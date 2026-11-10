@@ -969,35 +969,12 @@ public final class ZkData {
         }
     }
 
-    /** Static partition-transaction parent and per-partition transaction collection. */
-    public static final class BulkLoadPartitionTransactionsZNode {
-        public static String path() {
-            return BulkLoadTransactionsZNode.path() + "/partitions";
-        }
-
-        public static String path(long partitionId) {
-            return path() + "/" + requireNonNegativeId(partitionId, "partition ID");
-        }
-    }
-
-    /** One non-partitioned table BulkLoad transaction root. */
+    /** One shared table-level BulkLoad transaction root. */
     public static final class BulkLoadTableTransactionZNode {
         public static String path(long tableId, String bulkLoadId) {
             return transactionPath(BulkLoadTableTransactionsZNode.path(), tableId, bulkLoadId);
         }
     }
-
-    /** One partition BulkLoad transaction root. */
-    public static final class BulkLoadPartitionTransactionZNode {
-        public static String path(long partitionId, String bulkLoadId) {
-            return transactionPath(
-                    BulkLoadPartitionTransactionsZNode.path(), partitionId, bulkLoadId);
-        }
-    }
-
-    // ------------------------------------------------------------------------------------------
-    // ZNodes under "/producers/"
-    // ------------------------------------------------------------------------------------------
 
     /**
      * The znode for producers. This is the root node for all producer offset snapshots. The znode

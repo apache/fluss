@@ -35,6 +35,8 @@ public final class QueueItem<ResponseT extends ApiMessage> {
     @Nullable private final BiConsumer<ResponseT, ? super Throwable> callback;
     private final int coordinatorEpoch;
     private final long enqueueTimeMs;
+    private final boolean retryTransport;
+    private final CompletableFuture<Void> dequeued = new CompletableFuture<>();
 
     public QueueItem(
             ApiKeys apiKey,
@@ -42,11 +44,47 @@ public final class QueueItem<ResponseT extends ApiMessage> {
             @Nullable BiConsumer<ResponseT, ? super Throwable> callback,
             int coordinatorEpoch,
             long enqueueTimeMs) {
+        this(apiKey, requestSender, callback, coordinatorEpoch, enqueueTimeMs, true);
+    }
+
+    /** Creates a queued request with an explicit transport retry policy. */
+    public QueueItem(
+            ApiKeys apiKey,
+            Function<TabletServerGateway, CompletableFuture<ResponseT>> requestSender,
+            @Nullable BiConsumer<ResponseT, ? super Throwable> callback,
+            int coordinatorEpoch,
+            long enqueueTimeMs,
+            boolean retryTransport) {
+        this.retryTransport = retryTransport;
         this.apiKey = apiKey;
         this.requestSender = requestSender;
-        this.callback = callback;
+        java.util.concurrent.atomic.AtomicBoolean completed =
+                new java.util.concurrent.atomic.AtomicBoolean();
+        this.callback =
+                callback == null
+                        ? null
+                        : (response, failure) -> {
+                            if (completed.compareAndSet(false, true)) {
+                                callback.accept(response, failure);
+                            }
+                        };
         this.coordinatorEpoch = coordinatorEpoch;
         this.enqueueTimeMs = enqueueTimeMs;
+    }
+
+    /** Returns the completion marking removal from the sender queue. */
+    public CompletableFuture<Void> getDequeuedFuture() {
+        return dequeued;
+    }
+
+    /** Marks this item as owned by the sender instead of the queue. */
+    public void markDequeued() {
+        dequeued.complete(null);
+    }
+
+    /** Returns whether the sender owns transport retries for this request. */
+    public boolean retriesTransport() {
+        return retryTransport;
     }
 
     public ApiKeys getApiKey() {

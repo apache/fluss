@@ -152,7 +152,8 @@ public class RemoteLogManager implements Closeable {
             if (task.isOwnedBy(replica)) {
                 return;
             }
-            pauseLogTiering(replica);
+            rlmTasks.remove(tableBucket);
+            task.cancel();
         }
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
@@ -227,35 +228,6 @@ public class RemoteLogManager implements Closeable {
             task.cancel();
         }
         LOG.debug("Removed the remote log tiering task for replica {}", tb);
-    }
-
-    /** Pauses upload and expiry scheduling without deleting remote read state. */
-    public void pauseLogTiering(Replica replica) {
-        if (remoteDisabled()) {
-            return;
-        }
-        TableBucket tableBucket = replica.getTableBucket();
-        TaskWithFuture task = rlmTasks.remove(tableBucket);
-        if (task != null) {
-            LOG.info("Pausing the RLM task for table-bucket: {}", tableBucket);
-            task.cancel();
-        }
-    }
-
-    /** Resumes a previously paused leader task after BulkLoad ACTIVE convergence. */
-    public void resumeLogTiering(Replica replica) {
-        if (remoteDisabled()) {
-            return;
-        }
-        if (!replica.isLeader()) {
-            throw new IllegalStateException(
-                    "Remote log tiering can only resume for the current leader.");
-        }
-        if (!remoteLogs.containsKey(replica.getTableBucket())) {
-            throw new IllegalStateException(
-                    "Remote log tiering cannot resume before the replica is registered.");
-        }
-        startLogTiering(replica);
     }
 
     /**

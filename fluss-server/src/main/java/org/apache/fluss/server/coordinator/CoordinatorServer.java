@@ -156,6 +156,8 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
 
+    private java.util.concurrent.Semaphore bulkLoadCapacity;
+
     @GuardedBy("lock")
     @Nullable
     private Authorizer authorizer;
@@ -360,6 +362,11 @@ public class CoordinatorServer extends ServerBase {
                             replicaCapacityController);
             autoPartitionManager.start();
 
+            if (bulkLoadCapacity == null) {
+                bulkLoadCapacity =
+                        new java.util.concurrent.Semaphore(
+                                conf.get(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS));
+            }
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,
@@ -375,7 +382,8 @@ public class CoordinatorServer extends ServerBase {
                             metadataManager,
                             kvSnapshotLeaseManager,
                             scheduler,
-                            clock);
+                            clock,
+                            bulkLoadCapacity);
             coordinatorEventProcessor.startup();
             coordinatorEventProcessor
                     .getCoordinatorEventManager()

@@ -19,12 +19,14 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.TimeoutException;
 
-/** Process-wide fail-closed access gate with one monotonic invalidation epoch. */
+/** ZooKeeper session-validation gate for Snapshot restoration requests. */
 @Internal
-public final class TabletServerAccessGate {
+public final class SnapshotRestoreAccessGate {
 
     private long accessEpoch;
+    private long serverSessionId;
     private boolean enabled;
     private boolean permanentlyClosed;
 
@@ -40,7 +42,8 @@ public final class TabletServerAccessGate {
     /** Starts validation for an initial or reconnected ZooKeeper session. */
     public synchronized ValidationToken beginValidation() {
         if (permanentlyClosed) {
-            throw stale("TabletServer access is permanently closed after ZooKeeper session loss.");
+            throw stale(
+                    "Snapshot restoration is permanently disabled after ZooKeeper session loss.");
         }
         invalidate();
         return new ValidationToken(accessEpoch);
@@ -58,21 +61,32 @@ public final class TabletServerAccessGate {
     }
 
     /** Enables access after validation succeeds for the current ZooKeeper session. */
-    public synchronized void validationSucceeded(ValidationToken token) {
+    public synchronized void validationSucceeded(ValidationToken token, long validatedSessionId) {
         ensureCurrent(token);
+        if (validatedSessionId == 0
+                || (serverSessionId != 0 && serverSessionId != validatedSessionId)) {
+            throw stale("Snapshot restoration cannot use a different ZooKeeper session.");
+        }
+        serverSessionId = validatedSessionId;
         enabled = true;
     }
 
-    /** Captures the enabled access epoch at external request ingress. */
+    /** Captures the enabled access epoch at restoration request ingress. */
     public synchronized long captureAccessEpoch() {
         ensureEnabled(accessEpoch);
         return accessEpoch;
     }
 
-    /** Rechecks the captured access epoch immediately before successful completion. */
-    public synchronized void ensureEnabled(long expectedAccessEpoch) {
+    /** Returns the registered server session after rechecking the captured request epoch. */
+    public synchronized long getServerSessionId(long expectedAccessEpoch) {
+        ensureEnabled(expectedAccessEpoch);
+        return serverSessionId;
+    }
+
+    private void ensureEnabled(long expectedAccessEpoch) {
         if (expectedAccessEpoch != accessEpoch || !enabled) {
-            throw stale("TabletServer access is disabled or its access epoch is stale.");
+            throw new TimeoutException(
+                    "Snapshot restoration is disabled or its access epoch is stale.");
         }
     }
 
@@ -83,7 +97,7 @@ public final class TabletServerAccessGate {
 
     private void ensureCurrent(ValidationToken token) {
         if (permanentlyClosed || token.accessEpoch != accessEpoch) {
-            throw stale("TabletServer validation token is stale.");
+            throw stale("Snapshot restoration validation token is stale.");
         }
     }
 

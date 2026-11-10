@@ -21,8 +21,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -34,36 +32,16 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     // the server id that return the response
     private final int responseServerId;
 
-    private final Map<TableBucket, Long> pendingLeaderActivationIds;
+    // the bucket epoch sent in the request for each bucket, the response itself carries no epoch
     private final Map<TableBucket, Integer> requestBucketEpochs;
 
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
-            int responseServerId) {
-        this(notifyLeaderAndIsrResultForBuckets, responseServerId, Collections.emptyMap());
-    }
-
-    public NotifyLeaderAndIsrResponseReceivedEvent(
-            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId,
-            Map<TableBucket, Long> pendingLeaderActivationIds) {
-        this(
-                notifyLeaderAndIsrResultForBuckets,
-                responseServerId,
-                pendingLeaderActivationIds,
-                Collections.emptyMap());
-    }
-
-    public NotifyLeaderAndIsrResponseReceivedEvent(
-            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
-            int responseServerId,
-            Map<TableBucket, Long> pendingLeaderActivationIds,
             Map<TableBucket, Integer> requestBucketEpochs) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
-        this.requestBucketEpochs = Collections.unmodifiableMap(new HashMap<>(requestBucketEpochs));
-        this.pendingLeaderActivationIds =
-                Collections.unmodifiableMap(new HashMap<>(pendingLeaderActivationIds));
+        this.requestBucketEpochs = requestBucketEpochs;
     }
 
     public int getResponseServerId() {
@@ -77,9 +55,5 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     /** Returns the bucket epoch the request sent for the bucket, or -1 if unknown. */
     public int getRequestBucketEpoch(TableBucket tableBucket) {
         return requestBucketEpochs.getOrDefault(tableBucket, -1);
-    }
-
-    public Map<TableBucket, Long> getPendingLeaderActivationIds() {
-        return pendingLeaderActivationIds;
     }
 }

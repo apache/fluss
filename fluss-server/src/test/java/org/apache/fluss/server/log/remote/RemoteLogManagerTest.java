@@ -151,39 +151,16 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     }
 
     @Test
-    void testPauseLogTieringStopsSchedulingWithoutDeletingReadState() throws Exception {
+    void testStartLogTieringIsIdempotentForSameLeaderReplica() throws Exception {
         TableBucket tableBucket = makeTableBucket(false);
         makeLogTableAsLeader(tableBucket, false);
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
-        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
-        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        List<RemoteLogSegment> uploaded =
-                remoteLogManager.relevantRemoteLogSegments(tableBucket, 0L);
-        assertThat(uploaded).isNotEmpty();
 
-        remoteLogManager.pauseLogTiering(replica);
-        addMultiSegmentsToLogTablet(replica.getLogTablet(), 2);
-        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-
-        assertThat(remoteLogManager.relevantRemoteLogSegments(tableBucket, 0L))
-                .containsExactlyElementsOf(uploaded);
-        assertThat(remoteLogManager.remoteLogTablet(tableBucket)).isNotNull();
-        assertThat(remoteLogManager.lookupPositionForOffset(uploaded.get(0), 0L))
-                .isGreaterThanOrEqualTo(0);
-    }
-
-    @Test
-    void testResumeLogTieringIsIdempotentForSameLeaderReplica() throws Exception {
-        TableBucket tableBucket = makeTableBucket(false);
-        makeLogTableAsLeader(tableBucket, false);
-        Replica replica = replicaManager.getReplicaOrException(tableBucket);
-        remoteLogManager.pauseLogTiering(replica);
-
-        remoteLogManager.resumeLogTiering(replica);
+        remoteLogManager.startLogTiering(replica);
         RemoteLogManager.TaskWithFuture resumed = remoteLogManager.getTaskWithFuture(tableBucket);
         assertThat(resumed).isNotNull();
 
-        remoteLogManager.resumeLogTiering(replica);
+        remoteLogManager.startLogTiering(replica);
 
         assertThat(remoteLogManager.getTaskWithFuture(tableBucket)).isSameAs(resumed);
         assertThat(remoteLogTaskScheduler.getActivePeriodicScheduledTask()).hasSize(1);

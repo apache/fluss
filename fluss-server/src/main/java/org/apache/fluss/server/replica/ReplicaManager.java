@@ -36,7 +36,6 @@ import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -124,7 +123,6 @@ import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import org.apache.fluss.server.replica.historical.HistoricalPartitionManager;
 import org.apache.fluss.server.storage.DiskUsageMonitor;
 import org.apache.fluss.server.storage.LocalDiskManager;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -254,9 +252,6 @@ public class ReplicaManager implements ServerReconfigurable {
     private final ScannerManager scannerManager;
 
     private final HistoricalPartitionManager historicalPartitionManager;
-
-    @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, BulkLoadTargetMetadata> bulkLoadTargets = new HashMap<>();
 
     public ReplicaManager(
             Configuration conf,
@@ -599,6 +594,34 @@ public class ReplicaManager implements ServerReconfigurable {
         return remoteLogManager.getRemoteLogSize();
     }
 
+    /** Triggers or queries imported Snapshot work without waiting for replica role changes. */
+    public List<NotifyLeaderAndIsrResultForBucket> restoreImportedSnapshots(
+            int requestEpoch, List<NotifyLeaderAndIsrData> requests) {
+        List<NotifyLeaderAndIsrResultForBucket> results = new ArrayList<>();
+        for (NotifyLeaderAndIsrData request : requests) {
+            TableBucket bucket = request.getTableBucket();
+            try {
+                if (requestEpoch != coordinatorEpoch
+                        || request.getLeader() != serverId
+                        || !request.getReplicas().contains(serverId)) {
+                    throw new org.apache.fluss.exception.TimeoutException(
+                            "Replica role is not ready for imported Snapshot restoration.");
+                }
+                Replica replica = getReplicaOrException(bucket);
+                if (!replica.restoreImportedSnapshot(request, ioExecutor)) {
+                    throw new org.apache.fluss.exception.TimeoutException(
+                            "Imported Snapshot restoration is in progress.");
+                }
+                results.add(new NotifyLeaderAndIsrResultForBucket(bucket));
+            } catch (Exception failure) {
+                results.add(
+                        new NotifyLeaderAndIsrResultForBucket(
+                                bucket, ApiError.fromThrowable(failure)));
+            }
+        }
+        return results;
+    }
+
     /**
      * Receive a request to make these replicas to become leader or follower, if the replica doesn't
      * exist, we will create it.
@@ -624,10 +647,6 @@ public class ReplicaManager implements ServerReconfigurable {
                                 data.getReplicas());
                         TableBucket tb = data.getTableBucket();
                         try {
-                            BulkLoadTargetMetadata bulkLoadMetadata = data.getBulkLoadMetadata();
-                            if (bulkLoadMetadata != null) {
-                                applyBulkLoadTargetMetadata(bulkLoadMetadata);
-                            }
                             boolean becomeLeader = validateAndGetIsBecomeLeader(data);
                             if (becomeLeader) {
                                 replicasToBeLeader.add(data);
@@ -1369,9 +1388,6 @@ public class ReplicaManager implements ServerReconfigurable {
                                 }
                             }
                         }
-                        if (data.isDeleteLocal() && stopResult.succeeded()) {
-                            bulkLoadTargets.remove(tb);
-                        }
                         result.add(stopResult);
                     }
 
@@ -1498,7 +1514,6 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
-                BulkLoadTargetMetadata bulkLoadMetadata = data.getBulkLoadMetadata();
                 // register replica to remote log manager first.
                 remoteLogManager.registerReplica(replica);
 
@@ -1511,9 +1526,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 replica.makeLeader(data);
 
                 // start the remote log tiering tasks for leaders
-                if (bulkLoadMetadata == null || !bulkLoadMetadata.isLoading()) {
-                    remoteLogManager.startLogTiering(replica);
-                }
+                remoteLogManager.startLogTiering(replica);
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to leader", tb, e);
@@ -1590,16 +1603,10 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
                 // stop the remote log tiering tasks for followers
                 remoteLogManager.stopLogTiering(replica);
-                BulkLoadTargetMetadata bulkLoadMetadata = data.getBulkLoadMetadata();
-                boolean isLoadingFollower =
-                        bulkLoadMetadata != null && bulkLoadMetadata.isLoading();
-                if (isLoadingFollower
-                        || (previousLeaderId != null && previousLeaderId != data.getLeader())) {
+                if (previousLeaderId != null && previousLeaderId != data.getLeader()) {
                     fetchersToRemove.add(tb);
                 }
-                if (!isLoadingFollower) {
-                    replicasToAddFetcher.add(replica);
-                }
+                replicasToAddFetcher.add(replica);
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to follower", tb, e);
@@ -2322,25 +2329,6 @@ public class ReplicaManager implements ServerReconfigurable {
             if (data.getReplicas().contains(serverId)) {
                 int leaderId = data.getLeader();
                 boolean becomeLeader = leaderId == serverId;
-                BulkLoadTargetMetadata target = data.getBulkLoadMetadata();
-                if (data.requiresEmptyTarget()
-                        || (target != null
-                                && target.isLoading()
-                                && !zkClient.getTableBucketLatestSnapshot(tb).isPresent())) {
-                    // Before snapshot installation, ordinary role notifications must preserve
-                    // local data for Begin's emptiness check instead of truncating it away.
-                    replica.requireEmptyBulkLoadTarget(checkNotNull(target));
-                } else if (target != null && target.isLoading()) {
-                    // A registered snapshot can be restored while external access stays fenced.
-                    try {
-                        if (becomeLeader && requestLeaderEpoch == currentLeaderEpoch) {
-                            replica.recoverLoadingLeader(target);
-                        }
-                    } catch (Exception e) {
-                        throw new StorageException(
-                                "Failed ordinary LOADING recovery for " + tb + '.', e);
-                    }
-                }
                 if (becomeLeader) {
                     ensureWritableForNewKvLeader(replica, requestLeaderEpoch);
                 }
@@ -2656,15 +2644,6 @@ public class ReplicaManager implements ServerReconfigurable {
             } else if (hostedReplica instanceof OfflineReplica) {
                 LOG.warn("Unable to get the Replica {} while it is offline", tb);
             }
-            if (replicaOpt.isPresent()) {
-                BulkLoadTargetMetadata target =
-                        data.getBulkLoadMetadata() != null
-                                ? data.getBulkLoadMetadata()
-                                : bulkLoadTargets.get(tb);
-                if (target != null) {
-                    replicaOpt.get().applyBulkLoadMetadata(target);
-                }
-            }
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -2673,36 +2652,6 @@ public class ReplicaManager implements ServerReconfigurable {
         }
 
         return replicaOpt;
-    }
-
-    @GuardedBy("replicaStateChangeLock")
-    private void applyBulkLoadTargetMetadata(BulkLoadTargetMetadata incoming) {
-        TableBucket tableBucket = incoming.getTableBucket();
-        BulkLoadTargetMetadata current = bulkLoadTargets.get(tableBucket);
-        if (current != null) {
-            if (incoming.getMetadataVersion() < current.getMetadataVersion()) {
-                throw new StaleMetadataException(
-                        "BulkLoad metadata version "
-                                + incoming.getMetadataVersion()
-                                + " is older than "
-                                + current.getMetadataVersion()
-                                + " for "
-                                + tableBucket
-                                + '.');
-            }
-            if (incoming.getMetadataVersion() == current.getMetadataVersion()) {
-                if (!incoming.equals(current)) {
-                    throw new StaleMetadataException(
-                            "BulkLoad metadata conflicts at version "
-                                    + incoming.getMetadataVersion()
-                                    + " for "
-                                    + tableBucket
-                                    + '.');
-                }
-                return;
-            }
-        }
-        bulkLoadTargets.put(tableBucket, incoming);
     }
 
     public Replica getReplicaOrException(TableBucket tableBucket) {

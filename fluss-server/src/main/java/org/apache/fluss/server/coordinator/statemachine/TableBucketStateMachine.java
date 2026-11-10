@@ -123,11 +123,6 @@ public class TableBucketStateMachine {
         LOG.info("Shutdown table bucket state machine.");
     }
 
-    /** Discards requests left by a state transition that failed before sending its batch. */
-    public void discardIncompleteBatch() {
-        coordinatorRequestBatch.discardIncompleteBatch();
-    }
-
     public void handleStateChange(Set<TableBucket> tableBuckets, BucketState targetState) {
         handleStateChange(tableBuckets, targetState, new DefaultLeaderElection());
     }

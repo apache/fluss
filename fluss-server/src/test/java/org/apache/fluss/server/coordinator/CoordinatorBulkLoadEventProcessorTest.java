@@ -17,876 +17,490 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.cluster.Endpoint;
-import org.apache.fluss.cluster.TabletServerInfo;
-import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.BulkLoadHandle;
-import org.apache.fluss.metadata.BulkLoadState;
+import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PhysicalTablePath;
-import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
-import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
-import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
-import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
-import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
-import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
-import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
-import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
-import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
-import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
-import org.apache.fluss.server.entity.CommitKvSnapshotData;
-import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
-import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
-import org.apache.fluss.server.metadata.TabletServerResource;
-import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
-import org.apache.fluss.server.zk.data.ServerProtocolVersion;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import javax.annotation.Nullable;
-
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Arrays;
+import java.nio.file.Paths;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 
-import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.apache.fluss.server.testutils.KvTestUtils.writeSnapshotMetadata;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyMap;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.atLeastOnce;
-import static org.mockito.Mockito.doCallRealMethod;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 
-/** Bulk-load related tests for {@link CoordinatorEventProcessor}. */
-class CoordinatorBulkLoadEventProcessorTest extends CoordinatorEventProcessorTestBase {
+/** Event and process-capacity ownership across asynchronous BulkLoad admission and cancellation. */
+class CoordinatorBulkLoadEventProcessorTest {
+    @RegisterExtension
+    static final AllCallbackWrapper<ZooKeeperExtension> ZOOKEEPER =
+            new AllCallbackWrapper<>(new ZooKeeperExtension());
 
-    private static final String MANIFEST_SHA256 =
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    @TempDir private Path directory;
+    private ZooKeeperClient client;
+    private LakeCatalogDynamicLoader catalogs;
+    private TestCoordinatorChannelManager channels;
+    private MetadataManager metadata;
+    private CoordinatorContext context;
+    private Configuration conf;
+    private BulkLoadManager manager;
+    private final Semaphore capacity = new Semaphore(1);
+    private final ManuallyTriggeredScheduledExecutorService executor =
+            new ManuallyTriggeredScheduledExecutorService();
+    private final TestingEventManager events = new TestingEventManager();
+    private TablePath table;
 
-    private final List<BulkLoadHandle> recoveredTargets = new ArrayList<>();
+    @BeforeEach
+    void setUp() throws Exception {
+        client = ZOOKEEPER.getCustomExtension().createZooKeeperClient(NOPErrorHandler.INSTANCE);
+        context = new CoordinatorContext(client.fenceBecomeCoordinatorLeader("bulkload-events"));
+        conf = new Configuration();
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, directory.toUri().toString());
+        catalogs = new LakeCatalogDynamicLoader(conf, null, true);
+        metadata = new MetadataManager(client, conf, catalogs);
+        channels = new TestCoordinatorChannelManager();
+        client.ensureBulkLoadMetadataPaths();
+        ensure(ZkData.ServerIdsZNode.path());
+        ensure(ZkData.CoordinatorIdsZNode.path());
+        java.util.List<org.apache.fluss.cluster.Endpoint> endpoints =
+                Collections.singletonList(
+                        new org.apache.fluss.cluster.Endpoint("localhost", 20000, "INTERNAL"));
+        client.registerCoordinatorServer(
+                new org.apache.fluss.server.zk.data.CoordinatorAddress(
+                        "bulkload-events",
+                        endpoints,
+                        org.apache.fluss.server.zk.data.ServerProtocolVersion.CURRENT));
+        client.registerTabletServer(
+                1,
+                new org.apache.fluss.server.zk.data.TabletServerRegistration(
+                        "rack",
+                        endpoints,
+                        1L,
+                        org.apache.fluss.server.metadata.TabletServerResource.unknown(),
+                        org.apache.fluss.server.zk.data.ServerProtocolVersion.CURRENT));
+
+        table =
+                TablePath.of(
+                        "bulkload_events",
+                        "t" + Math.abs(UUID.randomUUID().getLeastSignificantBits()));
+        metadata.createDatabase(table.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+        metadata.createTable(
+                table,
+                directory.toUri().toString(),
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .build()
+                        .withReplicationFactor(1),
+                TableAssignment.builder().add(0, BucketAssignment.of(1)).build(),
+                false);
+        manager = newManager();
+    }
 
     @AfterEach
-    void releaseRecoveredTargets() throws Exception {
-        for (BulkLoadHandle handle : recoveredTargets) {
-            TablePath tablePath = handle.getTarget().getTablePath();
-            setDataState(
-                    ZkData.TableZNode.path(tablePath),
-                    tablePath,
-                    false,
-                    BulkLoadDataState.ACTIVE,
-                    null);
-            zookeeperClient.getCuratorClient().delete().forPath(transactionPath(handle));
-        }
+    void tearDown() throws Exception {
+        manager.close();
+        channels.close();
+        catalogs.close();
+        client.close();
     }
 
     @Test
-    void testStartupIsolatesBulkLoadProgressionFailure() throws Exception {
-        initCoordinatorChannel();
-        eventProcessor.shutdown();
-        for (int serverId : zookeeperClient.getSortedTabletServerList()) {
-            zookeeperClient
-                    .getCuratorClient()
+    void testBeginDoesNotWaitForReplicaAcknowledgement() throws Exception {
+        CompletableFuture<BeginBulkLoadResponse> result = begin();
+        assertThat(result).isNotDone();
+        executor.triggerAll();
+        drainEvents();
+        assertThat(result).isCompleted();
+        assertThat(result.get().getTargetInfosCount()).isEqualTo(1);
+        assertThat(client.getTable(table).get().bulkLoadId)
+                .isEqualTo(result.get().getHandle().getBulkLoadId());
+        assertThat(capacity.availablePermits()).isZero();
+    }
+
+    @Test
+    void testCloseDuringAdmissionRetainsCapacityUntilActualWorkerExit() {
+        CompletableFuture<BeginBulkLoadResponse> result = begin();
+        manager.close();
+        assertThat(result).isCompletedExceptionally();
+        assertThat(capacity.availablePermits()).isZero();
+        executor.triggerAll();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+        assertThat(events.getEvents()).isEmpty();
+    }
+
+    @Test
+    void testCloseRetainsCapacityUntilOutstandingRestorationResponseExits() throws Exception {
+        manager.close();
+        channels.close();
+        AtomicReference<BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable>> response =
+                new AtomicReference<>();
+        channels =
+                new TestCoordinatorChannelManager() {
+                    @Override
+                    public void sendBucketLeaderAndIsrRequest(
+                            int server,
+                            NotifyLeaderAndIsrRequest request,
+                            BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> callback) {
+                        response.set(callback);
+                    }
+                };
+        manager = newManager();
+        CompletableFuture<BeginBulkLoadResponse> begun = begin();
+        executor.triggerAll();
+        drainEvents();
+        BeginBulkLoadResponse target = begun.get();
+        BulkLoadHandle handle =
+                new BulkLoadHandle(
+                        table, target.getHandle().getTableId(), target.getHandle().getBulkLoadId());
+        TableBucket bucket = new TableBucket(handle.getTableId(), 0);
+        ensure(ZkData.BucketIdZNode.path(bucket));
+        client.getCuratorClient()
+                .create()
+                .forPath(
+                        ZkData.LeaderAndIsrZNode.path(bucket),
+                        ZkData.LeaderAndIsrZNode.encode(
+                                new LeaderAndIsr(1, context.getCoordinatorEpoch())));
+        Long rowCount =
+                metadata.getTable(table).getTableConfig().getChangelogImage() == ChangelogImage.FULL
+                        ? 0L
+                        : null;
+        FsPath input =
+                writeSnapshotMetadata(
+                        directory.toUri().toString(),
+                        PhysicalTablePath.of(table),
+                        bucket,
+                        target.getTargetInfoAt(0).getSnapshotIds()[0],
+                        0L,
+                        rowCount);
+        byte[] bucketDigest =
+                Hashing.sha256().hashBytes(Files.readAllBytes(Paths.get(input.toUri()))).asBytes();
+        CompletableFuture<?> commit =
+                manager.commit(handle, Hashing.sha256().hashBytes(bucketDigest).toString());
+        try {
+            executor.triggerAll();
+            drainEvents();
+            executor.triggerAll();
+            drainEvents();
+            assertThat(response.get()).isNotNull();
+            assertThat(commit).isNotDone();
+            manager.close();
+            assertThat(commit).isCompletedExceptionally();
+            assertThat(capacity.availablePermits()).isZero();
+        } finally {
+            manager.close();
+            if (response.get() != null) {
+                response.get().accept(null, new java.util.concurrent.TimeoutException());
+            }
+        }
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+        assertThat(events.getEvents()).isEmpty();
+    }
+
+    @Test
+    void testSaturatedRequestsFailWithoutQueuingWork() {
+        CompletableFuture<BeginBulkLoadResponse> first = begin();
+        assertThat(begin()).isCompletedExceptionally();
+        BulkLoadHandle unknown = new BulkLoadHandle(table, 99L, UUID.randomUUID().toString());
+        assertThat(manager.commit(unknown, null)).isCompletedExceptionally();
+        assertThat(executor.numQueuedRunnables()).isEqualTo(1);
+        manager.close();
+        executor.triggerAll();
+        assertThat(first).isCompletedExceptionally();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+    }
+
+    @Test
+    void testAbortWhileValidationIsQueuedRejectsLateResultAndRetainsCapacity() throws Exception {
+        CompletableFuture<BeginBulkLoadResponse> begun = begin();
+        executor.triggerAll();
+        drainEvents();
+        BeginBulkLoadResponse response = begun.get();
+        BulkLoadHandle handle =
+                new BulkLoadHandle(
+                        table,
+                        response.getHandle().getTableId(),
+                        response.getHandle().getBulkLoadId());
+        CompletableFuture<?> commit =
+                manager.commit(handle, String.join("", Collections.nCopies(64, "a")));
+        CompletableFuture<?> abort = manager.abort(handle);
+        assertThat(executor.numQueuedRunnables()).isEqualTo(2);
+        // Run validation's worker first, but leave its continuation queued on the event lane.
+        executor.trigger();
+        executor.trigger();
+        assertThat(capacity.availablePermits()).isZero();
+        drainEvents();
+        assertThat(abort).isCompleted();
+        assertThat(commit).isCompletedExceptionally();
+        assertThat(client.getTable(table).get().bulkLoadId).isNull();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+        assertThat(executor.numQueuedRunnables()).isZero();
+    }
+
+    @Test
+    void testUnknownHandleReleasesItsProvisionalCapacity() {
+        BulkLoadHandle unknown = new BulkLoadHandle(table, 99L, UUID.randomUUID().toString());
+        CompletableFuture<?> result = manager.commit(unknown, null);
+        executor.triggerAll();
+        drainEvents();
+        assertThat(result).isCompletedExceptionally();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCallerAndDeadlineAbortPersistWhileReadOnlyWorkerIsBlocked(boolean expired)
+            throws Exception {
+        CompletableFuture<BeginBulkLoadResponse> begun = begin();
+        executor.triggerAll();
+        drainEvents();
+        BeginBulkLoadResponse response = begun.get();
+        BulkLoadHandle handle =
+                new BulkLoadHandle(
+                        table,
+                        response.getHandle().getTableId(),
+                        response.getHandle().getBulkLoadId());
+        if (expired) {
+            org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction current =
+                    BulkLoadManager.readTransaction(client, handle);
+            org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction deadline =
+                    new org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction(
+                            handle,
+                            current.getState(),
+                            current.getCreatorName(),
+                            current.getCreatorType(),
+                            current.getTargets(),
+                            0L,
+                            null,
+                            null,
+                            null);
+            client.getCuratorClient()
                     .setData()
                     .forPath(
-                            ZkData.ServerIdZNode.path(serverId),
-                            ZkData.ServerIdZNode.encode(
-                                    registration(serverId, ServerProtocolVersion.CURRENT)));
+                            ZkData.BulkLoadTableTransactionZNode.path(
+                                    handle.getTableId(), handle.getBulkLoadId()),
+                            ZkData.BulkLoadTransactionsZNode.encode(deadline));
         }
-        BulkLoadHandle failing = createRecoverableBulkLoad("failing_recovery", 1);
-        BulkLoadHandle healthy = createRecoverableBulkLoad("healthy_recovery", 2);
-        String assignmentPath = ZkData.TableIdZNode.path(failing.getTableId());
-        ZooKeeperClient client = spy(zookeeperClient);
-        // Startup loads assignments in bulk. Fail the versioned read used to advance one target.
-        doThrow(new KeeperException.ConnectionLossException())
-                .when(client)
-                .getDataWithStatIfExists(assignmentPath);
-        eventProcessor = buildCoordinatorEventProcessor(client);
-
-        eventProcessor.startup();
-
-        verify(client, atLeastOnce()).getDataWithStatIfExists(assignmentPath);
-        boolean targetRestored = fromCtx(ctx -> ctx.containsTableId(failing.getTableId()));
-        assertThat(targetRestored).isTrue();
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(readBulkLoad(healthy).isFenceReady()).isTrue());
-        assertThat(readBulkLoad(failing).isFenceReady()).isFalse();
-
-        doCallRealMethod().when(client).getDataWithStatIfExists(assignmentPath);
-        eventProcessor.getCoordinatorEventManager().put(new BulkLoadMaintenanceEvent());
-
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(readBulkLoad(failing).isFenceReady()).isTrue());
-    }
-
-    @Test
-    void testStartupRejectsUnreadableBulkLoadTransaction() throws Exception {
-        initCoordinatorChannel();
-        eventProcessor.shutdown();
-        BulkLoadHandle handle = createRecoverableBulkLoad("unreadable_recovery", 3);
-        ZooKeeperClient client = spy(zookeeperClient);
-        doThrow(new KeeperException.ConnectionLossException())
-                .when(client)
-                .getDataWithStatIfExists(transactionPath(handle));
-        eventProcessor = buildCoordinatorEventProcessor(client);
-
-        assertThatThrownBy(() -> eventProcessor.startup())
-                .hasMessageContaining("Fail to initialize coordinator context")
-                .hasRootCauseInstanceOf(KeeperException.ConnectionLossException.class);
-    }
-
-    @Test
-    void testOrdinaryCommitsRequireCurrentActiveMetadataIdentity(@TempDir Path tempDir)
-            throws Exception {
-        TablePath tablePath = TablePath.of(defaultDatabase, "recreated_commit_identity");
-        long oldTableId =
-                createTable(
-                        tablePath,
-                        new TabletServerInfo[] {
-                            new TabletServerInfo(0, "rack0"),
-                            new TabletServerInfo(1, "rack1"),
-                            new TabletServerInfo(2, "rack2")
-                        });
-        TableBucket tableBucket = new TableBucket(oldTableId, 0);
-        waitValue(
-                () -> fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket)),
-                Duration.ofMinutes(1),
-                "leader not elected");
-        String metadataPath = ZkData.TableZNode.path(tablePath);
-        TableRegistration oldRegistration = zookeeperClient.getTable(tablePath).get();
-        int oldMetadataVersion =
-                zookeeperClient.getDataWithStat(metadataPath).getStat().getVersion();
-
-        zookeeperClient.updateTable(
-                tablePath,
-                oldRegistration.withDataState(
-                        BulkLoadDataState.LOADING, "550e8400-e29b-41d4-a716-446655440000"));
-        assertSnapshotAndManifestCommitRejected(tempDir, tableBucket, 98);
-
-        zookeeperClient
-                .getCuratorClient()
-                .delete()
-                .deletingChildrenIfNeeded()
-                .forPath(metadataPath);
-        TableRegistration recreated =
-                TableRegistration.newTable(oldTableId + 1, remoteDataDir, TEST_TABLE);
-        zookeeperClient.registerTable(tablePath, recreated);
-        for (int i = 0; i < oldMetadataVersion; i++) {
-            zookeeperClient.updateTable(tablePath, recreated);
-        }
-        assertThat(zookeeperClient.getDataWithStat(metadataPath).getStat().getVersion())
-                .isEqualTo(oldMetadataVersion);
-
-        assertSnapshotAndManifestCommitRejected(tempDir, tableBucket, 99);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testFailedLeaderStaysInactiveWhenZooKeeperUpdateFails(boolean retryUpdateFails)
-            throws Exception {
-        eventProcessor.shutdown();
-        ZooKeeperClient client = spy(zookeeperClient);
-        eventProcessor = buildCoordinatorEventProcessor(client);
-        initCoordinatorChannel();
-        eventProcessor.startup();
-        TablePath tablePath =
-                TablePath.of(defaultDatabase, "failed_activation_" + retryUpdateFails);
-        TableAssignment assignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0))
-                        .add(1, BucketAssignment.of(0))
-                        .add(2, BucketAssignment.of(0))
-                        .build();
-        long tableId =
-                metadataManager.createTable(
-                        tablePath,
-                        remoteDataDir,
-                        TEST_TABLE.withReplicationFactor(1),
-                        assignment,
-                        false);
-        TableBucket bucket = new TableBucket(tableId, 0);
-        waitUntil(
-                () ->
-                        fromCtx(
-                                context ->
-                                        context.isLeaderActive(bucket)
-                                                && CoordinatorService.computeClusterHealth(context)
-                                                                .getActiveLeaderReplicas()
-                                                        == 3),
-                Duration.ofMinutes(1),
-                "Initial leader did not become active");
-        LeaderAndIsr leaderAndIsr = fromCtx(context -> context.getBucketLeaderAndIsr(bucket).get());
-        doThrow(new KeeperException.ConnectionLossException())
-                .when(client)
-                .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
-        doThrow(new KeeperException.ConnectionLossException())
-                .when(client)
-                .batchUpdateLeaderAndIsr(anyMap(), anyInt());
-        long activationId = fromCtx(context -> context.addPendingLeaderActivationAndGetId(bucket));
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(
-                        new NotifyLeaderAndIsrResponseReceivedEvent(
-                                Collections.singletonList(
-                                        new NotifyLeaderAndIsrResultForBucket(
-                                                bucket,
-                                                new ApiError(
-                                                        Errors.DISK_WRITE_LOCKED,
-                                                        "disk write locked"))),
-                                leaderAndIsr.leader(),
-                                Collections.singletonMap(bucket, activationId)));
-
-        fromCtx(
-                context -> {
-                    assertThat(context.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
-                    assertThat(context.getBucketLeaderAndIsr(bucket)).contains(leaderAndIsr);
-                    assertThat(context.getBucketState(bucket)).isEqualTo(OfflineBucket);
-                    assertThat(context.isReplicaOnline(leaderAndIsr.leader(), bucket)).isFalse();
-                    assertThat(context.isLeaderActive(bucket)).isFalse();
-                    assertThat(
-                                    CoordinatorService.computeClusterHealth(context)
-                                            .getActiveLeaderReplicas())
-                            .isEqualTo(2);
-                    return null;
-                });
-        verify(client, atLeastOnce()).batchUpdateLeaderAndIsr(anyMap(), anyInt());
-        if (!retryUpdateFails) {
-            doCallRealMethod()
-                    .when(client)
-                    .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
-            doCallRealMethod().when(client).batchUpdateLeaderAndIsr(anyMap(), anyInt());
-        }
-        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
-
-        waitUntil(
-                () ->
-                        fromCtx(
-                                context ->
-                                        !context.getPendingLeaderActivationBuckets()
-                                                        .contains(bucket)
-                                                && context.isReplicaOnline(
-                                                        leaderAndIsr.leader(), bucket)
-                                                && context.getBucketState(bucket)
-                                                        == (retryUpdateFails
-                                                                ? OfflineBucket
-                                                                : OnlineBucket)),
-                Duration.ofMinutes(1),
-                "Leader retry did not finish");
-        fromCtx(
-                context -> {
-                    assertThat(context.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
-                    assertThat(context.isReplicaOnline(leaderAndIsr.leader(), bucket)).isTrue();
-                    assertThat(context.getBucketState(bucket))
-                            .isEqualTo(retryUpdateFails ? OfflineBucket : OnlineBucket);
-                    assertThat(context.isLeaderActive(bucket)).isEqualTo(!retryUpdateFails);
-                    assertThat(
-                                    CoordinatorService.computeClusterHealth(context)
-                                            .getActiveLeaderReplicas())
-                            .isEqualTo(retryUpdateFails ? 2 : 3);
-                    return null;
-                });
-        verify(client, atLeastOnce())
-                .updateLeaderAndIsr(eq(bucket), any(LeaderAndIsr.class), anyInt());
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testNotifyResponseReleasesOnlyItsRequestPendingOwnership(boolean oldRequestFails)
-            throws Exception {
-        long tableId = oldRequestFails ? 92_001L : 92_000L;
-        TableBucket tableBucket = new TableBucket(tableId, 0);
-        TablePath tablePath = TablePath.of("db", "pending_leader_" + tableId);
-        List<Integer> assignment = Arrays.asList(0, 1);
-        ControlledResponseGateway oldLeaderGateway = new ControlledResponseGateway(oldRequestFails);
-        ControlledResponseGateway newLeaderGateway = new ControlledResponseGateway(false);
-        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
-        gateways.put(0, oldLeaderGateway);
-        gateways.put(1, newLeaderGateway);
-        testCoordinatorChannelManager.setGateways(gateways);
-
-        LeaderAndIsr oldLeader =
-                new LeaderAndIsr(
-                        0,
-                        0,
-                        assignment,
-                        Collections.emptyList(),
-                        eventProcessor.getCoordinatorContext().getCoordinatorEpoch(),
-                        0);
-        LeaderAndIsr newLeader =
-                new LeaderAndIsr(
-                        1,
-                        1,
-                        oldRequestFails ? Collections.singletonList(1) : assignment,
-                        Collections.emptyList(),
-                        eventProcessor.getCoordinatorContext().getCoordinatorEpoch(),
-                        1);
-        CoordinatorTestUtils.registerTable(
-                zookeeperClient, tablePath, tableId, DATA1_TABLE_DESCRIPTOR);
-        CoordinatorRequestBatch requestBatch =
-                new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager,
-                        eventProcessor.getCoordinatorEventManager(),
-                        eventProcessor.getCoordinatorContext(),
-                        zookeeperClient);
-
-        fromCtx(
-                context -> {
-                    assertThat(context.liveTabletServerSet()).contains(0, 1);
-                    context.putTablePath(tableId, tablePath);
-                    context.updateBucketReplicaAssignment(tableBucket, assignment);
-                    context.putReplicaState(new TableBucketReplica(tableBucket, 0), OnlineReplica);
-                    context.putReplicaState(new TableBucketReplica(tableBucket, 1), OnlineReplica);
-                    context.putBucketState(tableBucket, OnlineBucket);
-                    context.putBucketLeaderAndIsr(tableBucket, oldLeader);
-                    dispatch(requestBatch, context, tablePath, tableBucket, assignment, oldLeader);
-                    return null;
-                });
-
-        fromCtx(
-                context -> {
-                    context.putBucketLeaderAndIsr(tableBucket, newLeader);
-                    dispatch(requestBatch, context, tablePath, tableBucket, assignment, newLeader);
-                    return null;
-                });
-        assertThat(oldLeaderGateway.getRequestCount()).isOne();
-        assertThat(newLeaderGateway.getRequestCount()).isOne();
-        assertInactive(tableBucket);
-
-        oldLeaderGateway.releaseResponse();
-        assertInactive(tableBucket);
-
-        newLeaderGateway.releaseResponse();
-        fromCtx(
-                context -> {
-                    assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
-                    assertThat(context.isLeaderActive(tableBucket)).isTrue();
-                    assertThat(
-                                    CoordinatorService.computeClusterHealth(context)
-                                            .getActiveLeaderReplicas())
-                            .isOne();
-                    assertThat(CoordinatorService.computeClusterHealth(context).getStatus())
-                            .isEqualTo(oldRequestFails ? 1 : 0);
-                    return null;
-                });
-    }
-
-    @Test
-    void testFeatureAdvertisementDoesNotSequenceOrdinaryTabletServerRestart() throws Exception {
-        int serverId = 31;
-        String serverPath = ZkData.ServerIdZNode.path(serverId);
-        ZooKeeperClient processClient = newProcessClient();
-        processClient.registerTabletServer(serverId, registration(serverId, 0));
+        manager.close();
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        ZooKeeperClient blocked =
+                new ZooKeeperClient(
+                        new org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener(
+                                client.getCuratorClient(), (message, failure) -> {}),
+                        conf) {
+                    @Override
+                    public java.util.Optional<DataWithStat> getDataWithStatIfExists(String path)
+                            throws Exception {
+                        if (Thread.currentThread().getName().equals("bulkload-validation")
+                                && path.equals(ZkData.TableZNode.path(table))) {
+                            entered.countDown();
+                            release.await();
+                        }
+                        return super.getDataWithStatIfExists(path);
+                    }
+                };
+        manager = newManager(blocked);
+        manager.restoreTransactions(Collections.singletonList(handle));
+        CompletableFuture<?> commit =
+                manager.commit(handle, String.join("", Collections.nCopies(64, "a")));
+        Thread validation = new Thread(executor::trigger, "bulkload-validation");
+        validation.start();
+        assertThat(entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         try {
-            waitForServer(serverId, true);
-            initCoordinatorChannel();
-
-            TablePath tablePath = TablePath.of(defaultDatabase, "ordinary_restart_dispatch");
-            TableAssignment assignment =
-                    TableAssignment.builder().add(0, BucketAssignment.of(serverId)).build();
-            metadataManager.createTable(tablePath, remoteDataDir, TEST_TABLE, assignment, false);
-            TableInfo tableInfo = metadataManager.getTable(tablePath);
-            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
-            waitValue(
-                    () -> fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket)),
-                    Duration.ofMinutes(1),
-                    "leader not elected");
-
-            processClient.close();
-            waitForServer(serverId, false);
-
-            processClient = newProcessClient();
-            ControlledGateway gateway = new ControlledGateway();
-            testCoordinatorChannelManager.setGateways(gateways(gateway, serverId));
-            processClient.registerTabletServer(
-                    serverId, registration(serverId, ServerProtocolVersion.CURRENT));
-            waitForServer(serverId, true);
-            fromCtx(Function.identity());
-
-            assertThat(gateway.sequence())
-                    .startsWith("metadata:alive", "metadata:full", "notify-role");
+            CompletableFuture<?> abort = expired ? null : manager.abort(handle);
+            if (expired) {
+                manager.process(
+                        new org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent());
+            }
+            executor.trigger();
+            drainEvents();
+            if (abort != null) {
+                assertThat(abort).isCompleted();
+            }
+            assertThat(BulkLoadManager.readTransaction(client, handle).getAbortReason())
+                    .isEqualTo(
+                            expired
+                                    ? org.apache.fluss.metadata.BulkLoadAbortReason
+                                            .DEADLINE_EXCEEDED
+                                    : org.apache.fluss.metadata.BulkLoadAbortReason
+                                            .ABORTED_BY_CALLER);
+            assertThat(commit).isCompletedExceptionally();
+            assertThat(client.getTable(table).get().bulkLoadId).isNull();
+            assertThat(capacity.availablePermits()).isZero();
         } finally {
-            processClient.close();
-            ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(serverPath);
+            release.countDown();
+            validation.join(10_000);
         }
+        assertThat(validation.isAlive()).isFalse();
+        executor.triggerAll();
+        drainEvents();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+        assertThat(executor.numQueuedRunnables()).isZero();
     }
 
-    @ParameterizedTest
-    @CsvSource({"false, BEGUN", "false, COMMITTING", "true, BEGUN", "true, COMMITTING"})
-    void testReassignmentRejectsActiveBulkLoadWithoutMetadataMutation(
-            boolean partitioned, BulkLoadState state) throws Exception {
-        int replacementServer = 19_003 + state.ordinal() + (partitioned ? 10 : 0);
-        zookeeperClient.registerTabletServer(
-                replacementServer,
-                new TabletServerRegistration(
-                        "rack" + replacementServer,
-                        Collections.singletonList(
-                                new Endpoint(
-                                        "host" + replacementServer, 1001, DEFAULT_LISTENER_NAME)),
-                        System.currentTimeMillis()));
-        try {
-            initCoordinatorChannel();
-            TablePath tablePath =
-                    TablePath.of(
-                            defaultDatabase,
-                            "bulk_load_reassignment_"
-                                    + partitioned
-                                    + "_"
-                                    + state.name().toLowerCase());
-            TableDescriptor descriptor =
-                    partitioned
-                            ? TableDescriptor.builder()
-                                    .schema(
-                                            Schema.newBuilder()
-                                                    .column("id", DataTypes.INT())
-                                                    .column("part", DataTypes.STRING())
-                                                    .primaryKey("id", "part")
-                                                    .build())
-                                    .distributedBy(1, "id")
-                                    .partitionedBy("part")
-                                    .build()
-                                    .withReplicationFactor(3)
-                            : TEST_TABLE;
-            TableAssignment tableAssignment =
-                    TableAssignment.builder().add(0, BucketAssignment.of(0, 1, 2)).build();
-            long tableId =
-                    metadataManager.createTable(
-                            tablePath,
-                            remoteDataDir,
-                            descriptor,
-                            partitioned ? null : tableAssignment,
-                            false);
-            Long partitionId = null;
-            String registrationPath = ZkData.TableZNode.path(tablePath);
-            String assignmentPath = ZkData.TableIdZNode.path(tableId);
-            if (partitioned) {
-                String partitionName = "p0";
-                metadataManager.createPartition(
-                        tablePath,
-                        tableId,
-                        remoteDataDir,
-                        new PartitionAssignment(tableId, tableAssignment.getBucketAssignments()),
-                        ResolvedPartitionSpec.fromPartitionValue("part", partitionName),
-                        false,
-                        tableAssignment.getBuckets().size());
-                PartitionRegistration partitionRegistration =
-                        zookeeperClient
-                                .getPartition(tablePath, partitionName)
-                                .orElseThrow(AssertionError::new);
-                partitionId = partitionRegistration.getPartitionId();
-                registrationPath = ZkData.PartitionZNode.path(tablePath, partitionName);
-                assignmentPath = ZkData.PartitionIdZNode.path(partitionId);
-            }
-            TableBucket bucket = new TableBucket(tableId, partitionId, 0);
-            String bulkLoadId =
-                    String.format(
-                            "550e8400-e29b-41d4-a716-%012d",
-                            (partitioned ? 10 : 0) + state.ordinal());
-            BulkLoadHandle handle =
-                    new BulkLoadHandle(
-                            partitioned
-                                    ? PhysicalTablePath.of(tablePath, "p0")
-                                    : PhysicalTablePath.of(tablePath),
-                            tableId,
-                            partitionId,
-                            bulkLoadId);
-            setDataState(
-                    registrationPath,
-                    tablePath,
-                    partitioned,
-                    BulkLoadDataState.LOADING,
-                    bulkLoadId);
-            String transactionPath =
-                    partitioned
-                            ? ZkData.BulkLoadPartitionTransactionZNode.path(partitionId, bulkLoadId)
-                            : ZkData.BulkLoadTableTransactionZNode.path(tableId, bulkLoadId);
-            zookeeperClient
-                    .getCuratorClient()
-                    .create()
-                    .creatingParentsIfNeeded()
-                    .forPath(
-                            transactionPath,
-                            ZkData.BulkLoadTransactionsZNode.encode(
-                                    reassignmentTransaction(handle, state)));
-            Map<String, ZooKeeperClient.DataWithStat> before = new LinkedHashMap<>();
-            for (String path :
-                    Arrays.asList(
-                            assignmentPath,
-                            ZkData.LeaderAndIsrZNode.path(bucket),
-                            registrationPath,
-                            transactionPath)) {
-                before.put(path, zookeeperClient.getDataWithStat(path));
-            }
-            RebalancePlanForBucket plan =
-                    new RebalancePlanForBucket(
-                            bucket,
-                            0,
-                            0,
-                            Arrays.asList(0, 1, 2),
-                            Arrays.asList(0, 1, replacementServer));
+    @Test
+    void testUncertainBeginRetainsRecoveryOwnership() throws Exception {
+        manager.close();
+        ZooKeeperClient uncertain =
+                new ZooKeeperClient(
+                        new org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener(
+                                client.getCuratorClient(), (message, failure) -> {}),
+                        conf) {
+                    private boolean loseResponse = true;
 
-            eventProcessor
-                    .getRebalanceManager()
-                    .registerRebalance(
-                            "bulk-load-reassignment-" + bulkLoadId,
-                            Collections.singletonMap(bucket, plan),
-                            RebalanceStatus.NOT_STARTED);
-
-            for (Map.Entry<String, ZooKeeperClient.DataWithStat> entry : before.entrySet()) {
-                String path = entry.getKey();
-                ZooKeeperClient.DataWithStat current = zookeeperClient.getDataWithStat(path);
-                assertThat(current.getData())
-                        .as(path + " bytes")
-                        .isEqualTo(entry.getValue().getData());
-                assertThat(current.getStat().getVersion())
-                        .as(path + " version")
-                        .isEqualTo(entry.getValue().getStat().getVersion());
-            }
-            setDataState(registrationPath, tablePath, partitioned, BulkLoadDataState.ACTIVE, null);
-            zookeeperClient.getCuratorClient().delete().forPath(transactionPath);
-
-        } finally {
-            ZOO_KEEPER_EXTENSION_WRAPPER
-                    .getCustomExtension()
-                    .cleanupPath(ZkData.ServerIdZNode.path(replacementServer));
-        }
+                    @Override
+                    public java.util.Map<
+                                    String,
+                                    org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data
+                                            .Stat>
+                            submitCheckedMulti(
+                                    java.util.List<
+                                                    org.apache.fluss.shaded.curator5.org.apache
+                                                            .curator.framework.api.transaction
+                                                            .CuratorOp>
+                                            operations)
+                                    throws Exception {
+                        java.util.Map<
+                                        String,
+                                        org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data
+                                                .Stat>
+                                result = super.submitCheckedMulti(operations);
+                        if (loseResponse) {
+                            loseResponse = false;
+                            throw new org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper
+                                    .KeeperException.ConnectionLossException();
+                        }
+                        return result;
+                    }
+                };
+        manager = newManager(uncertain);
+        CompletableFuture<BeginBulkLoadResponse> result = begin();
+        executor.triggerAll();
+        drainEvents();
+        executor.triggerAll();
+        drainEvents();
+        assertThat(result).isCompletedExceptionally();
+        assertThat(client.getTable(table).get().bulkLoadId).isNotNull();
+        assertThat(capacity.availablePermits()).isZero();
+        CompletableFuture<org.apache.fluss.rpc.messages.GetInProgressBulkLoadResponse> discovered =
+                manager.getInProgress(
+                        PhysicalTablePath.of(table), new FlussPrincipal("alice", "USER"), false);
+        executor.triggerAll();
+        org.apache.fluss.rpc.messages.PbBulkLoadHandle handle =
+                discovered.get().getStatus().getHandle();
+        CompletableFuture<?> aborted =
+                manager.abort(
+                        new BulkLoadHandle(table, handle.getTableId(), handle.getBulkLoadId()));
+        executor.triggerAll();
+        drainEvents();
+        assertThat(aborted).isCompleted();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
     }
 
-    private BulkLoadHandle createRecoverableBulkLoad(String tableName, int id) throws Exception {
-        TablePath tablePath = TablePath.of(defaultDatabase, tableName);
-        long tableId =
-                metadataManager.createTable(
-                        tablePath,
-                        remoteDataDir,
-                        TEST_TABLE,
-                        TableAssignment.builder()
-                                .add(0, BucketAssignment.of(0, 1, 2))
-                                .add(1, BucketAssignment.of(0, 1, 2))
-                                .add(2, BucketAssignment.of(0, 1, 2))
-                                .build(),
-                        false);
-        String bulkLoadId = String.format("550e8400-e29b-41d4-a716-%012d", id);
-        BulkLoadHandle handle =
-                new BulkLoadHandle(PhysicalTablePath.of(tablePath), tableId, null, bulkLoadId);
-        recoveredTargets.add(handle);
-        String registrationPath = ZkData.TableZNode.path(tablePath);
-        setDataState(registrationPath, tablePath, false, BulkLoadDataState.LOADING, bulkLoadId);
-        int metadataVersion =
-                zookeeperClient.getDataWithStat(registrationPath).getStat().getVersion();
-        BulkLoadTransaction transaction =
-                new BulkLoadTransaction(
-                        handle,
-                        BulkLoadState.BEGUN,
-                        "alice",
-                        "USER",
-                        remoteDataDir,
+    @Test
+    void testQueuedBeginCannotRestartItsPreparationBudget() throws Exception {
+        CompletableFuture<BeginBulkLoadResponse> result =
+                manager.begin(
+                        Collections.singletonList(PhysicalTablePath.of(table)),
+                        1L,
+                        new FlussPrincipal("alice", "USER"));
+        long pastAdmissionDeadline = System.currentTimeMillis() + 2L;
+        org.apache.fluss.testutils.common.CommonTestUtils.waitUntil(
+                () -> System.currentTimeMillis() >= pastAdmissionDeadline,
+                java.time.Duration.ofSeconds(5),
+                "admitted Begin budget expires before worker execution");
+        executor.triggerAll();
+        drainEvents();
+        executor.triggerAll();
+        drainEvents();
+        assertThat(result).isCompletedExceptionally();
+        assertThat(client.getTable(table).get().bulkLoadId).isNull();
+        assertThat(capacity.availablePermits()).isEqualTo(1);
+    }
+
+    private BulkLoadManager newManager() {
+        return newManager(client);
+    }
+
+    private BulkLoadManager newManager(ZooKeeperClient client) {
+        return new BulkLoadManager(
+                client,
+                conf,
+                context,
+                metadata,
+                channels,
+                executor,
+                events,
+                new CompletedSnapshotStoreManager(
                         1,
-                        metadataVersion,
-                        null,
-                        Long.MAX_VALUE,
-                        null,
-                        null,
-                        null);
-        zookeeperClient
-                .getCuratorClient()
-                .create()
-                .creatingParentsIfNeeded()
-                .forPath(
-                        transactionPath(handle),
-                        ZkData.BulkLoadTransactionsZNode.encode(transaction));
-        return handle;
+                        executor,
+                        client,
+                        TestingMetricGroups.COORDINATOR_METRICS,
+                        bucket -> false),
+                capacity);
     }
 
-    private static String transactionPath(BulkLoadHandle handle) {
-        return ZkData.BulkLoadTableTransactionZNode.path(
-                handle.getTableId(), handle.getBulkLoadId());
-    }
-
-    private static BulkLoadTransaction readBulkLoad(BulkLoadHandle handle) throws Exception {
-        return ZkData.BulkLoadTransactionsZNode.decode(
-                zookeeperClient.getDataWithStat(transactionPath(handle)).getData());
-    }
-
-    private void assertSnapshotAndManifestCommitRejected(
-            Path tempDir, TableBucket tableBucket, long snapshotId) throws Exception {
-        CompletedSnapshot completedSnapshot =
-                mockCompletedSnapshot(tempDir, tableBucket, snapshotId);
-        LeaderAndIsr leaderAndIsr = currentLeaderAndIsr(tableBucket);
-        CompletableFuture<CommitKvSnapshotResponse> snapshotFuture = new CompletableFuture<>();
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(
-                        new CommitKvSnapshotEvent(
-                                new CommitKvSnapshotData(
-                                        completedSnapshot,
-                                        coordinatorContextEpoch(),
-                                        leaderAndIsr.leaderEpoch()),
-                                snapshotFuture));
-        assertThatThrownBy(() -> snapshotFuture.get(20, TimeUnit.SECONDS))
-                .cause()
-                .isInstanceOf(IllegalStateException.class);
-
-        CompletableFuture<CommitRemoteLogManifestResponse> manifestFuture =
-                new CompletableFuture<>();
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(
-                        new CommitRemoteLogManifestEvent(
-                                new CommitRemoteLogManifestData(
-                                        tableBucket,
-                                        new FsPath("file:///tmp/rejected-manifest-" + snapshotId),
-                                        0,
-                                        1,
-                                        coordinatorContextEpoch(),
-                                        leaderAndIsr.leaderEpoch()),
-                                manifestFuture));
-        assertThat(manifestFuture.get(20, TimeUnit.SECONDS).isCommitSuccess()).isFalse();
-        assertThat(
-                        new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient)
-                                .get(tableBucket, snapshotId))
-                .isEmpty();
-        assertThat(zookeeperClient.getRemoteLogManifestHandle(tableBucket)).isEmpty();
-    }
-
-    private int coordinatorContextEpoch() throws Exception {
-        return fromCtx(CoordinatorContext::getCoordinatorEpoch);
-    }
-
-    private LeaderAndIsr currentLeaderAndIsr(TableBucket tableBucket) throws Exception {
-        return fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
-    }
-
-    private static void dispatch(
-            CoordinatorRequestBatch requestBatch,
-            CoordinatorContext context,
-            TablePath tablePath,
-            TableBucket tableBucket,
-            List<Integer> assignment,
-            LeaderAndIsr leaderAndIsr) {
-        requestBatch.newBatch();
-        requestBatch.addNotifyLeaderRequestForTabletServers(
-                Collections.singleton(leaderAndIsr.leader()),
-                PhysicalTablePath.of(tablePath),
-                tableBucket,
-                assignment,
-                leaderAndIsr);
-        requestBatch.sendRequestToTabletServers(context.getCoordinatorEpoch());
-    }
-
-    private void assertInactive(TableBucket tableBucket) throws Exception {
-        fromCtx(
-                context -> {
-                    assertThat(context.getPendingLeaderActivationBuckets())
-                            .containsExactly(tableBucket);
-                    assertThat(context.isLeaderActive(tableBucket)).isFalse();
-                    assertThat(CoordinatorService.computeClusterHealth(context).getStatus())
-                            .isEqualTo(2);
-                    return null;
-                });
-    }
-
-    private static final class ControlledResponseGateway extends TestTabletServerGateway {
-
-        private final CompletableFuture<Void> responseRelease = new CompletableFuture<>();
-        private final AtomicInteger requestCount = new AtomicInteger();
-
-        private ControlledResponseGateway(boolean failResponse) {
-            super(failResponse, Collections.emptySet());
-        }
-
-        @Override
-        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                NotifyLeaderAndIsrRequest request) {
-            requestCount.incrementAndGet();
-            NotifyLeaderAndIsrResponse response = super.notifyLeaderAndIsr(request).join();
-            return responseRelease.thenApply(ignored -> response);
-        }
-
-        @Override
-        public CompletableFuture<UpdateMetadataResponse> updateMetadata(
-                UpdateMetadataRequest request) {
-            return CompletableFuture.completedFuture(new UpdateMetadataResponse());
-        }
-
-        private int getRequestCount() {
-            return requestCount.get();
-        }
-
-        private void releaseResponse() {
-            assertThat(responseRelease.complete(null)).isTrue();
-        }
-    }
-
-    private static ZooKeeperClient newProcessClient() throws Exception {
-        ZooKeeperClient client =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .createZooKeeperClient(NOPErrorHandler.INSTANCE);
-        if (!client.getCuratorClient().blockUntilConnected(30, TimeUnit.SECONDS)) {
-            throw new IllegalStateException("Test TabletServer ZooKeeper session did not connect.");
-        }
-        return client;
-    }
-
-    private static Map<Integer, TabletServerGateway> gateways(
-            TabletServerGateway controlledGateway, int controlledServerId) throws Exception {
-        Map<Integer, TabletServerGateway> gateways = new HashMap<>();
-        for (int serverId : zookeeperClient.getSortedTabletServerList()) {
-            gateways.put(serverId, new TestTabletServerGateway(false, Collections.emptySet()));
-        }
-        gateways.put(controlledServerId, controlledGateway);
-        return gateways;
-    }
-
-    private static TabletServerRegistration registration(int serverId, int serverProtocolVersion) {
-        return new TabletServerRegistration(
-                "rack" + serverId,
-                Collections.singletonList(
-                        new Endpoint("host" + serverId, 1234, DEFAULT_LISTENER_NAME)),
-                System.currentTimeMillis(),
-                TabletServerResource.unknown(),
-                serverProtocolVersion);
-    }
-
-    private void waitForServer(int serverId, boolean expectedLive) {
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    boolean actual =
-                            fromCtx(context -> context.liveTabletServerSet().contains(serverId));
-                    assertThat(actual).isEqualTo(expectedLive);
-                });
-    }
-
-    private static final class ControlledGateway extends TestTabletServerGateway {
-
-        private final CompletableFuture<Void> membershipResponseRelease = new CompletableFuture<>();
-        private final CompletableFuture<Void> roleResponseRelease = new CompletableFuture<>();
-        private final ConcurrentLinkedDeque<String> sequence = new ConcurrentLinkedDeque<>();
-
-        private ControlledGateway() {
-            super(false, Collections.emptySet());
-        }
-
-        @Override
-        public CompletableFuture<UpdateMetadataResponse> updateMetadata(
-                UpdateMetadataRequest request) {
-            boolean empty =
-                    request.getTableMetadatasCount() == 0
-                            && request.getPartitionMetadatasCount() == 0;
-            sequence.add(empty ? "metadata:alive" : "metadata:full");
-            return empty
-                    ? membershipResponseRelease.thenApply(ignored -> new UpdateMetadataResponse())
-                    : CompletableFuture.completedFuture(new UpdateMetadataResponse());
-        }
-
-        @Override
-        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                NotifyLeaderAndIsrRequest request) {
-            sequence.add("notify-role");
-            NotifyLeaderAndIsrResponse response = super.notifyLeaderAndIsr(request).join();
-            return roleResponseRelease.thenApply(ignored -> response);
-        }
-
-        private List<String> sequence() {
-            return sequence.stream().collect(Collectors.toList());
-        }
-    }
-
-    private static void setDataState(
-            String registrationPath,
-            TablePath tablePath,
-            boolean partitioned,
-            BulkLoadDataState dataState,
-            @Nullable String bulkLoadId)
-            throws Exception {
-        byte[] encoded;
-        if (partitioned) {
-            PartitionRegistration registration =
-                    zookeeperClient.getPartition(tablePath, "p0").orElseThrow(AssertionError::new);
-            encoded =
-                    ZkData.PartitionZNode.encode(registration.withDataState(dataState, bulkLoadId));
-        } else {
-            TableRegistration registration =
-                    zookeeperClient.getTable(tablePath).orElseThrow(AssertionError::new);
-            encoded = ZkData.TableZNode.encode(registration.withDataState(dataState, bulkLoadId));
-        }
-        zookeeperClient.getCuratorClient().setData().forPath(registrationPath, encoded);
-    }
-
-    private static BulkLoadTransaction reassignmentTransaction(
-            BulkLoadHandle handle, BulkLoadState state) {
-        boolean commitDecided = state == BulkLoadState.COMMITTING;
-        return new BulkLoadTransaction(
-                handle,
-                commitDecided ? BulkLoadState.COMMITTING : BulkLoadState.BEGUN,
-                "alice",
-                "USER",
-                "file:///tmp",
-                1,
-                0,
-                new long[] {1L},
-                Long.MAX_VALUE,
-                commitDecided ? MANIFEST_SHA256 : null,
+    private CompletableFuture<BeginBulkLoadResponse> begin() {
+        return manager.begin(
+                Collections.singletonList(PhysicalTablePath.of(table)),
                 null,
-                null);
+                new FlussPrincipal("alice", "USER"));
+    }
+
+    private void drainEvents() {
+        while (!events.getEvents().isEmpty()) {
+            AccessContextEvent<?> event = (AccessContextEvent<?>) events.getEvents().remove(0);
+            event.getAccessFunction().apply(context);
+        }
+    }
+
+    private void ensure(String path) throws Exception {
+        if (!client.pathExists(path)) {
+            client.getCuratorClient().create().creatingParentsIfNeeded().forPath(path);
+        }
     }
 }

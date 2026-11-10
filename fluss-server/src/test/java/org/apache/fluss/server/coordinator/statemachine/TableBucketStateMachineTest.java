@@ -135,8 +135,7 @@ class TableBucketStateMachineTest {
                         event -> {
                             // do nothing
                         },
-                        coordinatorContext,
-                        zookeeperClient);
+                        coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
         replicaCapacityController =
                 new ReplicaCapacityController(
@@ -356,16 +355,15 @@ class TableBucketStateMachineTest {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         kvSnapshotLeaseManager,
                         scheduler,
-                        SystemClock.getInstance());
+                        SystemClock.getInstance(),
+                        new java.util.concurrent.Semaphore(
+                                conf.get(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS)));
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
         coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager,
-                        eventManager,
-                        coordinatorContext,
-                        zookeeperClient);
+                        testCoordinatorChannelManager, eventManager, coordinatorContext);
         tableBucketStateMachine =
                 new TableBucketStateMachine(
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);

@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
-import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.UnsupportedVersionException;
@@ -40,23 +39,22 @@ import org.apache.fluss.rpc.messages.GetInProgressBulkLoadResponse;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbBulkLoadStatus;
 import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
+import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.BulkLoadReplicaAction;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadReplicaConvergence.ReplicaConvergenceContext;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.BulkLoadMaintenanceEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.ServerProtocolVersion;
@@ -64,18 +62,17 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.Nullable;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -87,17 +84,33 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromPhysicalTablePath;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Coordinator event-thread owner of the metadata-only BulkLoad lifecycle. */
+/**
+ * Event-thread orchestration of a fixed-target, shared BulkLoad transaction.
+ *
+ * <table>
+ * <caption>Durable transaction transitions</caption>
+ * <tr><th>State</th><th>Work</th><th>Outcome</th></tr>
+ * <tr><td>BEGUN</td><td>Prepare fixed target metadata and validate the common input</td>
+ * <td>COMMITTING, or atomic ABORTED with all owners released</td></tr>
+ * <tr><td>COMMITTING</td><td>Adopt snapshots and confirm every current leader</td>
+ * <td>Atomic COMMITTED with all owners released</td></tr>
+ * <tr><td>Terminal</td><td>Complete requests and retain the result</td><td>Decision preserved</td></tr>
+ * </table>
+ *
+ * <p>The event thread schedules work and publishes matching callbacks. Storage I/O runs on the
+ * coordinator I/O executor. A pending operation retains its identity until it exits. Abort competes
+ * with the commit decision independently of read-only validation. Process-owned capacity remains
+ * held until the terminal decision or epoch shutdown and every outstanding task have completed.
+ */
 @Internal
 public final class BulkLoadManager {
-
-    private static final Logger LOG = LoggerFactory.getLogger(BulkLoadManager.class);
-
     private final ZooKeeperClient zkClient;
     private final BulkLoadMetadataStore metadataStore;
     private final Configuration configuration;
@@ -108,761 +121,77 @@ public final class BulkLoadManager {
     private final BulkLoadReplicaConvergence convergence;
     private final BulkLoadResultGc resultGc;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
+    private final Semaphore capacity;
     private final Map<BulkLoadHandle, PendingBulkLoad> pending = new HashMap<>();
+    private final Set<PendingBulkLoad> admitting = new HashSet<>();
+    private volatile boolean closed;
 
-    /** Creates the production metadata-only manager. */
+    /** Creates the manager with capacity shared by coordinator epochs in this process. */
     public BulkLoadManager(
             ZooKeeperClient zkClient,
             Configuration configuration,
-            CoordinatorContext coordinatorContext,
+            CoordinatorContext context,
             MetadataManager metadataManager,
             CoordinatorChannelManager channelManager,
             ExecutorService ioExecutor,
-            EventManager eventManager,
-            CompletedSnapshotStoreManager completedSnapshotStoreManager) {
-        this.zkClient = checkNotNull(zkClient);
-        this.metadataStore = new BulkLoadMetadataStore(zkClient, coordinatorContext);
-        this.configuration = checkNotNull(configuration);
-        this.coordinatorContext = checkNotNull(coordinatorContext);
-        this.metadataManager = checkNotNull(metadataManager);
-        this.ioExecutor = checkNotNull(ioExecutor);
-        this.eventManager = checkNotNull(eventManager);
-        this.completedSnapshotStoreManager = checkNotNull(completedSnapshotStoreManager);
-        this.convergence = new BulkLoadReplicaConvergence(coordinatorContext, channelManager);
+            EventManager events,
+            CompletedSnapshotStoreManager snapshots,
+            Semaphore capacity) {
+        this.zkClient = zkClient;
+        this.metadataStore = new BulkLoadMetadataStore(zkClient);
+        this.configuration = configuration;
+        this.coordinatorContext = context;
+        this.metadataManager = metadataManager;
+        this.ioExecutor = ioExecutor;
+        this.eventManager = events;
+        this.completedSnapshotStoreManager = snapshots;
+        this.capacity = capacity;
+        this.convergence = new BulkLoadReplicaConvergence(channelManager);
         this.resultGc = new BulkLoadResultGc(zkClient, ioExecutor);
     }
 
-    /** Restores owned transactions before the ordinary replica state machines start. */
+    /** Schedules recovery without performing storage I/O on the event thread. */
     public void restoreTransactions(List<BulkLoadHandle> handles) {
-        pending.clear();
         for (BulkLoadHandle handle : handles) {
-            recordActiveTransaction(readTransactionVersioned(handle));
+            pending.computeIfAbsent(handle, ignored -> new PendingBulkLoad());
         }
     }
 
-    Versioned<BulkLoadTransaction> recordActiveTransaction(
-            Versioned<BulkLoadTransaction> transaction) {
-        pending.computeIfAbsent(
-                                transaction.getValue().getHandle(),
-                                ignored -> new PendingBulkLoad())
-                        .transaction =
-                transaction;
-        return transaction;
-    }
-
-    /** Replays current persisted state independently for every active target. */
+    /** Retries each independently owned transaction. */
     public void resumeActiveTransactions() {
         for (BulkLoadHandle handle : new ArrayList<>(pending.keySet())) {
-            try {
-                advance(handle);
-            } catch (Exception failure) {
-                LOG.warn("Failed to advance active BulkLoad {}.", handle, failure);
+            PendingBulkLoad work = pending.get(handle);
+            if (work.preCommitDeadline <= System.currentTimeMillis() && !work.abortRequested) {
+                abort(handle, BulkLoadAbortReason.DEADLINE_EXCEEDED);
             }
+            advance(handle);
         }
     }
 
-    /**
-     * Resumes a transaction from its persisted decision and target metadata on the event thread. A
-     * target with an outstanding operation is left alone until that operation completes.
-     *
-     * <table>
-     * <caption>Next actions, in priority order</caption>
-     * <tr><th>Current facts</th><th>Action</th><th>Successful outcome</th></tr>
-     * <tr><td>Terminal transaction</td><td>Complete waiters</td><td>Decision unchanged</td></tr>
-     * <tr><td>Persisted abort reason</td><td>Converge ACTIVE replicas and release ownership</td>
-     * <td>ABORTED</td></tr>
-     * <tr><td>BEGUN, cancellation or expired deadline</td><td>Persist abort and ACTIVE target</td>
-     * <td>BEGUN with abort reason; continue convergence</td></tr>
-     * <tr><td>BEGUN, fence not ready</td><td>Fence replicas, prove empty and allocate snapshot IDs</td>
-     * <td>BEGUN with snapshot IDs; complete Begin</td></tr>
-     * <tr><td>BEGUN, fence ready, no input</td><td>Complete Begin and wait for Commit</td>
-     * <td>Commit freezes input without extending the deadline</td></tr>
-     * <tr><td>BEGUN with input</td><td>Validate snapshots, then decide commit</td>
-     * <td>COMMITTING; install snapshots and converge replicas</td></tr>
-     * <tr><td>COMMITTING, target LOADING</td><td>Revalidate, reinstall and converge replicas</td>
-     * <td>COMMITTING with ACTIVE target</td></tr>
-     * <tr><td>COMMITTING, target ACTIVE</td><td>Confirm convergence and release ownership</td>
-     * <td>COMMITTED</td></tr>
-     * </table>
-     *
-     * <p>These actions are derived from existing facts, not additional persisted states. Successful
-     * preparation and validation recheck cancellation before their next write. A durable commit
-     * decision is never aborted because of cancellation or expiry.
-     *
-     * <p>Missing replica observations leave the transaction pending. Async results must pass the
-     * operation, transaction-version and replica-observation checks before any outcome is handled.
-     * Preparation's designated invalid-request failures decide TARGET_NOT_EMPTY; other failures
-     * invalidate the cached transaction and fail current waiters. Later requests, maintenance or
-     * recovery resume from persisted facts, including after an uncertain write outcome.
-     */
-    void advance(BulkLoadHandle handle) throws Exception {
-        PendingBulkLoad work = pending.computeIfAbsent(handle, ignored -> new PendingBulkLoad());
-        if (work.inFlight != null) {
-            return;
-        }
-        try {
-            Optional<Versioned<BulkLoadTransaction>> read =
-                    work.transaction == null
-                            ? readTransaction(handle)
-                            : Optional.of(work.transaction);
-            if (!read.isPresent()) {
-                pending.remove(handle);
-                return;
+    /** Releases epoch ownership while workers retain their capacity until they actually exit. */
+    public void close() {
+        closed = true;
+        Set<PendingBulkLoad> owned = new HashSet<>(pending.values());
+        owned.addAll(admitting);
+        for (PendingBulkLoad work : owned) {
+            if (work.lifetime != null) {
+                work.lifetime.finish();
             }
-            Versioned<BulkLoadTransaction> transaction = read.get();
-            recordActiveTransaction(transaction);
-            BulkLoadTransaction value = transaction.getValue();
-            BulkLoadAbortReason abort = abortDecision(value);
-            BulkLoadDataState targetState =
-                    value.getState() == BulkLoadState.COMMITTING && value.getAbortReason() == null
-                            ? registrationState(readRegistration(handle)).state
-                            : null;
-            switch (nextAction(value, abort, targetState)) {
-                case COMPLETE:
-                    completeTerminalWaiters(value);
-                    break;
-                case RESTORE_ACCESS:
-                    startConvergenceRound(transaction);
-                    break;
-                case ABORT:
-                    startAbortDecision(transaction, checkNotNull(abort), null);
-                    break;
-                case PREPARE:
-                    startFenceRound(transaction);
-                    break;
-                case WAIT_FOR_INPUT:
-                    completePendingBegin(value);
-                    break;
-                case VALIDATE:
-                    startValidateSnapshots(transaction);
-                    break;
-                case CONFIRM_ACTIVE:
-                    requireControl(transaction, BulkLoadDataState.ACTIVE);
-                    startConvergenceRound(transaction);
-                    break;
-                default:
-                    throw new IllegalStateException("Unexpected BulkLoad action.");
+            failWaiters(work, new FlussRuntimeException("Coordinator epoch ended."));
+            if (work.abortResult != null) {
+                work.abortResult.completeExceptionally(invalid("Coordinator epoch ended."));
             }
-        } catch (Exception failure) {
-            invalidate(handle);
-            throw failure;
+            if (work.beginResult != null) {
+                work.beginResult.completeExceptionally(invalid("Coordinator epoch ended."));
+            }
         }
+        pending.clear();
+        admitting.clear();
     }
 
-    /** Selects the action described by {@link #advance} without reading or modifying metadata. */
-    private static NextAction nextAction(
-            BulkLoadTransaction transaction,
-            @Nullable BulkLoadAbortReason abort,
-            @Nullable BulkLoadDataState targetState) {
-        if (transaction.getState().isTerminal()) {
-            return NextAction.COMPLETE;
-        }
-        if (transaction.getAbortReason() != null) {
-            return NextAction.RESTORE_ACCESS;
-        }
-        if (transaction.getState() == BulkLoadState.BEGUN) {
-            if (abort != null) {
-                return NextAction.ABORT;
-            }
-            if (!transaction.isFenceReady()) {
-                return NextAction.PREPARE;
-            }
-            return transaction.getInputSha256() == null
-                    ? NextAction.WAIT_FOR_INPUT
-                    : NextAction.VALIDATE;
-        }
-        return checkNotNull(targetState) == BulkLoadDataState.LOADING
-                ? NextAction.VALIDATE
-                : NextAction.CONFIRM_ACTIVE;
-    }
-
-    /** Returns the reason this transaction must abort, or null while it may still commit. */
-    private @Nullable BulkLoadAbortReason abortDecision(BulkLoadTransaction transaction) {
-        if (transaction.getState() != BulkLoadState.BEGUN || transaction.getAbortReason() != null) {
-            return null;
-        }
-        PendingBulkLoad work = pending.get(transaction.getHandle());
-        if (work != null && work.abortRequested) {
-            return BulkLoadAbortReason.ABORTED_BY_CALLER;
-        }
-        return deadlineReason(transaction, System.currentTimeMillis());
-    }
-
-    /** Returns the deadline this transaction has already missed, or null while it is in time. */
-    static @Nullable BulkLoadAbortReason deadlineReason(BulkLoadTransaction transaction, long now) {
-        if (transaction.getState() != BulkLoadState.BEGUN
-                || transaction.getAbortReason() != null
-                || now < transaction.getDeadlineMs()) {
-            return null;
-        }
-        return BulkLoadAbortReason.DEADLINE_EXCEEDED;
-    }
-
-    /** Handles Begin on the Coordinator event thread. */
+    /** Begins one metadata-only transaction for the whole selected target set. */
     public CompletableFuture<BeginBulkLoadResponse> begin(
-            PhysicalTablePath target, @Nullable Long timeoutMs, FlussPrincipal creator) {
-        CompletableFuture<BeginBulkLoadResponse> future = new CompletableFuture<>();
-        BulkLoadHandle attemptedHandle = null;
-        try {
-            requireClusterCapabilities();
-            BeginAdmission admission = readBeginAdmission(target, timeoutMs, creator);
-            attemptedHandle = admission.transaction.getHandle();
-            PendingBulkLoad work = new PendingBulkLoad();
-            work.beginResult = future;
-            pending.put(attemptedHandle, work);
-            Versioned<BulkLoadTransaction> created =
-                    metadataStore.createTransactionAndFence(
-                            admission.registration,
-                            admission.assignment,
-                            admission.transaction,
-                            coordinatorEpochVersion());
-            recordActiveTransaction(created);
-            advance(created.getValue().getHandle());
-        } catch (Throwable failure) {
-            if (attemptedHandle != null) {
-                PendingBulkLoad work = pending.get(attemptedHandle);
-                if (work != null) {
-                    work.beginResult = null;
-                }
-            }
-            future.completeExceptionally(failure);
-        }
-        return future;
-    }
-
-    /** Handles an ownership-scoped in-progress lookup on the Coordinator event thread. */
-    public CompletableFuture<GetInProgressBulkLoadResponse> getInProgress(
-            PhysicalTablePath target, FlussPrincipal creator, boolean canAlter) {
-        CompletableFuture<GetInProgressBulkLoadResponse> future = new CompletableFuture<>();
-        try {
-            GetInProgressBulkLoadResponse response = new GetInProgressBulkLoadResponse();
-            BulkLoadHandle existing = findExistingTarget(target);
-            if (existing != null) {
-                BulkLoadTransaction transaction = readTransactionVersioned(existing).getValue();
-                if (!sameCreator(creator, transaction) && !canAlter) {
-                    throw new InvalidBulkLoadRequestException(
-                            "BulkLoad target is occupied by another transaction.");
-                }
-                response.setStatus(toStatus(transaction));
-            }
-            future.complete(response);
-        } catch (Throwable failure) {
-            future.completeExceptionally(failure);
-        }
-        return future;
-    }
-
-    /** Handles Commit on the Coordinator event thread. */
-    public CompletableFuture<CommitBulkLoadResponse> commit(
-            BulkLoadHandle handle, @Nullable String inputSha256) {
-        try {
-            Versioned<BulkLoadTransaction> transaction = readTransactionVersioned(handle);
-            if (transaction.getValue().getState() == BulkLoadState.COMMITTED) {
-                if (inputSha256 != null) {
-                    requireSameInput(transaction.getValue(), inputSha256);
-                }
-                completeTerminalWaiters(transaction.getValue());
-                return CompletableFuture.completedFuture(
-                        new CommitBulkLoadResponse().setStatus(toStatus(transaction.getValue())));
-            }
-            if (transaction.getValue().getState() == BulkLoadState.BEGUN) {
-                requireControl(transaction, BulkLoadDataState.LOADING);
-                if (!transaction.getValue().isFenceReady()) {
-                    throw new InvalidBulkLoadRequestException(
-                            "BulkLoad Commit requires an established fence.");
-                }
-                BulkLoadAbortReason expired =
-                        deadlineReason(transaction.getValue(), System.currentTimeMillis());
-                if (expired != null) {
-                    throw new InvalidBulkLoadRequestException(
-                            "BulkLoad deadline expired before Commit: " + expired.name());
-                }
-                if (transaction.getValue().getAbortReason() != null) {
-                    throw new InvalidBulkLoadRequestException(
-                            "BulkLoad Commit conflicts with a persisted abort decision.");
-                }
-                if (transaction.getValue().getInputSha256() == null) {
-                    if (inputSha256 == null) {
-                        throw new InvalidBulkLoadRequestException(
-                                "BulkLoad Commit requires an input digest.");
-                    }
-                    BulkLoadTransaction frozen = transaction.getValue().withInput(inputSha256);
-                    transaction =
-                            recordActiveTransaction(
-                                    metadataStore.update(
-                                            transaction,
-                                            frozen,
-                                            readRegistration(handle),
-                                            null,
-                                            coordinatorEpochVersion()));
-                }
-            } else if (transaction.getValue().getState() != BulkLoadState.COMMITTING) {
-                throw new InvalidBulkLoadRequestException(
-                        "BulkLoad Commit requires BEGUN or COMMITTING.");
-            }
-            if (inputSha256 != null) {
-                requireSameInput(transaction.getValue(), inputSha256);
-            }
-            return awaitTerminal(handle)
-                    .thenApply(
-                            finished -> {
-                                if (finished.getState() == BulkLoadState.ABORTED) {
-                                    throw abortedFailure(finished);
-                                }
-                                return new CommitBulkLoadResponse().setStatus(toStatus(finished));
-                            });
-        } catch (Throwable failure) {
-            invalidate(handle);
-            return FutureUtils.completedExceptionally(failure);
-        }
-    }
-
-    /** Handles Abort on the Coordinator event thread. */
-    public CompletableFuture<AbortBulkLoadResponse> abort(BulkLoadHandle handle) {
-        try {
-            Versioned<BulkLoadTransaction> transaction = readTransactionVersioned(handle);
-            if (transaction.getValue().getState() == BulkLoadState.ABORTED) {
-                completeTerminalWaiters(transaction.getValue());
-                return CompletableFuture.completedFuture(
-                        new AbortBulkLoadResponse().setStatus(toStatus(transaction.getValue())));
-            }
-            if (transaction.getValue().getState() != BulkLoadState.BEGUN) {
-                throw new InvalidBulkLoadRequestException("BulkLoad Abort requires BEGUN.");
-            }
-            pending.get(handle).abortRequested = true;
-            return awaitTerminal(handle)
-                    .thenApply(
-                            finished -> new AbortBulkLoadResponse().setStatus(toStatus(finished)));
-        } catch (Throwable failure) {
-            return FutureUtils.completedExceptionally(failure);
-        }
-    }
-
-    /** Retries active transactions and collects expired terminal results. */
-    public void process(BulkLoadMaintenanceEvent event) {
-        resumeActiveTransactions();
-        resultGc.runMaintenance(
-                System.currentTimeMillis(), coordinatorContext.getCoordinatorZkVersion());
-    }
-
-    private void startFenceRound(Versioned<BulkLoadTransaction> transaction) throws Exception {
-        BulkLoadHandle handle = transaction.getValue().getHandle();
-        requireControl(transaction, BulkLoadDataState.LOADING);
-        Versioned<? extends TableAssignment> assignment = readAssignment(handle);
-        ReplicaConvergenceContext round = registrationsForRound(assignment, true);
-        if (round == null) {
-            return;
-        }
-        int bucketCount = targetBucketCount(handle);
-        await(
-                transaction,
-                convergence
-                        .apply(
-                                transaction.getValue(),
-                                round,
-                                BulkLoadReplicaAction.FENCE_EMPTY_TARGET)
-                        .thenCompose(
-                                ignored ->
-                                        io(
-                                                () -> {
-                                                    proveRemoteEmpty(
-                                                            handle,
-                                                            assignment.getValue(),
-                                                            bucketCount);
-                                                    return allocateSnapshotIds(handle, bucketCount);
-                                                })),
-                round,
-                (current, snapshotIds) -> onTargetPrepared(current, round, snapshotIds),
-                this::onPrepareFailed);
-    }
-
-    /** Publishes the prepared snapshot IDs only while the transaction may still commit. */
-    private void onTargetPrepared(
-            Versioned<BulkLoadTransaction> current,
-            ReplicaConvergenceContext round,
-            long[] snapshotIds)
-            throws Exception {
-        if (tryAbortBeforeCommit(current)) {
-            return;
-        }
-        BulkLoadHandle handle = current.getValue().getHandle();
-        Versioned<BulkLoadTransaction> ready =
-                recordActiveTransaction(
-                        metadataStore.update(
-                                current,
-                                current.getValue().withSnapshotIds(snapshotIds),
-                                readRegistration(handle),
-                                round,
-                                coordinatorEpochVersion()));
-        completePendingBegin(ready.getValue());
-    }
-
-    /** Decides TARGET_NOT_EMPTY for the preparation stage's designated invalid-request failures. */
-    private void onPrepareFailed(Versioned<BulkLoadTransaction> current, Throwable failure)
-            throws Exception {
-        if (ExceptionUtils.findThrowable(failure, InvalidBulkLoadRequestException.class)
-                .isPresent()) {
-            startAbortDecision(
-                    current,
-                    BulkLoadAbortReason.TARGET_NOT_EMPTY,
-                    ExceptionUtils.stringifyException(failure));
-        } else {
-            throw new CompletionException(unwrap(failure));
-        }
-    }
-
-    private void startValidateSnapshots(Versioned<BulkLoadTransaction> transaction)
-            throws Exception {
-        requireControl(transaction, BulkLoadDataState.LOADING);
-        BulkLoadTransaction value = transaction.getValue();
-        BulkLoadHandle handle = value.getHandle();
-        TableInfo tableInfo = tableInfo(handle);
-        long maxMetadataBytes =
-                configuration.get(ConfigOptions.BULKLOAD_SNAPSHOT_METADATA_MAX_SIZE).getBytes();
-        await(
-                transaction,
-                io(
-                        () ->
-                                new BulkLoadSnapshotValidator()
-                                        .validate(
-                                                handle,
-                                                value.getRemoteDataDir(),
-                                                value.getInputSha256(),
-                                                checkNotNull(value.getSnapshotIds()),
-                                                tableInfo.getTableConfig().getChangelogImage(),
-                                                maxMetadataBytes)),
-                null,
-                this::onSnapshotsValidated,
-                null);
-    }
-
-    /** Checks cancellation before deciding commit, or resumes an existing commit decision. */
-    private void onSnapshotsValidated(
-            Versioned<BulkLoadTransaction> current, List<CompletedSnapshot> snapshots)
-            throws Exception {
-        if (tryAbortBeforeCommit(current)) {
-            return;
-        }
-        BulkLoadHandle handle = current.getValue().getHandle();
-        Versioned<?> registration = readRegistration(handle);
-        requireControl(current.getValue(), registration, BulkLoadDataState.LOADING);
-        if (current.getValue().getState() == BulkLoadState.BEGUN) {
-            current =
-                    recordActiveTransaction(
-                            metadataStore.update(
-                                    current,
-                                    current.getValue().committing(),
-                                    registration,
-                                    null,
-                                    coordinatorEpochVersion()));
-        }
-        installBuckets(current, registration, snapshots);
-    }
-
-    private void installBuckets(
-            Versioned<BulkLoadTransaction> transaction,
-            Versioned<?> registration,
-            List<CompletedSnapshot> snapshots) {
-        BulkLoadHandle handle = transaction.getValue().getHandle();
-        int epochVersion = coordinatorEpochVersion();
-        await(
-                transaction,
-                io(
-                        () -> {
-                            for (CompletedSnapshot snapshot : snapshots) {
-                                completedSnapshotStoreManager
-                                        .getOrCreateCompletedSnapshotStore(
-                                                handle.getTarget().getTablePath(),
-                                                snapshot.getTableBucket())
-                                        .registerExternalSnapshot(
-                                                snapshot,
-                                                () ->
-                                                        metadataStore.adoptBucketMetadata(
-                                                                transaction,
-                                                                registration,
-                                                                snapshot.getTableBucket()
-                                                                        .getBucket(),
-                                                                new BucketSnapshot(
-                                                                        snapshot.getSnapshotID(),
-                                                                        snapshot.getLogOffset(),
-                                                                        snapshot.getMetadataFilePath()
-                                                                                .toString()),
-                                                                epochVersion));
-                            }
-                            return null;
-                        }),
-                null,
-                (current, ignored) -> onSnapshotsInstalled(current),
-                null);
-    }
-
-    /** Continues replica convergence after snapshot installation. */
-    private void onSnapshotsInstalled(Versioned<BulkLoadTransaction> current) throws Exception {
-        requireControl(current, BulkLoadDataState.LOADING);
-        startConvergenceRound(current);
-    }
-
-    private void startConvergenceRound(Versioned<BulkLoadTransaction> transaction)
-            throws Exception {
-        BulkLoadTransaction value = transaction.getValue();
-        BulkLoadHandle handle = value.getHandle();
-        Versioned<? extends TableAssignment> assignment = readAssignment(handle);
-        ReplicaConvergenceContext confirmation = registrationsForRound(assignment, false);
-        if (confirmation == null) {
-            return;
-        }
-        BulkLoadDataState targetState = registrationState(readRegistration(handle)).state;
-        BulkLoadReplicaAction action =
-                targetState == BulkLoadDataState.LOADING
-                        ? BulkLoadReplicaAction.RECOVER_LOADING_TARGET
-                        : BulkLoadReplicaAction.CONFIRM_ACTIVE_TARGET;
-        await(
-                transaction,
-                convergence.apply(value, confirmation, action),
-                confirmation,
-                (current, ignored) -> onReplicasConverged(current, confirmation, targetState),
-                null);
-    }
-
-    /** Publishes ACTIVE after LOADING convergence, or releases an already ACTIVE target. */
-    private void onReplicasConverged(
-            Versioned<BulkLoadTransaction> current,
-            ReplicaConvergenceContext confirmation,
-            BulkLoadDataState targetState)
-            throws Exception {
-        BulkLoadHandle handle = current.getValue().getHandle();
-        Versioned<?> registration = readRegistration(handle);
-        requireControl(current.getValue(), registration, targetState);
-        BulkLoadTransaction next =
-                targetState == BulkLoadDataState.LOADING
-                        ? current.getValue()
-                                .activated(
-                                        registration.getVersion() + 1,
-                                        current.getValue().getAbortReason(),
-                                        current.getValue().getAbortMessage())
-                        : current.getValue()
-                                .released(
-                                        registration.getVersion() + 1,
-                                        Math.addExact(
-                                                System.currentTimeMillis(),
-                                                configuration
-                                                        .get(
-                                                                ConfigOptions
-                                                                        .BULKLOAD_RESULT_RETENTION)
-                                                        .toMillis()));
-        recordActiveTransaction(
-                metadataStore.update(
-                        current, next, registration, confirmation, coordinatorEpochVersion()));
-        advance(handle);
-    }
-
-    private boolean tryAbortBeforeCommit(Versioned<BulkLoadTransaction> transaction)
-            throws Exception {
-        BulkLoadAbortReason abort = abortDecision(transaction.getValue());
-        if (abort == null) {
-            return false;
-        }
-        startAbortDecision(transaction, abort, null);
-        return true;
-    }
-
-    /** Persists the abort decision and the rollback to ordinary ACTIVE metadata in one write. */
-    private void startAbortDecision(
-            Versioned<BulkLoadTransaction> transaction,
-            BulkLoadAbortReason reason,
-            @Nullable String lastError)
-            throws Exception {
-        BulkLoadHandle handle = transaction.getValue().getHandle();
-        Versioned<?> registration = readRegistration(handle);
-        requireControl(transaction.getValue(), registration, BulkLoadDataState.LOADING);
-        recordActiveTransaction(
-                metadataStore.update(
-                        transaction,
-                        transaction
-                                .getValue()
-                                .activated(registration.getVersion() + 1, reason, lastError),
-                        registration,
-                        null,
-                        coordinatorEpochVersion()));
-        advance(handle);
-    }
-
-    private void completeTerminalWaiters(BulkLoadTransaction finished) {
-        PendingBulkLoad work = pending.remove(finished.getHandle());
-        if (work == null) {
-            return;
-        }
-        if (finished.getState() == BulkLoadState.ABORTED && work.beginResult != null) {
-            work.beginResult.completeExceptionally(abortedFailure(finished));
-            work.beginResult = null;
-        }
-        if (work.terminalResult != null) {
-            work.terminalResult.complete(finished);
-        }
-    }
-
-    private static InvalidBulkLoadRequestException abortedFailure(BulkLoadTransaction finished) {
-        return new InvalidBulkLoadRequestException(
-                "BulkLoad aborted while the request was pending: "
-                        + finished.getAbortReason()
-                        + (finished.getAbortMessage() == null
-                                ? ""
-                                : ": " + finished.getAbortMessage()));
-    }
-
-    private <T> CompletableFuture<T> io(Callable<T> operation) {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    try {
-                        return operation.call();
-                    } catch (Exception failure) {
-                        throw new CompletionException(failure);
-                    }
-                },
-                ioExecutor);
-    }
-
-    /**
-     * Dispatches matching async results on the event thread after rechecking the transaction and
-     * replica observations. Stage handlers own transition, cancellation and designated failure
-     * policies; unmatched or stale results never reach either handler.
-     */
-    private <T> void await(
-            Versioned<BulkLoadTransaction> observed,
-            CompletableFuture<T> completion,
-            @Nullable ReplicaConvergenceContext confirmation,
-            Continuation<T> continuation,
-            @Nullable FailureHandler failureHandler) {
-        BulkLoadHandle handle = observed.getValue().getHandle();
-        Object operation = new Object();
-        PendingBulkLoad work = pending.get(handle);
-        work.inFlight = operation;
-        completion.whenComplete(
-                (result, failure) ->
-                        eventManager.put(
-                                new AccessContextEvent<Void>(
-                                        ignored -> {
-                                            if (pending.get(handle) != work
-                                                    || work.inFlight != operation) {
-                                                return null;
-                                            }
-                                            work.inFlight = null;
-                                            try {
-                                                Versioned<BulkLoadTransaction> current =
-                                                        readTransactionVersioned(handle);
-                                                if (current.getVersion() != observed.getVersion()) {
-                                                    advance(handle);
-                                                    return null;
-                                                }
-                                                if (confirmation != null
-                                                        && !confirmation.matchesRoundFacts(
-                                                                readAssignment(handle),
-                                                                coordinatorContext,
-                                                                readRegisteredTabletServers())) {
-                                                    advance(handle);
-                                                    return null;
-                                                }
-                                                if (failure != null) {
-                                                    if (failureHandler != null) {
-                                                        failureHandler.run(current, failure);
-                                                    } else {
-                                                        throw new CompletionException(
-                                                                unwrap(failure));
-                                                    }
-                                                } else {
-                                                    continuation.run(current, result);
-                                                }
-                                            } catch (Throwable error) {
-                                                invalidate(handle);
-                                                failWaiters(handle, unwrap(error));
-                                            }
-                                            return null;
-                                        })));
-    }
-
-    @FunctionalInterface
-    private interface Continuation<T> {
-        void run(Versioned<BulkLoadTransaction> transaction, T result) throws Exception;
-    }
-
-    @FunctionalInterface
-    private interface FailureHandler {
-        void run(Versioned<BulkLoadTransaction> transaction, Throwable failure) throws Exception;
-    }
-
-    private enum NextAction {
-        COMPLETE,
-        RESTORE_ACCESS,
-        ABORT,
-        PREPARE,
-        WAIT_FOR_INPUT,
-        VALIDATE,
-        CONFIRM_ACTIVE
-    }
-
-    private long[] allocateSnapshotIds(BulkLoadHandle handle, int count) throws Exception {
-        long[] snapshotIds = new long[count];
-        for (int bucketId = 0; bucketId < count; bucketId++) {
-            TableBucket tableBucket =
-                    new TableBucket(handle.getTableId(), handle.getPartitionId(), bucketId);
-            snapshotIds[bucketId] = zkClient.allocateTableBucketSnapshotId(tableBucket);
-        }
-        return snapshotIds;
-    }
-
-    private void proveRemoteEmpty(BulkLoadHandle handle, TableAssignment assignment, int count)
-            throws Exception {
-        requireCompleteAssignment(handle, assignment, count);
-        for (int bucketId = 0; bucketId < count; bucketId++) {
-            TableBucket bucket =
-                    new TableBucket(handle.getTableId(), handle.getPartitionId(), bucketId);
-            if (!zkClient.listBucketSnapshotIds(bucket).isEmpty()
-                    || zkClient.getRemoteLogManifestHandle(bucket).isPresent()) {
-                throw new InvalidBulkLoadRequestException(
-                        "BulkLoad target has ordinary remote data for " + bucket + '.');
-            }
-        }
-    }
-
-    private BeginAdmission readBeginAdmission(
-            PhysicalTablePath target, @Nullable Long timeoutMs, FlussPrincipal creator)
-            throws Exception {
-        TablePath tablePath = target.getTablePath();
-        PhysicalTarget physical = readPhysicalTarget(target);
-        TableInfo tableInfo = physical.tableInfo;
-        if (tableInfo.getPrimaryKeys().isEmpty()) {
-            throw new InvalidBulkLoadRequestException("BulkLoad requires a primary-key table.");
-        }
-        SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
-        if (!schemaInfo.getSchema().getAutoIncrementColumnNames().isEmpty()) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad does not support auto-increment columns.");
-        }
-        Long partitionId = physical.partitionId;
-        Versioned<?> registration = physical.registration;
-        String remoteDataDir = physical.remoteDataDir;
-        RegistrationState state = registrationState(registration);
-        if (state.state != BulkLoadDataState.ACTIVE || state.bulkLoadId != null) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad target is occupied or its data state changed.");
-        }
-        BulkLoadHandle handle =
-                new BulkLoadHandle(
-                        target, tableInfo.getTableId(), partitionId, UUID.randomUUID().toString());
-        Versioned<? extends TableAssignment> assignment = readAssignment(handle);
-        if (remoteDataDir == null || remoteDataDir.isEmpty()) {
-            throw new InvalidBulkLoadRequestException("BulkLoad remote data directory is missing.");
-        }
-        requireCompleteAssignment(handle, assignment.getValue(), tableInfo.getNumBuckets());
-        int active = pending.size();
-        int limit = configuration.get(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS);
-        if (active >= limit) {
-            throw new InvalidBulkLoadRequestException("BulkLoad active transaction limit reached.");
-        }
-        requireFound(
-                ZkData.SchemaZNode.path(tablePath, schemaInfo.getSchemaId()),
-                ZkData.SchemaZNode::decode,
-                "schema");
+            List<PhysicalTablePath> targets, @Nullable Long timeoutMs, FlussPrincipal creator) {
         long timeout =
                 timeoutMs == null
                         ? configuration
@@ -874,178 +203,745 @@ public final class BulkLoadManager {
                         > configuration
                                 .get(ConfigOptions.COORDINATOR_BULKLOAD_TIMEOUT_MAX)
                                 .toMillis()) {
-            throw new InvalidBulkLoadRequestException("Invalid BulkLoad timeout.");
+            return FutureUtils.completedExceptionally(invalid("Invalid BulkLoad timeout."));
         }
-        long now = System.currentTimeMillis();
-        BulkLoadTransaction transaction =
-                new BulkLoadTransaction(
-                        handle,
-                        BulkLoadState.BEGUN,
-                        creator.getName(),
-                        creator.getType(),
-                        remoteDataDir,
-                        schemaInfo.getSchemaId(),
-                        registration.getVersion() + 1,
-                        null,
-                        Math.addExact(now, timeout),
-                        null,
-                        null,
-                        null);
-        return new BeginAdmission(registration, assignment, transaction);
+        final long deadline = Math.addExact(System.currentTimeMillis(), timeout);
+        if (!capacity.tryAcquire()) {
+            return FutureUtils.completedExceptionally(
+                    invalid("BulkLoad active work limit reached."));
+        }
+        PendingBulkLoad work = new PendingBulkLoad();
+        work.lifetime = new WorkLifetime(capacity);
+        CompletableFuture<BeginBulkLoadResponse> response = new CompletableFuture<>();
+        work.beginResult = response;
+        admitting.add(work);
+        int epoch = coordinatorEpochVersion();
+        io(
+                        work,
+                        () -> {
+                            requireClusterCapabilities();
+                            if (targets.isEmpty()
+                                    || new HashSet<>(targets).size() != targets.size()) {
+                                throw invalid(
+                                        "BulkLoad requires nonempty, duplicate-free targets.");
+                            }
+                            TablePath path = targets.get(0).getTablePath();
+                            Versioned<TableRegistration> table =
+                                    requireFound(
+                                            ZkData.TableZNode.path(path),
+                                            ZkData.TableZNode::decode,
+                                            "table registration");
+                            TableInfo info = metadataManager.getTable(path);
+                            SchemaInfo schema = metadataManager.getLatestSchema(path);
+                            if (info.getPrimaryKeys().isEmpty()
+                                    || !schema.getSchema()
+                                            .getAutoIncrementColumnNames()
+                                            .isEmpty()) {
+                                throw invalid(
+                                        "BulkLoad requires a primary-key table without auto-increment columns.");
+                            }
+                            List<BulkLoadTarget> frozen = new ArrayList<>();
+                            List<Versioned<?>> registrations = new ArrayList<>();
+                            List<Versioned<? extends TableAssignment>> assignments =
+                                    new ArrayList<>();
+                            Map<PhysicalTablePath, TableInfo> infos = new HashMap<>();
+                            for (PhysicalTablePath target : targets) {
+                                if (!path.equals(target.getTablePath())
+                                        || (info.isPartitioned()
+                                                != (target.getPartitionName() != null))) {
+                                    throw invalid(
+                                            "BulkLoad targets must be physical targets of one table.");
+                                }
+                                PhysicalTarget physical = readPhysicalTarget(target);
+                                if (physical.tableInfo.getTableId() != info.getTableId()
+                                        || BulkLoadMetadataStore.owner(
+                                                        physical.registration.getValue())
+                                                != null) {
+                                    throw invalid("BulkLoad target identity or owner changed.");
+                                }
+                                if (physical.remoteDataDir == null
+                                        || physical.remoteDataDir.isEmpty()) {
+                                    throw invalid("Missing remote data directory.");
+                                }
+                                Versioned<? extends TableAssignment> assignment =
+                                        readAssignment(info.getTableId(), physical.partitionId);
+                                requireCompleteAssignment(
+                                        info.getTableId(),
+                                        physical.partitionId,
+                                        assignment.getValue(),
+                                        physical.tableInfo.getNumBuckets());
+                                long[] ids = new long[physical.tableInfo.getNumBuckets()];
+                                for (int bucket = 0; bucket < ids.length; bucket++) {
+                                    ids[bucket] =
+                                            zkClient.allocateTableBucketSnapshotId(
+                                                    new TableBucket(
+                                                            info.getTableId(),
+                                                            physical.partitionId,
+                                                            bucket));
+                                }
+                                frozen.add(
+                                        new BulkLoadTarget(
+                                                target,
+                                                physical.partitionId,
+                                                physical.remoteDataDir,
+                                                schema.getSchemaId(),
+                                                physical.registration.getVersion() + 1,
+                                                ids));
+                                registrations.add(physical.registration);
+                                assignments.add(assignment);
+                                infos.put(target, physical.tableInfo);
+                            }
+                            BulkLoadHandle handle =
+                                    new BulkLoadHandle(
+                                            path, info.getTableId(), UUID.randomUUID().toString());
+                            BulkLoadTransaction transaction =
+                                    new BulkLoadTransaction(
+                                            handle,
+                                            BulkLoadState.BEGUN,
+                                            creator.getName(),
+                                            creator.getType(),
+                                            frozen,
+                                            deadline,
+                                            null,
+                                            null,
+                                            null);
+                            // The shared table registration protects table identity and the
+                            // layout/schema context.
+                            if (table.getValue().tableId != info.getTableId()) {
+                                throw invalid("BulkLoad table identity changed.");
+                            }
+                            work.attemptedHandle = handle;
+                            if (System.currentTimeMillis() >= deadline) {
+                                throw invalid(
+                                        "BulkLoad Begin preparation deadline expired before ownership.");
+                            }
+                            Versioned<BulkLoadTransaction> created =
+                                    metadataStore.createTransactionAndOwn(
+                                            registrations, assignments, table, transaction, epoch);
+                            BeginBulkLoadResponse result =
+                                    new BeginBulkLoadResponse().setHandle(toPbHandle(handle));
+                            for (BulkLoadTarget target : transaction.getTargets()) {
+                                TableInfo effective = infos.get(target.getTarget());
+                                result.addAllTargetInfos(
+                                        Collections.singletonList(toTargetInfo(target, effective)));
+                            }
+                            return new BeginResult(created, result);
+                        })
+                .whenComplete(
+                        (result, failure) -> {
+                            if (closed) {
+                                work.lifetime.finish();
+                                response.completeExceptionally(invalid("Coordinator epoch ended."));
+                                return;
+                            }
+                            onEvent(
+                                    () -> {
+                                        admitting.remove(work);
+                                        if (failure != null) {
+                                            if (work.attemptedHandle == null) {
+                                                work.lifetime.finish();
+                                            } else {
+                                                pending.put(work.attemptedHandle, work);
+                                                advance(work.attemptedHandle);
+                                            }
+                                            response.completeExceptionally(unwrap(failure));
+                                            work.beginResult = null;
+                                            return;
+                                        }
+                                        work.preCommitDeadline =
+                                                result.transaction.getValue().getDeadlineMs();
+                                        pending.put(
+                                                result.transaction.getValue().getHandle(), work);
+                                        response.complete(result.response);
+                                        work.beginResult = null;
+                                    });
+                        });
+        return response;
     }
 
-    private void requireClusterCapabilities() throws Exception {
-        List<CoordinatorAddress> coordinators = new ArrayList<>();
-        for (String id : zkClient.getCoordinatorServerList()) {
-            coordinators.add(
-                    requireFound(
-                                    ZkData.CoordinatorIdZNode.path(id),
-                                    ZkData.CoordinatorIdZNode::decode,
-                                    "Coordinator registration")
-                            .getValue());
-        }
-        List<RegisteredTabletServer> tablets = readRegisteredTabletServers();
-        if (!ServerProtocolVersion.coordinatorsSupportBulkLoad(coordinators)) {
-            throw new UnsupportedVersionException(
-                    "Every Coordinator must cover the BulkLoad capability set.");
-        }
-        validateTabletCapabilities(tablets);
+    /** Finds the shared owner of one physical target. */
+    public CompletableFuture<GetInProgressBulkLoadResponse> getInProgress(
+            PhysicalTablePath target, FlussPrincipal creator, boolean canAlter) {
+        return io(
+                null,
+                () -> {
+                    PhysicalTarget physical = readPhysicalTarget(target);
+                    String owner = BulkLoadMetadataStore.owner(physical.registration.getValue());
+                    GetInProgressBulkLoadResponse response = new GetInProgressBulkLoadResponse();
+                    if (owner != null) {
+                        BulkLoadTransaction transaction =
+                                readTransactionVersioned(
+                                                new BulkLoadHandle(
+                                                        target.getTablePath(),
+                                                        physical.tableInfo.getTableId(),
+                                                        owner))
+                                        .getValue();
+                        if (!canAlter
+                                && !(creator.getName().equals(transaction.getCreatorName())
+                                        && creator.getType()
+                                                .equals(transaction.getCreatorType()))) {
+                            throw invalid("BulkLoad target is occupied by another transaction.");
+                        }
+                        response.setStatus(toStatus(transaction));
+                    }
+                    return response;
+                });
     }
 
-    private static void validateTabletCapabilities(List<RegisteredTabletServer> registrations) {
-        List<TabletServerRegistration> values = new ArrayList<>();
-        for (RegisteredTabletServer registration : registrations) {
-            values.add(registration.getRegistration());
+    /** Freezes common input and waits for all current leaders to restore it. */
+    public CompletableFuture<CommitBulkLoadResponse> commit(
+            BulkLoadHandle handle, @Nullable String digest) {
+        PendingBulkLoad work = pending.get(handle);
+        if (work == null) {
+            if (!capacity.tryAcquire()) {
+                return FutureUtils.completedExceptionally(
+                        invalid("BulkLoad active work limit reached."));
+            }
+            work = new PendingBulkLoad();
+            work.lifetime = new WorkLifetime(capacity);
+            pending.put(handle, work);
         }
-        if (!ServerProtocolVersion.tabletServersSupportBulkLoad(values)) {
-            throw new UnsupportedVersionException(
-                    "Every TabletServer must cover the BulkLoad capability set.");
+        if (work.inputRequested != null && digest != null && !work.inputRequested.equals(digest)) {
+            return FutureUtils.completedExceptionally(
+                    invalid("Commit conflicts with the frozen input."));
         }
+        if (digest != null) {
+            work.inputRequested = digest;
+        }
+        if (work.result == null) {
+            work.result = new CompletableFuture<>();
+        }
+        CompletableFuture<BulkLoadTransaction> result = work.result;
+        work.commitRequested = true;
+        advance(handle);
+        return result.thenApply(
+                transaction -> {
+                    if (transaction.getState() != BulkLoadState.COMMITTED) {
+                        throw invalid("BulkLoad transaction is aborted.");
+                    }
+                    if (digest != null && !digest.equals(transaction.getInputSha256())) {
+                        throw invalid("Commit conflicts with the frozen input.");
+                    }
+                    return new CommitBulkLoadResponse().setStatus(toStatus(transaction));
+                });
     }
 
-    List<RegisteredTabletServer> readRegisteredTabletServers() throws Exception {
-        List<RegisteredTabletServer> result = new ArrayList<>();
-        for (int id : zkClient.getSortedTabletServerList()) {
-            Versioned<TabletServerRegistration> registration =
-                    requireFound(
-                            ZkData.ServerIdZNode.path(id),
-                            ZkData.ServerIdZNode::decode,
-                            "TabletServer registration");
-            result.add(
-                    new RegisteredTabletServer(
-                            id,
-                            registration.getValue(),
-                            registration.getPath(),
-                            registration.getVersion(),
-                            registration.getEphemeralOwner()));
-        }
-        return Collections.unmodifiableList(result);
+    /** Persists Abort independently of outstanding read-only validation. */
+    public CompletableFuture<AbortBulkLoadResponse> abort(BulkLoadHandle handle) {
+        return abort(handle, BulkLoadAbortReason.ABORTED_BY_CALLER);
     }
 
-    private @Nullable ReplicaConvergenceContext registrationsForRound(
-            Versioned<? extends TableAssignment> assignment, boolean requireAllHolders)
+    private CompletableFuture<AbortBulkLoadResponse> abort(
+            BulkLoadHandle handle, BulkLoadAbortReason reason) {
+        PendingBulkLoad existing = pending.get(handle);
+        PendingBulkLoad work = existing == null ? new PendingBulkLoad() : existing;
+        if (work.abortResult != null) {
+            return work.abortResult;
+        }
+        if (existing == null) {
+            admitting.add(work);
+        }
+        work.abortRequested = true;
+        int epoch = coordinatorEpochVersion();
+        work.abortResult = new CompletableFuture<>();
+        CompletableFuture<AbortBulkLoadResponse> response = work.abortResult;
+        io(
+                        work,
+                        () -> {
+                            Versioned<BulkLoadTransaction> current =
+                                    readTransactionVersioned(handle);
+                            BulkLoadTransaction value = current.getValue();
+                            if (value.getState() == BulkLoadState.ABORTED) {
+                                return current;
+                            }
+                            if (value.getState() != BulkLoadState.BEGUN) {
+                                throw invalid("BulkLoad Abort requires BEGUN.");
+                            }
+                            return metadataStore.update(
+                                    current,
+                                    value.aborted(reason, null, expiry()),
+                                    readOwnedRegistrations(value),
+                                    null,
+                                    epoch);
+                        })
+                .whenComplete(
+                        (finished, failure) -> {
+                            if (closed) {
+                                response.completeExceptionally(invalid("Coordinator epoch ended."));
+                                return;
+                            }
+                            onEvent(
+                                    () -> {
+                                        admitting.remove(work);
+                                        work.abortResult = null;
+                                        if (failure != null) {
+                                            work.abortRequested = false;
+                                            response.completeExceptionally(unwrap(failure));
+                                            return;
+                                        }
+                                        completeTerminal(handle, work, finished.getValue());
+                                        response.complete(
+                                                new AbortBulkLoadResponse()
+                                                        .setStatus(toStatus(finished.getValue())));
+                                    });
+                        });
+        return response;
+    }
+
+    /** Retries recoverable work and collects retained terminal results. */
+    public void process(BulkLoadMaintenanceEvent event) {
+        resumeActiveTransactions();
+        resultGc.runMaintenance(System.currentTimeMillis(), coordinatorEpochVersion());
+    }
+
+    void advance(BulkLoadHandle handle) {
+        PendingBulkLoad work = pending.get(handle);
+        if (closed || work == null || work.inFlight != null) {
+            return;
+        }
+        if (work.lifetime == null) {
+            if (!capacity.tryAcquire()) {
+                return;
+            }
+            work.lifetime = new WorkLifetime(capacity);
+        }
+        Object operation = new Object();
+        work.inFlight = operation;
+        int epoch = coordinatorEpochVersion();
+        int coordinatorEpoch = coordinatorContext.getCoordinatorEpoch();
+        String requestedInput = work.inputRequested;
+        boolean requestedCommit = work.commitRequested;
+        // Own the complete chain, including gaps between I/O tasks and outstanding sends.
+        work.lifetime.tasks.incrementAndGet();
+        io(
+                        work,
+                        () ->
+                                prepareAndConfirm(
+                                        handle,
+                                        work,
+                                        requestedInput,
+                                        requestedCommit,
+                                        epoch,
+                                        coordinatorEpoch))
+                .thenCompose(Function.identity())
+                .whenComplete(
+                        (finished, failure) -> {
+                            work.lifetime.taskExited();
+                            onEvent(
+                                    () -> {
+                                        if (!isCurrent(handle, work, operation)) {
+                                            return;
+                                        }
+                                        work.inFlight = null;
+                                        if (work.terminalResult != null) {
+                                            completeTerminal(handle, work, work.terminalResult);
+                                        } else if (failure == null) {
+                                            completeTerminal(handle, work, finished.getValue());
+                                        } else {
+                                            if (!retryable(failure)) {
+                                                failWaiters(work, unwrap(failure));
+                                            }
+                                            if (ExceptionUtils.findThrowable(
+                                                            failure,
+                                                            BulkLoadNotFoundException.class)
+                                                    .isPresent()) {
+                                                pending.remove(handle, work);
+                                                work.lifetime.finish();
+                                            }
+                                        }
+                                    });
+                        });
+    }
+
+    // Called on the I/O thread. The future covers confirmation and terminal I/O.
+    private CompletableFuture<Versioned<BulkLoadTransaction>> prepareAndConfirm(
+            BulkLoadHandle handle,
+            PendingBulkLoad work,
+            String requestedInput,
+            boolean requestedCommit,
+            int epoch,
+            int coordinatorEpoch)
             throws Exception {
-        List<RegisteredTabletServer> registrations = readRegisteredTabletServers();
-        List<RegisteredTabletServer> recipients =
-                BulkLoadReplicaConvergence.liveRecipients(coordinatorContext, registrations);
-        if (!recipients.isEmpty()) {
-            validateTabletCapabilities(recipients);
+        Versioned<BulkLoadTransaction> current = readTransactionVersioned(handle);
+        BulkLoadTransaction value = current.getValue();
+        work.preCommitDeadline =
+                value.getState() == BulkLoadState.BEGUN ? value.getDeadlineMs() : Long.MAX_VALUE;
+        if (value.getState().isTerminal()) {
+            return CompletableFuture.completedFuture(current);
         }
-        Set<Integer> registeredIds = new HashSet<>();
-        for (RegisteredTabletServer registration : registrations) {
-            registeredIds.add(registration.getServerId());
-        }
-        ReplicaConvergenceContext round =
-                new ReplicaConvergenceContext(assignment, recipients, Collections.emptyMap());
-        for (Map.Entry<Integer, RegisteredTabletServer> holder : round.holders.entrySet()) {
-            if (holder.getValue() == null
-                    && (requireAllHolders || registeredIds.contains(holder.getKey()))) {
-                return null;
+        List<Versioned<?>> registrations = readOwnedRegistrations(value);
+        if (value.getState() == BulkLoadState.BEGUN) {
+            BulkLoadAbortReason expired = deadlineReason(value, System.currentTimeMillis());
+            if (expired != null) {
+                return CompletableFuture.completedFuture(
+                        metadataStore.update(
+                                current,
+                                value.aborted(expired, null, expiry()),
+                                registrations,
+                                null,
+                                epoch));
+            }
+            if (requestedInput != null) {
+                if (value.getInputSha256() != null
+                        && !value.getInputSha256().equals(requestedInput)) {
+                    throw invalid("Commit conflicts with the frozen input.");
+                }
+                if (value.getInputSha256() == null) {
+                    current =
+                            metadataStore.update(
+                                    current,
+                                    value.withInput(requestedInput),
+                                    registrations,
+                                    null,
+                                    epoch);
+                    value = current.getValue();
+                }
+            }
+            if (value.getInputSha256() == null) {
+                if (requestedCommit) {
+                    throw invalid("Commit requires an input digest.");
+                }
+                return CompletableFuture.completedFuture(current);
             }
         }
-        return round;
+        TableInfo info = metadataManager.getTable(handle.getTablePath());
+        if (info.getTableId() != handle.getTableId()) {
+            throw invalid("BulkLoad table identity changed.");
+        }
+        int schemaId = metadataManager.getLatestSchema(handle.getTablePath()).getSchemaId();
+        for (BulkLoadTarget target : value.getTargets()) {
+            if (schemaId != target.getSchemaId()) {
+                throw invalid("BulkLoad schema changed.");
+            }
+        }
+        if (work.snapshotsToAdopt == null) {
+            work.snapshotsToAdopt =
+                    new ArrayDeque<>(
+                            new BulkLoadSnapshotValidator()
+                                    .validate(
+                                            value,
+                                            info.getTableConfig().getChangelogImage(),
+                                            configuration
+                                                    .get(
+                                                            ConfigOptions
+                                                                    .BULKLOAD_SNAPSHOT_METADATA_MAX_SIZE)
+                                                    .getBytes()));
+        }
+        Versioned<BulkLoadTransaction> validated = current;
+        current = readTransactionVersioned(handle);
+        value = current.getValue();
+        if (value.getState().isTerminal()) {
+            return CompletableFuture.completedFuture(current);
+        }
+        if (current.getVersion() != validated.getVersion()) {
+            throw invalid("BulkLoad changed during validation.");
+        }
+        registrations = readOwnedRegistrations(value);
+        if (value.getState() == BulkLoadState.BEGUN) {
+            if (work.abortRequested) {
+                return CompletableFuture.completedFuture(current);
+            }
+            BulkLoadAbortReason expired = deadlineReason(value, System.currentTimeMillis());
+            if (expired != null) {
+                return CompletableFuture.completedFuture(
+                        metadataStore.update(
+                                current,
+                                value.aborted(expired, null, expiry()),
+                                registrations,
+                                null,
+                                epoch));
+            }
+            current = metadataStore.update(current, value.committing(), registrations, null, epoch);
+            value = current.getValue();
+        }
+        if (value.getState() != BulkLoadState.COMMITTING) {
+            throw invalid("BulkLoad requires a durable commit decision.");
+        }
+        work.preCommitDeadline = Long.MAX_VALUE;
+        Versioned<BulkLoadTransaction> decision = current;
+        Map<Long, Versioned<?>> registrationsByPartition = new HashMap<>();
+        for (Versioned<?> registration : registrations) {
+            Long partitionId =
+                    registration.getValue() instanceof PartitionRegistration
+                            ? ((PartitionRegistration) registration.getValue()).getPartitionId()
+                            : null;
+            registrationsByPartition.put(partitionId, registration);
+        }
+        while (!work.snapshotsToAdopt.isEmpty()) {
+            if (closed) {
+                throw invalid("Coordinator epoch ended.");
+            }
+            CompletedSnapshot snapshot = work.snapshotsToAdopt.peekFirst();
+            completedSnapshotStoreManager
+                    .getOrCreateCompletedSnapshotStore(
+                            handle.getTablePath(), snapshot.getTableBucket())
+                    .registerExternalSnapshot(
+                            snapshot,
+                            () ->
+                                    metadataStore.adoptBucketMetadata(
+                                            decision,
+                                            registrationsByPartition.get(
+                                                    snapshot.getTableBucket().getPartitionId()),
+                                            snapshot.getTableBucket(),
+                                            new BucketSnapshot(
+                                                    snapshot.getSnapshotID(),
+                                                    snapshot.getLogOffset(),
+                                                    snapshot.getMetadataFilePath().toString()),
+                                            epoch));
+            work.snapshotsToAdopt.removeFirst();
+        }
+        ReplicaConvergenceContext round = readRound(value);
+        return convergence
+                .apply(value, round, coordinatorEpoch)
+                .thenCompose(
+                        ignored ->
+                                io(
+                                        work,
+                                        () ->
+                                                metadataStore.update(
+                                                        decision,
+                                                        decision.getValue().committed(expiry()),
+                                                        readOwnedRegistrations(decision.getValue()),
+                                                        round,
+                                                        epoch)));
     }
 
-    private void requireControl(
-            Versioned<BulkLoadTransaction> transaction, BulkLoadDataState state) {
-        BulkLoadTransaction value = transaction.getValue();
-        requireControl(value, readRegistration(value.getHandle()), state);
+    private ReplicaConvergenceContext readRound(BulkLoadTransaction value) throws Exception {
+        List<Versioned<? extends TableAssignment>> assignments = new ArrayList<>();
+        Map<TableBucket, Versioned<LeaderAndIsr>> leaders = new HashMap<>();
+        Map<Integer, Versioned<TabletServerRegistration>> holders = new HashMap<>();
+        for (BulkLoadTarget target : value.getTargets()) {
+            Versioned<? extends TableAssignment> assignment =
+                    readAssignment(value.getTableId(), target.getPartitionId());
+            long[] snapshotIds = target.getSnapshotIds();
+            requireCompleteAssignment(
+                    value.getTableId(),
+                    target.getPartitionId(),
+                    assignment.getValue(),
+                    snapshotIds.length);
+            assignments.add(assignment);
+            for (int id = 0; id < snapshotIds.length; id++) {
+                TableBucket bucket =
+                        new TableBucket(value.getTableId(), target.getPartitionId(), id);
+                Versioned<LeaderAndIsr> leader =
+                        readOptional(
+                                        ZkData.LeaderAndIsrZNode.path(bucket),
+                                        ZkData.LeaderAndIsrZNode::decode)
+                                .orElseThrow(
+                                        () ->
+                                                new org.apache.fluss.exception.TimeoutException(
+                                                        "Current leader is not available."));
+                int serverId = leader.getValue().leader();
+                if (!assignment
+                        .getValue()
+                        .getBucketAssignment(id)
+                        .getReplicas()
+                        .contains(serverId)) {
+                    throw new org.apache.fluss.exception.TimeoutException(
+                            "Current leader is outside the observed assignment.");
+                }
+                if (!holders.containsKey(serverId)) {
+                    Versioned<TabletServerRegistration> server =
+                            readOptional(
+                                            ZkData.ServerIdZNode.path(serverId),
+                                            ZkData.ServerIdZNode::decode)
+                                    .orElseThrow(
+                                            () ->
+                                                    new org.apache.fluss.exception.TimeoutException(
+                                                            "Current leader session is not available."));
+                    holders.put(serverId, server);
+                }
+                leaders.put(bucket, leader);
+            }
+        }
+        return new ReplicaConvergenceContext(
+                assignments,
+                leaders,
+                holders,
+                metadataManager.getTable(value.getHandle().getTablePath()).getBucketCountEpoch());
     }
 
-    static void requireControl(
-            BulkLoadTransaction value, Versioned<?> observation, BulkLoadDataState expected) {
-        RegistrationState registration = registrationState(observation);
-        if (!hasSameTargetIdentity(value.getHandle(), observation.getValue())
-                || registration.state != expected
-                || !value.getBulkLoadId().equals(registration.bulkLoadId)
-                || !value.getMetadataPath().equals(registration.path)
-                || value.getMetadataVersion() != registration.version) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad " + expected + " metadata identity changed.");
+    private boolean isCurrent(BulkLoadHandle handle, PendingBulkLoad work, Object operation) {
+        return !closed && pending.get(handle) == work && work.inFlight == operation;
+    }
+
+    private void completeTerminal(
+            BulkLoadHandle handle, PendingBulkLoad work, BulkLoadTransaction value) {
+        if (!value.getState().isTerminal()) {
+            return;
+        }
+        work.terminalResult = value;
+        if (work.result != null) {
+            work.result.complete(value);
+            work.result = null;
+        }
+        if (work.lifetime != null) {
+            work.lifetime.finish();
+        }
+        // A running stage still owns its capacity and its callback identity.
+        if (work.inFlight == null) {
+            pending.remove(handle, work);
         }
     }
 
-    static boolean hasSameTargetIdentity(BulkLoadHandle handle, Object registration) {
-        if (registration instanceof TableRegistration) {
-            return handle.getPartitionId() == null
-                    && handle.getTableId() == ((TableRegistration) registration).tableId;
+    private void failWaiters(PendingBulkLoad work, Throwable failure) {
+        if (work.result != null) {
+            work.result.completeExceptionally(failure);
+            work.result = null;
         }
-        PartitionRegistration partition = (PartitionRegistration) registration;
-        return handle.getPartitionId() != null
-                && handle.getTableId() == partition.getTableId()
-                && handle.getPartitionId() == partition.getPartitionId();
+    }
+
+    private long expiry() {
+        return Math.addExact(
+                System.currentTimeMillis(),
+                configuration.get(ConfigOptions.BULKLOAD_RESULT_RETENTION).toMillis());
+    }
+
+    static @Nullable BulkLoadAbortReason deadlineReason(BulkLoadTransaction value, long now) {
+        return value.getState() == BulkLoadState.BEGUN && now >= value.getDeadlineMs()
+                ? BulkLoadAbortReason.DEADLINE_EXCEEDED
+                : null;
+    }
+
+    private int coordinatorEpochVersion() {
+        return coordinatorContext.getCoordinatorZkVersion();
+    }
+
+    private <T> CompletableFuture<T> io(@Nullable PendingBulkLoad work, Callable<T> action) {
+        WorkLifetime lifetime = work == null ? null : work.lifetime;
+        if (lifetime != null) {
+            lifetime.tasks.incrementAndGet();
+        }
+        try {
+            return CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            if (closed) {
+                                throw invalid("Coordinator epoch ended.");
+                            }
+                            return action.call();
+                        } catch (Exception failure) {
+                            throw new CompletionException(failure);
+                        } finally {
+                            if (lifetime != null) {
+                                lifetime.taskExited();
+                            }
+                        }
+                    },
+                    ioExecutor);
+        } catch (RuntimeException rejected) {
+            if (lifetime != null) {
+                lifetime.taskExited();
+            }
+            return FutureUtils.completedExceptionally(rejected);
+        }
+    }
+
+    private void onEvent(Runnable action) {
+        if (!closed) {
+            eventManager.put(
+                    new AccessContextEvent<Void>(
+                            ignored -> {
+                                action.run();
+                                return null;
+                            }));
+        }
+    }
+
+    private static boolean retryable(Throwable failure) {
+        return ExceptionUtils.findThrowable(
+                                failure, org.apache.fluss.exception.RetriableException.class)
+                        .isPresent()
+                || ExceptionUtils.findThrowable(
+                                failure, java.util.concurrent.TimeoutException.class)
+                        .isPresent()
+                || ExceptionUtils.findThrowable(failure, java.io.IOException.class).isPresent()
+                || ExceptionUtils.findThrowable(
+                                failure,
+                                org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper
+                                        .KeeperException.class)
+                        .isPresent();
+    }
+
+    private static Throwable unwrap(Throwable failure) {
+        return ExceptionUtils.stripCompletionException(failure);
+    }
+
+    private static InvalidBulkLoadRequestException invalid(String message) {
+        return new InvalidBulkLoadRequestException(message);
     }
 
     Versioned<BulkLoadTransaction> readTransactionVersioned(BulkLoadHandle handle) {
-        PendingBulkLoad work = pending.get(handle);
-        if (work != null && work.transaction != null) {
-            return work.transaction;
-        }
-        Versioned<BulkLoadTransaction> transaction =
-                readTransaction(handle)
-                        .orElseThrow(
-                                () ->
-                                        new InvalidBulkLoadRequestException(
-                                                "Missing BulkLoad transaction."));
-        if (!transaction.getValue().getState().isTerminal() || work != null) {
-            recordActiveTransaction(transaction);
-        }
-        return transaction;
-    }
-
-    private void invalidate(BulkLoadHandle handle) {
-        PendingBulkLoad work = pending.get(handle);
-        if (work != null) {
-            work.transaction = null;
-        }
+        return readTransaction(handle)
+                .orElseThrow(
+                        () ->
+                                new BulkLoadNotFoundException(
+                                        "BulkLoad transaction does not exist."));
     }
 
     Optional<Versioned<BulkLoadTransaction>> readTransaction(BulkLoadHandle handle) {
-        Optional<Versioned<BulkLoadTransaction>> read =
+        Optional<Versioned<BulkLoadTransaction>> result =
                 readOptional(
                         BulkLoadMetadataStore.transactionPath(handle),
                         ZkData.BulkLoadTransactionsZNode::decode);
-        if (read.isPresent() && !read.get().getValue().getHandle().equals(handle)) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad handle does not match the persisted transaction.");
+        if (result.isPresent() && !result.get().getValue().getHandle().equals(handle)) {
+            throw invalid("BulkLoad handle does not match the persisted transaction.");
         }
-        return read;
+        return result;
     }
 
-    Versioned<? extends TableAssignment> readAssignment(BulkLoadHandle handle) {
-        return handle.getPartitionId() == null
-                ? requireFound(
-                        ZkData.TableIdZNode.path(handle.getTableId()),
-                        ZkData.TableIdZNode::decode,
-                        "table assignment")
-                : requireFound(
-                        ZkData.PartitionIdZNode.path(handle.getPartitionId()),
-                        ZkData.PartitionIdZNode::decode,
-                        "partition assignment");
+    public static BulkLoadTransaction readTransaction(
+            ZooKeeperClient client, BulkLoadHandle handle) {
+        try {
+            BulkLoadTransaction value =
+                    new BulkLoadMetadataStore(client)
+                            .readOptional(
+                                    BulkLoadMetadataStore.transactionPath(handle),
+                                    ZkData.BulkLoadTransactionsZNode::decode)
+                            .orElseThrow(
+                                    () ->
+                                            new BulkLoadNotFoundException(
+                                                    "BulkLoad transaction does not exist."))
+                            .getValue();
+            if (!value.getHandle().equals(handle)) {
+                throw invalid("BulkLoad handle does not match the persisted transaction.");
+            }
+            return value;
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new FlussRuntimeException("Failed to read BulkLoad transaction.", failure);
+        }
     }
 
-    Versioned<?> readRegistration(BulkLoadHandle handle) {
-        return readRegistration(handle.getTarget());
+    List<Versioned<?>> readOwnedRegistrations(BulkLoadTransaction value) {
+        List<Versioned<?>> registrations = new ArrayList<>();
+        for (BulkLoadTarget target : value.getTargets()) {
+            Versioned<?> registration = readRegistration(target.getTarget());
+            requireControl(value, target, registration);
+            registrations.add(registration);
+        }
+        return registrations;
+    }
+
+    static void requireControl(
+            BulkLoadTransaction value, BulkLoadTarget target, Versioned<?> registration) {
+        Object metadata = registration.getValue();
+        boolean identity =
+                metadata instanceof TableRegistration
+                        ? target.getPartitionId() == null
+                                && ((TableRegistration) metadata).tableId == value.getTableId()
+                        : target.getPartitionId() != null
+                                && ((PartitionRegistration) metadata).getTableId()
+                                        == value.getTableId()
+                                && ((PartitionRegistration) metadata).getPartitionId()
+                                        == target.getPartitionId();
+        if (!identity
+                || !target.getMetadataPath().equals(registration.getPath())
+                || target.getRegistrationVersion() != registration.getVersion()
+                || !value.getBulkLoadId().equals(BulkLoadMetadataStore.owner(metadata))) {
+            throw invalid("BulkLoad target identity, ownership or version changed.");
+        }
     }
 
     private Versioned<?> readRegistration(PhysicalTablePath target) {
@@ -1061,12 +957,22 @@ public final class BulkLoadManager {
                         "partition registration");
     }
 
+    private Versioned<? extends TableAssignment> readAssignment(
+            long tableId, @Nullable Long partitionId) {
+        return partitionId == null
+                ? requireFound(
+                        ZkData.TableIdZNode.path(tableId),
+                        ZkData.TableIdZNode::decode,
+                        "table assignment")
+                : requireFound(
+                        ZkData.PartitionIdZNode.path(partitionId),
+                        ZkData.PartitionIdZNode::decode,
+                        "partition assignment");
+    }
+
     <T> Versioned<T> requireFound(String path, Function<byte[], T> decoder, String description) {
         return readOptional(path, decoder)
-                .orElseThrow(
-                        () ->
-                                new InvalidBulkLoadRequestException(
-                                        "Missing BulkLoad " + description + '.'));
+                .orElseThrow(() -> invalid("Missing BulkLoad " + description + '.'));
     }
 
     private <T> Optional<Versioned<T>> readOptional(String path, Function<byte[], T> decoder) {
@@ -1074,24 +980,22 @@ public final class BulkLoadManager {
             return metadataStore.readOptional(path, decoder);
         } catch (Exception failure) {
             throw new InvalidBulkLoadRequestException(
-                    "BulkLoad metadata is unreadable: " + path, failure);
+                    "Unreadable BulkLoad metadata " + path, failure);
         }
     }
 
-    int coordinatorEpochVersion() {
-        return coordinatorContext.getCoordinatorZkVersion();
-    }
-
-    private int targetBucketCount(BulkLoadHandle handle) throws Exception {
-        return tableInfo(handle).getNumBuckets();
-    }
-
-    private TableInfo tableInfo(BulkLoadHandle handle) throws Exception {
-        PhysicalTarget target = readPhysicalTarget(handle.getTarget());
-        if (!hasSameTargetIdentity(handle, target.registration.getValue())) {
-            throw new InvalidBulkLoadRequestException("BulkLoad physical target identity changed.");
+    private static void requireCompleteAssignment(
+            long tableId, @Nullable Long partitionId, TableAssignment assignment, int count) {
+        Set<Integer> expected = new HashSet<>();
+        for (int id = 0; id < count; id++) {
+            expected.add(id);
         }
-        return target.tableInfo;
+        if (!assignment.getBuckets().equals(expected)
+                || (partitionId != null
+                        && (!(assignment instanceof PartitionAssignment)
+                                || ((PartitionAssignment) assignment).getTableId() != tableId))) {
+            throw invalid("BulkLoad assignment does not cover its physical target.");
+        }
     }
 
     private PhysicalTarget readPhysicalTarget(PhysicalTablePath path) throws Exception {
@@ -1133,15 +1037,6 @@ public final class BulkLoadManager {
         return new PhysicalTarget(info, registration, partitionId, remoteDataDir);
     }
 
-    private @Nullable BulkLoadHandle findExistingTarget(PhysicalTablePath path) throws Exception {
-        PhysicalTarget target = readPhysicalTarget(path);
-        String owner = registrationState(target.registration).bulkLoadId;
-        return owner == null
-                ? null
-                : new BulkLoadHandle(
-                        path, target.tableInfo.getTableId(), target.partitionId, owner);
-    }
-
     private static final class PhysicalTarget {
         private final TableInfo tableInfo;
         private final Versioned<?> registration;
@@ -1160,218 +1055,136 @@ public final class BulkLoadManager {
         }
     }
 
-    private static boolean sameCreator(FlussPrincipal creator, BulkLoadTransaction transaction) {
-        return creator.getName().equals(transaction.getCreatorName())
-                && creator.getType().equals(transaction.getCreatorType());
-    }
-
-    private void completePendingBegin(BulkLoadTransaction transaction) {
-        PendingBulkLoad work = pending.get(transaction.getHandle());
-        CompletableFuture<BeginBulkLoadResponse> result = work.beginResult;
-        work.beginResult = null;
-        if (result != null) {
-            if (transaction.getState() != BulkLoadState.BEGUN || !transaction.isFenceReady()) {
-                result.completeExceptionally(
-                        new InvalidBulkLoadRequestException(
-                                "BulkLoad Begin did not reach a fence-ready state."));
-                return;
-            }
-            try {
-                result.complete(
-                        new BeginBulkLoadResponse()
-                                .setTargetInfo(
-                                        toTargetInfo(
-                                                transaction, tableInfo(transaction.getHandle()))));
-            } catch (Exception failure) {
-                result.completeExceptionally(failure);
+    private void requireClusterCapabilities() throws Exception {
+        List<String> coordinatorIds = zkClient.getCoordinatorServerList();
+        if (coordinatorIds.isEmpty()) {
+            throw new UnsupportedVersionException(
+                    "Every Coordinator must cover the BulkLoad capability set.");
+        }
+        for (String id : coordinatorIds) {
+            CoordinatorAddress registration =
+                    requireFound(
+                                    ZkData.CoordinatorIdZNode.path(id),
+                                    ZkData.CoordinatorIdZNode::decode,
+                                    "Coordinator registration")
+                            .getValue();
+            if (registration.getServerProtocolVersion() < ServerProtocolVersion.BULK_LOAD) {
+                throw new UnsupportedVersionException(
+                        "Every Coordinator must cover the BulkLoad capability set.");
             }
         }
-    }
-
-    private CompletableFuture<BulkLoadTransaction> awaitTerminal(BulkLoadHandle handle) {
-        PendingBulkLoad work = pending.get(handle);
-        if (work.terminalResult == null) {
-            work.terminalResult = new CompletableFuture<>();
+        int[] tabletIds = zkClient.getSortedTabletServerList();
+        if (tabletIds.length == 0) {
+            throw new UnsupportedVersionException(
+                    "Every TabletServer must cover the BulkLoad capability set.");
         }
-        CompletableFuture<BulkLoadTransaction> result = work.terminalResult;
-        try {
-            advance(handle);
-        } catch (Throwable failure) {
-            failWaiters(handle, failure);
-        }
-        return result;
-    }
-
-    private void failWaiters(BulkLoadHandle handle, Throwable failure) {
-        PendingBulkLoad work = pending.get(handle);
-        if (work == null) {
-            return;
-        }
-        work.inFlight = null;
-        if (work.beginResult != null) {
-            work.beginResult.completeExceptionally(failure);
-            work.beginResult = null;
-        }
-        if (work.terminalResult != null) {
-            work.terminalResult.completeExceptionally(failure);
-            work.terminalResult = null;
-        }
-    }
-
-    private static final class PendingBulkLoad {
-        private Versioned<BulkLoadTransaction> transaction;
-        private Object inFlight;
-        private boolean abortRequested;
-        private CompletableFuture<BeginBulkLoadResponse> beginResult;
-        private CompletableFuture<BulkLoadTransaction> terminalResult;
-    }
-
-    static RegistrationState registrationState(Versioned<?> registration) {
-        if (registration.getValue() instanceof TableRegistration) {
-            TableRegistration table = (TableRegistration) registration.getValue();
-            return new RegistrationState(
-                    registration.getPath(),
-                    registration.getVersion(),
-                    table.dataState,
-                    table.bulkLoadId);
-        }
-        PartitionRegistration partition = (PartitionRegistration) registration.getValue();
-        return new RegistrationState(
-                registration.getPath(),
-                registration.getVersion(),
-                partition.getDataState(),
-                partition.getBulkLoadId());
-    }
-
-    private static void requireSameInput(BulkLoadTransaction transaction, String inputSha256) {
-        if (!inputSha256.equals(transaction.getInputSha256())) {
-            throw new InvalidBulkLoadRequestException(
-                    "Commit retry conflicts with the frozen input.");
-        }
-    }
-
-    private static void requireCompleteAssignment(
-            BulkLoadHandle handle, TableAssignment assignment, int count) {
-        requireCompleteAssignment(handle.getTableId(), handle.getPartitionId(), assignment, count);
-    }
-
-    private static void requireCompleteAssignment(
-            long tableId, @Nullable Long partitionId, TableAssignment assignment, int count) {
-        Set<Integer> expected = new HashSet<>();
-        for (int bucket = 0; bucket < count; bucket++) {
-            expected.add(bucket);
-        }
-        if (!assignment.getBuckets().equals(expected)) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad assignment does not cover the complete physical target.");
-        }
-        if (partitionId != null
-                && (!(assignment instanceof PartitionAssignment)
-                        || ((PartitionAssignment) assignment).getTableId() != tableId)) {
-            throw new InvalidBulkLoadRequestException(
-                    "BulkLoad partition assignment identity changed.");
-        }
-    }
-
-    private static Throwable unwrap(@Nullable Throwable failure) {
-        return failure == null ? null : ExceptionUtils.stripCompletionException(failure);
-    }
-
-    public static BulkLoadTransaction readTransaction(
-            ZooKeeperClient zkClient, BulkLoadHandle handle) {
-        try {
-            Optional<DataWithStat> data =
-                    zkClient.getDataWithStatIfExists(BulkLoadMetadataStore.transactionPath(handle));
-            if (!data.isPresent()) {
-                throw new BulkLoadNotFoundException("BulkLoad transaction does not exist.");
+        for (int id : tabletIds) {
+            TabletServerRegistration registration =
+                    requireFound(
+                                    ZkData.ServerIdZNode.path(id),
+                                    ZkData.ServerIdZNode::decode,
+                                    "TabletServer registration")
+                            .getValue();
+            if (registration.getServerProtocolVersion() < ServerProtocolVersion.BULK_LOAD) {
+                throw new UnsupportedVersionException(
+                        "Every TabletServer must cover the BulkLoad capability set.");
             }
-            BulkLoadTransaction transaction =
-                    ZkData.BulkLoadTransactionsZNode.decode(data.get().getData());
-            if (!transaction.getHandle().equals(handle)) {
-                throw new InvalidBulkLoadRequestException(
-                        "BulkLoad handle does not match the persisted transaction.");
-            }
-            return transaction;
-        } catch (BulkLoadNotFoundException
-                | InvalidBulkLoadRequestException
-                | CorruptMessageException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new FlussRuntimeException("Failed to read BulkLoad transaction.", e);
         }
     }
 
-    private static PbBulkLoadStatus toStatus(BulkLoadTransaction transaction) {
+    private static PbBulkLoadHandle toPbHandle(BulkLoadHandle handle) {
+        return new PbBulkLoadHandle()
+                .setTablePath(
+                        new PbTablePath()
+                                .setDatabaseName(handle.getTablePath().getDatabaseName())
+                                .setTableName(handle.getTablePath().getTableName()))
+                .setTableId(handle.getTableId())
+                .setBulkLoadId(handle.getBulkLoadId());
+    }
+
+    private static PbBulkLoadStatus toStatus(BulkLoadTransaction value) {
         PbBulkLoadStatus status =
                 new PbBulkLoadStatus()
-                        .setHandle(toPbHandle(transaction.getHandle()))
-                        .setState(transaction.getState().getCode());
-        if (transaction.getAbortReason() != null) {
-            status.setAbortReason(transaction.getAbortReason().getCode());
+                        .setHandle(toPbHandle(value.getHandle()))
+                        .setState(value.getState().getCode());
+        if (value.getAbortReason() != null) {
+            status.setAbortReason(value.getAbortReason().getCode());
         }
-        if (transaction.getAbortMessage() != null) {
-            status.setAbortMessage(transaction.getAbortMessage());
+        if (value.getAbortMessage() != null) {
+            status.setAbortMessage(value.getAbortMessage());
         }
         return status;
     }
 
-    private static PbBulkLoadHandle toPbHandle(BulkLoadHandle handle) {
-        PbBulkLoadHandle result =
-                new PbBulkLoadHandle()
-                        .setTarget(fromPhysicalTablePath(handle.getTarget()))
-                        .setTableId(handle.getTableId())
-                        .setBulkLoadId(handle.getBulkLoadId());
-        if (handle.getPartitionId() != null) {
-            result.setPartitionId(handle.getPartitionId());
+    private static PbBulkLoadTargetInfo toTargetInfo(BulkLoadTarget target, TableInfo info) {
+        PbBulkLoadTargetInfo result =
+                new PbBulkLoadTargetInfo()
+                        .setTarget(fromPhysicalTablePath(target.getTarget()))
+                        .setSchemaId(target.getSchemaId())
+                        .setTableJson(info.toTableDescriptor().toJsonBytes())
+                        .setCreatedTime(info.getCreatedTime())
+                        .setModifiedTime(info.getModifiedTime())
+                        .setRemoteDataDir(target.getRemoteDataDir())
+                        .setSnapshotIds(target.getSnapshotIds());
+        if (target.getPartitionId() != null) {
+            result.setPartitionId(target.getPartitionId());
         }
         return result;
     }
 
-    private static PbBulkLoadTargetInfo toTargetInfo(
-            BulkLoadTransaction transaction, TableInfo tableInfo) {
-        long[] snapshotIds = checkNotNull(transaction.getSnapshotIds());
-        if (snapshotIds.length != tableInfo.getNumBuckets()) {
-            throw new IllegalArgumentException(
-                    "BulkLoad Snapshot IDs must cover every physical bucket.");
-        }
-        return new PbBulkLoadTargetInfo()
-                .setHandle(toPbHandle(transaction.getHandle()))
-                .setSchemaId(transaction.getSchemaId())
-                .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
-                .setCreatedTime(tableInfo.getCreatedTime())
-                .setModifiedTime(tableInfo.getModifiedTime())
-                .setRemoteDataDir(transaction.getRemoteDataDir())
-                .setSnapshotIds(snapshotIds);
+    private static final class PendingBulkLoad {
+        private BulkLoadTransaction terminalResult;
+        private BulkLoadHandle attemptedHandle;
+        private volatile long preCommitDeadline = Long.MAX_VALUE;
+        private WorkLifetime lifetime;
+        private Object inFlight;
+        private volatile boolean abortRequested;
+        private boolean commitRequested;
+        private String inputRequested;
+        private CompletableFuture<BulkLoadTransaction> result;
+        private CompletableFuture<BeginBulkLoadResponse> beginResult;
+        private CompletableFuture<AbortBulkLoadResponse> abortResult;
+
+        // Owned by the one in-flight I/O chain. Null means full validation has not succeeded.
+        // A failed or uncertain adoption retains the head for idempotent replay.
+        private Deque<CompletedSnapshot> snapshotsToAdopt;
     }
 
-    /** Exact ZooKeeper observations needed by the Begin checked multi. */
-    private static final class BeginAdmission {
-        private final Versioned<?> registration;
-        private final Versioned<? extends TableAssignment> assignment;
-        private final BulkLoadTransaction transaction;
+    private static final class WorkLifetime {
+        private final Semaphore capacity;
+        private final AtomicInteger tasks = new AtomicInteger();
+        private final AtomicBoolean finished = new AtomicBoolean();
+        private final AtomicBoolean released = new AtomicBoolean();
 
-        private BeginAdmission(
-                Versioned<?> registration,
-                Versioned<? extends TableAssignment> assignment,
-                BulkLoadTransaction transaction) {
-            this.registration = registration;
-            this.assignment = assignment;
+        private WorkLifetime(Semaphore capacity) {
+            this.capacity = capacity;
+        }
+
+        private void finish() {
+            finished.set(true);
+            release();
+        }
+
+        private void taskExited() {
+            tasks.decrementAndGet();
+            release();
+        }
+
+        private void release() {
+            if (finished.get() && tasks.get() == 0 && released.compareAndSet(false, true)) {
+                capacity.release();
+            }
+        }
+    }
+
+    private static final class BeginResult {
+        private final Versioned<BulkLoadTransaction> transaction;
+        private final BeginBulkLoadResponse response;
+
+        private BeginResult(
+                Versioned<BulkLoadTransaction> transaction, BeginBulkLoadResponse response) {
             this.transaction = transaction;
-        }
-    }
-
-    static final class RegistrationState {
-        final String path;
-        final int version;
-        final BulkLoadDataState state;
-        final @Nullable String bulkLoadId;
-
-        private RegistrationState(
-                String path, int version, BulkLoadDataState state, @Nullable String bulkLoadId) {
-            this.path = path;
-            this.version = version;
-            this.state = state;
-            this.bulkLoadId = bulkLoadId;
+            this.response = response;
         }
     }
 }

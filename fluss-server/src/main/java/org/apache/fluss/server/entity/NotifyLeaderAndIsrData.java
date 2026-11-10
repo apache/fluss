@@ -20,7 +20,6 @@ package org.apache.fluss.server.entity;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import javax.annotation.Nullable;
@@ -36,87 +35,43 @@ public final class NotifyLeaderAndIsrData {
     // null when a legacy coordinator omits the fields
     private final @Nullable Integer bucketCount;
     private final @Nullable Long bucketCountEpoch;
-    private final @Nullable BulkLoadTargetMetadata bulkLoadMetadata;
-    private final boolean requireEmptyTarget;
+    private final @Nullable Long restoreSnapshotId;
 
     public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr) {
-        this(physicalTablePath, tableBucket, replicas, leaderAndIsr, null, null, null, false);
+            PhysicalTablePath path, TableBucket bucket, List<Integer> replicas, LeaderAndIsr role) {
+        this(path, bucket, replicas, role, null, null, null);
     }
 
     public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
+            PhysicalTablePath path,
+            TableBucket bucket,
             List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr,
+            LeaderAndIsr role,
             @Nullable Integer bucketCount,
             @Nullable Long bucketCountEpoch) {
-        this(
-                physicalTablePath,
-                tableBucket,
-                replicas,
-                leaderAndIsr,
-                bucketCount,
-                bucketCountEpoch,
-                null,
-                false);
+        this(path, bucket, replicas, role, bucketCount, bucketCountEpoch, null);
     }
 
     public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
+            PhysicalTablePath path,
+            TableBucket bucket,
             List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr,
-            @Nullable BulkLoadTargetMetadata bulkLoadMetadata) {
-        this(
-                physicalTablePath,
-                tableBucket,
-                replicas,
-                leaderAndIsr,
-                null,
-                null,
-                bulkLoadMetadata,
-                false);
-    }
-
-    public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr,
-            @Nullable BulkLoadTargetMetadata bulkLoadMetadata,
-            boolean requireEmptyTarget) {
-        this(
-                physicalTablePath,
-                tableBucket,
-                replicas,
-                leaderAndIsr,
-                null,
-                null,
-                bulkLoadMetadata,
-                requireEmptyTarget);
-    }
-
-    public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr,
+            LeaderAndIsr role,
             @Nullable Integer bucketCount,
             @Nullable Long bucketCountEpoch,
-            @Nullable BulkLoadTargetMetadata bulkLoadMetadata,
-            boolean requireEmptyTarget) {
-        this.physicalTablePath = physicalTablePath;
-        this.tableBucket = tableBucket;
+            @Nullable Long restoreSnapshotId) {
+        this.physicalTablePath = path;
+        this.tableBucket = bucket;
         this.replicas = replicas;
-        this.leaderAndIsr = leaderAndIsr;
+        this.leaderAndIsr = role;
         this.bucketCount = bucketCount;
         this.bucketCountEpoch = bucketCountEpoch;
-        this.bulkLoadMetadata = bulkLoadMetadata;
-        this.requireEmptyTarget = requireEmptyTarget;
+        this.restoreSnapshotId = restoreSnapshotId;
+    }
+
+    /** Returns the imported snapshot that the current leader must restore. */
+    public @Nullable Long getRestoreSnapshotId() {
+        return restoreSnapshotId;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -161,18 +116,6 @@ public final class NotifyLeaderAndIsrData {
 
     public LeaderAndIsr getLeaderAndIsr() {
         return leaderAndIsr;
-    }
-
-    @Nullable
-    public BulkLoadTargetMetadata getBulkLoadMetadata() {
-        return bulkLoadMetadata;
-    }
-
-    /**
-     * Tells whether the recipient must prove the bucket is locally empty before taking the role.
-     */
-    public boolean requiresEmptyTarget() {
-        return requireEmptyTarget;
     }
 
     public List<Integer> getStandbyReplicas() {

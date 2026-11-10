@@ -496,7 +496,7 @@ class ControlRequestSendThreadTest {
 
         assertThat(thread.isAlive()).isFalse();
         assertThat(shutdownDuration).isLessThan(2000);
-        assertThat(callbackCount.get()).isEqualTo(0);
+        assertThat(callbackCount.get()).isEqualTo(1);
         assertThat(getGaugeValue(metricGroup, MetricNames.SENDER_ALIVE)).isEqualTo(0);
         thread = null;
     }
@@ -546,6 +546,143 @@ class ControlRequestSendThreadTest {
         assertThat(invocationCount.get()).isEqualTo(2);
         assertThat(getCounter(metricGroup, MetricNames.SENDER_RETRY_COUNT).getCount()).isEqualTo(0);
         assertThat(getGaugeValue(metricGroup, MetricNames.SENDER_ALIVE)).isEqualTo(1);
+    }
+
+    @Test
+    void testSingleAttemptTimeoutCancelsRequestAndInvalidatesBeforeCompletion() throws Exception {
+        BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
+        CompletableFuture<ApiVersionsResponse> request = new CompletableFuture<>();
+        CompletableFuture<Void> invalidated = new CompletableFuture<>();
+        CountDownLatch startedInvalidation = new CountDownLatch(1);
+        CompletableFuture<Throwable> result = new CompletableFuture<>();
+        AtomicInteger sends = new AtomicInteger();
+        thread =
+                createThread(
+                        queue,
+                        () -> Optional.of(unusedGateway()),
+                        () -> {
+                            startedInvalidation.countDown();
+                            return invalidated;
+                        },
+                        () -> EPOCH,
+                        TestMetricGroup.createTestMetricGroup(),
+                        Duration.ofMillis(200));
+        thread.start();
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            sends.incrementAndGet();
+                            return request;
+                        },
+                        (response, failure) -> result.complete(failure),
+                        EPOCH,
+                        System.currentTimeMillis(),
+                        false));
+        assertThat(startedInvalidation.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(request).isCancelled();
+        assertThat(result).isNotDone();
+        invalidated.complete(null);
+        assertThat(result.get(5, TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.TimeoutException.class);
+        assertThat(sends).hasValue(1);
+    }
+
+    @Test
+    void testShutdownCompletesUnsentSingleAttemptRequests() throws Exception {
+        BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
+        CountDownLatch firstStarted = new CountDownLatch(1);
+        CompletableFuture<ApiVersionsResponse> first = new CompletableFuture<>();
+        CompletableFuture<Throwable> queued = new CompletableFuture<>();
+        thread =
+                createThread(
+                        queue,
+                        () -> Optional.of(unusedGateway()),
+                        () -> EPOCH,
+                        TestMetricGroup.createTestMetricGroup());
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            firstStarted.countDown();
+                            return first;
+                        },
+                        null,
+                        EPOCH,
+                        System.currentTimeMillis()));
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            throw new AssertionError(
+                                    "Queued request must not be sent after channel shutdown");
+                        },
+                        (response, failure) -> queued.complete(failure),
+                        EPOCH,
+                        System.currentTimeMillis(),
+                        false));
+        thread.start();
+        assertThat(firstStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        thread.initiateShutdown();
+        assertThat(queued.get(5, TimeUnit.SECONDS)).isNotNull();
+        assertThat(first).isCancelled();
+    }
+
+    @Test
+    void testUnfinishedInvalidationRemainsOwnedBeforeNextTransport() throws Exception {
+        BlockingQueue<QueueItem<?>> queue = new LinkedBlockingQueue<>();
+        CompletableFuture<ApiVersionsResponse> first = new CompletableFuture<>();
+        CompletableFuture<Void> invalidation = new CompletableFuture<>();
+        CompletableFuture<Throwable> firstResult = new CompletableFuture<>();
+        CompletableFuture<ApiVersionsResponse> secondResult = new CompletableFuture<>();
+        CountDownLatch secondStarted = new CountDownLatch(1);
+        AtomicInteger invalidations = new AtomicInteger();
+        thread =
+                createThread(
+                        queue,
+                        () -> Optional.of(unusedGateway()),
+                        () -> {
+                            invalidations.incrementAndGet();
+                            return invalidation;
+                        },
+                        () -> EPOCH,
+                        TestMetricGroup.createTestMetricGroup(),
+                        Duration.ofMillis(200));
+        thread.start();
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> first,
+                        (response, failure) -> firstResult.complete(failure),
+                        EPOCH,
+                        System.currentTimeMillis(),
+                        false));
+        assertThat(firstResult.get(5, TimeUnit.SECONDS))
+                .isInstanceOf(java.util.concurrent.TimeoutException.class);
+        assertThat(first).isCancelled();
+        queue.put(
+                new QueueItem<>(
+                        ApiKeys.API_VERSIONS,
+                        ignored -> {
+                            secondStarted.countDown();
+                            return CompletableFuture.completedFuture(new ApiVersionsResponse());
+                        },
+                        (response, failure) -> {
+                            if (failure == null) {
+                                secondResult.complete(response);
+                            } else {
+                                secondResult.completeExceptionally(failure);
+                            }
+                        },
+                        EPOCH,
+                        System.currentTimeMillis(),
+                        false));
+        assertThat(secondStarted.await(50, TimeUnit.MILLISECONDS)).isFalse();
+        assertThat(invalidations).hasValue(1);
+        invalidation.complete(null);
+        assertThat(secondResult.get(5, TimeUnit.SECONDS)).isNotNull();
+        assertThat(secondStarted.getCount()).isZero();
+        assertThat(invalidations).hasValue(1);
     }
 
     private static TabletServerGateway unusedGateway() {

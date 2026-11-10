@@ -19,8 +19,6 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
 
-import java.util.Collection;
-
 /**
  * The protocol version a Fluss server advertises in its ZooKeeper registration znode, used to gate
  * features that require every server in the cluster to understand a newer protocol.
@@ -39,38 +37,4 @@ public final class ServerProtocolVersion {
     public static final int BULK_LOAD = 1;
 
     private ServerProtocolVersion() {}
-
-    /**
-     * Returns true only when the cluster has at least one registered Coordinator and every
-     * registered Coordinator advertises a protocol version supporting bulk load.
-     */
-    public static boolean coordinatorsSupportBulkLoad(
-            Collection<CoordinatorAddress> registrations) {
-        if (registrations.isEmpty()) {
-            return false;
-        }
-        for (CoordinatorAddress registration : registrations) {
-            if (registration.getServerProtocolVersion() < BULK_LOAD) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Returns true only when the cluster has at least one registered TabletServer and every
-     * registered TabletServer advertises a protocol version supporting bulk load.
-     */
-    public static boolean tabletServersSupportBulkLoad(
-            Collection<TabletServerRegistration> registrations) {
-        if (registrations.isEmpty()) {
-            return false;
-        }
-        for (TabletServerRegistration registration : registrations) {
-            if (registration.getServerProtocolVersion() < BULK_LOAD) {
-                return false;
-            }
-        }
-        return true;
-    }
 }

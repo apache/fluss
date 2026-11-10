@@ -30,9 +30,7 @@ import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager.ServerIdAndFetcherId;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -220,80 +218,10 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
 
         assertThat(roleResult.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         Replica follower = replicaManager.getReplicaOrException(tb);
-        assertThat(follower.getBulkLoadTargetMetadata()).isNull();
         assertThat(follower.isLeader()).isFalse();
         assertThat(follower.getLeaderId()).isEqualTo(TABLET_SERVER_ID + 1);
         assertThat(replicaManager.getReplicaFetcherManager().hasFetcherForBucket(tb))
                 .as("an exact ordinary follower replay must restore missing fetch ownership")
-                .isTrue();
-    }
-
-    @Test
-    void testLoadingFollowerRecoveryDoesNotStartOrdinaryFetcher() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 2);
-        List<Integer> replicas = Arrays.asList(TABLET_SERVER_ID, TABLET_SERVER_ID + 1);
-        LeaderAndIsr followerRole =
-                new LeaderAndIsr(
-                        TABLET_SERVER_ID + 1,
-                        1,
-                        replicas,
-                        Collections.emptyList(),
-                        INITIAL_COORDINATOR_EPOCH,
-                        LeaderAndIsr.INITIAL_BUCKET_EPOCH);
-        BulkLoadTargetMetadata loadingTarget =
-                new BulkLoadTargetMetadata(tb, 1, BulkLoadDataState.LOADING);
-        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> roleResult =
-                new CompletableFuture<>();
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
-                                replicas,
-                                followerRole)),
-                roleResult::complete);
-        assertThat(roleResult.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
-        assertThat(replicaManager.getReplicaFetcherManager().hasFetcherForBucket(tb)).isTrue();
-
-        roleResult = new CompletableFuture<>();
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
-                                replicas,
-                                followerRole,
-                                loadingTarget)),
-                roleResult::complete);
-
-        assertThat(roleResult.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
-        assertThat(replicaManager.getReplicaOrException(tb).getBulkLoadTargetMetadata())
-                .isEqualTo(loadingTarget);
-        assertThat(replicaManager.getReplicaFetcherManager().hasFetcherForBucket(tb))
-                .as("LOADING recovery must not start ordinary follower replication")
-                .isFalse();
-
-        BulkLoadTargetMetadata activeTarget =
-                new BulkLoadTargetMetadata(tb, 2, BulkLoadDataState.ACTIVE);
-        roleResult = new CompletableFuture<>();
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
-                                replicas,
-                                followerRole,
-                                activeTarget)),
-                roleResult::complete);
-        assertThat(roleResult.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
-
-        assertThat(replicaManager.getReplicaOrException(tb).getBulkLoadTargetMetadata())
-                .isEqualTo(activeTarget);
-        assertThat(replicaManager.getReplicaFetcherManager().hasFetcherForBucket(tb))
-                .as("successful ACTIVE publication must restore ordinary follower replication")
                 .isTrue();
     }
 

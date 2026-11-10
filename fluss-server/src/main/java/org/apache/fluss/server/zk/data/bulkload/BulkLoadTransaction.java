@@ -21,46 +21,44 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.BulkLoadAbortReason;
 import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.BulkLoadState;
-import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.metadata.PhysicalTablePath;
 
 import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Immutable version-1 BulkLoad transaction facts. ZooKeeper Stat.version is its state version. */
+/** Immutable shared BulkLoad transaction facts. ZooKeeper Stat.version is its state version. */
 @Internal
 public final class BulkLoadTransaction {
-
     private static final int MAX_ABORT_MESSAGE_BYTES = 4096;
 
     private final BulkLoadHandle handle;
     private final BulkLoadState state;
     private final String creatorName;
     private final String creatorType;
-    private final String remoteDataDir;
-    private final int schemaId;
-    private final int metadataVersion;
-    private final @Nullable long[] snapshotIds;
+    private final List<BulkLoadTarget> targets;
     private final long deadlineMs;
     private final @Nullable String inputSha256;
     private final @Nullable BulkLoadAbortReason abortReason;
     private final @Nullable String abortMessage;
 
-    /** Creates the persisted transaction state. */
+    /** Creates the persisted state for a fixed, nonempty set of same-table targets. */
     public BulkLoadTransaction(
             BulkLoadHandle handle,
             BulkLoadState state,
             String creatorName,
             String creatorType,
-            String remoteDataDir,
-            int schemaId,
-            int metadataVersion,
-            @Nullable long[] snapshotIds,
+            List<BulkLoadTarget> targets,
             long deadlineMs,
             @Nullable String inputSha256,
             @Nullable BulkLoadAbortReason abortReason,
@@ -69,57 +67,43 @@ public final class BulkLoadTransaction {
         this.state = checkNotNull(state, "BulkLoad state must not be null.");
         this.creatorName = checkNotNull(creatorName, "BulkLoad creator name must not be null.");
         this.creatorType = checkNotNull(creatorType, "BulkLoad creator type must not be null.");
-        this.remoteDataDir =
-                checkNotNull(remoteDataDir, "BulkLoad remote data directory must not be null.");
-        checkArgument(schemaId >= 0, "BulkLoad schema ID must be non-negative.");
-        checkArgument(metadataVersion >= 0, "BulkLoad metadata version must be non-negative.");
-        checkArgument(
-                snapshotIds == null || snapshotIds.length > 0,
-                "BulkLoad snapshot IDs must not be empty.");
-        if (snapshotIds != null) {
-            for (long snapshotId : snapshotIds) {
-                checkArgument(snapshotId >= 0, "BulkLoad snapshot ID must be non-negative.");
-            }
+        checkNotNull(targets, "BulkLoad targets must not be null.");
+        checkArgument(!targets.isEmpty(), "BulkLoad targets must not be empty.");
+        List<BulkLoadTarget> copy = new ArrayList<>(targets);
+        Set<PhysicalTablePath> paths = new HashSet<>();
+        Set<Long> partitionIds = new HashSet<>();
+        for (BulkLoadTarget target : copy) {
+            checkNotNull(target, "BulkLoad target must not be null.");
+            checkArgument(
+                    handle.getTablePath().equals(target.getTarget().getTablePath()),
+                    "BulkLoad targets must belong to the handle's table.");
+            checkArgument(
+                    paths.add(target.getTarget()) && partitionIds.add(target.getPartitionId()),
+                    "BulkLoad targets must not contain duplicate paths or partition IDs.");
+            checkArgument(
+                    target.getPartitionId() != null || copy.size() == 1,
+                    "A non-partitioned BulkLoad target must be the only target.");
         }
+        copy.sort(
+                Comparator.comparing(
+                        BulkLoadTarget::getPartitionId,
+                        Comparator.nullsFirst(Comparator.naturalOrder())));
+        this.targets = Collections.unmodifiableList(copy);
         checkArgument(deadlineMs >= 0, "BulkLoad deadline must be non-negative.");
-
-        this.schemaId = schemaId;
-        this.metadataVersion = metadataVersion;
-        this.snapshotIds = snapshotIds == null ? null : snapshotIds.clone();
         this.deadlineMs = deadlineMs;
         this.inputSha256 = inputSha256;
         this.abortReason = abortReason;
         this.abortMessage = truncateUtf8(abortMessage);
     }
 
-    /** Returns a fenced transaction with the allocated snapshot IDs. */
-    public BulkLoadTransaction withSnapshotIds(long[] snapshotIds) {
-        return new BulkLoadTransaction(
-                handle,
-                state,
-                creatorName,
-                creatorType,
-                remoteDataDir,
-                schemaId,
-                metadataVersion,
-                snapshotIds,
-                deadlineMs,
-                inputSha256,
-                abortReason,
-                abortMessage);
-    }
-
-    /** Returns a transaction bound to the submitted input digest, preserving its deadline. */
+    /** Returns a transaction bound to the submitted digest, preserving its deadline. */
     public BulkLoadTransaction withInput(String sha256) {
         return new BulkLoadTransaction(
                 handle,
                 state,
                 creatorName,
                 creatorType,
-                remoteDataDir,
-                schemaId,
-                metadataVersion,
-                snapshotIds,
+                targets,
                 deadlineMs,
                 sha256,
                 abortReason,
@@ -133,55 +117,47 @@ public final class BulkLoadTransaction {
                 BulkLoadState.COMMITTING,
                 creatorName,
                 creatorType,
-                remoteDataDir,
-                schemaId,
-                metadataVersion,
-                snapshotIds,
+                targets,
                 deadlineMs,
                 inputSha256,
                 abortReason,
                 abortMessage);
     }
 
-    /** Returns a transaction whose target registration has become ACTIVE. */
-    public BulkLoadTransaction activated(
-            int metadataVersion, @Nullable BulkLoadAbortReason reason, @Nullable String message) {
+    /** Returns a committed result with its result-retention expiry time. */
+    public BulkLoadTransaction committed(long expiry) {
         return new BulkLoadTransaction(
                 handle,
-                state,
+                BulkLoadState.COMMITTED,
                 creatorName,
                 creatorType,
-                remoteDataDir,
-                schemaId,
-                metadataVersion,
-                snapshotIds,
-                deadlineMs,
+                targets,
+                expiry,
+                inputSha256,
+                null,
+                null);
+    }
+
+    /** Returns an aborted result with its result-retention expiry time. */
+    public BulkLoadTransaction aborted(BulkLoadAbortReason reason, String message, long expiry) {
+        return new BulkLoadTransaction(
+                handle,
+                BulkLoadState.ABORTED,
+                creatorName,
+                creatorType,
+                targets,
+                expiry,
                 inputSha256,
                 reason,
                 message);
     }
 
-    /** Returns the terminal result after target ownership has been released. */
-    public BulkLoadTransaction released(int metadataVersion, long expireTimeMs) {
-        return new BulkLoadTransaction(
-                handle,
-                state == BulkLoadState.COMMITTING ? BulkLoadState.COMMITTED : BulkLoadState.ABORTED,
-                creatorName,
-                creatorType,
-                remoteDataDir,
-                schemaId,
-                metadataVersion,
-                snapshotIds,
-                expireTimeMs,
-                inputSha256,
-                abortReason,
-                abortMessage);
-    }
-
+    /** Returns the shared transaction handle. */
     public BulkLoadHandle getHandle() {
         return handle;
     }
 
+    /** Returns the canonical transaction UUID. */
     public String getBulkLoadId() {
         return handle.getBulkLoadId();
     }
@@ -191,84 +167,57 @@ public final class BulkLoadTransaction {
         return state;
     }
 
-    public String getDatabaseName() {
-        return handle.getTarget().getDatabaseName();
-    }
-
-    public String getTableName() {
-        return handle.getTarget().getTableName();
-    }
-
-    @Nullable
-    public String getPartitionName() {
-        return handle.getTarget().getPartitionName();
-    }
-
-    public long getTableId() {
-        return handle.getTableId();
-    }
-
-    @Nullable
-    public Long getPartitionId() {
-        return handle.getPartitionId();
-    }
-
+    /** Returns the creator's name. */
     public String getCreatorName() {
         return creatorName;
     }
 
+    /** Returns the creator's principal type. */
     public String getCreatorType() {
         return creatorType;
     }
 
-    public String getRemoteDataDir() {
-        return remoteDataDir;
+    /** Returns the immutable target list ordered by physical partition ID. */
+    public List<BulkLoadTarget> getTargets() {
+        return targets;
     }
 
-    public int getSchemaId() {
-        return schemaId;
-    }
-
-    public String getMetadataPath() {
-        return handle.getPartitionId() == null
-                ? ZkData.TableZNode.path(handle.getTarget().getTablePath())
-                : ZkData.PartitionZNode.path(
-                        handle.getTarget().getTablePath(), handle.getTarget().getPartitionName());
-    }
-
-    public int getMetadataVersion() {
-        return metadataVersion;
-    }
-
-    public boolean isFenceReady() {
-        return snapshotIds != null;
-    }
-
-    @Nullable
-    public long[] getSnapshotIds() {
-        return snapshotIds == null ? null : snapshotIds.clone();
-    }
-
-    /**
-     * Returns the shared pre-commit deadline, or the result expiry time for a terminal transaction.
-     */
+    /** Returns the pre-commit deadline or the terminal result's expiry time. */
     public long getDeadlineMs() {
         return deadlineMs;
     }
 
+    /** Returns the frozen input digest, if submitted. */
     @Nullable
     public String getInputSha256() {
         return inputSha256;
     }
 
+    /** Returns the abort reason, if present. */
     @Nullable
     public BulkLoadAbortReason getAbortReason() {
         return abortReason;
     }
 
+    /** Returns the bounded abort message, if present. */
     @Nullable
     public String getAbortMessage() {
         return abortMessage;
+    }
+
+    /** Returns the physical table ID. */
+    public long getTableId() {
+        return handle.getTableId();
+    }
+
+    /** Returns the original database name. */
+    public String getDatabaseName() {
+        return handle.getTablePath().getDatabaseName();
+    }
+
+    /** Returns the original table name. */
+    public String getTableName() {
+        return handle.getTablePath().getTableName();
     }
 
     @Override
@@ -280,15 +229,12 @@ public final class BulkLoadTransaction {
             return false;
         }
         BulkLoadTransaction that = (BulkLoadTransaction) o;
-        return schemaId == that.schemaId
-                && metadataVersion == that.metadataVersion
-                && Arrays.equals(snapshotIds, that.snapshotIds)
-                && deadlineMs == that.deadlineMs
+        return deadlineMs == that.deadlineMs
                 && Objects.equals(handle, that.handle)
                 && state == that.state
                 && Objects.equals(creatorName, that.creatorName)
                 && Objects.equals(creatorType, that.creatorType)
-                && Objects.equals(remoteDataDir, that.remoteDataDir)
+                && Objects.equals(targets, that.targets)
                 && Objects.equals(inputSha256, that.inputSha256)
                 && abortReason == that.abortReason
                 && Objects.equals(abortMessage, that.abortMessage);
@@ -296,25 +242,28 @@ public final class BulkLoadTransaction {
 
     @Override
     public int hashCode() {
-        int result =
-                Objects.hash(
-                        handle,
-                        state,
-                        creatorName,
-                        creatorType,
-                        remoteDataDir,
-                        schemaId,
-                        metadataVersion,
-                        deadlineMs,
-                        inputSha256,
-                        abortReason,
-                        abortMessage);
-        return 31 * result + Arrays.hashCode(snapshotIds);
+        return Objects.hash(
+                handle,
+                state,
+                creatorName,
+                creatorType,
+                targets,
+                deadlineMs,
+                inputSha256,
+                abortReason,
+                abortMessage);
     }
 
     @Override
     public String toString() {
-        return "BulkLoadTransaction{" + "handle=" + handle + ", state=" + state + '}';
+        return "BulkLoadTransaction{"
+                + "handle="
+                + handle
+                + ", state="
+                + state
+                + ", targets="
+                + targets
+                + '}';
     }
 
     @Nullable

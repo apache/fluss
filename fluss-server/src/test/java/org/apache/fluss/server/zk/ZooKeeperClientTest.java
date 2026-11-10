@@ -41,7 +41,6 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
-import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -78,11 +77,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -757,163 +751,6 @@ class ZooKeeperClientTest {
 
         assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
                 .containsEntry(tableBucket.getBucket(), Optional.empty());
-    }
-
-    @Test
-    void testFencedSnapshotDoesNotRecreateMissingPhysicalIdentityRoot() throws Exception {
-        long tableId = 901L;
-        TablePath tablePath = TablePath.of("parent_boundary", "snapshot");
-        TableBucket tableBucket = registerFencedCommitTarget(tableId, tablePath);
-        ZooKeeperClient.DataWithStat metadata = activeMetadata(tablePath);
-        int leaderAndIsrVersion = leaderAndIsrVersion(tableBucket);
-        String identityRoot = deleteIdentityRoot(tableId);
-
-        assertThatThrownBy(
-                        () ->
-                                zookeeperClient.registerTableBucketSnapshot(
-                                        tableBucket,
-                                        new BucketSnapshot(1L, 0L, "file:///tmp/missing-root"),
-                                        ZkData.TableZNode.path(tablePath),
-                                        metadata.getStat().getVersion(),
-                                        zkEpoch.getCoordinatorEpochZkVersion(),
-                                        leaderAndIsrVersion))
-                .isInstanceOf(KeeperException.NoNodeException.class);
-        assertThat(zookeeperClient.getCuratorClient().checkExists().forPath(identityRoot)).isNull();
-    }
-
-    @Test
-    void testFencedManifestDoesNotRecreateMissingPhysicalIdentityRoot() throws Exception {
-        long tableId = 902L;
-        TablePath tablePath = TablePath.of("parent_boundary", "manifest");
-        TableBucket tableBucket = registerFencedCommitTarget(tableId, tablePath);
-        ZooKeeperClient.DataWithStat metadata = activeMetadata(tablePath);
-        int leaderAndIsrVersion = leaderAndIsrVersion(tableBucket);
-        String identityRoot = deleteIdentityRoot(tableId);
-
-        assertThatThrownBy(
-                        () ->
-                                zookeeperClient.upsertRemoteLogManifestHandle(
-                                        tableBucket,
-                                        new RemoteLogManifestHandle(
-                                                new FsPath("file:///tmp/missing-root-manifest"),
-                                                1L),
-                                        ZkData.TableZNode.path(tablePath),
-                                        metadata.getStat().getVersion(),
-                                        zkEpoch.getCoordinatorEpochZkVersion(),
-                                        leaderAndIsrVersion))
-                .isInstanceOf(KeeperException.NoNodeException.class);
-        assertThat(zookeeperClient.getCuratorClient().checkExists().forPath(identityRoot)).isNull();
-    }
-
-    @Test
-    void testConcurrentFencedSnapshotsTolerateStructuralParentRace() throws Exception {
-        long tableId = 903L;
-        TablePath tablePath = TablePath.of("parent_boundary", "race");
-        TableBucket tableBucket = registerFencedCommitTarget(tableId, tablePath);
-        ZooKeeperClient.DataWithStat metadata = activeMetadata(tablePath);
-        int leaderAndIsrVersion = leaderAndIsrVersion(tableBucket);
-        CountDownLatch start = new CountDownLatch(1);
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
-            CompletableFuture<Void> first =
-                    registerSnapshotAsync(
-                            executor,
-                            start,
-                            tableBucket,
-                            1L,
-                            tablePath,
-                            metadata.getStat().getVersion(),
-                            leaderAndIsrVersion);
-            CompletableFuture<Void> second =
-                    registerSnapshotAsync(
-                            executor,
-                            start,
-                            tableBucket,
-                            2L,
-                            tablePath,
-                            metadata.getStat().getVersion(),
-                            leaderAndIsrVersion);
-            start.countDown();
-            CompletableFuture.allOf(first, second).get(20, TimeUnit.SECONDS);
-        } finally {
-            executor.shutdownNow();
-        }
-
-        assertThat(zookeeperClient.getTableBucketSnapshot(tableBucket, 1L)).isPresent();
-        assertThat(zookeeperClient.getTableBucketSnapshot(tableBucket, 2L)).isPresent();
-    }
-
-    private CompletableFuture<Void> registerSnapshotAsync(
-            ExecutorService executor,
-            CountDownLatch start,
-            TableBucket tableBucket,
-            long snapshotId,
-            TablePath tablePath,
-            int metadataVersion,
-            int leaderAndIsrVersion) {
-        return CompletableFuture.runAsync(
-                () -> {
-                    try {
-                        start.await();
-                        zookeeperClient.registerTableBucketSnapshot(
-                                tableBucket,
-                                new BucketSnapshot(
-                                        snapshotId, 0L, "file:///tmp/parent-race-" + snapshotId),
-                                ZkData.TableZNode.path(tablePath),
-                                metadataVersion,
-                                zkEpoch.getCoordinatorEpochZkVersion(),
-                                leaderAndIsrVersion);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                },
-                executor);
-    }
-
-    private TableBucket registerFencedCommitTarget(long tableId, TablePath tablePath)
-            throws Exception {
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
-                        .distributedBy(1)
-                        .build();
-        zookeeperClient.registerTable(
-                tablePath, TableRegistration.newTable(tableId, remoteDataDir, descriptor));
-        TableBucket tableBucket = new TableBucket(tableId, 0);
-        zookeeperClient.registerTableAssignment(
-                tableId, TableAssignment.builder().add(0, BucketAssignment.of(1)).build());
-        zookeeperClient.registerLeaderAndIsr(
-                tableBucket,
-                new LeaderAndIsr(
-                        1,
-                        0,
-                        Collections.singletonList(1),
-                        Collections.emptyList(),
-                        zkEpoch.getCoordinatorEpoch(),
-                        0),
-                zkEpoch.getCoordinatorEpochZkVersion());
-        return tableBucket;
-    }
-
-    private ZooKeeperClient.DataWithStat activeMetadata(TablePath tablePath) throws Exception {
-        return zookeeperClient.getDataWithStat(ZkData.TableZNode.path(tablePath));
-    }
-
-    private String deleteIdentityRoot(long tableId) throws Exception {
-        String identityRoot = ZkData.TableIdZNode.path(tableId);
-        zookeeperClient
-                .getCuratorClient()
-                .delete()
-                .deletingChildrenIfNeeded()
-                .forPath(identityRoot);
-        return identityRoot;
-    }
-
-    private int leaderAndIsrVersion(TableBucket tableBucket) throws Exception {
-        return zookeeperClient
-                .getDataWithStat(ZkData.LeaderAndIsrZNode.path(tableBucket))
-                .getStat()
-                .getVersion();
     }
 
     @Test

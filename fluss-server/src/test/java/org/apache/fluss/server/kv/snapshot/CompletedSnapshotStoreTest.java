@@ -107,44 +107,8 @@ class CompletedSnapshotStoreTest {
                         1, completedSnapshotHandleStore, Collections.emptyList());
         assertThat(completedSnapshotStore.getLatestSnapshot()).isEmpty();
         CompletedSnapshot snapshot = getSnapshot(1);
-        completedSnapshotStore.add(snapshot, "/table", 1, 1, 1);
+        completedSnapshotStore.add(snapshot);
         assertThat(completedSnapshotStore.getLatestSnapshot().get()).isEqualTo(snapshot);
-    }
-
-    @Test
-    void testLateSnapshotCannotReplaceImportedSnapshotOrChangeRetention() throws Exception {
-        CompletedSnapshot imported = getSnapshot(20L);
-        SharedKvFileRegistry registry = new SharedKvFileRegistry();
-        CompletedSnapshotStore store =
-                new CompletedSnapshotStore(
-                        1,
-                        registry,
-                        Collections.emptyList(),
-                        builder.build(),
-                        executorService,
-                        ignored -> false);
-        Path metadata = Paths.get(imported.getMetadataFilePath().toUri());
-        Files.createDirectories(metadata.getParent());
-        Files.write(metadata, CompletedSnapshotJsonSerde.toJson(imported));
-        store.registerExternalSnapshot(imported, () -> {});
-        CompletedSnapshot late =
-                getSnapshotWithSharedFiles(
-                        19L,
-                        Collections.singletonList(
-                                KvFileHandleAndLocalPath.of(
-                                        new TestKvHandle("late.sst"), "late.sst")));
-
-        assertThatThrownBy(() -> store.add(late, "/table", 1, 1, 1))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("older than the latest");
-
-        assertThat(store.getAllSnapshots()).containsExactly(imported);
-        assertThat(registry.getFileSize()).isZero();
-        assertThat(
-                        imported.getMetadataFilePath()
-                                .getFileSystem()
-                                .exists(imported.getMetadataFilePath()))
-                .isTrue();
     }
 
     @Test
@@ -210,8 +174,7 @@ class CompletedSnapshotStoreTest {
                                         new TestKvHandle("unconfirmed-shared.sst"),
                                         "unconfirmed-shared.sst")));
 
-        assertThatThrownBy(() -> store.add(snapshot, "/table", 1, 1, 1))
-                .isInstanceOf(FlussException.class);
+        assertThatThrownBy(() -> store.add(snapshot)).isInstanceOf(FlussException.class);
 
         assertThat(registry.getFileSize()).isZero();
         assertThat(store.getAllSnapshots()).isEmpty();
@@ -238,7 +201,7 @@ class CompletedSnapshotStoreTest {
 
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
-        completedSnapshotStore.add(ckp, "/table", 1, 1, 1);
+        completedSnapshotStore.add(ckp);
 
         // We should persist the completed snapshot to snapshot handle store.
         final CompletedSnapshotHandle addedCkpHandle =
@@ -274,7 +237,7 @@ class CompletedSnapshotStoreTest {
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
 
-        assertThatThrownBy(() -> completedSnapshotStore.add(ckp, "/table", 1, 1, 1))
+        assertThatThrownBy(() -> completedSnapshotStore.add(ckp))
                 .as("We should get an exception when add snapshot to failed..")
                 .hasMessageContaining(errMsg)
                 .isInstanceOf(FlussException.class);
@@ -288,7 +251,7 @@ class CompletedSnapshotStoreTest {
     private static void addConcurrentSnapshot(
             CompletedSnapshotStore store, CompletedSnapshot snapshot) throws Exception {
         try {
-            store.add(snapshot, "/table", 1, 1, 1);
+            store.add(snapshot);
         } catch (IllegalArgumentException lateSnapshot) {
             if (!lateSnapshot.getMessage().contains("older than the latest")
                     || store.getLatestSnapshot().get().getSnapshotID() < snapshot.getSnapshotID()) {
@@ -640,12 +603,12 @@ class CompletedSnapshotStoreTest {
         CompletedSnapshot cp2 = getSnapshot(2L);
         CompletedSnapshot cp3 = getSnapshot(3L);
 
-        store.add(cp1, "/table", 1, 1, 1);
+        store.add(cp1);
         assertThat(store.getAllSnapshots()).hasSize(1);
         assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
         assertThat(store.stillInUseSnapshots).isEmpty();
 
-        store.add(cp2, "/table", 1, 1, 1);
+        store.add(cp2);
 
         // After adding cp1 and cp2 with maxRetain=1:
         // cp1 can't be subsumed (leased) → moved to stillInUseSnapshots
@@ -654,7 +617,7 @@ class CompletedSnapshotStoreTest {
         assertThat(store.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(2L);
         assertThat(store.stillInUseSnapshots).containsKey(1L);
 
-        store.add(cp3, "/table", 1, 1, 1);
+        store.add(cp3);
 
         // After adding cp3 with maxRetain=1:
         // cp1 is still in stillInUseSnapshots (lease not expired)
@@ -729,11 +692,11 @@ class CompletedSnapshotStoreTest {
                         executorService,
                         bucket -> bucket.getSnapshotID() == 1L);
 
-        store.add(cp1, "/table", 1, 1, 1);
-        store.add(cp2, "/table", 1, 1, 1);
-        store.add(cp3, "/table", 1, 1, 1);
-        store.add(cp4, "/table", 1, 1, 1);
-        store.add(cp5, "/table", 1, 1, 1);
+        store.add(cp1);
+        store.add(cp2);
+        store.add(cp3);
+        store.add(cp4);
+        store.add(cp5);
 
         // Wait for async cleanup
         Thread.sleep(200);
@@ -796,8 +759,8 @@ class CompletedSnapshotStoreTest {
                         executorService,
                         bucket -> leasedSnapshotIds.contains(bucket.getSnapshotID()));
 
-        store.add(cp1, "/table", 1, 1, 1);
-        store.add(cp2, "/table", 1, 1, 1);
+        store.add(cp1);
+        store.add(cp2);
 
         // cp1 leased → moved to stillInUseSnapshots, completedSnapshots = [2]
         assertThat(store.stillInUseSnapshots).containsKey(1L);
@@ -815,7 +778,7 @@ class CompletedSnapshotStoreTest {
                         Collections.singletonList(
                                 KvFileHandleAndLocalPath.of(
                                         new PlaceholderKvFileHandler(fileA), "a.sst")));
-        store.add(cp3, "/table", 1, 1, 1);
+        store.add(cp3);
         Thread.sleep(200);
 
         // After lease expiry: stillInUseSnapshots should be empty
@@ -890,7 +853,7 @@ class CompletedSnapshotStoreTest {
                         numToRetain, snapshotHandleStore, Collections.emptyList());
 
         for (CompletedSnapshot c : completed) {
-            completedSnapshotStore.add(c, "/table", 1, 1, 1);
+            completedSnapshotStore.add(c);
         }
         assertThat(completedSnapshotStore.getAllSnapshots()).isEqualTo(expectedRetained);
     }

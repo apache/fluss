@@ -22,7 +22,6 @@ import org.apache.fluss.annotation.PublicEvolving;
 /** The reason why a BulkLoad transaction was aborted. */
 @PublicEvolving
 public enum BulkLoadAbortReason {
-    TARGET_NOT_EMPTY(0),
     DEADLINE_EXCEEDED(1),
     ABORTED_BY_CALLER(2);
 

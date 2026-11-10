@@ -29,21 +29,18 @@ import java.util.Optional;
 public interface CompletedSnapshotHandleStore {
 
     /**
-     * Persists an ordinary snapshot commit with coordinator and target-metadata fences in the same
-     * coordination-system transaction.
+     * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).
+     *
+     * @param tableBucket the table bucket the snapshot belongs to
+     * @param snapshotId the snapshot id
+     * @param completedSnapshotHandle CompletedSnapshotHandle to be added
+     * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
-    default void add(
+    void add(
             TableBucket tableBucket,
             long snapshotId,
-            CompletedSnapshotHandle completedSnapshotHandle,
-            String sourceMetadataPath,
-            int sourceMetadataVersion,
-            int coordinatorZkVersion,
-            int leaderAndIsrZkVersion)
-            throws Exception {
-        throw new UnsupportedOperationException(
-                "Atomic metadata-fenced snapshot commits are not supported by this store.");
-    }
+            CompletedSnapshotHandle completedSnapshotHandle)
+            throws Exception;
 
     /**
      * Remove the snapshot handle for the given snapshot id of the given table bucket.

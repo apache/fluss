@@ -75,6 +75,8 @@ public class ControlRequestSendThread extends ShutdownableThread {
     private final Counter retryCount;
     private final Counter staleDropCount;
     private final AtomicInteger aliveFlag;
+    private boolean connectionNeedsInvalidation;
+    private CompletableFuture<Void> pendingInvalidation;
 
     private final AtomicReference<CompletableFuture<? extends ApiMessage>> inFlight =
             new AtomicReference<>();
@@ -117,6 +119,12 @@ public class ControlRequestSendThread extends ShutdownableThread {
             super.run();
         } finally {
             aliveFlag.set(0);
+            QueueItem<?> abandoned;
+            while ((abandoned = queue.poll()) != null) {
+                abandoned.markDequeued();
+                invokeCallback(
+                        abandoned, null, new IllegalStateException("Control channel closed."));
+            }
         }
     }
 
@@ -134,8 +142,10 @@ public class ControlRequestSendThread extends ShutdownableThread {
 
     @Override
     public void doWork() throws Exception {
+        QueueItem<?> item = null;
         try {
-            QueueItem<?> item = queue.take();
+            item = queue.take();
+            item.markDequeued();
             queueTimeMsHistogram.update(System.currentTimeMillis() - item.getEnqueueTimeMs());
 
             int currentEpoch = epochSupplier.getAsInt();
@@ -147,11 +157,15 @@ public class ControlRequestSendThread extends ShutdownableThread {
                         tabletServerId,
                         item.getCoordinatorEpoch(),
                         currentEpoch);
+                invokeCallback(item, null, new IllegalStateException("Coordinator epoch changed."));
                 return;
             }
 
             send(item);
         } catch (InterruptedException e) {
+            if (item != null) {
+                invokeCallback(item, null, e);
+            }
             Thread.currentThread().interrupt();
         }
     }
@@ -159,6 +173,19 @@ public class ControlRequestSendThread extends ShutdownableThread {
     private <ResponseT extends ApiMessage> void send(QueueItem<ResponseT> item)
             throws InterruptedException {
         while (isRunning()) {
+            if (connectionNeedsInvalidation) {
+                Throwable cleanupFailure = invalidateConnectionOnce();
+                if (cleanupFailure != null) {
+                    if (!item.retriesTransport()) {
+                        invokeCallback(item, null, cleanupFailure);
+                        return;
+                    }
+                    logInvalidationFailure(item, cleanupFailure);
+                    retryCount.inc();
+                    backoff();
+                    continue;
+                }
+            }
             Optional<TabletServerGateway> gatewayOpt;
             try {
                 gatewayOpt = gatewaySupplier.get();
@@ -174,6 +201,13 @@ public class ControlRequestSendThread extends ShutdownableThread {
                 return;
             }
             if (!gatewayOpt.isPresent()) {
+                if (!item.retriesTransport()) {
+                    invokeCallback(
+                            item,
+                            null,
+                            new IllegalStateException("TabletServer gateway is unavailable."));
+                    return;
+                }
                 retryCount.inc();
                 backoff();
                 continue;
@@ -201,6 +235,7 @@ public class ControlRequestSendThread extends ShutdownableThread {
             }
 
             if (!isRunning()) {
+                invokeCallback(item, null, new IllegalStateException("Control channel closed."));
                 return;
             }
 
@@ -214,6 +249,18 @@ public class ControlRequestSendThread extends ShutdownableThread {
                 return;
             }
 
+            if (!item.retriesTransport()) {
+                if (future != null) {
+                    future.cancel(true);
+                }
+                connectionNeedsInvalidation = true;
+                Throwable cleanupFailure = invalidateConnectionOnce();
+                if (cleanupFailure != null) {
+                    failure.addSuppressed(cleanupFailure);
+                }
+                invokeCallback(item, null, failure);
+                return;
+            }
             if (!invalidateConnection(item)) {
                 return;
             }
@@ -227,46 +274,40 @@ public class ControlRequestSendThread extends ShutdownableThread {
                     failure);
             backoff();
         }
+        invokeCallback(item, null, new IllegalStateException("Control channel closed."));
     }
 
     private boolean invalidateConnection(QueueItem<?> item) throws InterruptedException {
-        CompletableFuture<Void> invalidationFuture = null;
+        connectionNeedsInvalidation = true;
         while (isRunning()) {
-            if (invalidationFuture == null) {
-                try {
-                    invalidationFuture = connectionInvalidator.get();
-                } catch (RuntimeException e) {
-                    logInvalidationFailure(item, unwrapFailure(e));
-                    retryCount.inc();
-                    backoff();
-                    continue;
-                }
-            }
-
-            try {
-                invalidationFuture.get(requestTimeoutMs, TimeUnit.MILLISECONDS);
+            Throwable failure = invalidateConnectionOnce();
+            if (failure == null) {
                 return true;
-            } catch (TimeoutException e) {
-                log.warn(
-                        "Timed out waiting to invalidate the connection to tabletServer {} after "
-                                + "{}; the queue head will be retained and invalidation will be "
-                                + "checked again after {}ms",
-                        tabletServerId,
-                        item.getApiKey(),
-                        backoffMs,
-                        e);
-            } catch (ExecutionException e) {
-                logInvalidationFailure(item, unwrapFailure(e));
-                invalidationFuture = null;
-            } catch (RuntimeException e) {
-                logInvalidationFailure(item, unwrapFailure(e));
-                invalidationFuture = null;
             }
-
+            logInvalidationFailure(item, failure);
             retryCount.inc();
             backoff();
         }
         return false;
+    }
+
+    private Throwable invalidateConnectionOnce() throws InterruptedException {
+        try {
+            if (pendingInvalidation == null) {
+                pendingInvalidation = connectionInvalidator.get();
+            }
+            pendingInvalidation.get(requestTimeoutMs, TimeUnit.MILLISECONDS);
+            pendingInvalidation = null;
+            connectionNeedsInvalidation = false;
+            return null;
+        } catch (TimeoutException failure) {
+            // The channel owns this cleanup until completion. A later request must observe it
+            // before acquiring another connection or transport request.
+            return failure;
+        } catch (ExecutionException | RuntimeException failure) {
+            pendingInvalidation = null;
+            return unwrapFailure(failure);
+        }
     }
 
     private void logInvalidationFailure(QueueItem<?> item, Throwable failure) {

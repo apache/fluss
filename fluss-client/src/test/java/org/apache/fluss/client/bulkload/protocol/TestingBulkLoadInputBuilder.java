@@ -21,11 +21,10 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.BulkLoadHandle;
-import org.apache.fluss.metadata.BulkLoadTargetInfo;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
 import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -33,7 +32,9 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
+import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
@@ -65,37 +66,60 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTabl
 /** Produces real RocksDB snapshots as independent inputs to server protocol tests. */
 public final class TestingBulkLoadInputBuilder {
 
-    /** Builds final ordinary Snapshot files and returns their ordered metadata digest. */
-    public CommitBulkLoadRequest build(PbBulkLoadTargetInfo target, List<Object[]> logicalRows)
+    /** Builds one common digest for all targets returned by Begin. */
+    public CommitBulkLoadRequest build(
+            BeginBulkLoadResponse begun, Map<PhysicalTablePath, List<Object[]>> rows)
             throws Exception {
-        return build(target, logicalRows, Collections.emptyMap());
+        Hasher digest = Hashing.sha256().newHasher();
+        List<PbBulkLoadTargetInfo> targets = new ArrayList<>(begun.getTargetInfosList());
+        targets.sort(
+                java.util.Comparator.comparing(
+                        target -> target.hasPartitionId() ? target.getPartitionId() : -1L));
+        for (PbBulkLoadTargetInfo target : targets) {
+            writeTarget(
+                    begun.getHandle(),
+                    target,
+                    rows.getOrDefault(
+                            toPhysicalTablePath(target.getTarget()), Collections.emptyList()),
+                    Collections.emptyMap(),
+                    digest);
+        }
+        return new CommitBulkLoadRequest()
+                .setHandle(begun.getHandle())
+                .setInputSha256(digest.hash().toString());
     }
 
-    /**
-     * Builds snapshots at explicitly supplied offsets, using final row counts for other buckets.
-     */
+    /** Builds one physical target with explicit bucket offsets. */
     public CommitBulkLoadRequest build(
-            PbBulkLoadTargetInfo target, List<Object[]> logicalRows, Map<Integer, Long> offsets)
+            BeginBulkLoadResponse begun, List<Object[]> rows, Map<Integer, Long> offsets)
             throws Exception {
-        BulkLoadHandle handle =
-                new BulkLoadHandle(
-                        toPhysicalTablePath(target.getHandle().getTarget()),
-                        target.getHandle().getTableId(),
-                        target.getHandle().hasPartitionId()
-                                ? target.getHandle().getPartitionId()
-                                : null,
-                        target.getHandle().getBulkLoadId());
+        if (begun.getTargetInfosCount() != 1) {
+            throw new IllegalArgumentException("Explicit offsets require one physical target.");
+        }
+        Hasher digest = Hashing.sha256().newHasher();
+        writeTarget(begun.getHandle(), begun.getTargetInfoAt(0), rows, offsets, digest);
+        return new CommitBulkLoadRequest()
+                .setHandle(begun.getHandle())
+                .setInputSha256(digest.hash().toString());
+    }
+
+    private void writeTarget(
+            PbBulkLoadHandle handle,
+            PbBulkLoadTargetInfo target,
+            List<Object[]> logicalRows,
+            Map<Integer, Long> offsets,
+            Hasher digest)
+            throws Exception {
+        PhysicalTablePath path = toPhysicalTablePath(target.getTarget());
         TableInfo tableInfo =
                 TableInfo.of(
-                        handle.getTarget().getTablePath(),
+                        path.getTablePath(),
                         handle.getTableId(),
                         target.getSchemaId(),
                         TableDescriptor.fromJsonBytes(target.getTableJson()),
                         target.getRemoteDataDir(),
                         target.getCreatedTime(),
                         target.getModifiedTime());
-        BulkLoadTargetInfo targetInfo =
-                new BulkLoadTargetInfo(handle, tableInfo, target.getSnapshotIds());
         ChangelogImage changelogImage = tableInfo.getTableConfig().getChangelogImage();
         KeyEncoder keyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
@@ -114,33 +138,36 @@ public final class TestingBulkLoadInputBuilder {
         }
         List<Object[]> expectedRows = new ArrayList<>(finalRows.values());
         List<List<Object[]>> rowsByBucket = distribute(tableInfo, expectedRows);
-        Hasher digest = Hashing.sha256().newHasher();
         for (int bucketId = 0; bucketId < rowsByBucket.size(); bucketId++) {
             List<Object[]> bucketRows = rowsByBucket.get(bucketId);
             long offset = offsets.getOrDefault(bucketId, (long) bucketRows.size());
             Long rowCount =
                     changelogImage == ChangelogImage.FULL ? Long.valueOf(bucketRows.size()) : null;
-            digest.putBytes(writeSnapshot(targetInfo, bucketId, bucketRows, offset, rowCount));
+            digest.putBytes(
+                    writeSnapshot(tableInfo, target, bucketId, bucketRows, offset, rowCount));
         }
-        return new CommitBulkLoadRequest()
-                .setHandle(target.getHandle())
-                .setInputSha256(digest.hash().toString());
     }
 
     private static byte[] writeSnapshot(
-            BulkLoadTargetInfo info, int bucketId, List<Object[]> rows, long offset, Long rowCount)
+            TableInfo table,
+            PbBulkLoadTargetInfo info,
+            int bucketId,
+            List<Object[]> rows,
+            long offset,
+            Long rowCount)
             throws Exception {
-        TableInfo table = info.getTableInfo();
-        BulkLoadHandle handle = info.getHandle();
         TableBucket bucket =
-                new TableBucket(handle.getTableId(), handle.getPartitionId(), bucketId);
+                new TableBucket(
+                        table.getTableId(),
+                        info.hasPartitionId() ? info.getPartitionId() : null,
+                        bucketId);
         FsPath tabletDir =
                 FlussPaths.remoteKvTabletDir(
                         new FsPath(table.getRemoteDataDir(), FlussPaths.REMOTE_KV_DIR_NAME),
-                        handle.getTarget(),
+                        toPhysicalTablePath(info.getTarget()),
                         bucket);
         FsPath snapshotDir =
-                FlussPaths.remoteKvSnapshotDir(tabletDir, info.getSnapshotId(bucketId));
+                FlussPaths.remoteKvSnapshotDir(tabletDir, info.getSnapshotIds()[bucketId]);
         Path work = Files.createTempDirectory("bulkload-server-input-");
         RocksDB.loadLibrary();
         try {
@@ -202,7 +229,7 @@ public final class TestingBulkLoadInputBuilder {
                     KvSnapshotFileMetadataJsonSerde.toJson(
                             new KvSnapshotFileMetadata(
                                     bucket,
-                                    info.getSnapshotId(bucketId),
+                                    info.getSnapshotIds()[bucketId],
                                     snapshotDir.toString(),
                                     Collections.emptyList(),
                                     files,

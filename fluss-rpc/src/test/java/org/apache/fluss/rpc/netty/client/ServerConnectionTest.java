@@ -40,6 +40,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -294,6 +295,35 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testSnapshotRestorationRequiresNotifyVersionOne() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            NotifyLeaderAndIsrRequest request = new NotifyLeaderAndIsrRequest();
+            request.addNotifyBucketsLeaderReq();
+            connection.validateVersionCompatibility(
+                    ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 0, request);
+            request.addNotifyBucketsLeaderReq().setRestoreSnapshotId(17L);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("requires NOTIFY_LEADER_AND_ISR version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+            connection.validateVersionCompatibility(
+                    ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 1, request);
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

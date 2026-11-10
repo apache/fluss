@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.TableLifecycleThrottler;
-import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -47,11 +46,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 /** A watcher to watch the table changes(create/delete) in zookeeper. */
 public class TableChangeWatcher {
@@ -60,8 +55,6 @@ public class TableChangeWatcher {
     private final CuratorCache curatorCache;
 
     private volatile boolean running;
-
-    private final Set<String> changedRegistrations = new HashSet<>();
 
     private final EventManager eventManager;
     private final TableLifecycleThrottler lifecycleThrottler;
@@ -91,34 +84,6 @@ public class TableChangeWatcher {
         running = false;
         LOG.info("Stopping TableChangeWatcher");
         curatorCache.close();
-        synchronized (changedRegistrations) {
-            changedRegistrations.clear();
-        }
-    }
-
-    private void invalidateTargetMetadata(String path) {
-        synchronized (changedRegistrations) {
-            if (!running) {
-                return;
-            }
-            boolean enqueue = changedRegistrations.isEmpty();
-            changedRegistrations.add(path);
-            // Coalesce paths so cascading DROP keeps one pending cache event.
-            if (enqueue) {
-                eventManager.put(
-                        new AccessContextEvent<>(
-                                context -> {
-                                    List<String> paths;
-                                    synchronized (changedRegistrations) {
-                                        paths = new ArrayList<>(changedRegistrations);
-                                        changedRegistrations.clear();
-                                    }
-                                    // Invalidate only: late events must not replace local writes.
-                                    paths.forEach(context::invalidateTargetMetadata);
-                                    return null;
-                                }));
-            }
-        }
     }
 
     /** A listener to monitor the changes of table nodes in zookeeper. */
@@ -130,12 +95,6 @@ public class TableChangeWatcher {
                 LOG.debug("Received {} event (path: {})", type, newData.getPath());
             } else {
                 LOG.debug("Received {} event", type);
-            }
-            ChildData registration = newData == null ? oldData : newData;
-            if (registration != null
-                    && (TableZNode.parsePath(registration.getPath()) != null
-                            || PartitionZNode.parsePath(registration.getPath()) != null)) {
-                invalidateTargetMetadata(registration.getPath());
             }
             switch (type) {
                 case NODE_CREATED:

@@ -89,6 +89,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkVersion;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -99,6 +101,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -206,6 +209,22 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                     return null;
                 });
         assertThat(fromCtx(CoordinatorContext::getKvBucketCount)).isZero();
+    }
+
+    @Test
+    void testStartupAcceptsLakeMetadataWithoutTableAssignment() throws Exception {
+        eventProcessor.shutdown();
+        long tableId = 10004L;
+        zookeeperClient.upsertLakeTable(
+                tableId, new LakeTable(new LakeTableSnapshot(1L, Collections.emptyMap())), false);
+        assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        boolean tableRegistered = fromCtx(ctx -> ctx.containsTableId(tableId));
+        assertThat(tableRegistered).isFalse();
     }
 
     @Test
@@ -2157,8 +2176,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 .hasMessageContaining("can only be altered on primary key tables");
     }
 
-    @Test
-    void testDoBucketReassignment() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testDoBucketReassignment(boolean bulkLoadActive) throws Exception {
         zookeeperClient.registerTabletServer(
                 3,
                 new TabletServerRegistration(
@@ -2180,40 +2200,55 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         CoordinatorEventProcessorTest.TEST_TABLE,
                         tableAssignment,
                         false);
-        TableBucket tb0 = new TableBucket(t1Id, 0);
-        verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+        try {
+            TableBucket tb0 = new TableBucket(t1Id, 0);
+            verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
+            if (bulkLoadActive) {
+                zookeeperClient.updateTable(
+                        t1,
+                        zookeeperClient
+                                .getTable(t1)
+                                .get()
+                                .withBulkLoadId("550e8400-e29b-41d4-a716-446655440000"));
+            }
 
-        // trigger bucket reassignment for tb0:
-        // bucket0 -> (0, 1, 2)
-        Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
-        RebalancePlanForBucket planForBucket0 =
-                new RebalancePlanForBucket(
-                        tb0, 0, 0, Arrays.asList(0, 1, 3), Arrays.asList(0, 1, 2));
+            // trigger bucket reassignment for tb0:
+            // bucket0 -> (0, 1, 2)
+            Map<TableBucket, RebalancePlanForBucket> rebalancePlan = new HashMap<>();
+            RebalancePlanForBucket planForBucket0 =
+                    new RebalancePlanForBucket(
+                            tb0, 0, 0, Arrays.asList(0, 1, 3), Arrays.asList(0, 1, 2));
 
-        rebalancePlan.put(tb0, planForBucket0);
-        // try to execute.
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance(
-                        "rebalance-task-jdsds1", rebalancePlan, RebalanceStatus.NOT_STARTED);
+            rebalancePlan.put(tb0, planForBucket0);
+            // try to execute.
+            eventProcessor
+                    .getRebalanceManager()
+                    .registerRebalance(
+                            "rebalance-task-jdsds1", rebalancePlan, RebalanceStatus.NOT_STARTED);
 
-        // Mock to finish rebalance tasks, in production case, this need to be trigged by receiving
-        // AdjustIsrRequest.
-        Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
-        CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
+            // Mock to finish rebalance tasks, in production case, this need to be trigged by
+            // receiving
+            // AdjustIsrRequest.
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
+            CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
 
-        // This isr list equals originReplicas + addingReplicas. the bucket epoch is 1.
-        leaderAndIsrMap.put(
-                tb0,
-                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2, 3), Collections.emptyList(), 0, 1));
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
-        respCallback.get();
-        verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
-
-        // clean up the tablet server 3
-        cleanupTabletServer3();
+            // This isr list equals originReplicas + addingReplicas. the bucket epoch is 1.
+            leaderAndIsrMap.put(
+                    tb0,
+                    new LeaderAndIsr(
+                            0, 0, Arrays.asList(0, 1, 2, 3), Collections.emptyList(), 0, 1));
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
+            respCallback.get();
+            verifyIsr(tb0, 0, Arrays.asList(0, 1, 2));
+        } finally {
+            if (bulkLoadActive) {
+                zookeeperClient.updateTable(
+                        t1, zookeeperClient.getTable(t1).get().withBulkLoadId(null));
+            }
+            cleanupTabletServer3();
+        }
     }
 
     @Test

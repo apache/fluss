@@ -19,61 +19,37 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import javax.annotation.Nullable;
-
 import java.util.Objects;
 import java.util.UUID;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Immutable physical identity of a BulkLoad transaction. */
+/** Immutable table identity of a BulkLoad transaction. */
 @PublicEvolving
 public final class BulkLoadHandle {
 
-    private final PhysicalTablePath target;
+    private final TablePath tablePath;
     private final long tableId;
-    private final @Nullable Long partitionId;
     private final String bulkLoadId;
 
-    /**
-     * Creates a BulkLoad handle.
-     *
-     * @param target the original physical target path
-     * @param tableId the physical table ID
-     * @param partitionId the physical partition ID, or {@code null} for a non-partitioned target
-     * @param bulkLoadId the canonical lowercase BulkLoad UUID
-     */
-    public BulkLoadHandle(
-            PhysicalTablePath target, long tableId, @Nullable Long partitionId, String bulkLoadId) {
-        this.target = checkNotNull(target, "BulkLoad target must not be null.");
-        checkArgument(target.isValid(), "BulkLoad target must be valid.");
+    /** Creates a table-level BulkLoad handle with a canonical lowercase UUID. */
+    public BulkLoadHandle(TablePath tablePath, long tableId, String bulkLoadId) {
+        this.tablePath = checkNotNull(tablePath, "BulkLoad table path must not be null.");
+        checkArgument(tablePath.isValid(), "BulkLoad table path must be valid.");
         checkArgument(tableId >= 0, "BulkLoad table ID must be non-negative.");
-        checkArgument(
-                partitionId == null || partitionId >= 0,
-                "BulkLoad partition ID must be non-negative.");
-        checkArgument(
-                (target.getPartitionName() == null) == (partitionId == null),
-                "BulkLoad partition name and partition ID must both be present or both be absent.");
         this.bulkLoadId = validateBulkLoadId(bulkLoadId);
         this.tableId = tableId;
-        this.partitionId = partitionId;
     }
 
-    /** Returns the original physical target path. */
-    public PhysicalTablePath getTarget() {
-        return target;
+    /** Returns the original table path. */
+    public TablePath getTablePath() {
+        return tablePath;
     }
 
     /** Returns the physical table ID. */
     public long getTableId() {
         return tableId;
-    }
-
-    /** Returns the physical partition ID, or {@code null} for a non-partitioned target. */
-    @Nullable
-    public Long getPartitionId() {
-        return partitionId;
     }
 
     /** Returns the canonical lowercase BulkLoad UUID. */
@@ -91,25 +67,22 @@ public final class BulkLoadHandle {
         }
         BulkLoadHandle that = (BulkLoadHandle) o;
         return tableId == that.tableId
-                && Objects.equals(target, that.target)
-                && Objects.equals(partitionId, that.partitionId)
+                && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(bulkLoadId, that.bulkLoadId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(target, tableId, partitionId, bulkLoadId);
+        return Objects.hash(tablePath, tableId, bulkLoadId);
     }
 
     @Override
     public String toString() {
         return "BulkLoadHandle{"
-                + "target="
-                + target
+                + "tablePath="
+                + tablePath
                 + ", tableId="
                 + tableId
-                + ", partitionId="
-                + partitionId
                 + ", bulkLoadId='"
                 + bulkLoadId
                 + '\''

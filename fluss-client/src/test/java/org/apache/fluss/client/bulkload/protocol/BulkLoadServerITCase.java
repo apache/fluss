@@ -19,1640 +19,725 @@ package org.apache.fluss.client.bulkload.protocol;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
-import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
-import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.exception.BulkLoadInProgressException;
-import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.InvalidBulkLoadRequestException;
-import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.BulkLoadAbortReason;
 import org.apache.fluss.metadata.BulkLoadState;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DatabaseDescriptor;
-import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
 import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
-import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.GetInProgressBulkLoadRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbBulkLoadStatus;
-import org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo;
-import org.apache.fluss.rpc.protocol.Errors;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.replica.Replica;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
-import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.ExceptionUtils;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-import static org.apache.fluss.client.bulkload.protocol.TestingBulkLoadInputBuilder.bucketOf;
-import static org.apache.fluss.record.TestData.DATA1;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromPhysicalTablePath;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPhysicalTablePath;
-import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** End-to-end server transaction tests using internal RPC and ordinary client reads and writes. */
+/** Shared BulkLoad transactions through Coordinator RPCs and ordinary client operations. */
 final class BulkLoadServerITCase {
-
-    private static final Duration E2E_TIMEOUT = Duration.ofMinutes(5);
-    private static final int BUCKET_COUNT = 5;
-    private static final int INDEXED_ROWS_PER_BUCKET = 2050;
-    private static final int STRESS_ROWS_PER_BUCKET = 1101;
-    private static final String WAL_TARGET_PARTITION = "target";
-    private static final String WAL_LIVE_PARTITION = "live";
-
-    private static final Schema FULL_SCHEMA =
+    private static final Duration TIMEOUT = Duration.ofMinutes(3);
+    private static final Schema SCHEMA =
             Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("payload", DataTypes.STRING())
                     .primaryKey("id")
                     .build();
-
-    private static final Schema PARTITIONED_WAL_SCHEMA =
+    private static final Schema PARTITIONED =
             Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("payload", DataTypes.STRING())
                     .column("pt", DataTypes.STRING())
                     .primaryKey("id", "pt")
                     .build();
-
     private final FlussClusterExtension cluster =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
-                    .setClusterConf(featureClusterConfiguration())
+                    .setClusterConf(configuration())
                     .build();
-
     private Connection connection;
     private FlussAdmin admin;
 
     @BeforeEach
-    void startCluster() throws Exception {
+    void start() throws Exception {
         cluster.start();
         connection = ConnectionFactory.createConnection(cluster.getClientConfig());
         admin = (FlussAdmin) connection.getAdmin();
     }
 
     @AfterEach
-    void closeCluster() throws Exception {
+    void close() throws Exception {
         IOUtils.closeAll(admin, connection, cluster::close);
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testCommitRecoversAfterCoordinatorAndOriginalLeaderLoss(boolean resizeTable)
+    @EnumSource(ChangelogImage.class)
+    void testSharedPartitionsImportOneDecisionAndPreserveOnlineWrites(ChangelogImage image)
             throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "partitioned_wal_import");
-        await(admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false));
-        await(
-                admin.createTable(
-                        tablePath,
-                        TableDescriptor.builder()
-                                .schema(PARTITIONED_WAL_SCHEMA)
-                                .distributedBy(BUCKET_COUNT, "id")
-                                .partitionedBy("pt")
-                                .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.WAL)
-                                .build(),
-                        false));
-        await(
-                admin.createPartition(
-                        tablePath,
-                        new PartitionSpec(Collections.singletonMap("pt", WAL_TARGET_PARTITION)),
-                        false));
-        await(
-                admin.createPartition(
-                        tablePath,
-                        new PartitionSpec(Collections.singletonMap("pt", WAL_LIVE_PARTITION)),
-                        false));
-        TableInfo tableInfo = await(admin.getTableInfo(tablePath));
-        if (resizeTable) {
-            await(
-                    admin.alterTable(
-                            tablePath,
-                            Collections.singletonList(
-                                    TableChange.modifyBucketCount(BUCKET_COUNT + 1)),
-                            false));
-        }
-        Map<String, Long> partitionIds =
-                await(admin.listPartitionInfos(tablePath)).stream()
-                        .collect(
-                                Collectors.toMap(
-                                        PartitionInfo::getPartitionName,
-                                        PartitionInfo::getPartitionId));
-        assertThat(partitionIds).containsKeys(WAL_TARGET_PARTITION, WAL_LIVE_PARTITION);
-
-        try (Table table = connection.getTable(tablePath)) {
-            runPartitionedWalRecoveryScenario(table, tableInfo, partitionIds);
-        }
-    }
-
-    @Test
-    void testImportFinalStandardFilesAndContinueOnlineWrites() throws Exception {
-        Configuration clientConfiguration = cluster.getClientConfig();
-        Configuration accessProbeConfiguration = new Configuration(clientConfiguration);
-        accessProbeConfiguration.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofSeconds(1));
-        accessProbeConfiguration.setInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES, 0);
-        accessProbeConfiguration.setInt(ConfigOptions.CLIENT_WRITER_RETRIES, 0);
-        accessProbeConfiguration.setBoolean(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
-        try (Connection accessProbeConnection =
-                ConnectionFactory.createConnection(accessProbeConfiguration)) {
-            TablePath tablePath = TablePath.of("bulkload_e2e", "full_import");
-            createDatabaseAndTable(admin, tablePath, BUCKET_COUNT);
-
-            try (Table table = connection.getTable(tablePath);
-                    Table accessProbeTable = accessProbeConnection.getTable(tablePath)) {
-                runFullImportScenario(table, accessProbeTable);
-            }
-        }
-    }
-
-    @Test
-    void testSnapshotAtProvidedLogEndOffsetsPersistsAcrossRecovery() throws Exception {
-        Configuration clientConfiguration = cluster.getClientConfig();
-        TablePath tablePath = TablePath.of("bulkload_e2e", "snapshot_only_import");
-        PhysicalTablePath target = PhysicalTablePath.of(tablePath);
-        List<Object[]> expectedRows = new ArrayList<>();
-        List<Object[]> firstTailRows = new ArrayList<>();
-        Map<Integer, Long> expectedOffsets = new LinkedHashMap<>();
-        BucketRows rowGenerator;
-        TableInfo tableInfo;
-
-        try (Connection connection = ConnectionFactory.createConnection(clientConfiguration);
-                FlussAdmin admin = (FlussAdmin) connection.getAdmin()) {
-            tableInfo = createDatabaseAndTable(admin, tablePath, BUCKET_COUNT);
-            rowGenerator = new BucketRows(tableInfo, 700_000);
-            cluster.waitUntilTableReady(tableInfo.getTableId());
-
-            for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-                expectedOffsets.put(bucket, 10_000L + bucket * 1_000L + 17L);
-                for (int index = 0; index < 3; index++) {
-                    Object[] values =
-                            rowGenerator.row(bucket, "snapshot-only-" + bucket + '-' + index);
-                    expectedRows.add(values);
-                }
-            }
-            PbBulkLoadTargetInfo context = await(begin(admin, target));
-            CommitBulkLoadRequest input =
-                    new TestingBulkLoadInputBuilder().build(context, expectedRows, expectedOffsets);
-            PbBulkLoadStatus committed = commitUntilReady(admin, input);
-            assertThat(committed.getState()).isEqualTo(BulkLoadState.COMMITTED.getCode());
-            assertThat(latestOffsets(admin, target, expectedOffsets.keySet()))
-                    .containsExactlyInAnyOrderEntriesOf(expectedOffsets);
-            try (Table table = connection.getTable(tablePath)) {
-                verifyPublicRows(table, tableInfo.getRowType(), expectedRows);
-                UpsertWriter writer = table.newUpsert().createWriter();
-                for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-                    Object[] tail = rowGenerator.row(bucket, "first-tail-" + bucket);
-                    firstTailRows.add(tail);
-                    await(writer.upsert(row(tableInfo.getRowType(), tail)));
-                }
-                writer.flush();
-                expectedRows.addAll(firstTailRows);
-                verifyPublicRows(table, tableInfo.getRowType(), expectedRows);
-                Map<Integer, Long> afterWriteOffsets = offsetsAfter(expectedOffsets, 1L);
-                assertThat(latestOffsets(admin, target, expectedOffsets.keySet()))
-                        .containsExactlyInAnyOrderEntriesOf(afterWriteOffsets);
-                try (LogScanner scanner = table.newScan().createLogScanner()) {
-                    for (Map.Entry<Integer, Long> entry : expectedOffsets.entrySet()) {
-                        scanner.subscribe(entry.getKey(), entry.getValue());
-                    }
-                    Map<Integer, ScanRecord> tails = new LinkedHashMap<>();
-                    long deadline = System.nanoTime() + E2E_TIMEOUT.toNanos();
-                    while (tails.size() < BUCKET_COUNT && System.nanoTime() < deadline) {
-                        ScanRecords records = scanner.poll(Duration.ofSeconds(1));
-                        for (TableBucket bucket : records.buckets()) {
-                            List<ScanRecord> recordsForBucket = records.records(bucket);
-                            if (!recordsForBucket.isEmpty()) {
-                                tails.put(bucket.getBucket(), recordsForBucket.get(0));
-                            }
-                        }
-                    }
-                    assertThat(tails).hasSize(BUCKET_COUNT);
-                    for (Map.Entry<Integer, ScanRecord> entry : tails.entrySet()) {
-                        assertThat(entry.getValue().logOffset())
-                                .isEqualTo(expectedOffsets.get(entry.getKey()));
-                    }
-                }
-            }
-
-            assertNoBulkLoadRemoteLogArtifacts(cluster, tableInfo, target);
-
-            int restartedTabletServer =
-                    cluster.waitAndGetLeader(new TableBucket(tableInfo.getTableId(), 0));
-            cluster.stopCoordinatorServer();
-            cluster.startCoordinatorServer();
-            cluster.stopTabletServer(restartedTabletServer);
-            cluster.startTabletServer(restartedTabletServer);
-        }
-
-        try (Connection recoveredConnection =
-                        ConnectionFactory.createConnection(cluster.getClientConfig());
-                Admin recoveredAdmin = recoveredConnection.getAdmin();
-                Table recoveredTable = recoveredConnection.getTable(tablePath)) {
-            Map<Integer, Long> recoveredOffsets = offsetsAfter(expectedOffsets, 1L);
-            verifyPublicRows(recoveredTable, tableInfo.getRowType(), expectedRows);
-            assertThat(latestOffsets(recoveredAdmin, target, expectedOffsets.keySet()))
-                    .containsExactlyInAnyOrderEntriesOf(recoveredOffsets);
-
-            UpsertWriter writer = recoveredTable.newUpsert().createWriter();
-            for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-                Object[] tail = rowGenerator.row(bucket, "recovered-tail-" + bucket);
-                expectedRows.add(tail);
-                await(writer.upsert(row(tableInfo.getRowType(), tail)));
-            }
-            writer.flush();
-            verifyPublicRows(recoveredTable, tableInfo.getRowType(), expectedRows);
-            Map<Integer, Long> finalOffsets = offsetsAfter(expectedOffsets, 2L);
-            assertThat(latestOffsets(recoveredAdmin, target, expectedOffsets.keySet()))
-                    .containsExactlyInAnyOrderEntriesOf(finalOffsets);
-        }
-    }
-
-    @Test
-    void testOrdinarySnapshotCommitAfterActiveTableRegistrationChanges() throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "active_identity_refresh");
-        PhysicalTablePath target = PhysicalTablePath.of(tablePath);
-        TableInfo tableInfo = createDatabaseAndTable(admin, tablePath, 1);
-        cluster.waitUntilTableReady(tableInfo.getTableId());
-        PbBulkLoadTargetInfo context = await(begin(admin, target));
-        CommitBulkLoadRequest input =
-                buildInput(context, Collections.singletonList(new Object[] {1, "bulkload"}));
-        PbBulkLoadStatus committed = commitUntilReady(admin, input);
+        TablePath path = create("shared_commit", true, image);
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1"),
+                second = PhysicalTablePath.of(path, "p2");
+        BeginBulkLoadResponse begun = begin(second, first);
+        assertThat(begun.getTargetInfosCount()).isEqualTo(2);
+        assertThat(owner(first).getHandle().getBulkLoadId())
+                .isEqualTo(begun.getHandle().getBulkLoadId());
+        assertThat(owner(second).getHandle().getBulkLoadId())
+                .isEqualTo(begun.getHandle().getBulkLoadId());
+        Map<PhysicalTablePath, List<Object[]>> rows = new HashMap<>();
+        rows.put(
+                first, Arrays.asList(new Object[] {1, "one", "p1"}, new Object[] {2, "two", "p1"}));
+        rows.put(second, Collections.singletonList(new Object[] {3, "three", "p2"}));
+        CommitBulkLoadRequest input = new TestingBulkLoadInputBuilder().build(begun, rows);
+        PbBulkLoadStatus committed = commit(input);
         assertThat(committed.getState()).isEqualTo(BulkLoadState.COMMITTED.getCode());
-
-        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
-        Replica leader = cluster.waitAndGetLeaderReplica(tableBucket);
-        Integer leaderId = leader.getLeaderId();
-        await(
-                admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.set(
-                                        ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), "5")),
-                        false));
-        waitValue(
-                () ->
-                        leader.getLogTablet().getTieredLogLocalSegments() == 5
-                                ? Optional.of(Boolean.TRUE)
-                                : Optional.empty(),
-                E2E_TIMEOUT,
-                "table config metadata dispatch reaches the active leader");
-        assertThat(cluster.waitAndGetLeaderReplica(tableBucket).getLeaderId()).isEqualTo(leaderId);
-
-        try (Table table = connection.getTable(tablePath)) {
-            writeAndAwaitOrdinaryRow(
-                    table, tableInfo, new Object[] {2, "ordinary"}, "ordinary row before snapshot");
+        try (Table table = connection.getTable(path)) {
+            verify(table, PARTITIONED, new Object[] {1, "one", "p1"});
+            verify(table, PARTITIONED, new Object[] {3, "three", "p2"});
+            write(table, row(1, "updated", "p1"));
+            verify(table, PARTITIONED, new Object[] {1, "updated", "p1"});
+            assertThat(commit(new CommitBulkLoadRequest().setHandle(begun.getHandle())).getState())
+                    .isEqualTo(BulkLoadState.COMMITTED.getCode());
+            verify(table, PARTITIONED, new Object[] {1, "updated", "p1"});
         }
-        assertThat(cluster.triggerAndWaitSnapshot(tableBucket)).isNotNull();
+        assertUnowned(first);
+        assertUnowned(second);
     }
 
     @Test
-    void testAbortAfterBuildRestoresAccessAndLeavesStandardFilesForOrdinaryOrphanCleanup()
-            throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "built_abort");
-        createDatabaseAndTable(admin, tablePath, BUCKET_COUNT);
-
-        try (Table table = connection.getTable(tablePath)) {
-            runAbortAfterBuildScenario(table);
-        }
+    void testConflictingMissingAndDisjointPartitionSets() throws Exception {
+        TablePath path = create("shared_owners", true);
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1"),
+                second = PhysicalTablePath.of(path, "p2"),
+                third = PhysicalTablePath.of(path, "p3");
+        BeginBulkLoadResponse original = begin(second);
+        assertThatThrownBy(() -> begin(first, second))
+                .hasRootCauseInstanceOf(
+                        org.apache.fluss.exception.InvalidBulkLoadRequestException.class);
+        assertUnowned(first);
+        assertThatThrownBy(() -> begin(first, PhysicalTablePath.of(path, "missing")))
+                .isInstanceOf(Exception.class);
+        assertUnowned(first);
+        BeginBulkLoadResponse disjoint = begin(first, third);
+        assertThat(disjoint.getHandle().getBulkLoadId())
+                .isNotEqualTo(original.getHandle().getBulkLoadId());
+        abort(disjoint.getHandle());
+        assertUnowned(first);
+        assertUnowned(third);
+        assertThat(owner(second).getHandle().getBulkLoadId())
+                .isEqualTo(original.getHandle().getBulkLoadId());
+        abort(original.getHandle());
+        assertUnowned(second);
     }
 
     @Test
-    void testAbortConvergesWhenAssignedHolderIsAbsentBeforeFence() throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "pre_fence_abort");
-        TableInfo tableInfo = createDatabaseAndTable(admin, tablePath, 1);
-        cluster.waitUntilTableReady(tableInfo.getTableId());
-
-        TableBucket bucket = new TableBucket(tableInfo.getTableId(), 0);
-        int leader = cluster.waitAndGetLeader(bucket);
-        TableAssignment assignment =
-                cluster.getZooKeeperClient()
-                        .getTableAssignment(tableInfo.getTableId())
-                        .orElseThrow(() -> new AssertionError("Missing table assignment."));
-        List<Integer> replicas = assignment.getBucketAssignment(0).getReplicas();
-        assertThat(replicas).hasSize(3);
-        int absentHolder =
-                replicas.stream()
-                        .filter(holder -> holder != leader)
-                        .findFirst()
-                        .orElseThrow(() -> new AssertionError("Missing follower holder."));
-        cluster.stopTabletServer(absentHolder);
-
-        ZooKeeperClient zkClient = cluster.getZooKeeperClient();
-        String holderPath = ZkData.ServerIdZNode.path(absentHolder);
-        waitValue(
-                () ->
-                        zkClient.pathExists(holderPath)
-                                ? Optional.empty()
-                                : Optional.of(Boolean.TRUE),
-                Duration.ofSeconds(30),
-                "stopped holder registration disappears before Begin");
-
-        begin(admin, PhysicalTablePath.of(tablePath));
-        TableRegistration registration =
-                waitValue(
-                        () -> {
-                            try {
-                                TableRegistration value =
-                                        ZkData.TableZNode.decode(
-                                                zkClient.getDataWithStat(
-                                                                ZkData.TableZNode.path(tablePath))
-                                                        .getData());
-                                return value.dataState == BulkLoadDataState.LOADING
-                                                && value.bulkLoadId != null
-                                        ? Optional.of(value)
-                                        : Optional.empty();
-                            } catch (Exception notLoadingYet) {
-                                return Optional.empty();
-                            }
-                        },
-                        Duration.ofSeconds(30),
-                        "pre-fence registration owns the BulkLoad transaction");
-        String transactionPath =
-                ZkData.BulkLoadTableTransactionZNode.path(
-                        tableInfo.getTableId(), registration.bulkLoadId);
-        BulkLoadTransaction transaction =
-                ZkData.BulkLoadTransactionsZNode.decode(
-                        zkClient.getDataWithStat(transactionPath).getData());
-        assertThat(transaction.getState()).isEqualTo(BulkLoadState.BEGUN);
-        assertThat(transaction.isFenceReady()).isFalse();
-        assertThat(transaction.getBulkLoadId()).isEqualTo(registration.bulkLoadId);
-        assertThat(registration.dataState).isEqualTo(BulkLoadDataState.LOADING);
-        assertThat(registration.bulkLoadId).isEqualTo(transaction.getBulkLoadId());
-
-        PbBulkLoadStatus aborted =
-                abort(
-                                admin,
-                                new PbBulkLoadHandle()
-                                        .setTarget(
-                                                fromPhysicalTablePath(
-                                                        transaction.getHandle().getTarget()))
-                                        .setTableId(transaction.getTableId())
-                                        .setBulkLoadId(transaction.getBulkLoadId()))
-                        .get(30, TimeUnit.SECONDS);
-        assertThat(aborted.getState()).isEqualTo(BulkLoadState.ABORTED.getCode());
-        BulkLoadTransaction terminal =
-                ZkData.BulkLoadTransactionsZNode.decode(
-                        zkClient.getDataWithStat(transactionPath).getData());
-        TableRegistration active =
-                ZkData.TableZNode.decode(
-                        zkClient.getDataWithStat(ZkData.TableZNode.path(tablePath)).getData());
-        assertThat(terminal.getState()).isEqualTo(BulkLoadState.ABORTED);
-        assertThat(active.dataState).isEqualTo(BulkLoadDataState.ACTIVE);
-        assertThat(active.bulkLoadId).isNull();
-
-        try (Table table = connection.getTable(tablePath)) {
-            writeAndAwaitOrdinaryRow(
-                    table,
-                    tableInfo,
-                    new Object[] {1, "ordinary-after-pre-fence-abort"},
-                    "ordinary lookup succeeds after pre-fence Abort");
+    void testMetadataOnlyBeginAndAbortLeaveOrdinaryAccessAvailable() throws Exception {
+        TablePath path = create("ordinary_access", false);
+        BeginBulkLoadResponse begun = begin(PhysicalTablePath.of(path));
+        assertThat(
+                        await(
+                                        admin.getAdminGateway()
+                                                .listKvSnapshots(
+                                                        new ListKvSnapshotsRequest()
+                                                                .setTableId(
+                                                                        begun.getHandle()
+                                                                                .getTableId())))
+                                .getActiveSnapshotsList())
+                .isEmpty();
+        try (Table table = connection.getTable(path)) {
+            write(table, row(1, "during-begun"));
+            verify(table, SCHEMA, new Object[] {1, "during-begun"});
+            assertThat(abort(begun.getHandle()).getState())
+                    .isEqualTo(BulkLoadState.ABORTED.getCode());
+            verify(table, SCHEMA, new Object[] {1, "during-begun"});
         }
     }
 
     @Test
-    void testIdempotencyAndNonEmptyTargetFence() throws Exception {
-        TablePath idempotent = TablePath.of("bulkload_e2e", "idempotent");
-        TablePath localNonEmpty = TablePath.of("bulkload_e2e", "local_non_empty");
-        TablePath remoteNonEmpty = TablePath.of("bulkload_e2e", "remote_non_empty");
-        await(admin.createDatabase(idempotent.getDatabaseName(), DatabaseDescriptor.EMPTY, false));
-        Map<TablePath, TableInfo> tables = new LinkedHashMap<>();
-        for (TablePath tablePath : Arrays.asList(idempotent, localNonEmpty, remoteNonEmpty)) {
-            createTable(admin, tablePath, 1);
-            TableInfo tableInfo = await(admin.getTableInfo(tablePath));
-            cluster.waitUntilTableReady(tableInfo.getTableId());
-            tables.put(tablePath, tableInfo);
-        }
+    void testCommitRecoversSharedOwnersAfterCoordinatorAndLeaderLoss() throws Exception {
+        TablePath path = create("shared_recovery", true);
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1"),
+                second = PhysicalTablePath.of(path, "p2");
+        BeginBulkLoadResponse begun = begin(first, second);
+        Map<PhysicalTablePath, List<Object[]>> rows = new HashMap<>();
+        rows.put(first, Collections.singletonList(new Object[] {11, "one", "p1"}));
+        rows.put(second, Collections.singletonList(new Object[] {22, "two", "p2"}));
+        CommitBulkLoadRequest input = new TestingBulkLoadInputBuilder().build(begun, rows);
+        long partitionId = begun.getTargetInfoAt(0).getPartitionId();
+        TableBucket bucket = new TableBucket(begun.getHandle().getTableId(), partitionId, 0);
+        int original = cluster.waitAndGetLeader(bucket);
+        cluster.stopCoordinatorServer();
+        cluster.startCoordinatorServer();
+        IOUtils.closeAll(admin, connection);
+        connection = ConnectionFactory.createConnection(cluster.getClientConfig());
+        admin = (FlussAdmin) connection.getAdmin();
+        cluster.stopTabletServer(original);
+        commit(input);
+        assertNoOrdinaryPublication(begun, true);
+        retry(
+                TIMEOUT,
+                () -> {
+                    try (Table table = connection.getTable(path)) {
+                        Lookuper lookuper = table.newLookup().createLookuper();
+                        assertThatRow(
+                                        lookuper.lookup(row(11, "p1"))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .withSchema(PARTITIONED.getRowType())
+                                .isEqualTo(row(PARTITIONED.getRowType(), 11, "one", "p1"));
+                        assertThatRow(
+                                        lookuper.lookup(row(22, "p2"))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .withSchema(PARTITIONED.getRowType())
+                                .isEqualTo(row(PARTITIONED.getRowType(), 22, "two", "p2"));
+                    } catch (Exception failure) {
+                        throw new AssertionError("Recovered public table is not ready", failure);
+                    }
+                });
+        assertUnowned(first);
+        assertUnowned(second);
+    }
 
-        PhysicalTablePath idempotentTarget = PhysicalTablePath.of(idempotent);
-        PbBulkLoadTargetInfo firstBegin = await(begin(admin, idempotentTarget));
-        assertThat(await(getInProgress((FlussAdmin) connection.getAdmin(), idempotentTarget)))
-                .hasValueSatisfying(
-                        status -> {
-                            assertThat(status.getHandle().toByteArray())
-                                    .isEqualTo(firstBegin.getHandle().toByteArray());
-                            assertThat(status.getState()).isEqualTo(BulkLoadState.BEGUN.getCode());
-                        });
-        assertThatThrownBy(() -> await(begin(admin, idempotentTarget)))
-                .hasCauseInstanceOf(InvalidBulkLoadRequestException.class)
-                .hasMessageNotContaining(firstBegin.getHandle().getBulkLoadId());
+    @Test
+    void testInvalidCommonDigestCannotInstallAnySnapshotAndCanAbortWholeSet() throws Exception {
+        TablePath path = create("shared_digest", true);
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1"),
+                second = PhysicalTablePath.of(path, "p2");
+        BeginBulkLoadResponse begun = begin(first, second);
         CommitBulkLoadRequest input =
-                buildInput(
-                        firstBegin,
-                        Collections.<Object[]>singletonList(new Object[] {1, "idempotent"}));
-        PbBulkLoadStatus firstCommit = await(commit(admin, input));
-        PbBulkLoadStatus repeatedCommit = await(commit(admin, input));
-        assertThat(repeatedCommit.toByteArray()).isEqualTo(firstCommit.toByteArray());
+                new TestingBulkLoadInputBuilder().build(begun, Collections.emptyMap());
+        input.setInputSha256(String.join("", Collections.nCopies(64, "f")));
         assertThatThrownBy(
                         () ->
-                                await(
-                                        commit(
-                                                admin,
-                                                new CommitBulkLoadRequest()
-                                                        .setHandle(input.getHandle())
-                                                        .setInputSha256(
-                                                                String.join(
-                                                                        "",
-                                                                        Collections.nCopies(
-                                                                                64, "0"))))))
-                .hasCauseInstanceOf(InvalidBulkLoadRequestException.class)
-                .hasMessageContaining("conflicts with the frozen input");
-        assertThat(firstCommit.getState()).isEqualTo(BulkLoadState.COMMITTED.getCode());
-        assertThat(await(getInProgress((FlussAdmin) connection.getAdmin(), idempotentTarget)))
-                .isEmpty();
+                                admin.getAdminGateway()
+                                        .commitBulkLoad(input)
+                                        .get(30, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(
+                        org.apache.fluss.exception.InvalidBulkLoadRequestException.class);
+        assertThat(owner(first).getState()).isEqualTo(BulkLoadState.BEGUN.getCode());
+        assertThat(owner(second).getState()).isEqualTo(BulkLoadState.BEGUN.getCode());
+        abort(begun.getHandle());
+        assertUnowned(first);
+        assertUnowned(second);
+    }
 
-        TableInfo localTableInfo = tables.get(localNonEmpty);
-        try (Table localTable = connection.getTable(localNonEmpty)) {
-            writeAndAwaitOrdinaryRow(
-                    localTable,
-                    localTableInfo,
-                    new Object[] {2, "ordinary-local"},
-                    "ordinary local content before rejected Begin");
+    @Test
+    void testPartitionsKeepIndependentFrozenBucketLayouts() throws Exception {
+        TablePath path = create("partition_layouts", true);
+        await(
+                admin.alterTable(
+                        path, Collections.singletonList(TableChange.modifyBucketCount(3)), false));
+        await(
+                admin.createPartition(
+                        path, new PartitionSpec(Collections.singletonMap("pt", "p4")), false));
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1");
+        PhysicalTablePath second = PhysicalTablePath.of(path, "p4");
+        BeginBulkLoadResponse begun = begin(first, second);
+        assertThat(begun.getTargetInfoAt(0).getSnapshotIds().length).isEqualTo(2);
+        assertThat(begun.getTargetInfoAt(1).getSnapshotIds().length).isEqualTo(3);
+        Map<PhysicalTablePath, List<Object[]>> rows = new HashMap<>();
+        rows.put(first, Collections.singletonList(new Object[] {1, "first", "p1"}));
+        rows.put(second, Collections.singletonList(new Object[] {2, "second", "p4"}));
+        commit(new TestingBulkLoadInputBuilder().build(begun, rows));
+        try (Table table = connection.getTable(path)) {
+            verify(table, PARTITIONED, new Object[] {1, "first", "p1"});
+            verify(table, PARTITIONED, new Object[] {2, "second", "p4"});
         }
-        assertTargetNotEmpty(admin, PhysicalTablePath.of(localNonEmpty), "contains local data");
-
-        TableInfo remoteTableInfo = tables.get(remoteNonEmpty);
-        TableBucket remoteBucket = new TableBucket(remoteTableInfo.getTableId(), 0);
-        FsPath remoteManifestPath =
-                new FsPath(cluster.getRemoteDataDir(), "registered-remote-manifest.json");
-        Files.createDirectories(Paths.get(remoteManifestPath.toUri()).getParent());
-        Files.write(
-                Paths.get(remoteManifestPath.toUri()),
-                new RemoteLogManifest(
-                                PhysicalTablePath.of(remoteNonEmpty),
-                                remoteBucket,
-                                Collections.emptyList())
-                        .toJsonBytes());
-        cluster.getZooKeeperClient()
-                .upsertRemoteLogManifestHandle(
-                        remoteBucket, new RemoteLogManifestHandle(remoteManifestPath, -1L));
-        assertTargetNotEmpty(admin, PhysicalTablePath.of(remoteNonEmpty), "ordinary remote data");
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testRetainedTerminalHandleIsIdempotentAcrossConnections(boolean committed)
+    @EnumSource(ChangelogImage.class)
+    void testExplicitLogTailSurvivesLeaderRecoveryAndSubsequentWrites(ChangelogImage image)
             throws Exception {
-        Configuration clientConfiguration = cluster.getClientConfig();
-        TablePath tablePath = TablePath.of("bulkload_e2e", "retained_handle");
-        PhysicalTablePath target = PhysicalTablePath.of(tablePath);
-        TableInfo tableInfo;
-        PbBulkLoadTargetInfo targetInfo;
-        Object[] ordinaryRow = new Object[] {Integer.MAX_VALUE - 1, "ordinary-after-terminal"};
-        try (Connection connection = ConnectionFactory.createConnection(clientConfiguration);
-                FlussAdmin admin = (FlussAdmin) connection.getAdmin()) {
-            tableInfo = createDatabaseAndTable(admin, tablePath, BUCKET_COUNT);
-            cluster.waitUntilTableReady(tableInfo.getTableId());
-            targetInfo = await(begin(admin, target));
-        }
-
-        BucketRows rowGenerator = new BucketRows(tableInfo, 0);
-        List<Object[]> rows = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            rows.add(rowGenerator.row(bucket, "retained"));
-        }
-        CommitBulkLoadRequest input = committed ? buildInput(targetInfo, rows) : null;
-        PbBulkLoadHandle handle = targetInfo.getHandle();
-        PbBulkLoadStatus status;
-        try (Connection connection = ConnectionFactory.createConnection(clientConfiguration);
-                FlussAdmin admin = (FlussAdmin) connection.getAdmin();
-                Table table = connection.getTable(tablePath)) {
-            status = await((committed ? commit(admin, input) : abort(admin, handle)));
-            assertThat(status.getState())
-                    .isEqualTo(
-                            (committed ? BulkLoadState.COMMITTED : BulkLoadState.ABORTED)
-                                    .getCode());
-            if (!committed) {
-                PbBulkLoadHandle freshHandle = await(begin(admin, target)).getHandle();
-                assertThat(freshHandle.toByteArray()).isNotEqualTo(handle.toByteArray());
-                assertThat(await(abort(admin, freshHandle)).getState())
-                        .isEqualTo(BulkLoadState.ABORTED.getCode());
-            }
-            writeAndAwaitOrdinaryRow(
-                    table, tableInfo, ordinaryRow, "ordinary lookup after terminal");
-        }
-
-        try (Connection connection = ConnectionFactory.createConnection(clientConfiguration);
-                FlussAdmin admin = (FlussAdmin) connection.getAdmin();
-                Table table = connection.getTable(tablePath)) {
-            PbBulkLoadStatus repeated =
-                    await((committed ? commit(admin, input) : abort(admin, handle)));
-            assertThat(repeated.toByteArray()).isEqualTo(status.toByteArray());
-            assertThat(await(getInProgress(admin, target))).isEmpty();
-            awaitPublicRow(
-                    table,
-                    tableInfo.getRowType(),
-                    ordinaryRow,
-                    "ordinary lookup after repeated terminal request");
-        }
-
-        if (!committed) {
-            try (Connection connection = ConnectionFactory.createConnection(clientConfiguration);
-                    FlussAdmin admin = (FlussAdmin) connection.getAdmin()) {
-                await(admin.dropTable(tablePath, false));
-                PbBulkLoadStatus afterDrop = await(abort(admin, handle));
-                assertThat(afterDrop.toByteArray()).isEqualTo(status.toByteArray());
-            }
-        }
-    }
-
-    @Test
-    void testReRegisteredAssignedHolderCannotEscapeLoadingFence() throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "re_registered_holder");
-        TableInfo tableInfo = createDatabaseAndTable(admin, tablePath, 1);
-        cluster.waitUntilTableReady(tableInfo.getTableId());
-
-        TableBucket bucket = new TableBucket(tableInfo.getTableId(), 0);
+        TablePath path = create("snapshot_tail", false, image);
+        BeginBulkLoadResponse begun = begin(PhysicalTablePath.of(path));
+        Map<Integer, Long> offsets = new HashMap<>();
+        offsets.put(0, 10_017L);
+        offsets.put(1, 20_017L);
+        assertNoOrdinaryPublication(begun, false);
+        CommitBulkLoadRequest input =
+                new TestingBulkLoadInputBuilder()
+                        .build(
+                                begun,
+                                Arrays.asList(new Object[] {1, "one"}, new Object[] {2, "two"}),
+                                offsets);
+        assertNoOrdinaryPublication(begun, false);
+        commit(input);
+        assertNoOrdinaryPublication(begun, true);
+        TableBucket bucket = new TableBucket(begun.getHandle().getTableId(), 0);
         int leader = cluster.waitAndGetLeader(bucket);
-        TableAssignment assignment =
-                cluster.getZooKeeperClient()
-                        .getTableAssignment(tableInfo.getTableId())
-                        .orElseThrow(() -> new AssertionError("Missing table assignment."));
-        List<Integer> followers =
-                assignment.getBucketAssignment(0).getReplicas().stream()
-                        .filter(holder -> holder != leader)
-                        .collect(Collectors.toList());
-        assertThat(followers).hasSize(2);
-        int staleHolder = followers.get(0);
-        int unavailableHolder = followers.get(1);
-
-        Replica staleReplica =
-                cluster.getTabletServerById(staleHolder)
-                        .getReplicaManager()
-                        .getReplicaOrException(bucket);
-        staleReplica.appendRecordsToFollower(genMemoryLogRecordsByObject(DATA1));
-        assertThat(staleReplica.getLocalLogEndOffset()).isEqualTo(DATA1.size());
-        cluster.stopTabletServer(staleHolder);
-        cluster.stopTabletServer(unavailableHolder);
-        cluster.assertHasTabletServerNumber(1);
-
-        CompletableFuture<PbBulkLoadTargetInfo> beginFuture =
-                begin(admin, PhysicalTablePath.of(tablePath));
-        assertThatThrownBy(() -> beginFuture.get(5, TimeUnit.SECONDS))
-                .isInstanceOf(TimeoutException.class);
-
-        cluster.startTabletServer(staleHolder);
-        Replica reRegisteredReplica = awaitLoadingReplica(staleHolder, bucket);
-        assertThat(reRegisteredReplica.getLocalLogEndOffset()).isEqualTo(DATA1.size());
-        assertLoadingFetchRejected(staleHolder, bucket);
-
-        cluster.startTabletServer(unavailableHolder);
-        assertThatThrownBy(() -> await(beginFuture))
-                .isInstanceOf(ExecutionException.class)
-                .hasCauseInstanceOf(InvalidBulkLoadRequestException.class)
-                .hasMessageContaining(BulkLoadAbortReason.TARGET_NOT_EMPTY.name());
-        assertThat(
-                        await(
-                                getInProgress(
-                                        (FlussAdmin) connection.getAdmin(),
-                                        PhysicalTablePath.of(tablePath))))
-                .isEmpty();
-    }
-
-    private static void createTable(FlussAdmin admin, TablePath tablePath, int buckets)
-            throws Exception {
-        await(
-                admin.createTable(
-                        tablePath,
-                        TableDescriptor.builder()
-                                .schema(FULL_SCHEMA)
-                                .distributedBy(buckets, "id")
-                                .build(),
-                        false));
-    }
-
-    private static TableInfo createDatabaseAndTable(
-            FlussAdmin admin, TablePath tablePath, int buckets) throws Exception {
-        await(admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false));
-        createTable(admin, tablePath, buckets);
-        return await(admin.getTableInfo(tablePath));
-    }
-
-    private static void assertTargetNotEmpty(
-            FlussAdmin admin, PhysicalTablePath target, String expectedEvidence) throws Exception {
-        assertThatThrownBy(() -> await(begin(admin, target)))
-                .isInstanceOf(ExecutionException.class)
-                .hasCauseInstanceOf(InvalidBulkLoadRequestException.class)
-                .hasMessageContaining(BulkLoadAbortReason.TARGET_NOT_EMPTY.name())
-                .hasMessageContaining(expectedEvidence);
-        assertThat(getInProgress(admin, target).get()).isEmpty();
-    }
-
-    private static void writeRow(Table table, Object[] values, Duration timeout) throws Exception {
-        UpsertWriter writer = table.newUpsert().createWriter();
-        writer.upsert(row(table.getTableInfo().getRowType(), values))
-                .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-        writer.flush();
-    }
-
-    private static void writeAndAwaitOrdinaryRow(
-            Table table, TableInfo tableInfo, Object[] values, String description)
-            throws Exception {
-        writeRow(table, values, E2E_TIMEOUT);
-        awaitPublicRow(table, tableInfo.getRowType(), values, description);
-    }
-
-    private void runFullImportScenario(Table table, Table accessProbeTable) throws Exception {
-        TableInfo tableInfo = table.getTableInfo();
-        TablePath tablePath = tableInfo.getTablePath();
-        int seedBase =
-                (System.getProperty("test.randomization.seed", "bulkload-e2e-default").hashCode()
-                                & Integer.MAX_VALUE)
-                        % 100_000;
-        BucketRows rowGenerator = new BucketRows(tableInfo, seedBase);
-        List<Object[]> inputRows = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT - 1; bucket++) {
-            int records = bucket == 0 ? INDEXED_ROWS_PER_BUCKET : 6;
-            for (int record = 0; record < records; record++) {
-                inputRows.add(rowGenerator.row(bucket, "bucket-" + bucket + "-record-" + record));
-            }
-        }
-        Object[] first = inputRows.get(0);
-        Object[] overwrittenFirst = Arrays.copyOf(first, first.length);
-        overwrittenFirst[1] = "overwritten-" + first[0];
-        List<Object[]> readinessProbes = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            readinessProbes.add(rowGenerator.row(bucket, "readiness-probe-" + bucket));
-        }
-        awaitPublicBucketReadiness(table, readinessProbes);
-
-        PhysicalTablePath target = PhysicalTablePath.of(tablePath);
-        PbBulkLoadTargetInfo context = await(begin(admin, target));
-        assertThat(await(getInProgress(admin, target)))
-                .hasValueSatisfying(
-                        status -> {
-                            assertThat(status.getHandle().toByteArray())
-                                    .isEqualTo(context.getHandle().toByteArray());
-                            assertThat(status.getState()).isEqualTo(BulkLoadState.BEGUN.getCode());
-                        });
-        assertLoadingAccessRejected(accessProbeTable, tableInfo, first);
-
-        List<Object[]> buildRows = new ArrayList<>();
-        buildRows.add(overwrittenFirst);
-        buildRows.addAll(inputRows);
-        CommitBulkLoadRequest input = buildInput(context, buildRows);
-        Map<Integer, Long> expectedInitialOffsets = new LinkedHashMap<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            Set<Integer> finalKeys = new HashSet<>();
-            for (Object[] values : inputRows) {
-                if (bucketOf(tableInfo, values) == bucket) {
-                    finalKeys.add((Integer) values[0]);
-                }
-            }
-            expectedInitialOffsets.put(bucket, (long) finalKeys.size());
-        }
-
-        int controlledBucket = 0;
-        TableBucket controlledTableBucket =
-                new TableBucket(tableInfo.getTableId(), controlledBucket);
-        int stoppedServer = cluster.waitAndGetLeader(controlledTableBucket);
-        PbBulkLoadStatus committed = commitUntilReady(admin, input);
-        assertThat(committed.getState()).isEqualTo(BulkLoadState.COMMITTED.getCode());
-        assertThat(latestOffsets(admin, target, expectedInitialOffsets.keySet()))
-                .containsExactlyInAnyOrderEntriesOf(expectedInitialOffsets);
-        verifyPublicRows(table, tableInfo.getRowType(), inputRows);
-        assertNoBulkLoadRemoteLogArtifacts(cluster, tableInfo, target);
-
-        cluster.stopTabletServer(stoppedServer);
-        try (Connection recoveredConnection =
-                        ConnectionFactory.createConnection(cluster.getClientConfig());
-                Admin recoveredAdmin = recoveredConnection.getAdmin();
-                Table recoveredTable = recoveredConnection.getTable(tablePath)) {
-            verifyPublicRows(recoveredTable, tableInfo.getRowType(), inputRows);
-
-            Object[] ordinaryRow = rowGenerator.row(controlledBucket, "ordinary-tail");
-            writeRow(recoveredTable, ordinaryRow, E2E_TIMEOUT);
-
-            List<Object[]> rowsAfterWrite = new ArrayList<>(inputRows);
-            rowsAfterWrite.add(Arrays.copyOf(ordinaryRow, ordinaryRow.length));
-            verifyPublicRows(recoveredTable, tableInfo.getRowType(), rowsAfterWrite);
-            Map<Integer, Long> expectedOffsetsAfterWrite =
-                    new LinkedHashMap<>(expectedInitialOffsets);
-            expectedOffsetsAfterWrite.put(
-                    controlledBucket, expectedInitialOffsets.get(controlledBucket) + 1L);
-            assertThat(latestOffsets(recoveredAdmin, target, expectedInitialOffsets.keySet()))
-                    .containsExactlyInAnyOrderEntriesOf(expectedOffsetsAfterWrite);
+        try (Table table = connection.getTable(path)) {
+            write(table, row(3, "online"));
+            cluster.stopTabletServer(leader);
+            verify(table, SCHEMA, new Object[] {1, "one"});
+            verify(table, SCHEMA, new Object[] {2, "two"});
+            verify(table, SCHEMA, new Object[] {3, "online"});
         }
     }
 
-    private void runAbortAfterBuildScenario(Table table) throws Exception {
-        TableInfo tableInfo = table.getTableInfo();
-        TablePath tablePath = tableInfo.getTablePath();
-        int seedBase =
-                (System.getProperty("test.randomization.seed", "bulkload-abort-e2e-default")
-                                                .hashCode()
-                                        & Integer.MAX_VALUE)
-                                % 100_000
-                        + 600_000;
-        BucketRows rowGenerator = new BucketRows(tableInfo, seedBase);
-        List<Object[]> inputRows = new ArrayList<>();
-        List<Object[]> readinessProbes = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            inputRows.add(rowGenerator.row(bucket, "aborted-input-bucket-" + bucket));
-            readinessProbes.add(rowGenerator.row(bucket, "abort-readiness-bucket-" + bucket));
-        }
-        awaitPublicBucketReadiness(table, readinessProbes);
-
-        PbBulkLoadTargetInfo targetInfo = await(begin(admin, PhysicalTablePath.of(tablePath)));
-
-        CommitBulkLoadRequest input = buildInput(targetInfo, inputRows);
-        assertThatThrownBy(() -> await(admin.dropTable(tablePath, false)))
-                .hasCauseInstanceOf(InvalidAlterTableException.class);
-
-        PbBulkLoadStatus aborted = await(abort(admin, input.getHandle()));
-        assertThat(aborted.getState()).isEqualTo(BulkLoadState.ABORTED.getCode());
-
-        verifyEmptyPublicTarget(admin, table, tablePath);
-
-        Object[] ordinaryRow = rowGenerator.row(0, "ordinary-after-abort");
-        writeRow(table, ordinaryRow, E2E_TIMEOUT);
-
-        awaitPublicRow(
-                table,
-                tableInfo.getRowType(),
-                ordinaryRow,
-                "ordinary lookup succeeds after aborting built output");
-        assertThat(
-                        await(table.newLookup().createLookuper().lookup(row(Integer.MAX_VALUE)))
-                                .getSingletonRow())
-                .isNull();
-        awaitExactPublicBatchScan(table, Collections.<Object[]>singletonList(ordinaryRow));
-        verifySingleOrdinaryLogAfterAbort(admin, table, tablePath, ordinaryRow);
-    }
-
-    private void runPartitionedWalRecoveryScenario(
-            Table table, TableInfo tableInfo, Map<String, Long> partitionIds) throws Exception {
-        TablePath tablePath = tableInfo.getTablePath();
-        long targetPartitionId = partitionIds.get(WAL_TARGET_PARTITION);
-        int seedBase =
-                (System.getProperty("test.randomization.seed", "bulkload-wal-e2e-default")
-                                                .hashCode()
-                                        & Integer.MAX_VALUE)
-                                % 100_000
-                        + 300_000;
-        BucketRows rowGenerator = new BucketRows(tableInfo, seedBase);
-        List<Object[]> targetRows = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            targetRows.addAll(
-                    rowGenerator.partitionRows(
-                            bucket, STRESS_ROWS_PER_BUCKET, WAL_TARGET_PARTITION));
-        }
-        List<Object[]> liveRows = new ArrayList<>();
-        writeAndAwaitPartitionRow(
-                table,
-                tableInfo.getRowType(),
-                liveRows,
-                rowGenerator.row(0, "live-before-begin", WAL_LIVE_PARTITION),
-                "non-target partition is live before Begin");
-
-        PbBulkLoadTargetInfo targetInfo =
-                await(begin(admin, PhysicalTablePath.of(tablePath, WAL_TARGET_PARTITION)));
-        assertThat(targetInfo.getHandle().getPartitionId()).isEqualTo(targetPartitionId);
-        assertThat(
-                        TableDescriptor.fromJsonBytes(targetInfo.getTableJson())
-                                .getTableDistribution()
-                                .get()
-                                .getBucketCount()
-                                .get())
-                .isEqualTo(BUCKET_COUNT);
-        writeAndAwaitPartitionRow(
-                table,
-                tableInfo.getRowType(),
-                liveRows,
-                rowGenerator.row(1, "live-after-begin", WAL_LIVE_PARTITION),
-                "non-target partition is live while target is LOADING");
-
-        CommitBulkLoadRequest input = buildInput(targetInfo, targetRows);
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            FsPath snapshotDir =
-                    FlussPaths.remoteKvSnapshotDir(
-                            FlussPaths.remoteKvTabletDir(
-                                    new FsPath(
-                                            targetInfo.getRemoteDataDir(),
-                                            FlussPaths.REMOTE_KV_DIR_NAME),
-                                    toPhysicalTablePath(targetInfo.getHandle().getTarget()),
-                                    new TableBucket(
-                                            targetInfo.getHandle().getTableId(),
-                                            targetInfo.getHandle().getPartitionId(),
-                                            bucket)),
-                            targetInfo.getSnapshotIds()[bucket]);
-            CompletedSnapshot snapshot =
-                    new CompletedSnapshotHandle(0, new FsPath(snapshotDir, "_METADATA"), 0)
-                            .retrieveCompleteSnapshot();
-            assertThat(snapshot.getRowCount()).isNull();
-            assertThat(snapshot.getLogOffset()).isEqualTo(STRESS_ROWS_PER_BUCKET);
-        }
-
-        writeAndAwaitPartitionRow(
-                table,
-                tableInfo.getRowType(),
-                liveRows,
-                rowGenerator.row(2, "live-before-commit", WAL_LIVE_PARTITION),
-                "non-target partition is live before target Commit");
-
-        int controlledBucket = 0;
-        TableBucket controlledTableBucket =
-                new TableBucket(tableInfo.getTableId(), targetPartitionId, controlledBucket);
-        int originalLeader = cluster.waitAndGetLeader(controlledTableBucket);
-        cluster.stopTabletServer(originalLeader);
-        int replacementLeader =
-                awaitReplacementLeader(cluster, controlledTableBucket, originalLeader);
-        assertThat(replacementLeader).isNotEqualTo(originalLeader);
-
-        cluster.stopCoordinatorServer();
-        cluster.startCoordinatorServer();
-        try (Connection recoveredConnection =
-                        ConnectionFactory.createConnection(cluster.getClientConfig());
-                FlussAdmin recoveredAdmin = (FlussAdmin) recoveredConnection.getAdmin();
-                Table recoveredTable = recoveredConnection.getTable(tablePath)) {
-            CompletableFuture<Void> recoveredCommit =
-                    publicOperation(() -> commitUntilReady(recoveredAdmin, input));
-            await(recoveredCommit);
-            verifyPartitionedPublicState(
-                    recoveredAdmin, recoveredTable, tableInfo, targetRows, null, liveRows);
-
-            Object[] ordinaryTail =
-                    rowGenerator.row(
-                            controlledBucket, "ordinary-target-tail", WAL_TARGET_PARTITION);
-            writeAndAwaitPartitionRow(
-                    recoveredTable,
-                    tableInfo.getRowType(),
-                    null,
-                    ordinaryTail,
-                    "ordinary target write continues from E",
-                    Duration.ofSeconds(15));
-            assertThat(cluster.triggerAndWaitSnapshot(controlledTableBucket)).isNotNull();
-            writeAndAwaitPartitionRow(
-                    recoveredTable,
-                    tableInfo.getRowType(),
-                    liveRows,
-                    rowGenerator.row(1, "live-after-recovery", WAL_LIVE_PARTITION),
-                    "non-target partition remains live after both process restarts");
-            verifyPartitionedPublicState(
-                    recoveredAdmin, recoveredTable, tableInfo, targetRows, ordinaryTail, liveRows);
-        }
-    }
-
-    /** Restarts one holder inside the build window and reasserts the LOADING fence. */
     @Test
-    void testLoadingFenceSurvivesHolderRestartWhileBuilding() throws Exception {
-        TablePath tablePath = TablePath.of("bulkload_e2e", "fence_survives_holder_restart");
-        TableInfo tableInfo = createDatabaseAndTable(admin, tablePath, 1);
-        cluster.waitUntilTableReady(tableInfo.getTableId());
-
-        PhysicalTablePath target = PhysicalTablePath.of(tablePath);
-        PbBulkLoadTargetInfo context = await(begin(admin, target));
-
-        TableBucket bucket = new TableBucket(tableInfo.getTableId(), 0);
-        int restartedHolder = cluster.waitAndGetLeader(bucket);
-        cluster.stopTabletServer(restartedHolder);
-        cluster.startTabletServer(restartedHolder);
-        awaitLoadingReplica(restartedHolder, bucket);
-        assertLoadingFetchRejected(restartedHolder, bucket);
-
-        PbBulkLoadStatus aborted = await(abort(admin, context.getHandle()));
-        assertThat(aborted.getState()).isEqualTo(BulkLoadState.ABORTED.getCode());
-        assertThat(await(getInProgress((FlussAdmin) connection.getAdmin(), target))).isEmpty();
-    }
-
-    private Replica awaitLoadingReplica(int serverId, TableBucket bucket) {
-        return waitValue(
-                () -> {
-                    try {
-                        Replica replica =
-                                cluster.getTabletServerById(serverId)
-                                        .getReplicaManager()
-                                        .getReplicaOrException(bucket);
-                        BulkLoadTargetMetadata target = replica.getBulkLoadTargetMetadata();
-                        return target != null && target.isLoading()
-                                ? Optional.of(replica)
-                                : Optional.empty();
-                    } catch (RuntimeException notReady) {
-                        return Optional.empty();
-                    }
-                },
-                E2E_TIMEOUT,
-                "restarted holder reapplies LOADING before access");
-    }
-
-    private void assertLoadingFetchRejected(int serverId, TableBucket bucket) throws Exception {
-        FetchLogResponse response =
-                await(
-                        cluster.newTabletServerClientForNode(serverId)
-                                .fetchLog(
-                                        newFetchLogRequest(
-                                                -1, bucket.getTableId(), bucket.getBucket(), 0L)));
-        assertThat(response.getTablesRespsCount()).isEqualTo(1);
-        assertThat(response.getTablesRespAt(0).getBucketsRespsCount()).isEqualTo(1);
-        assertThat(response.getTablesRespAt(0).getBucketsRespAt(0).getErrorCode())
-                .isEqualTo(Errors.BULK_LOAD_IN_PROGRESS.code());
-        assertThat(response.getTablesRespAt(0).getBucketsRespAt(0).getErrorMessage())
-                .contains("BulkLoad is in progress for")
-                .contains(bucket.toString());
-    }
-
-    private static void assertLoadingAccessRejected(
-            Table table, TableInfo tableInfo, Object[] existingRow) {
-        awaitLoadingAccessRejection(
-                () -> table.newLookup().createLookuper().lookup(row((Integer) existingRow[0])),
-                E2E_TIMEOUT,
-                "point lookup");
-        awaitLoadingAccessRejection(
-                () ->
-                        publicOperation(
-                                () -> {
-                                    try (BatchScanner scanner =
-                                            table.newScan()
-                                                    .createBatchScanner(
-                                                            new TableBucket(
-                                                                    tableInfo.getTableId(), 0))) {
-                                        scanner.pollBatch(Duration.ofSeconds(1));
-                                    }
-                                }),
-                E2E_TIMEOUT,
-                "batch scan");
-        awaitLoadingAccessRejection(
-                () ->
-                        publicOperation(
-                                () -> {
-                                    try (LogScanner scanner = table.newScan().createLogScanner()) {
-                                        scanner.subscribeFromBeginning(0);
-                                        scanner.poll(Duration.ofSeconds(1));
-                                    }
-                                }),
-                E2E_TIMEOUT,
-                "log scan");
-        awaitLoadingAccessRejection(
-                () -> {
-                    UpsertWriter writer = table.newUpsert().createWriter();
-                    return writer.upsert(
-                            row(
-                                    tableInfo.getRowType(),
-                                    new Object[] {
-                                        (Integer) existingRow[0] + 1_000_000, "fenced-write"
-                                    }));
-                },
-                E2E_TIMEOUT,
-                "ordinary write");
-    }
-
-    private static void writeAndAwaitPartitionRow(
-            Table table,
-            RowType rowType,
-            List<Object[]> retainedRows,
-            Object[] values,
-            String description)
-            throws Exception {
-        writeAndAwaitPartitionRow(table, rowType, retainedRows, values, description, E2E_TIMEOUT);
-    }
-
-    private static void writeAndAwaitPartitionRow(
-            Table table,
-            RowType rowType,
-            List<Object[]> retainedRows,
-            Object[] values,
-            String description,
-            Duration writeTimeout)
-            throws Exception {
-        writeRow(table, values, writeTimeout);
-        awaitPublicRow(table, rowType, values, description);
-        if (retainedRows != null) {
-            retainedRows.add(Arrays.copyOf(values, values.length));
+    void testImportedFullSnapshotBatchScanCrossesPageBoundaries() throws Exception {
+        TablePath path = create("snapshot_batch_scan", false);
+        PhysicalTablePath target = PhysicalTablePath.of(path);
+        BeginBulkLoadResponse begun = begin(target);
+        List<Object[]> expected = new java.util.ArrayList<>();
+        for (int id = 0; id < 4200; id++) {
+            expected.add(new Object[] {id, "payload-" + id});
         }
-    }
-
-    private static void verifyPartitionedPublicState(
-            Admin admin,
-            Table table,
-            TableInfo tableInfo,
-            List<Object[]> targetRows,
-            Object[] targetTail,
-            List<Object[]> liveRows)
-            throws Exception {
-        List<Object[]> expectedRows = new ArrayList<>(targetRows);
-        if (targetTail != null) {
-            expectedRows.add(Arrays.copyOf(targetTail, targetTail.length));
-        }
-        expectedRows.addAll(liveRows);
-        List<Object[]> lookupRows = new ArrayList<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            final int bucketId = bucket;
-            List<Object[]> bucketRows =
-                    targetRows.stream()
-                            .filter(values -> bucketOf(tableInfo, values) == bucketId)
-                            .collect(Collectors.toList());
-            lookupRows.add(bucketRows.get(0));
-            lookupRows.add(bucketRows.get(bucketRows.size() / 2));
-            lookupRows.add(bucketRows.get(bucketRows.size() - 1));
-        }
-        if (targetTail != null) {
-            lookupRows.add(targetTail);
-        }
-        lookupRows.addAll(liveRows);
-        for (Object[] expected : lookupRows) {
-            awaitPublicRow(table, tableInfo.getRowType(), expected, "exact partitioned KV");
-        }
-        assertThat(
-                        await(
-                                        table.newLookup()
-                                                .createLookuper()
-                                                .lookup(
-                                                        row(
-                                                                Integer.MAX_VALUE,
-                                                                WAL_TARGET_PARTITION)))
-                                .getSingletonRow())
-                .isNull();
-        awaitExactPublicBatchScan(table, expectedRows);
-
-        Map<Integer, List<Object[]>> targetLogs =
-                groupByBucket(
-                        tableInfo,
-                        targetTail == null
-                                ? Collections.emptyList()
-                                : Collections.singletonList(targetTail));
-        assertExactPublicLogs(
-                admin,
-                table,
-                PhysicalTablePath.of(tableInfo.getTablePath(), WAL_TARGET_PARTITION),
-                targetLogs,
-                logEndOffsets(targetLogs, STRESS_ROWS_PER_BUCKET),
-                ChangeType.UPDATE_AFTER);
-
-        Map<Integer, List<Object[]>> liveLogs = groupByBucket(tableInfo, liveRows);
-        assertExactPublicLogs(
-                admin,
-                table,
-                PhysicalTablePath.of(tableInfo.getTablePath(), WAL_LIVE_PARTITION),
-                liveLogs,
-                logEndOffsets(liveLogs, 0L),
-                ChangeType.UPDATE_AFTER);
-    }
-
-    private static void awaitExactPublicBatchScan(Table table, List<Object[]> expectedRows) {
-        List<Object[]> actual =
-                waitValue(
-                        () -> {
-                            try (BatchScanner scanner = table.newScan().createBatchScanner()) {
-                                List<Object[]> observed =
-                                        toLogicalRows(BatchScanUtils.collectRows(scanner));
-                                return observed.size() == expectedRows.size()
-                                        ? Optional.of(observed)
-                                        : Optional.empty();
-                            } catch (Exception failure) {
-                                rethrowUnlessTransient(failure);
-                                return Optional.empty();
-                            }
-                        },
-                        E2E_TIMEOUT,
-                        "exact public batch scan");
-        assertThat(actual).containsExactlyInAnyOrderElementsOf(expectedRows);
-    }
-
-    private static void assertExactPublicLogs(
-            Admin admin,
-            Table table,
-            PhysicalTablePath target,
-            Map<Integer, List<Object[]>> expectedByBucket,
-            Map<Integer, Long> expectedEndOffsets,
-            ChangeType expectedChangeType)
-            throws Exception {
-        int expectedRecordCount = 0;
-        for (Map.Entry<Integer, List<Object[]>> entry : expectedByBucket.entrySet()) {
-            expectedRecordCount += entry.getValue().size();
-        }
-        retry(
-                E2E_TIMEOUT,
-                () -> {
-                    try {
-                        assertThat(latestOffsets(admin, target, expectedByBucket.keySet()))
-                                .as("BulkLoad offsets for %s", target)
-                                .containsExactlyInAnyOrderEntriesOf(expectedEndOffsets);
-                    } catch (Exception failure) {
-                        rethrowUnlessTransient(failure);
-                        throw new AssertionError("Public access has not converged", failure);
-                    }
-                });
-
-        Map<Integer, List<ScanRecord>> actualByBucket = new LinkedHashMap<>();
-        for (Integer bucket : expectedByBucket.keySet()) {
-            actualByBucket.put(bucket, new ArrayList<>());
-        }
-        Long partitionId = partitionId(admin, target);
-        try (LogScanner scanner = table.newScan().createLogScanner()) {
-            for (Integer bucket : expectedByBucket.keySet()) {
-                if (partitionId == null) {
-                    scanner.subscribeFromBeginning(bucket);
-                } else {
-                    scanner.subscribeFromBeginning(partitionId, bucket);
-                }
-            }
-            long deadlineNanos = System.nanoTime() + E2E_TIMEOUT.toNanos();
-            int actualCount = 0;
-            while (actualCount < expectedRecordCount && System.nanoTime() < deadlineNanos) {
-                ScanRecords records = scanner.poll(Duration.ofSeconds(1));
-                for (TableBucket bucket : records.buckets()) {
-                    assertThat(bucket.getPartitionId()).isEqualTo(partitionId);
-                    List<ScanRecord> bucketRecords = records.records(bucket);
-                    actualByBucket.get(bucket.getBucket()).addAll(bucketRecords);
-                    actualCount += bucketRecords.size();
-                }
-            }
-            assertThat(actualCount).isEqualTo(expectedRecordCount);
-        }
-        for (Map.Entry<Integer, List<Object[]>> entry : expectedByBucket.entrySet()) {
-            List<ScanRecord> actual = actualByBucket.get(entry.getKey());
-            assertThat(actual).hasSameSizeAs(entry.getValue());
-            long firstExpectedOffset =
-                    expectedEndOffsets.get(entry.getKey()) - entry.getValue().size();
-            for (int offset = 0; offset < entry.getValue().size(); offset++) {
-                ScanRecord record = actual.get(offset);
-                assertThat(record.logOffset()).isEqualTo(firstExpectedOffset + offset);
-                assertThat(record.getChangeType()).isEqualTo(expectedChangeType);
-                assertThatRow(record.getRow())
-                        .withSchema(table.getTableInfo().getRowType())
-                        .isEqualTo(
-                                row(
-                                        table.getTableInfo().getRowType(),
-                                        entry.getValue().get(offset)));
-            }
-        }
-    }
-
-    private static Map<Integer, Long> latestOffsets(
-            Admin admin, PhysicalTablePath target, Set<Integer> buckets) throws Exception {
-        List<Integer> bucketList = new ArrayList<>(buckets);
-        return target.getPartitionName() == null
-                ? await(
-                        admin.listOffsets(
-                                        target.getTablePath(),
-                                        bucketList,
-                                        new OffsetSpec.LatestSpec())
-                                .all())
-                : await(
-                        admin.listOffsets(
-                                        target.getTablePath(),
-                                        target.getPartitionName(),
-                                        bucketList,
-                                        new OffsetSpec.LatestSpec())
-                                .all());
-    }
-
-    private static void assertNoBulkLoadRemoteLogArtifacts(
-            FlussClusterExtension cluster, TableInfo tableInfo, PhysicalTablePath target)
-            throws Exception {
-        ZooKeeperClient zkClient = cluster.getZooKeeperClient();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
-            assertThat(zkClient.pathExists(ZkData.BucketRemoteLogsZNode.path(tableBucket)))
-                    .isFalse();
-            FsPath remoteTabletDirectory =
-                    FlussPaths.remoteLogTabletDir(
-                            new FsPath(
-                                    tableInfo.getRemoteDataDir(), FlussPaths.REMOTE_LOG_DIR_NAME),
-                            target,
-                            tableBucket);
-            Path localRemoteTabletDirectory = Paths.get(remoteTabletDirectory.toUri());
-            if (Files.exists(localRemoteTabletDirectory)) {
-                try (Stream<Path> paths = Files.walk(localRemoteTabletDirectory)) {
-                    assertThat(paths.filter(Files::isRegularFile)).isEmpty();
-                }
-            }
-        }
-    }
-
-    private static Long partitionId(Admin admin, PhysicalTablePath target) throws Exception {
-        if (target.getPartitionName() == null) {
-            return null;
-        }
-        return await(admin.listPartitionInfos(target.getTablePath())).stream()
-                .filter(info -> info.getPartitionName().equals(target.getPartitionName()))
-                .map(PartitionInfo::getPartitionId)
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("Missing partition metadata for " + target));
-    }
-
-    private static int awaitReplacementLeader(
-            FlussClusterExtension cluster, TableBucket tableBucket, int originalLeader) {
-        return waitValue(
-                () -> {
-                    Optional<LeaderAndIsr> role =
-                            cluster.getZooKeeperClient().getLeaderAndIsr(tableBucket);
-                    if (role.isPresent() && role.get().leader() != originalLeader) {
-                        return Optional.of(role.get().leader());
-                    }
-                    return Optional.empty();
-                },
-                E2E_TIMEOUT,
-                "replacement leader after the original leader is permanently stopped");
-    }
-
-    private static void awaitPublicRow(
-            Table table, RowType rowType, Object[] expected, String description) {
-        InternalRow lookupKey =
-                expected.length == 2
-                        ? row((Integer) expected[0])
-                        : row((Integer) expected[0], expected[2]);
-        Lookuper lookuper = table.newLookup().createLookuper();
-        InternalRow actual =
-                waitValue(
-                        () -> {
-                            try {
-                                return Optional.ofNullable(
-                                        lookuper.lookup(lookupKey)
-                                                .get(5, TimeUnit.SECONDS)
-                                                .getSingletonRow());
-                            } catch (Exception failure) {
-                                rethrowUnlessTransient(failure);
-                                return Optional.empty();
-                            }
-                        },
-                        E2E_TIMEOUT,
-                        "public lookup: " + description);
-        assertThatRow(actual).withSchema(rowType).isEqualTo(row(rowType, expected));
-    }
-
-    private static void awaitPublicBucketReadiness(Table table, List<Object[]> probes) {
-        Lookuper lookuper = table.newLookup().createLookuper();
-        for (Object[] probe : probes) {
+        commit(
+                new TestingBulkLoadInputBuilder()
+                        .build(begun, Collections.singletonMap(target, expected)));
+        try (Table table = connection.getTable(path)) {
             retry(
-                    E2E_TIMEOUT,
+                    TIMEOUT,
                     () -> {
-                        try {
-                            assertThat(
-                                            lookuper.lookup(row((Integer) probe[0]))
-                                                    .get(5, TimeUnit.SECONDS)
-                                                    .getSingletonRow())
-                                    .as("public lookup routing for key %s", probe[0])
-                                    .isNull();
+                        try (BatchScanner scanner = table.newScan().createBatchScanner()) {
+                            List<InternalRow> actual = BatchScanUtils.collectRows(scanner);
+                            assertThat(actual).hasSize(expected.size());
+                            java.util.Set<Integer> keys = new java.util.HashSet<>();
+                            for (InternalRow row : actual) {
+                                keys.add(row.getInt(0));
+                                assertThat(row.getString(1).toString())
+                                        .isEqualTo("payload-" + row.getInt(0));
+                            }
+                            assertThat(keys).hasSize(expected.size());
                         } catch (Exception failure) {
-                            rethrowUnlessTransient(failure);
-                            throw new AssertionError("Public access has not converged", failure);
+                            throw new AssertionError("Imported batch scan is not ready", failure);
                         }
                     });
         }
     }
 
-    private static void verifyPublicRows(Table table, RowType rowType, List<Object[]> expectedRows)
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPartiallyInstalledSharedDecisionRollsForward(boolean coordinatorTakeover)
             throws Exception {
-        Lookuper lookuper = table.newLookup().createLookuper();
-        List<CompletableFuture<LookupResult>> lookupFutures = new ArrayList<>(expectedRows.size());
-        for (Object[] expected : expectedRows) {
-            lookupFutures.add(lookuper.lookup(row((Integer) expected[0])));
-        }
-        CompletableFuture<LookupResult> absentLookup = lookuper.lookup(row(Integer.MAX_VALUE));
-        lookupFutures.add(absentLookup);
-        await(FutureUtils.completeAll(lookupFutures));
-
-        for (int rowIndex = 0; rowIndex < expectedRows.size(); rowIndex++) {
-            Object[] expected = expectedRows.get(rowIndex);
-            int key = (Integer) expected[0];
-            InternalRow actual = lookupFutures.get(rowIndex).get().getSingletonRow();
-            assertThatRow(actual)
-                    .as("public lookup result for key %s", key)
-                    .withSchema(rowType)
-                    .isEqualTo(row(rowType, Arrays.copyOf(expected, expected.length)));
-        }
-
-        assertThat(absentLookup.get().getSingletonRow())
-                .as("public lookup result for absent key %s", Integer.MAX_VALUE)
-                .isNull();
-
-        awaitExactPublicBatchScan(table, expectedRows);
-    }
-
-    private static Map<Integer, Long> offsetsAfter(Map<Integer, Long> offsets, long increment) {
-        Map<Integer, Long> result = new LinkedHashMap<>(offsets);
-        result.replaceAll((bucket, offset) -> offset + increment);
-        return result;
-    }
-
-    private static Map<Integer, List<Object[]>> groupByBucket(
-            TableInfo tableInfo, List<Object[]> rows) {
-        Map<Integer, List<Object[]>> result = new LinkedHashMap<>();
-        for (int bucket = 0; bucket < tableInfo.getNumBuckets(); bucket++) {
-            result.put(bucket, new ArrayList<>());
-        }
-        for (Object[] row : rows) {
-            result.get(bucketOf(tableInfo, row)).add(Arrays.copyOf(row, row.length));
-        }
-        return result;
-    }
-
-    private static Map<Integer, Long> logEndOffsets(
-            Map<Integer, List<Object[]>> rows, long baseOffset) {
-        Map<Integer, Long> result = new LinkedHashMap<>();
-        rows.forEach((bucket, values) -> result.put(bucket, baseOffset + values.size()));
-        return result;
-    }
-
-    private static void verifyEmptyPublicTarget(Admin admin, Table table, TablePath tablePath)
-            throws Exception {
-        awaitExactPublicBatchScan(table, Collections.<Object[]>emptyList());
-        Map<Integer, Long> expectedEndOffsets = new LinkedHashMap<>();
-        for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
-            expectedEndOffsets.put(bucket, 0L);
-        }
+        TablePath path = create("partial_takeover", true);
+        PhysicalTablePath first = PhysicalTablePath.of(path, "p1");
+        PhysicalTablePath second = PhysicalTablePath.of(path, "p2");
+        BeginBulkLoadResponse begun = begin(first, second);
+        Map<PhysicalTablePath, List<Object[]>> rows = new HashMap<>();
+        rows.put(first, Collections.singletonList(new Object[] {31, "first", "p1"}));
+        rows.put(second, Collections.singletonList(new Object[] {32, "second", "p2"}));
+        CommitBulkLoadRequest input = new TestingBulkLoadInputBuilder().build(begun, rows);
+        org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo last = begun.getTargetInfoAt(1);
+        TableBucket blocked =
+                new TableBucket(begun.getHandle().getTableId(), last.getPartitionId(), 1);
+        long blockedSnapshot = last.getSnapshotIds()[1];
+        org.apache.fluss.fs.FsPath metadata =
+                new org.apache.fluss.fs.FsPath(
+                        org.apache.fluss.utils.FlussPaths.remoteKvSnapshotDir(
+                                org.apache.fluss.utils.FlussPaths.remoteKvTabletDir(
+                                        new org.apache.fluss.fs.FsPath(
+                                                last.getRemoteDataDir(),
+                                                org.apache.fluss.utils.FlussPaths
+                                                        .REMOTE_KV_DIR_NAME),
+                                        second,
+                                        blocked),
+                                blockedSnapshot),
+                        "_METADATA");
+        ZooKeeperClient zk = cluster.getZooKeeperClient();
+        String blockedPath = ZkData.BucketSnapshotIdZNode.path(blocked, blockedSnapshot);
+        zk.getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        blockedPath,
+                        ZkData.BucketSnapshotIdZNode.encode(
+                                new org.apache.fluss.server.zk.data.BucketSnapshot(
+                                        blockedSnapshot, 999L, metadata.toString())));
+        assertThatThrownBy(() -> await(admin.getAdminGateway().commitBulkLoad(input)))
+                .isInstanceOf(java.util.concurrent.ExecutionException.class);
+        BulkLoadTransaction decision =
+                ZkData.BulkLoadTransactionsZNode.decode(
+                        zk.getDataWithStat(
+                                        ZkData.BulkLoadTableTransactionZNode.path(
+                                                begun.getHandle().getTableId(),
+                                                begun.getHandle().getBulkLoadId()))
+                                .getData());
+        assertThat(decision.getState()).isEqualTo(BulkLoadState.COMMITTING);
+        TableBucket adopted =
+                new TableBucket(
+                        begun.getHandle().getTableId(),
+                        begun.getTargetInfoAt(0).getPartitionId(),
+                        0);
+        assertThat(zk.listBucketSnapshotIds(adopted))
+                .contains(begun.getTargetInfoAt(0).getSnapshotIds()[0]);
         assertThat(
                         await(
-                                admin.listOffsets(
-                                                tablePath,
-                                                new ArrayList<>(expectedEndOffsets.keySet()),
-                                                new OffsetSpec.LatestSpec())
-                                        .all()))
-                .containsExactlyInAnyOrderEntriesOf(expectedEndOffsets);
-    }
-
-    private static void verifySingleOrdinaryLogAfterAbort(
-            Admin admin, Table table, TablePath tablePath, Object[] ordinaryRow) throws Exception {
-        Map<Integer, List<Object[]>> rows =
-                groupByBucket(table.getTableInfo(), Collections.singletonList(ordinaryRow));
-        assertExactPublicLogs(
-                admin,
-                table,
-                PhysicalTablePath.of(tablePath),
-                rows,
-                logEndOffsets(rows, 0L),
-                ChangeType.INSERT);
-    }
-
-    private static List<Object[]> toLogicalRows(List<InternalRow> rows) {
-        List<Object[]> logicalRows = new ArrayList<>(rows.size());
-        for (InternalRow row : rows) {
-            logicalRows.add(toLogicalRow(row));
-        }
-        return logicalRows;
-    }
-
-    private static Object[] toLogicalRow(InternalRow row) {
-        if (row.getFieldCount() == 2) {
-            return new Object[] {
-                row.getInt(0), row.isNullAt(1) ? null : row.getString(1).toString()
-            };
-        }
-        return new Object[] {
-            row.getInt(0),
-            row.isNullAt(1) ? null : row.getString(1).toString(),
-            row.isNullAt(2) ? null : row.getString(2).toString()
-        };
-    }
-
-    private static final class BucketRows {
-        private final TableInfo tableInfo;
-        private int nextId;
-
-        private BucketRows(TableInfo tableInfo, int firstId) {
-            this.tableInfo = tableInfo;
-            this.nextId = firstId;
-        }
-
-        private Object[] row(int targetBucket, String payloadPrefix, String... partition) {
-            for (int attempts = 0; attempts < 100_000; attempts++) {
-                int candidate = nextId++;
-                String payload = payloadPrefix + '-' + candidate;
-                Object[] values =
-                        partition.length == 0
-                                ? new Object[] {candidate, payload}
-                                : new Object[] {candidate, payload, partition[0]};
-                if (bucketOf(tableInfo, values) == targetBucket) {
-                    return values;
-                }
+                                        admin.getAdminGateway()
+                                                .listKvSnapshots(
+                                                        new ListKvSnapshotsRequest()
+                                                                .setTableId(adopted.getTableId())
+                                                                .setPartitionId(
+                                                                        adopted.getPartitionId())))
+                                .getActiveSnapshotsList())
+                .anySatisfy(
+                        snapshot -> {
+                            assertThat(snapshot.getBucketId()).isEqualTo(adopted.getBucket());
+                            assertThat(snapshot.getSnapshotId())
+                                    .isEqualTo(begun.getTargetInfoAt(0).getSnapshotIds()[0]);
+                        });
+        assertThat(owner(first).getState()).isEqualTo(BulkLoadState.COMMITTING.getCode());
+        assertThat(owner(second).getState()).isEqualTo(BulkLoadState.COMMITTING.getCode());
+        CompletableFuture<CommitBulkLoadResponse> resumed;
+        CommitBulkLoadRequest retryRequest =
+                new CommitBulkLoadRequest().setHandle(begun.getHandle());
+        if (coordinatorTakeover) {
+            cluster.stopCoordinatorServer();
+            zk.getCuratorClient().delete().forPath(blockedPath);
+            cluster.startCoordinatorServer();
+            IOUtils.closeAll(admin, connection);
+            connection = ConnectionFactory.createConnection(cluster.getClientConfig());
+            admin = (FlussAdmin) connection.getAdmin();
+            resumed = admin.getAdminGateway().commitBulkLoad(retryRequest);
+        } else {
+            String adoptedPath =
+                    ZkData.BucketSnapshotIdZNode.path(
+                            adopted, begun.getTargetInfoAt(0).getSnapshotIds()[0]);
+            Path validatedMetadata =
+                    Paths.get(
+                            new FsPath(
+                                            ZkData.BucketSnapshotIdZNode.decode(
+                                                            zk.getDataWithStat(adoptedPath)
+                                                                    .getData())
+                                                    .getMetadataPath())
+                                    .toUri());
+            Path unavailable = validatedMetadata.resolveSibling("_METADATA.unavailable");
+            Files.move(validatedMetadata, unavailable);
+            try {
+                zk.getCuratorClient().delete().forPath(blockedPath);
+                resumed = admin.getAdminGateway().commitBulkLoad(retryRequest);
+                waitUntil(
+                        () -> zk.pathExists(blockedPath),
+                        Duration.ofSeconds(20),
+                        "remaining bucket is adopted without rereading validated metadata");
+            } finally {
+                Files.move(unavailable, validatedMetadata);
             }
-            throw new AssertionError("Unable to find deterministic row for bucket " + targetBucket);
         }
-
-        private List<Object[]> partitionRows(int targetBucket, int count, String partition) {
-            List<Object[]> rows = new ArrayList<>(count);
-            while (rows.size() < count) {
-                int candidate = nextId++;
-                String payload;
-                if (candidate % 101 == 0) {
-                    payload = null;
-                } else {
-                    StringBuilder value =
-                            new StringBuilder(candidate % 97 == 0 ? "生产数据-" : "target-");
-                    int suffixLength = candidate % 257;
-                    for (int index = 0; index < suffixLength; index++) {
-                        value.append((char) ('a' + index % 26));
-                    }
-                    payload = value.append('-').append(candidate).toString();
-                }
-                Object[] values = new Object[] {candidate, payload, partition};
-                if (bucketOf(tableInfo, values) == targetBucket) {
-                    rows.add(values);
-                }
-            }
-            return rows;
-        }
-    }
-
-    private static <T> T await(CompletableFuture<T> future) throws Exception {
-        return future.get(E2E_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-    }
-
-    private static CompletableFuture<Void> publicOperation(CheckedRunnable operation) {
-        return CompletableFuture.runAsync(
+        assertThat(await(resumed).getStatus().getState())
+                .isEqualTo(BulkLoadState.COMMITTED.getCode());
+        retry(
+                TIMEOUT,
                 () -> {
-                    try {
-                        operation.run();
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
+                    try (Table table = connection.getTable(path)) {
+                        Lookuper lookuper = table.newLookup().createLookuper();
+                        assertThatRow(
+                                        lookuper.lookup(row(31, "p1"))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .withSchema(PARTITIONED.getRowType())
+                                .isEqualTo(row(PARTITIONED.getRowType(), 31, "first", "p1"));
+                        assertThatRow(
+                                        lookuper.lookup(row(32, "p2"))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .withSchema(PARTITIONED.getRowType())
+                                .isEqualTo(row(PARTITIONED.getRowType(), 32, "second", "p2"));
+                    } catch (Exception failure) {
+                        throw new AssertionError("Recovered shared table is not ready", failure);
+                    }
+                });
+        assertUnowned(first);
+        assertUnowned(second);
+    }
+
+    @Test
+    void testOrdinarySnapshotDeleteChangelogAndTieringAfterImport() throws Exception {
+        TablePath path = create("ordinary_after_import", false);
+        PhysicalTablePath target = PhysicalTablePath.of(path);
+        BeginBulkLoadResponse begun = begin(target);
+        commit(
+                new TestingBulkLoadInputBuilder()
+                        .build(
+                                begun,
+                                Collections.singletonMap(
+                                        target,
+                                        Collections.singletonList(new Object[] {1, "imported"}))));
+        long tableId = begun.getHandle().getTableId();
+        try (Table table = connection.getTable(path);
+                org.apache.fluss.client.table.scanner.log.LogScanner scanner =
+                        table.newScan().createLogScanner()) {
+            for (int bucket = 0; bucket < 2; bucket++) {
+                scanner.subscribe(
+                        bucket,
+                        cluster.waitAndGetLeaderReplica(new TableBucket(tableId, bucket))
+                                .getLocalLogEndOffset());
+            }
+            write(table, row(1, "updated"));
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.delete(row(1, (String) null));
+            writer.flush();
+            for (int round = 0; round < 5; round++) {
+                for (int id = 10; id < 110; id++) {
+                    writer.upsert(
+                            row(
+                                    id,
+                                    String.join(
+                                            "",
+                                            Collections.nCopies(
+                                                    100, "payload-" + id + "-" + round))));
+                }
+                writer.flush();
+            }
+            boolean sawDelete = false;
+            long deadline = System.nanoTime() + TIMEOUT.toNanos();
+            while (!sawDelete && System.nanoTime() < deadline) {
+                org.apache.fluss.client.table.scanner.log.ScanRecords records =
+                        scanner.poll(Duration.ofSeconds(1));
+                for (TableBucket bucket : records.buckets()) {
+                    for (org.apache.fluss.client.table.scanner.ScanRecord record :
+                            records.records(bucket)) {
+                        if (record.getChangeType() == org.apache.fluss.record.ChangeType.DELETE
+                                && record.getRow().getInt(0) == 1) {
+                            assertThat(record.getRow().getString(1).toString())
+                                    .isEqualTo("updated");
+                            sawDelete = true;
+                        }
+                    }
+                }
+            }
+            assertThat(sawDelete).isTrue();
+        }
+        await(
+                admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), "5")),
+                        false));
+        for (int bucket = 0; bucket < 2; bucket++) {
+            TableBucket physical = new TableBucket(tableId, bucket);
+            org.apache.fluss.server.kv.snapshot.CompletedSnapshot snapshot =
+                    cluster.triggerAndWaitSnapshot(physical);
+            assertThat(snapshot.getSnapshotID())
+                    .isGreaterThan(begun.getTargetInfoAt(0).getSnapshotIds()[bucket]);
+            waitUntil(
+                    () -> {
+                        try {
+                            return cluster.getZooKeeperClient()
+                                    .getRemoteLogManifestHandle(physical)
+                                    .isPresent();
+                        } catch (Exception failure) {
+                            throw new RuntimeException(failure);
+                        }
+                    },
+                    TIMEOUT,
+                    "ordinary remote log publication");
+        }
+        int leader = cluster.waitAndGetLeader(new TableBucket(tableId, 0));
+        cluster.stopTabletServer(leader);
+        retry(
+                TIMEOUT,
+                () -> {
+                    try (Table table = connection.getTable(path)) {
+                        Lookuper lookuper = table.newLookup().createLookuper();
+                        assertThat(
+                                        lookuper.lookup(row(1))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .isNull();
+                        assertThat(
+                                        lookuper.lookup(row(40))
+                                                .get(10, TimeUnit.SECONDS)
+                                                .getSingletonRow())
+                                .isNotNull();
+                    } catch (Exception failure) {
+                        throw new AssertionError(
+                                "Ordinary snapshot recovery is not ready", failure);
                     }
                 });
     }
 
-    private static Configuration featureClusterConfiguration() {
-        Configuration configuration = new Configuration();
-        configuration.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
-        configuration.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofHours(1));
-        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
-        configuration.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
-        configuration.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
-        return configuration;
-    }
-
-    private interface CheckedRunnable {
-        void run() throws Exception;
-    }
-
-    private static CompletableFuture<PbBulkLoadTargetInfo> begin(
-            FlussAdmin admin, PhysicalTablePath target) {
-        return admin.getAdminGateway()
-                .beginBulkLoad(new BeginBulkLoadRequest().setTarget(fromPhysicalTablePath(target)))
-                .thenApply(response -> response.getTargetInfo());
-    }
-
-    private static CompletableFuture<PbBulkLoadStatus> abort(
-            FlussAdmin admin, PbBulkLoadHandle handle) {
-        return admin.getAdminGateway()
-                .abortBulkLoad(new AbortBulkLoadRequest().setHandle(handle))
-                .thenApply(response -> assertValidStatus(response.getStatus()));
-    }
-
-    private static CompletableFuture<Optional<PbBulkLoadStatus>> getInProgress(
-            FlussAdmin admin, PhysicalTablePath target) {
-        return admin.getAdminGateway()
-                .getInProgressBulkLoad(
-                        new GetInProgressBulkLoadRequest().setTarget(fromPhysicalTablePath(target)))
-                .thenApply(
-                        response ->
-                                response.hasStatus()
-                                        ? Optional.of(assertValidStatus(response.getStatus()))
-                                        : Optional.empty());
-    }
-
-    private static CompletableFuture<PbBulkLoadStatus> commit(
-            FlussAdmin admin, CommitBulkLoadRequest input) {
-        return admin.getAdminGateway()
-                .commitBulkLoad(input)
-                .thenApply(response -> assertValidStatus(response.getStatus()));
-    }
-
-    private static PbBulkLoadStatus assertValidStatus(PbBulkLoadStatus status) {
-        boolean aborted = BulkLoadState.fromCode(status.getState()) == BulkLoadState.ABORTED;
-        assertThat(status.hasAbortReason()).isEqualTo(aborted);
-        if (aborted) {
-            assertThat(BulkLoadAbortReason.fromCode(status.getAbortReason())).isNotNull();
-        } else {
-            assertThat(status.hasAbortMessage()).isFalse();
-        }
-        return status;
-    }
-
-    private static PbBulkLoadStatus commitUntilReady(FlussAdmin admin, CommitBulkLoadRequest input)
+    private void assertNoOrdinaryPublication(BeginBulkLoadResponse begun, boolean adopted)
             throws Exception {
-        long deadline = System.nanoTime() + E2E_TIMEOUT.toNanos();
-        while (true) {
-            long remaining = deadline - System.nanoTime();
-            if (remaining <= 0) {
-                throw new TimeoutException("Commit was not confirmed within " + E2E_TIMEOUT);
-            }
-            try {
-                return commit(admin, input).get(remaining, TimeUnit.NANOSECONDS);
-            } catch (ExecutionException failure) {
-                if (!(rootCause(failure) instanceof RetriableException)) {
-                    throw failure;
+        ZooKeeperClient zk = cluster.getZooKeeperClient();
+        for (org.apache.fluss.rpc.messages.PbBulkLoadTargetInfo target :
+                begun.getTargetInfosList()) {
+            for (int id = 0; id < target.getSnapshotIds().length; id++) {
+                TableBucket bucket =
+                        new TableBucket(
+                                begun.getHandle().getTableId(),
+                                target.hasPartitionId() ? target.getPartitionId() : null,
+                                id);
+                Replica replica = cluster.waitAndGetLeaderReplica(bucket);
+                PeriodicSnapshotManager snapshots = replica.getKvSnapshotManager();
+                assertThat(snapshots).isNotNull();
+                long counter = snapshots.currentSnapshotId();
+                snapshots.triggerSnapshot();
+                assertThat(snapshots.currentSnapshotId()).isEqualTo(counter);
+                if (adopted) {
+                    assertThat(zk.listBucketSnapshotIds(bucket))
+                            .containsExactly(target.getSnapshotIds()[id]);
+                } else {
+                    assertThat(zk.listBucketSnapshotIds(bucket)).isEmpty();
                 }
-                Thread.sleep(200);
+                assertThat(zk.getRemoteLogManifestHandle(bucket)).isNotPresent();
             }
         }
     }
 
-    private static CommitBulkLoadRequest buildInput(
-            PbBulkLoadTargetInfo targetInfo, List<Object[]> logicalRows) throws Exception {
-        return new TestingBulkLoadInputBuilder().build(targetInfo, logicalRows);
+    private TablePath create(String name, boolean partitioned) throws Exception {
+        return create(name, partitioned, ChangelogImage.FULL);
     }
 
-    private static void awaitLoadingAccessRejection(
-            Supplier<? extends CompletableFuture<?>> publicAccess,
-            Duration timeout,
-            String description) {
-        waitUntil(
+    private TablePath create(String name, boolean partitioned, ChangelogImage image)
+            throws Exception {
+        TablePath path = TablePath.of("bulkload_shared", name);
+        await(admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true));
+        TableDescriptor.Builder builder =
+                TableDescriptor.builder()
+                        .schema(partitioned ? PARTITIONED : SCHEMA)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, image)
+                        .distributedBy(2, "id");
+        if (partitioned) {
+            builder.partitionedBy("pt");
+        }
+        await(admin.createTable(path, builder.build(), false));
+        if (partitioned) {
+            for (String part : Arrays.asList("p1", "p2", "p3")) {
+                await(
+                        admin.createPartition(
+                                path,
+                                new PartitionSpec(Collections.singletonMap("pt", part)),
+                                false));
+            }
+        }
+        return path;
+    }
+
+    private BeginBulkLoadResponse begin(PhysicalTablePath... targets) throws Exception {
+        BeginBulkLoadRequest request = new BeginBulkLoadRequest();
+        for (PhysicalTablePath target : targets) {
+            request.addAllTargets(Collections.singletonList(fromPhysicalTablePath(target)));
+        }
+        return await(admin.getAdminGateway().beginBulkLoad(request));
+    }
+
+    private PbBulkLoadStatus owner(PhysicalTablePath target) throws Exception {
+        return await(
+                        admin.getAdminGateway()
+                                .getInProgressBulkLoad(
+                                        new GetInProgressBulkLoadRequest()
+                                                .setTarget(fromPhysicalTablePath(target))))
+                .getStatus();
+    }
+
+    private void assertUnowned(PhysicalTablePath target) throws Exception {
+        assertThat(
+                        await(
+                                        admin.getAdminGateway()
+                                                .getInProgressBulkLoad(
+                                                        new GetInProgressBulkLoadRequest()
+                                                                .setTarget(
+                                                                        fromPhysicalTablePath(
+                                                                                target))))
+                                .hasStatus())
+                .isFalse();
+    }
+
+    private PbBulkLoadStatus abort(PbBulkLoadHandle handle) throws Exception {
+        return await(
+                        admin.getAdminGateway()
+                                .abortBulkLoad(new AbortBulkLoadRequest().setHandle(handle)))
+                .getStatus();
+    }
+
+    private PbBulkLoadStatus commit(CommitBulkLoadRequest input) throws Exception {
+        return await(admin.getAdminGateway().commitBulkLoad(input)).getStatus();
+    }
+
+    private static void write(Table table, InternalRow row) throws Exception {
+        UpsertWriter writer = table.newUpsert().createWriter();
+        writer.upsert(row);
+        writer.flush();
+    }
+
+    private static void verify(Table table, Schema schema, Object[] expected) {
+        retry(
+                TIMEOUT,
                 () -> {
                     try {
-                        publicAccess.get().get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-                        throw new AssertionError("LOADING access was allowed: " + description);
-                    } catch (ExecutionException | CompletionException failure) {
-                        if (isLoadingAccessRejection(rootCause(failure))) {
-                            return true;
-                        }
-                        rethrowUnlessTransient(failure);
-                        return false;
+                        Lookuper lookuper = table.newLookup().createLookuper();
+                        InternalRow key =
+                                expected.length == 2
+                                        ? row((Integer) expected[0])
+                                        : row((Integer) expected[0], expected[2]);
+                        InternalRow actual =
+                                lookuper.lookup(key).get(10, TimeUnit.SECONDS).getSingletonRow();
+                        assertThatRow(actual)
+                                .withSchema(schema.getRowType())
+                                .isEqualTo(row(schema.getRowType(), expected));
+                    } catch (Exception failure) {
+                        throw new AssertionError("Imported row is not ready", failure);
                     }
-                },
-                timeout,
-                "LOADING access rejection for " + description);
+                });
     }
 
-    private static boolean isLoadingAccessRejection(Throwable failure) {
-        return failure instanceof BulkLoadInProgressException;
+    private static <T> T await(CompletableFuture<T> future) throws Exception {
+        return future.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    private static Throwable rootCause(Throwable failure) {
-        Throwable current = failure;
-        while (current.getCause() != null && current.getCause() != current) {
-            current = current.getCause();
-        }
-        return current;
-    }
-
-    private static void rethrowUnlessTransient(Throwable failure) {
-        Throwable cause = rootCause(failure);
-        if (!(cause instanceof TimeoutException) && !(cause instanceof RetriableException)) {
-            ExceptionUtils.rethrow(cause);
-        }
+    private static Configuration configuration() {
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
+        conf.set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofMillis(100));
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("2kb"));
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
+        conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
+        conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
+        return conf;
     }
 }

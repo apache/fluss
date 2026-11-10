@@ -57,7 +57,6 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.tablet.TabletServer;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -741,7 +740,7 @@ public final class FlussClusterExtension
                         ReplicaManager replicaManager = tabletServer.getReplicaManager();
                         assertThat(replicaManager.getReplica(tableBucket))
                                 .isInstanceOf(ReplicaManager.OnlineReplica.class);
-                        assertThatCode(tabletServer.getAccessGate()::captureAccessEpoch)
+                        assertThatCode(tabletServer.getRestoreAccessGate()::captureAccessEpoch)
                                 .as(
                                         "TabletServer %s access must be enabled before its"
                                                 + " replica is ready",
@@ -930,7 +929,6 @@ public final class FlussClusterExtension
                 getTabletServerById(tabletServerId)
                         .getReplicaManager()
                         .getReplicaOrException(tableBucket);
-        BulkLoadTargetMetadata target = replica.getBulkLoadTargetMetadata();
         PbNotifyLeaderAndIsrReqForBucket reqForBucket =
                 makeNotifyBucketLeaderAndIsr(
                         new NotifyLeaderAndIsrData(
@@ -939,9 +937,7 @@ public final class FlussClusterExtension
                                 replicas,
                                 leaderAndIsr,
                                 3,
-                                0L,
-                                target,
-                                false));
+                                0L));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));
@@ -963,7 +959,7 @@ public final class FlussClusterExtension
                     (ReplicaManager.OnlineReplica) replicaManager.getReplica(tableBucket);
             if (onlineReplica.getReplica().isLeader() == isLeader) {
                 try {
-                    tabletServer.getAccessGate().captureAccessEpoch();
+                    tabletServer.getRestoreAccessGate().captureAccessEpoch();
                     return Optional.of(onlineReplica.getReplica());
                 } catch (StaleMetadataException ignored) {
                     return Optional.empty();

@@ -23,8 +23,6 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.BulkLoadInProgressException;
-import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
@@ -32,7 +30,6 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
-import org.apache.fluss.rpc.protocol.ApiError;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,7 +51,6 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchCollector}. */
 public class LogFetchCollectorTest {
@@ -272,41 +268,6 @@ public class LogFetchCollectorTest {
         // Empty record list, but bucket exposed via buckets() with an advanced consumedUpToOffset.
         assertThat(scanRecords.buckets()).contains(tb);
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
-    }
-
-    @Test
-    void testBulkLoadInProgressFetchErrorIsPropagated() {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        String message = "BulkLoad is in progress; ordinary reads and writes are unavailable.";
-        FetchLogResultForBucket failed =
-                FetchLogResultForBucket.error(
-                        tb, ApiError.fromThrowable(new BulkLoadInProgressException(message)));
-        logFetchBuffer.add(makeCompletedFetch(tb, failed, 0L));
-
-        assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
-                .isInstanceOf(BulkLoadInProgressException.class)
-                .hasMessageContaining(message);
-        assertThat(logScannerStatus.getBucketOffset(tb)).isZero();
-    }
-
-    @Test
-    void testUnknownServerFetchErrorPreservesOffsetAndAllowsSubsequentFetch() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        FetchLogResultForBucket failed =
-                FetchLogResultForBucket.error(
-                        tb,
-                        ApiError.fromThrowable(new UnknownServerException("temporary failure")));
-        logFetchBuffer.add(makeCompletedFetch(tb, failed, 0L));
-        assertThat(logFetchCollector.collectFetch(logFetchBuffer).records(tb)).isEmpty();
-        assertThat(logScannerStatus.getBucketOffset(tb)).isZero();
-
-        FetchLogResultForBucket succeeded =
-                FetchLogResultForBucket.records(
-                        tb, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L);
-        logFetchBuffer.add(makeCompletedFetch(tb, succeeded, 0L));
-        assertThat(logFetchCollector.collectFetch(logFetchBuffer).records(tb))
-                .hasSize(DATA1.size());
-        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo((long) DATA1.size());
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

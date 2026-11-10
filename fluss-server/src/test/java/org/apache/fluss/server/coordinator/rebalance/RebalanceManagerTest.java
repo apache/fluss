@@ -366,7 +366,9 @@ public class RebalanceManagerTest {
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                new java.util.concurrent.Semaphore(
+                        conf.get(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS)));
     }
 
     /** Records events put into the coordinator event queue. */

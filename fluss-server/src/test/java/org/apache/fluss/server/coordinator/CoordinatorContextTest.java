@@ -41,8 +41,6 @@ import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
@@ -158,13 +156,12 @@ class CoordinatorContextTest {
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
 
-        long activationId1 = context.addPendingLeaderActivationAndGetId(tb1);
-        long activationId2 = context.addPendingLeaderActivationAndGetId(tb2);
+        context.addPendingLeaderActivations(Arrays.asList(tb1, tb2));
 
-        context.clearPendingLeaderActivation(tb1, activationId1);
+        context.clearPendingLeaderActivation(tb1);
         assertThat(context.getPendingLeaderActivationBuckets()).containsExactly(tb2);
 
-        context.clearPendingLeaderActivation(tb2, activationId2);
+        context.clearPendingLeaderActivation(tb2);
         assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
@@ -174,7 +171,7 @@ class CoordinatorContextTest {
         TableBucket tb1 = new TableBucket(1L, 0);
 
         // Should not throw
-        context.clearPendingLeaderActivation(tb1, 1L);
+        context.clearPendingLeaderActivation(tb1);
         assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
@@ -225,23 +222,14 @@ class CoordinatorContextTest {
                         0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
 
         // Active leader on live server, not pending → active
-        context.putBucketState(tb, OnlineBucket);
-        assertThat(context.isLeaderActive(tb)).isTrue();
-
-        context.addOfflineBucketInServer(tb, 0);
-        assertThat(context.isLeaderActive(tb)).isFalse();
-        context.putBucketState(tb, OfflineBucket);
-        context.removeOfflineBucketInServer(tb, 0);
-        assertThat(context.isLeaderActive(tb)).isFalse();
-        context.putBucketState(tb, OnlineBucket);
         assertThat(context.isLeaderActive(tb)).isTrue();
 
         // Add to pending → not active
-        long activationId = context.addPendingLeaderActivationAndGetId(tb);
+        context.addPendingLeaderActivation(tb);
         assertThat(context.isLeaderActive(tb)).isFalse();
 
         // Clear pending → active again
-        context.clearPendingLeaderActivation(tb, activationId);
+        context.clearPendingLeaderActivation(tb);
         assertThat(context.isLeaderActive(tb)).isTrue();
 
         // Leader is NO_LEADER → not active

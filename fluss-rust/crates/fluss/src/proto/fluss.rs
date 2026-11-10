@@ -1258,34 +1258,34 @@ pub struct GetClusterHealthResponse {
     #[prost(int32, required, tag = "5")]
     pub status: i32,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BeginBulkLoadRequest {
-    #[prost(message, required, tag = "1")]
-    pub target: PbPhysicalTablePath,
+    #[prost(message, repeated, tag = "1")]
+    pub targets: ::prost::alloc::vec::Vec<PbPhysicalTablePath>,
     #[prost(int64, optional, tag = "2")]
     pub timeout_ms: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBulkLoadHandle {
     #[prost(message, required, tag = "1")]
-    pub target: PbPhysicalTablePath,
+    pub table_path: PbTablePath,
     #[prost(int64, required, tag = "2")]
     pub table_id: i64,
-    #[prost(int64, optional, tag = "3")]
-    pub partition_id: ::core::option::Option<i64>,
-    #[prost(string, required, tag = "4")]
+    #[prost(string, required, tag = "3")]
     pub bulk_load_id: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BeginBulkLoadResponse {
     #[prost(message, required, tag = "1")]
-    pub target_info: PbBulkLoadTargetInfo,
+    pub handle: PbBulkLoadHandle,
+    #[prost(message, repeated, tag = "2")]
+    pub target_infos: ::prost::alloc::vec::Vec<PbBulkLoadTargetInfo>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitBulkLoadRequest {
     #[prost(message, required, tag = "1")]
     pub handle: PbBulkLoadHandle,
-    /// SHA-256 of the concatenated 32-byte metadata SHA-256 digests, in bucket order.
+    /// SHA-256 of metadata digests ordered by partition ID and then bucket ID.
     #[prost(string, optional, tag = "2")]
     pub input_sha256: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -1328,7 +1328,7 @@ pub struct PbBulkLoadStatus {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbBulkLoadTargetInfo {
     #[prost(message, required, tag = "1")]
-    pub handle: PbBulkLoadHandle,
+    pub target: PbPhysicalTablePath,
     #[prost(int32, required, tag = "2")]
     pub schema_id: i32,
     #[prost(bytes = "vec", required, tag = "3")]
@@ -1339,6 +1339,8 @@ pub struct PbBulkLoadTargetInfo {
     pub modified_time: i64,
     #[prost(string, optional, tag = "6")]
     pub remote_data_dir: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "7")]
+    pub partition_id: ::core::option::Option<i64>,
     #[prost(int64, repeated, packed = "false", tag = "8")]
     pub snapshot_ids: ::prost::alloc::vec::Vec<i64>,
 }
@@ -1785,15 +1787,8 @@ pub struct PbNotifyLeaderAndIsrReqForBucket {
     pub bucket_count: ::core::option::Option<i32>,
     #[prost(int64, optional, tag = "10")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
-    #[prost(int32, optional, tag = "12")]
-    pub metadata_version: ::core::option::Option<i32>,
-    #[prost(int32, optional, tag = "13")]
-    pub data_state: ::core::option::Option<i32>,
-    /// Set only while installing a BulkLoad fence: the recipient must prove the bucket holds no local
-    /// user data before it accepts the role. The snapshot-restore round carries the same LOADING
-    /// identity but leaves this unset, because by then the bucket is expected to be filled.
-    #[prost(bool, optional, tag = "15")]
-    pub require_empty_target: ::core::option::Option<bool>,
+    #[prost(int64, optional, tag = "12")]
+    pub restore_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrRespForBucket {

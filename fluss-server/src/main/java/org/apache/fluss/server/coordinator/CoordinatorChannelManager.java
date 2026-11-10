@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
@@ -203,7 +204,19 @@ public class CoordinatorChannelManager {
                         serverId,
                         e);
             }
-            state.getQueue().clear();
+            QueueItem<?> abandoned;
+            while ((abandoned = state.getQueue().poll()) != null) {
+                abandoned.markDequeued();
+                if (abandoned.getCallback() != null) {
+                    try {
+                        abandoned
+                                .getCallback()
+                                .accept(null, new IllegalStateException("Control channel closed."));
+                    } catch (RuntimeException failure) {
+                        LOG.warn("Failed to complete an abandoned control request.", failure);
+                    }
+                }
+            }
             state.getMetricGroup().close();
         } catch (Throwable t) {
             LOG.error("Error tearing down channel state for tabletServer {}", serverId, t);
@@ -215,6 +228,22 @@ public class CoordinatorChannelManager {
             int receiveServerId,
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
+        boolean restore =
+                notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList().stream()
+                        .anyMatch(bucket -> bucket.hasRestoreSnapshotId());
+        if (restore) {
+            if (!enqueueRequest(
+                    receiveServerId,
+                    ApiKeys.NOTIFY_LEADER_AND_ISR,
+                    notifyLeaderAndIsrRequest.getCoordinatorEpoch(),
+                    gateway -> gateway.notifyLeaderAndIsr(notifyLeaderAndIsrRequest),
+                    responseConsumer,
+                    false)) {
+                responseConsumer.accept(
+                        null, new IllegalStateException("Restoration channel is unavailable."));
+            }
+            return;
+        }
         sendRequest(
                 receiveServerId,
                 notifyLeaderAndIsrRequest,
@@ -247,34 +276,50 @@ public class CoordinatorChannelManager {
             int coordinatorEpoch,
             Function<TabletServerGateway, CompletableFuture<ResponseT>> requestSender,
             @Nullable BiConsumer<ResponseT, ? super Throwable> responseConsumer) {
+        return enqueueRequest(
+                targetServerId, apiKey, coordinatorEpoch, requestSender, responseConsumer, true);
+    }
+
+    private <ResponseT extends ApiMessage> boolean enqueueRequest(
+            int targetServerId,
+            ApiKeys apiKey,
+            int coordinatorEpoch,
+            Function<TabletServerGateway, CompletableFuture<ResponseT>> requestSender,
+            @Nullable BiConsumer<ResponseT, ? super Throwable> responseConsumer,
+            boolean retryTransport) {
+        QueueItem<ResponseT> item =
+                new QueueItem<>(
+                        apiKey,
+                        requestSender,
+                        responseConsumer,
+                        coordinatorEpoch,
+                        System.currentTimeMillis(),
+                        retryTransport);
         TabletServerChannelState state;
         synchronized (channelLock) {
             state = channelStates.get(targetServerId);
+            if (state == null) {
+                LOG.warn("Cannot enqueue {} for offline tablet server {}.", apiKey, targetServerId);
+                return false;
+            }
+            state.getQueue().add(item);
         }
-        if (state == null) {
-            LOG.warn(
-                    "Cannot enqueue {} for tablet server {} because its channel does not exist.",
-                    apiKey,
-                    targetServerId);
-            return false;
+        if (!retryTransport) {
+            org.apache.fluss.utils.concurrent.FutureUtils.orTimeout(
+                            item.getDequeuedFuture(),
+                            conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT).toMillis(),
+                            java.util.concurrent.TimeUnit.MILLISECONDS,
+                            "Restoration sender queue timed out.")
+                    .whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null
+                                        && state.getQueue().remove(item)
+                                        && item.getCallback() != null) {
+                                    item.getCallback().accept(null, failure);
+                                }
+                            });
         }
-
-        try {
-            state.getQueue()
-                    .put(
-                            new QueueItem<>(
-                                    apiKey,
-                                    requestSender,
-                                    responseConsumer,
-                                    coordinatorEpoch,
-                                    System.currentTimeMillis()));
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            LOG.warn(
-                    "Interrupted while enqueueing {} for tablet server {}", apiKey, targetServerId);
-            return false;
-        }
+        return true;
     }
 
     /** Send UpdateMetadataRequest to the server and handle the response. */

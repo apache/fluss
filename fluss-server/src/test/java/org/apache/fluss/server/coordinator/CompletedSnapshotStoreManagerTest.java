@@ -220,11 +220,7 @@ class CompletedSnapshotStoreManagerTest {
                         new IOException(
                                 "Failed to open snapshot metadata.",
                                 new IOException(
-                                        "File does not exist: temporary standby response"))),
-                "/table",
-                1,
-                1,
-                1);
+                                        "File does not exist: temporary standby response"))));
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         10,
@@ -258,8 +254,8 @@ class CompletedSnapshotStoreManagerTest {
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new InMemoryCompletedSnapshotHandleStore();
-        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle, "/table", 1, 1, 1);
-        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle, "/table", 1, 1, 1);
+        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle);
+        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle);
 
         // CompletedSnapshotStoreManager
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
@@ -306,7 +302,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                         DATA1_TABLE_PATH, tableBucket);
-        KvTestUtils.commitSnapshot(zookeeperClient, completedSnapshotStore, completedSnapshot);
+        completedSnapshotStore.add(completedSnapshot);
     }
 
     private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId)
@@ -369,11 +365,7 @@ class CompletedSnapshotStoreManagerTest {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle,
-                String sourceMetadataPath,
-                int sourceMetadataVersion,
-                int coordinatorZkVersion,
-                int leaderAndIsrZkVersion)
+                CompletedSnapshotHandle completedSnapshotHandle)
                 throws Exception {
             snapshotHandleMap
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())

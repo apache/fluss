@@ -201,12 +201,10 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.ByteArraySlice;
@@ -817,18 +815,8 @@ public class ServerRpcMessageUtils {
             reqForBucket.setBucketCountEpoch(notifyLeaderAndIsrData.getBucketCountEpoch());
         }
 
-        BulkLoadTargetMetadata bulkLoadMetadata = notifyLeaderAndIsrData.getBulkLoadMetadata();
-        if (bulkLoadMetadata != null) {
-            reqForBucket
-                    .setMetadataVersion(bulkLoadMetadata.getMetadataVersion())
-                    .setDataState(bulkLoadMetadata.getDataState().getCode());
-        }
-        if (notifyLeaderAndIsrData.requiresEmptyTarget()) {
-            if (bulkLoadMetadata == null) {
-                throw new IllegalArgumentException(
-                        "Notify cannot demand an empty target without a BulkLoad identity.");
-            }
-            reqForBucket.setRequireEmptyTarget(true);
+        if (notifyLeaderAndIsrData.getRestoreSnapshotId() != null) {
+            reqForBucket.setRestoreSnapshotId(notifyLeaderAndIsrData.getRestoreSnapshotId());
         }
 
         return reqForBucket;
@@ -858,24 +846,6 @@ public class ServerRpcMessageUtils {
             TableBucket tableBucket = toTableBucket(pbTableBucket);
             PhysicalTablePath physicalTablePath =
                     toPhysicalTablePath(reqForBucket.getPhysicalTablePath());
-            BulkLoadTargetMetadata target = null;
-            if (reqForBucket.hasMetadataVersion() || reqForBucket.hasDataState()) {
-                if (!reqForBucket.hasMetadataVersion() || !reqForBucket.hasDataState()) {
-                    throw new IllegalArgumentException(
-                            "Notify BulkLoad target identity is incomplete.");
-                }
-                target =
-                        new BulkLoadTargetMetadata(
-                                tableBucket,
-                                reqForBucket.getMetadataVersion(),
-                                BulkLoadDataState.fromCode(reqForBucket.getDataState()));
-            }
-            boolean requireEmptyTarget =
-                    reqForBucket.hasRequireEmptyTarget() && reqForBucket.isRequireEmptyTarget();
-            if (requireEmptyTarget && target == null) {
-                throw new IllegalArgumentException(
-                        "Notify demands an empty target without a BulkLoad identity.");
-            }
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
                             physicalTablePath,
@@ -892,8 +862,9 @@ public class ServerRpcMessageUtils {
                             reqForBucket.hasBucketCountEpoch()
                                     ? reqForBucket.getBucketCountEpoch()
                                     : null,
-                            target,
-                            requireEmptyTarget));
+                            reqForBucket.hasRestoreSnapshotId()
+                                    ? reqForBucket.getRestoreSnapshotId()
+                                    : null));
         }
         return notifyLeaderAndIsrDataList;
     }

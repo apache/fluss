@@ -19,7 +19,6 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TablePartition;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 
 import javax.annotation.Nullable;
 
@@ -53,7 +52,6 @@ public class PartitionRegistration {
      */
     private final @Nullable Integer bucketCount;
 
-    private final BulkLoadDataState dataState;
     private final @Nullable String bulkLoadId;
 
     public PartitionRegistration(
@@ -61,11 +59,7 @@ public class PartitionRegistration {
             long partitionId,
             @Nullable String remoteDataDir,
             @Nullable Integer bucketCount) {
-        this(tableId, partitionId, remoteDataDir, bucketCount, BulkLoadDataState.ACTIVE, null);
-    }
-
-    public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
-        this(tableId, partitionId, remoteDataDir, null);
+        this(tableId, partitionId, remoteDataDir, bucketCount, null);
     }
 
     PartitionRegistration(
@@ -73,14 +67,16 @@ public class PartitionRegistration {
             long partitionId,
             @Nullable String remoteDataDir,
             @Nullable Integer bucketCount,
-            BulkLoadDataState dataState,
             @Nullable String bulkLoadId) {
-        validateDataState(dataState, bulkLoadId);
+        if (bulkLoadId != null) {
+            org.apache.fluss.utils.Preconditions.checkArgument(
+                    java.util.UUID.fromString(bulkLoadId).toString().equals(bulkLoadId),
+                    "BulkLoad ID must be a canonical UUID.");
+        }
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
         this.bucketCount = bucketCount;
-        this.dataState = dataState;
         this.bulkLoadId = bulkLoadId;
     }
 
@@ -132,10 +128,6 @@ public class PartitionRegistration {
                         + "; the ALTER bucket.num backfill invariant was broken.");
     }
 
-    public BulkLoadDataState getDataState() {
-        return dataState;
-    }
-
     @Nullable
     public String getBulkLoadId() {
         return bulkLoadId;
@@ -155,14 +147,13 @@ public class PartitionRegistration {
      */
     public PartitionRegistration newRemoteDataDir(String remoteDataDir) {
         return new PartitionRegistration(
-                tableId, partitionId, remoteDataDir, bucketCount, dataState, bulkLoadId);
+                tableId, partitionId, remoteDataDir, bucketCount, bulkLoadId);
     }
 
-    /** Returns a copy with the validated BulkLoad access state and transaction UUID. */
-    public PartitionRegistration withDataState(
-            BulkLoadDataState dataState, @Nullable String bulkLoadId) {
+    /** Returns a copy with the transaction UUID owning this target. */
+    public PartitionRegistration withBulkLoadId(@Nullable String bulkLoadId) {
         return new PartitionRegistration(
-                tableId, partitionId, remoteDataDir, bucketCount, dataState, bulkLoadId);
+                tableId, partitionId, remoteDataDir, bucketCount, bulkLoadId);
     }
 
     @Override
@@ -175,14 +166,12 @@ public class PartitionRegistration {
                 && partitionId == that.partitionId
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
                 && Objects.equals(bucketCount, that.bucketCount)
-                && dataState == that.dataState
                 && Objects.equals(bulkLoadId, that.bulkLoadId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(
-                tableId, partitionId, remoteDataDir, bucketCount, dataState, bulkLoadId);
+        return Objects.hash(tableId, partitionId, remoteDataDir, bucketCount, bulkLoadId);
     }
 
     @Override
@@ -197,19 +186,9 @@ public class PartitionRegistration {
                 + '\''
                 + ", bucketCount="
                 + bucketCount
-                + ", dataState="
-                + dataState
                 + ", bulkLoadId='"
                 + bulkLoadId
                 + '\''
                 + '}';
-    }
-
-    private static void validateDataState(
-            BulkLoadDataState dataState, @Nullable String bulkLoadId) {
-        if (dataState == null) {
-            throw new IllegalArgumentException("BulkLoad data state must not be null.");
-        }
-        dataState.validateBulkLoadId(bulkLoadId);
     }
 }

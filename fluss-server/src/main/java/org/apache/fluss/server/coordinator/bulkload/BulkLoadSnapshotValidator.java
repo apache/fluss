@@ -22,13 +22,15 @@ import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
 import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 import org.apache.fluss.utils.FlussPaths;
@@ -49,30 +51,30 @@ import java.util.Set;
 @Internal
 public final class BulkLoadSnapshotValidator {
 
-    /** Reads every planned snapshot and verifies the SHA-256 of its ordered metadata digests. */
+    /** Validates the common digest in physical partition and bucket order. */
     public List<CompletedSnapshot> validate(
-            BulkLoadHandle handle,
-            String remoteDataDir,
-            String inputSha256,
-            long[] snapshotIds,
-            ChangelogImage changelogImage,
-            long maxMetadataBytes) {
+            BulkLoadTransaction transaction, ChangelogImage changelogImage, long maxMetadataBytes) {
         try {
             Hasher digest = Hashing.sha256().newHasher();
-            List<CompletedSnapshot> snapshots = new ArrayList<>(snapshotIds.length);
-            for (int bucket = 0; bucket < snapshotIds.length; bucket++) {
-                snapshots.add(
-                        validateBucket(
-                                handle,
-                                remoteDataDir,
-                                snapshotIds[bucket],
-                                bucket,
-                                digest,
-                                changelogImage,
-                                maxMetadataBytes));
+            List<CompletedSnapshot> snapshots = new ArrayList<>();
+            for (BulkLoadTarget target : transaction.getTargets()) {
+                long[] snapshotIds = target.getSnapshotIds();
+                for (int bucket = 0; bucket < snapshotIds.length; bucket++) {
+                    snapshots.add(
+                            validateBucket(
+                                    transaction.getTableId(),
+                                    target.getPartitionId(),
+                                    target.getTarget(),
+                                    target.getRemoteDataDir(),
+                                    snapshotIds[bucket],
+                                    bucket,
+                                    digest,
+                                    changelogImage,
+                                    maxMetadataBytes));
+                }
             }
             require(
-                    digest.hash().toString().equals(inputSha256),
+                    digest.hash().toString().equals(transaction.getInputSha256()),
                     "BulkLoad input SHA-256 differs from the frozen input.");
             return Collections.unmodifiableList(snapshots);
         } catch (InvalidBulkLoadRequestException e) {
@@ -83,7 +85,9 @@ public final class BulkLoadSnapshotValidator {
     }
 
     private CompletedSnapshot validateBucket(
-            BulkLoadHandle handle,
+            long tableId,
+            Long partitionId,
+            PhysicalTablePath target,
             String remoteDataDir,
             long snapshotId,
             int bucketId,
@@ -91,13 +95,12 @@ public final class BulkLoadSnapshotValidator {
             ChangelogImage changelogImage,
             long maxMetadataBytes)
             throws Exception {
-        TableBucket tableBucket =
-                new TableBucket(handle.getTableId(), handle.getPartitionId(), bucketId);
+        TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
         FsPath snapshotDirectory =
                 FlussPaths.remoteKvSnapshotDir(
                         FlussPaths.remoteKvTabletDir(
                                 new FsPath(remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME),
-                                handle.getTarget(),
+                                target,
                                 tableBucket),
                         snapshotId);
         FsPath snapshotMetadataPath = new FsPath(snapshotDirectory, "_METADATA");

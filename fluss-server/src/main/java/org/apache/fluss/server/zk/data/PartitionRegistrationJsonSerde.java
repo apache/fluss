@@ -18,7 +18,6 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
@@ -41,7 +40,6 @@ public class PartitionRegistrationJsonSerde
     private static final String PARTITION_ID_KEY = "partition_id";
     private static final String REMOTE_DATA_DIR_KEY = "remote_data_dir";
     private static final String BUCKET_COUNT_KEY = "bucket_count";
-    private static final String DATA_STATE_KEY = "data_state";
     private static final String BULK_LOAD_ID_KEY = "bulk_load_id";
     static final int VERSION = 3;
     private static final int LEGACY_VERSION = 2;
@@ -61,7 +59,6 @@ public class PartitionRegistrationJsonSerde
             generator.writeNumberField(BUCKET_COUNT_KEY, registration.getBucketCount());
         }
         if (registration.getBulkLoadId() != null) {
-            generator.writeNumberField(DATA_STATE_KEY, registration.getDataState().getCode());
             generator.writeStringField(BULK_LOAD_ID_KEY, registration.getBulkLoadId());
         }
         generator.writeEndObject();
@@ -84,24 +81,16 @@ public class PartitionRegistrationJsonSerde
         if (node.has(BUCKET_COUNT_KEY)) {
             bucketCount = node.get(BUCKET_COUNT_KEY).asInt();
         }
-        BulkLoadDataState dataState = BulkLoadDataState.ACTIVE;
         String bulkLoadId = null;
         if (version == VERSION) {
-            JsonNode dataStateNode = node.get(DATA_STATE_KEY);
             JsonNode bulkLoadIdNode = node.get(BULK_LOAD_ID_KEY);
-            checkArgument(
-                    dataStateNode != null
-                            && dataStateNode.isIntegralNumber()
-                            && dataStateNode.canConvertToInt(),
-                    "PartitionRegistration version 3 data_state must be an integer.");
             checkArgument(
                     bulkLoadIdNode != null && bulkLoadIdNode.isTextual(),
                     "PartitionRegistration version 3 bulk_load_id must be a string.");
-            dataState = BulkLoadDataState.fromCode(dataStateNode.intValue());
             bulkLoadId = bulkLoadIdNode.textValue();
         }
         return new PartitionRegistration(
-                tableId, partitionId, remoteDataDir, bucketCount, dataState, bulkLoadId);
+                tableId, partitionId, remoteDataDir, bucketCount, bulkLoadId);
     }
 
     private static int readVersion(JsonNode node) {

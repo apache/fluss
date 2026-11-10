@@ -35,7 +35,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatch;
-import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
@@ -1310,28 +1309,6 @@ public final class KvTablet {
             valueBodySlices.add(kvValueLayout.toValueBodySlice(value));
         }
         return valueBodySlices;
-    }
-
-    /** Returns whether the user column family is authoritatively empty. */
-    public boolean isUserDataEmpty() throws Exception {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    try (ResourceGuard.Lease ignored =
-                            rocksDBKv.getResourceGuard().acquireResource()) {
-                        try (RocksIteratorWrapper iterator =
-                                new RocksIteratorWrapper(
-                                        rocksDBKv
-                                                .getDb()
-                                                .newIterator(
-                                                        rocksDBKv
-                                                                .getDefaultColumnFamilyHandle()))) {
-                            iterator.seekToFirst();
-                            return !iterator.isValid();
-                        }
-                    }
-                });
     }
 
     /**

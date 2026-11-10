@@ -20,10 +20,14 @@ package org.apache.fluss.server.coordinator.bulkload;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.BulkLoadHandle;
+import org.apache.fluss.metadata.BulkLoadState;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.HashCode;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +42,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.server.testutils.KvTestUtils.writeSnapshotMetadata;
@@ -55,22 +60,19 @@ class BulkLoadSnapshotValidatorTest {
     void prepareSnapshots() throws Exception {
         handle =
                 new BulkLoadHandle(
-                        PhysicalTablePath.of("db", "table", null),
-                        41L,
-                        null,
-                        "550e8400-e29b-41d4-a716-446655440000");
+                        TablePath.of("db", "table"), 41L, "550e8400-e29b-41d4-a716-446655440000");
         metadata =
                 Arrays.asList(
                         writeSnapshotMetadata(
                                 tempDir.toUri().toString(),
-                                handle,
+                                PhysicalTablePath.of(handle.getTablePath()),
                                 new TableBucket(handle.getTableId(), 0),
                                 17L,
                                 0L,
                                 0L),
                         writeSnapshotMetadata(
                                 tempDir.toUri().toString(),
-                                handle,
+                                PhysicalTablePath.of(handle.getTablePath()),
                                 new TableBucket(handle.getTableId(), 1),
                                 18L,
                                 2L,
@@ -114,7 +116,7 @@ class BulkLoadSnapshotValidatorTest {
     void testRejectsNegativeRowCount(long rowCount) throws Exception {
         writeSnapshotMetadata(
                 tempDir.toUri().toString(),
-                handle,
+                PhysicalTablePath.of(handle.getTablePath()),
                 new TableBucket(handle.getTableId(), 0),
                 17L,
                 0L,
@@ -163,10 +165,23 @@ class BulkLoadSnapshotValidatorTest {
     private List<CompletedSnapshot> validate(String digest, long limit) {
         return new BulkLoadSnapshotValidator()
                 .validate(
-                        handle,
-                        tempDir.toUri().toString(),
-                        digest,
-                        new long[] {17L, 18L},
+                        new BulkLoadTransaction(
+                                handle,
+                                BulkLoadState.BEGUN,
+                                "alice",
+                                "USER",
+                                Collections.singletonList(
+                                        new BulkLoadTarget(
+                                                PhysicalTablePath.of(handle.getTablePath()),
+                                                null,
+                                                tempDir.toUri().toString(),
+                                                1,
+                                                0,
+                                                new long[] {17L, 18L})),
+                                Long.MAX_VALUE,
+                                digest,
+                                null,
+                                null),
                         ChangelogImage.FULL,
                         limit);
     }

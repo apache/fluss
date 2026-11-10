@@ -92,11 +92,11 @@ class TabletServerLoadTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
-        long activationId = ctx.addPendingLeaderActivationAndGetId(tb);
+        ctx.addPendingLeaderActivation(tb);
 
         assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 0, 1, 1, 1, 0);
 
-        ctx.clearPendingLeaderActivation(tb, activationId);
+        ctx.clearPendingLeaderActivation(tb);
 
         assertLoad(CoordinatorService.computeTabletServerLoads(ctx), 0, 1, 1, 1, 1);
     }

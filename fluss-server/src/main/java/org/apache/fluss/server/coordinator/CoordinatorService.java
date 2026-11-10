@@ -44,7 +44,6 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
-import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
@@ -209,20 +208,16 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperClient.DataWithStat;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -239,12 +234,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Function;
@@ -379,11 +374,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request) {
-        PhysicalTablePath target = validateBulkLoadTarget(request);
-        authorize(target, OperationType.WRITE);
+        List<PhysicalTablePath> targets = new ArrayList<>();
+        for (PbPhysicalTablePath target : request.getTargetsList()) {
+            PhysicalTablePath path = validateBulkLoadTarget(target);
+            authorize(path, OperationType.WRITE);
+            targets.add(path);
+        }
+        if (targets.isEmpty()) {
+            throw new InvalidBulkLoadRequestException("BulkLoad targets must not be empty.");
+        }
         FlussPrincipal creator = currentSession().getPrincipal();
         Long timeout = request.hasTimeoutMs() ? request.getTimeoutMs() : null;
-        return submitBulkLoad(manager -> manager.begin(target, timeout, creator));
+        return submitBulkLoad(manager -> manager.begin(targets, timeout, creator));
     }
 
     @Override
@@ -413,8 +415,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<AbortBulkLoadResponse> abortBulkLoad(AbortBulkLoadRequest request) {
         BulkLoadHandle handle = requireHandle(request.hasHandle() ? request.getHandle() : null);
-        authorizeAbort(handle);
-        return submitBulkLoad(manager -> manager.abort(handle));
+        Session session = currentSession();
+        return CompletableFuture.runAsync(() -> authorizeAbort(handle, session), ioExecutor)
+                .thenCompose(ignored -> submitBulkLoad(manager -> manager.abort(handle)));
     }
 
     private <T> CompletableFuture<T> submitBulkLoad(
@@ -432,13 +435,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         AccessContextEvent<T> event = new AccessContextEvent<>(ignored -> action.get());
         eventManagerSupplier.get().put(event);
         return event.getResultFuture();
-    }
-
-    private PhysicalTablePath validateBulkLoadTarget(BeginBulkLoadRequest request) {
-        if (request.hasTimeoutMs() && request.getTimeoutMs() <= 0) {
-            throw new InvalidBulkLoadRequestException("Invalid BulkLoad Begin request.");
-        }
-        return validateBulkLoadTarget(request.hasTarget() ? request.getTarget() : null);
     }
 
     private PhysicalTablePath validateBulkLoadTarget(GetInProgressBulkLoadRequest request) {
@@ -479,16 +475,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private BulkLoadHandle requireHandle(@Nullable PbBulkLoadHandle handle) {
         if (handle == null
-                || !handle.hasTarget()
+                || !handle.hasTablePath()
                 || !handle.hasTableId()
                 || !handle.hasBulkLoadId()) {
             throw new InvalidBulkLoadRequestException("Malformed BulkLoad handle.");
         }
         try {
             return new BulkLoadHandle(
-                    validateBulkLoadTarget(handle.getTarget()),
+                    TablePath.of(
+                            handle.getTablePath().getDatabaseName(),
+                            handle.getTablePath().getTableName()),
                     handle.getTableId(),
-                    handle.hasPartitionId() ? handle.getPartitionId() : null,
                     handle.getBulkLoadId());
         } catch (RuntimeException e) {
             throw new InvalidBulkLoadRequestException("Malformed BulkLoad handle.", e);
@@ -496,22 +493,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private void authorizeCommit(BulkLoadHandle handle) {
-        BulkLoadTransaction transaction = BulkLoadManager.readTransaction(zkClient, handle);
         if (authorizer != null) {
             authorizer.authorize(
-                    currentSession(),
-                    OperationType.WRITE,
-                    Resource.table(transaction.getHandle().getTarget().getTablePath()));
+                    currentSession(), OperationType.WRITE, Resource.table(handle.getTablePath()));
         }
     }
 
-    private void authorizeAbort(BulkLoadHandle handle) {
-        BulkLoadTransaction transaction = BulkLoadManager.readTransaction(zkClient, handle);
+    private void authorizeAbort(BulkLoadHandle handle, Session session) {
         if (authorizer == null) {
             return;
         }
-        Session session = currentSession();
-        Resource resource = Resource.table(handle.getTarget().getTablePath());
+        BulkLoadTransaction transaction = BulkLoadManager.readTransaction(zkClient, handle);
+        Resource resource = Resource.table(handle.getTablePath());
         if (!isCreator(transaction, session)
                 && !authorizer.isAuthorized(session, OperationType.ALTER, resource)) {
             throw new AuthorizationException("Not authorized to abort this BulkLoad.");
@@ -1434,163 +1427,110 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizeTableWithSession(currentSession(), OperationType.DESCRIBE, tableId);
         }
 
-        return resolveBulkLoadReadTarget(tableId, partitionId)
-                .thenApplyAsync(
-                        target -> {
-                            validatePartitionOwnership(partitionId, tableId);
+        // Resolve numBuckets via event thread (CoordinatorContext is @NotThreadSafe)
+        CompletableFuture<Integer> numBucketsFuture = resolveNumBuckets(tableId, partitionId);
 
-                            CompletedSnapshotStoreManager storeManager =
-                                    snapshotStoreManagerSupplier.get();
-                            Map<Integer, Set<Long>> references;
-                            try {
-                                references =
-                                        readWithoutBulkLoad(
-                                                zkClient,
-                                                tableId,
-                                                partitionId,
-                                                target.registrationPath,
-                                                () -> {
-                                                    Map<Integer, Set<Long>> retained =
-                                                            storeManager
-                                                                    .getActiveSnapshotIdsByBucket(
-                                                                            tableId,
-                                                                            partitionId,
-                                                                            target.numBuckets);
-                                                    Map<Integer, Set<Long>> stillInUse =
-                                                            kvSnapshotLeaseManager
-                                                                    .getStillInUseSnapshotIds(
-                                                                            tableId, partitionId);
-                                                    stillInUse.forEach(
-                                                            (bucketId, ids) ->
-                                                                    retained.computeIfAbsent(
-                                                                                    bucketId,
-                                                                                    ignored ->
-                                                                                            new HashSet<>())
-                                                                            .addAll(ids));
-                                                    return retained;
-                                                });
-                            } catch (ApiException e) {
-                                throw e;
-                            } catch (Exception e) {
-                                throw new UnknownServerException(
-                                        "Failed to list active KV snapshots for tableId=" + tableId,
-                                        e);
-                            }
+        return numBucketsFuture.thenCompose(
+                numBuckets ->
+                        CompletableFuture.supplyAsync(
+                                () -> {
+                                    validatePartitionOwnership(partitionId, tableId);
 
-                            ListKvSnapshotsResponse response =
-                                    new ListKvSnapshotsResponse().setTableId(tableId);
-                            if (partitionId != null) {
-                                response.setPartitionId(partitionId);
-                            }
+                                    CompletedSnapshotStoreManager storeManager =
+                                            snapshotStoreManagerSupplier.get();
+                                    Map<Integer, Set<Long>> activeByBucket =
+                                            storeManager.getActiveSnapshotIdsByBucket(
+                                                    tableId, partitionId, numBuckets);
+                                    Map<Integer, Set<Long>> stillInUse =
+                                            kvSnapshotLeaseManager.getStillInUseSnapshotIds(
+                                                    tableId, partitionId);
 
-                            for (Map.Entry<Integer, Set<Long>> entry : references.entrySet()) {
-                                for (Long snapId : entry.getValue()) {
-                                    response.addActiveSnapshot()
-                                            .setBucketId(entry.getKey())
-                                            .setSnapshotId(snapId);
-                                }
-                            }
-                            return response;
-                        },
-                        ioExecutor);
+                                    ListKvSnapshotsResponse response =
+                                            new ListKvSnapshotsResponse().setTableId(tableId);
+                                    if (partitionId != null) {
+                                        response.setPartitionId(partitionId);
+                                    }
+
+                                    Set<Integer> allBucketIds =
+                                            new HashSet<>(activeByBucket.keySet());
+                                    allBucketIds.addAll(stillInUse.keySet());
+                                    for (int bucketId : allBucketIds) {
+                                        Set<Long> merged =
+                                                new LinkedHashSet<>(
+                                                        activeByBucket.getOrDefault(
+                                                                bucketId, Collections.emptySet()));
+                                        merged.addAll(
+                                                stillInUse.getOrDefault(
+                                                        bucketId, Collections.emptySet()));
+                                        for (Long snapId : merged) {
+                                            response.addActiveSnapshot()
+                                                    .setBucketId(bucketId)
+                                                    .setSnapshotId(snapId);
+                                        }
+                                    }
+                                    return response;
+                                },
+                                ioExecutor));
     }
 
-    // Cleanup must skip an owned target, including the ACTIVE publication phase. The final
-    // version check rejects Begin or Begin/Abort racing with the ordinary reference read.
-    static <T> T readWithoutBulkLoad(
-            ZooKeeperClient zkClient,
-            long tableId,
-            @Nullable Long partitionId,
-            String registrationPath,
-            Callable<T> reader)
-            throws Exception {
-        Stat epoch = zkClient.getDataWithStat(ZkData.CoordinatorEpochZNode.path()).getStat();
-        DataWithStat observed = zkClient.getDataWithStat(registrationPath);
-        String owner;
-        boolean sameTarget;
-        if (partitionId == null) {
-            TableRegistration registration = ZkData.TableZNode.decode(observed.getData());
-            sameTarget = registration.tableId == tableId;
-            owner = registration.bulkLoadId;
-        } else {
-            PartitionRegistration registration = ZkData.PartitionZNode.decode(observed.getData());
-            sameTarget =
-                    registration.getTableId() == tableId
-                            && registration.getPartitionId() == partitionId.longValue();
-            owner = registration.getBulkLoadId();
-        }
-        if (!sameTarget || owner != null) {
-            throw new InvalidBulkLoadRequestException(
-                    "Snapshot cleanup is unavailable for an owned or replaced BulkLoad target.");
-        }
-        T result = reader.call();
-        requireSameVersion(observed.getStat(), zkClient.getStat(registrationPath).orElse(null));
-        requireSameVersion(
-                epoch, zkClient.getStat(ZkData.CoordinatorEpochZNode.path()).orElse(null));
-        return result;
-    }
-
-    private static void requireSameVersion(Stat before, @Nullable Stat after) {
-        if (after == null
-                || before.getCzxid() != after.getCzxid()
-                || before.getVersion() != after.getVersion()) {
-            throw new TimeoutException("Snapshot cleanup target changed while reading references.");
-        }
-    }
-
-    private CompletableFuture<BulkLoadReadTarget> resolveBulkLoadReadTarget(
-            long tableId, @Nullable Long partitionId) {
-        AccessContextEvent<BulkLoadReadTarget> event =
+    private CompletableFuture<Integer> resolveNumBuckets(long tableId, @Nullable Long partitionId) {
+        AccessContextEvent<Integer> event =
                 new AccessContextEvent<>(
                         ctx -> {
-                            TablePath tablePath = ctx.getTablePathById(tableId);
-                            TableInfo tableInfo = ctx.getTableInfoById(tableId);
-                            if (tablePath == null || tableInfo == null) {
-                                return null;
-                            }
-                            int numBuckets = tableInfo.getNumBuckets();
-                            String registrationPath;
-                            if (partitionId == null) {
-                                registrationPath = ZkData.TableZNode.path(tablePath);
-                            } else {
+                            if (partitionId != null) {
+                                // for partitions, the table-level bucket count may differ from the
+                                // partition's actual bucket count after ALTER bucket.num; use the
+                                // partition assignment size instead
                                 Map<Integer, List<Integer>> partitionAssignment =
                                         ctx.getPartitionAssignment(
                                                 new TablePartition(tableId, partitionId));
-                                if (partitionAssignment.isEmpty()) {
-                                    return null;
-                                }
-                                numBuckets = partitionAssignment.size();
-                                Optional<PhysicalTablePath> path =
-                                        ctx.getPhysicalTablePath(partitionId);
-                                if (!path.isPresent()) {
-                                    return null;
-                                }
-                                registrationPath =
-                                        ZkData.PartitionZNode.path(
-                                                path.get().getTablePath(),
-                                                path.get().getPartitionName());
+                                return partitionAssignment.isEmpty()
+                                        ? null
+                                        : partitionAssignment.size();
                             }
-                            return new BulkLoadReadTarget(numBuckets, registrationPath);
+                            TablePath tablePath = ctx.getTablePathById(tableId);
+                            if (tablePath != null) {
+                                TableInfo tableInfo = ctx.getTableInfoById(tableId);
+                                if (tableInfo != null) {
+                                    return tableInfo.getNumBuckets();
+                                }
+                            }
+                            return null;
                         });
         eventManagerSupplier.get().put(event);
         return event.getResultFuture()
-                .thenApply(
-                        target -> {
-                            if (target == null) {
-                                throw new TableNotExistException(
-                                        "Physical table " + tableId + " does not exist");
+                .thenCompose(
+                        numBuckets -> {
+                            if (numBuckets != null) {
+                                return CompletableFuture.completedFuture(numBuckets);
                             }
-                            return target;
+                            return CompletableFuture.supplyAsync(
+                                    () -> resolveNumBucketsFromZk(tableId, partitionId),
+                                    ioExecutor);
                         });
     }
 
-    private static final class BulkLoadReadTarget {
-        private final int numBuckets;
-        private final String registrationPath;
-
-        private BulkLoadReadTarget(int numBuckets, String registrationPath) {
-            this.numBuckets = numBuckets;
-            this.registrationPath = registrationPath;
+    private int resolveNumBucketsFromZk(long tableId, @Nullable Long partitionId) {
+        try {
+            if (partitionId != null) {
+                Optional<PartitionAssignment> pAssignment =
+                        zkClient.getPartitionAssignment(partitionId);
+                if (!pAssignment.isPresent()) {
+                    throw new PartitionNotExistException(
+                            "Partition " + partitionId + " does not exist");
+                }
+                return pAssignment.get().getBuckets().size();
+            } else {
+                Optional<TableAssignment> assignment = zkClient.getTableAssignment(tableId);
+                if (!assignment.isPresent()) {
+                    throw new TableNotExistException("Table " + tableId + " does not exist");
+                }
+                return assignment.get().getBuckets().size();
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException("Failed to resolve table " + tableId + ": " + e.getMessage(), e);
         }
     }
 

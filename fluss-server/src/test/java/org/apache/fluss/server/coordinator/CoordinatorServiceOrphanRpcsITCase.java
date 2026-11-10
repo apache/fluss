@@ -17,8 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.exception.InvalidBulkLoadRequestException;
-import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -31,6 +30,8 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
@@ -40,11 +41,7 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
-import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -142,7 +139,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 0);
         CompletedSnapshotStore store = createTestStore(snapshot -> false);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId), "/table", 1, 1, 1);
+            store.add(createMinimalSnapshot(tb, snapId));
         }
         injectStore(tb, store);
 
@@ -167,7 +164,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 1);
         CompletedSnapshotStore store = createTestStore(snapshot -> snapshot.getSnapshotID() == 1L);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId), "/table", 1, 1, 1);
+            store.add(createMinimalSnapshot(tb, snapId));
         }
         injectStore(tb, store);
 
@@ -197,74 +194,57 @@ class CoordinatorServiceOrphanRpcsITCase {
     }
 
     @Test
-    void testSnapshotCleanupSkipsOwnedTargetsAndRejectsConcurrentBegin() throws Exception {
-        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        String path = ZkData.TableZNode.path(PK_TABLE_PATH);
-        TableRegistration active = ZkData.TableZNode.decode(zk.getDataWithStat(path).getData());
-        for (BulkLoadDataState state : BulkLoadDataState.values()) {
-            zk.getCuratorClient()
-                    .setData()
-                    .forPath(
-                            path,
-                            ZkData.TableZNode.encode(
-                                    active.withDataState(
-                                            state, "550e8400-e29b-41d4-a716-446655440000")));
-            assertThatThrownBy(
-                            () ->
-                                    CoordinatorService.readWithoutBulkLoad(
-                                            zk,
-                                            pkTableId,
-                                            null,
-                                            path,
-                                            () -> {
-                                                throw new AssertionError("Must skip owned target");
-                                            }))
-                    .isInstanceOf(InvalidBulkLoadRequestException.class);
+    void listSnapshotsFallsBackWhenContextLacksTablePath() throws Exception {
+        TableBucket bucket = new TableBucket(pkTableId, 0);
+        CompletedSnapshotStore store = createTestStore(snapshot -> false);
+        store.add(createMinimalSnapshot(bucket, 1L));
+        injectStore(bucket, store);
+        CoordinatorEventManager events =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessor()
+                        .getCoordinatorEventManager();
+        AccessContextEvent<Void> remove =
+                new AccessContextEvent<>(
+                        context -> {
+                            context.allTables().remove(pkTableId);
+                            return null;
+                        });
+        events.put(remove);
+        remove.getResultFuture().get();
+        try {
+            ListKvSnapshotsResponse response =
+                    FLUSS_CLUSTER_EXTENSION
+                            .newCoordinatorClient()
+                            .listKvSnapshots(new ListKvSnapshotsRequest().setTableId(pkTableId))
+                            .get();
+            assertThat(response.getActiveSnapshotsList())
+                    .extracting(PbKvSnapshot::getSnapshotId)
+                    .contains(1L);
+        } finally {
+            AccessContextEvent<Void> restore =
+                    new AccessContextEvent<>(
+                            context -> {
+                                context.putTablePath(pkTableId, PK_TABLE_PATH);
+                                return null;
+                            });
+            events.put(restore);
+            restore.getResultFuture().get();
         }
-        zk.getCuratorClient().setData().forPath(path, ZkData.TableZNode.encode(active));
+    }
+
+    @Test
+    void listSnapshotsForUnknownPartitionFails() {
+        ListKvSnapshotsRequest request =
+                new ListKvSnapshotsRequest().setTableId(pkTableId).setPartitionId(999_888L);
         assertThatThrownBy(
                         () ->
-                                CoordinatorService.readWithoutBulkLoad(
-                                        zk,
-                                        pkTableId,
-                                        null,
-                                        path,
-                                        () -> {
-                                            zk.getCuratorClient()
-                                                    .setData()
-                                                    .forPath(
-                                                            path,
-                                                            ZkData.TableZNode.encode(
-                                                                    active.withDataState(
-                                                                            BulkLoadDataState
-                                                                                    .LOADING,
-                                                                            "550e8400-e29b-41d4-a716-446655440000")));
-                                            zk.getCuratorClient()
-                                                    .setData()
-                                                    .forPath(
-                                                            path, ZkData.TableZNode.encode(active));
-                                            return Collections.emptyMap();
-                                        }))
-                .isInstanceOf(TimeoutException.class);
-        assertThat(
-                        CoordinatorService.readWithoutBulkLoad(
-                                zk, pkTableId, null, path, () -> Collections.singleton(88L)))
-                .containsExactly(88L);
-        String partitionPath = path + "/cleanup-partition";
-        zk.getCuratorClient()
-                .create()
-                .forPath(
-                        partitionPath,
-                        ZkData.PartitionZNode.encode(
-                                new PartitionRegistration(pkTableId, 71L, "file:///warehouse", 1)
-                                        .withDataState(
-                                                BulkLoadDataState.ACTIVE,
-                                                "550e8400-e29b-41d4-a716-446655440000")));
-        assertThatThrownBy(
-                        () ->
-                                CoordinatorService.readWithoutBulkLoad(
-                                        zk, pkTableId, 71L, partitionPath, Collections::emptyMap))
-                .isInstanceOf(InvalidBulkLoadRequestException.class);
+                                FLUSS_CLUSTER_EXTENSION
+                                        .newCoordinatorClient()
+                                        .listKvSnapshots(request)
+                                        .get())
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PartitionNotExistException.class);
     }
 
     // -------------------------------------------------------------------------
@@ -311,11 +291,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle,
-                String sourceMetadataPath,
-                int sourceMetadataVersion,
-                int coordinatorZkVersion,
-                int leaderAndIsrZkVersion) {}
+                CompletedSnapshotHandle completedSnapshotHandle) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) {}

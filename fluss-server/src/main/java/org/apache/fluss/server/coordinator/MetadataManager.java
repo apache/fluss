@@ -42,7 +42,6 @@ import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -60,6 +59,7 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
@@ -1388,6 +1388,28 @@ public class MetadataManager {
 
     // TODO: Make ownership checks atomic with DDL mutations (#5046).
     private void validateTableDdl(TablePath tablePath, TableRegistration registration) {
+        try {
+            for (String id :
+                    zookeeperClient.getChildren(
+                            ZkData.BulkLoadTableTransactionsZNode.path(registration.tableId))) {
+                org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction transaction =
+                        ZkData.BulkLoadTransactionsZNode.decode(
+                                zookeeperClient
+                                        .getDataWithStat(
+                                                ZkData.BulkLoadTableTransactionZNode.path(
+                                                        registration.tableId, id))
+                                        .getData());
+                if (!transaction.getState().isTerminal()) {
+                    throw new InvalidAlterTableException(
+                            "BulkLoad still owns targets in this table.");
+                }
+            }
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new FlussRuntimeException(
+                    "Failed to validate BulkLoad table transactions.", failure);
+        }
         validateNoBulkLoad(registration.bulkLoadId);
         if (registration.isPartitioned()) {
             try {
@@ -1401,28 +1423,6 @@ public class MetadataManager {
                 throw new FlussRuntimeException(
                         "Failed to validate BulkLoad state for table " + tablePath + ".", failure);
             }
-        }
-    }
-
-    void validateNoBulkLoad(PhysicalTablePath path, long tableId, @Nullable Long partitionId) {
-        if (partitionId == null) {
-            TableRegistration registration = getTableRegistration(path.getTablePath());
-            if (registration.tableId != tableId) {
-                throw new InvalidAlterTableException("Physical target identity changed.");
-            }
-            validateNoBulkLoad(registration.bulkLoadId);
-        } else {
-            PartitionRegistration registration =
-                    getOptionalPartitionRegistration(path.getTablePath(), path.getPartitionName())
-                            .orElseThrow(
-                                    () ->
-                                            new InvalidAlterTableException(
-                                                    "Physical target registration is missing."));
-            if (registration.getTableId() != tableId
-                    || registration.getPartitionId() != partitionId) {
-                throw new InvalidAlterTableException("Physical target identity changed.");
-            }
-            validateNoBulkLoad(registration.getBulkLoadId());
         }
     }
 

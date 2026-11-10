@@ -110,19 +110,15 @@ public final class BulkLoadResultGc {
 
     private List<Candidate> enumerateCandidates() throws Exception {
         List<Candidate> result = new ArrayList<>();
-        for (String scope :
-                Arrays.asList(
-                        ZkData.BulkLoadTableTransactionsZNode.path(),
-                        ZkData.BulkLoadPartitionTransactionsZNode.path())) {
-            for (String physicalId : zkClient.getChildren(scope)) {
-                String parent = scope + "/" + physicalId;
-                List<String> transactions = zkClient.getChildren(parent);
-                if (transactions.isEmpty()) {
-                    result.add(new Candidate(parent, true));
-                } else {
-                    for (String id : transactions) {
-                        result.add(new Candidate(parent + "/" + id, false));
-                    }
+        for (String physicalId :
+                zkClient.getChildren(ZkData.BulkLoadTableTransactionsZNode.path())) {
+            String parent = ZkData.BulkLoadTableTransactionsZNode.path() + "/" + physicalId;
+            List<String> transactions = zkClient.getChildren(parent);
+            if (transactions.isEmpty()) {
+                result.add(new Candidate(parent, true));
+            } else {
+                for (String id : transactions) {
+                    result.add(new Candidate(parent + "/" + id, false));
                 }
             }
         }

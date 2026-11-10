@@ -42,7 +42,6 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
-import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.KvFlushScheduler;
@@ -58,11 +57,9 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.TestingRemoteLogStorage;
-import org.apache.fluss.server.tablet.bulkload.BulkLoadTargetMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
@@ -101,7 +98,6 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
-import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -178,84 +174,6 @@ final class ReplicaTest extends ReplicaTestBase {
                                         new ListOffsetsParam(
                                                 -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
                 .isInstanceOf(NotLeaderOrFollowerException.class);
-    }
-
-    @Test
-    void testDeletedReplicaDoesNotRetainBulkLoadTargetIdentity() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "deleted_replica_identity");
-        long tableId =
-                registerTableInZkClient(
-                        tablePath,
-                        DATA1_SCHEMA,
-                        2998234L,
-                        Collections.emptyList(),
-                        Collections.emptyMap());
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
-        TableBucket tableBucket = new TableBucket(tableId, 1);
-        BulkLoadTargetMetadata oldIdentity =
-                new BulkLoadTargetMetadata(tableBucket, 10, BulkLoadDataState.ACTIVE);
-        assertThat(
-                        notifyLeaderWithIdentity(
-                                physicalTablePath, tableBucket, INITIAL_LEADER_EPOCH, oldIdentity))
-                .containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
-
-        deleteReplica(tableBucket);
-        assertThat(replicaManager.getReplica(tableBucket))
-                .isInstanceOf(ReplicaManager.NoneReplica.class);
-
-        BulkLoadTargetMetadata freshIdentity =
-                new BulkLoadTargetMetadata(tableBucket, 1, BulkLoadDataState.ACTIVE);
-        assertThat(
-                        notifyLeaderWithIdentity(
-                                physicalTablePath,
-                                tableBucket,
-                                INITIAL_LEADER_EPOCH + 1,
-                                freshIdentity))
-                .containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
-        assertThat(replicaManager.getReplicaOrException(tableBucket).getBulkLoadTargetMetadata())
-                .isEqualTo(freshIdentity);
-    }
-
-    @Test
-    void testDeletedOrphanReplicaDoesNotRetainBulkLoadTargetIdentity() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "deleted_orphan_replica_identity");
-        long tableId = 2998235L;
-        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
-        TableBucket tableBucket = new TableBucket(tableId, 1);
-        BulkLoadTargetMetadata oldIdentity =
-                new BulkLoadTargetMetadata(tableBucket, 10, BulkLoadDataState.ACTIVE);
-        assertThat(
-                        notifyLeaderWithIdentity(
-                                physicalTablePath, tableBucket, INITIAL_LEADER_EPOCH, oldIdentity))
-                .singleElement()
-                .satisfies(result -> assertThat(result.succeeded()).isFalse());
-        registerTableInZkClient(
-                tablePath, DATA1_SCHEMA, tableId, Collections.emptyList(), Collections.emptyMap());
-
-        File dataDir = localDiskManager.dataDirs().get(0);
-        File orphanLogDir =
-                logManager
-                        .getOrCreateLog(
-                                dataDir, physicalTablePath, tableBucket, LogFormat.ARROW, 1, false)
-                        .getLogDir();
-        assertThat(orphanLogDir).exists();
-        assertThat(replicaManager.getReplica(tableBucket))
-                .isInstanceOf(ReplicaManager.NoneReplica.class);
-
-        deleteReplica(tableBucket);
-        assertThat(orphanLogDir).doesNotExist();
-
-        BulkLoadTargetMetadata freshIdentity =
-                new BulkLoadTargetMetadata(tableBucket, 1, BulkLoadDataState.ACTIVE);
-        assertThat(
-                        notifyLeaderWithIdentity(
-                                physicalTablePath,
-                                tableBucket,
-                                INITIAL_LEADER_EPOCH,
-                                freshIdentity))
-                .containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
-        assertThat(replicaManager.getReplicaOrException(tableBucket).getBulkLoadTargetMetadata())
-                .isEqualTo(freshIdentity);
     }
 
     @Test
@@ -1386,34 +1304,6 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
     }
 
-    @SuppressWarnings("unchecked")
-    private List<NotifyLeaderAndIsrResultForBucket> notifyLeaderWithIdentity(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            int leaderEpoch,
-            BulkLoadTargetMetadata identity)
-            throws Exception {
-        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> result =
-                new CompletableFuture<>();
-        replicaManager.becomeLeaderOrFollower(
-                INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                physicalTablePath,
-                                tableBucket,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        leaderEpoch,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        leaderEpoch),
-                                identity)),
-                result::complete);
-        return result.get();
-    }
-
     private void deleteReplica(TableBucket tableBucket) throws Exception {
         CompletableFuture<List<StopReplicaResultForBucket>> deletion = new CompletableFuture<>();
         replicaManager.stopReplicas(
@@ -1453,6 +1343,157 @@ final class ReplicaTest extends ReplicaTestBase {
                 DATA1_TABLE_PATH,
                 new TableBucket(DATA1_TABLE_ID, 1),
                 INITIAL_LEADER_EPOCH);
+    }
+
+    @Test
+    void testImportedSnapshotRestorationPreservesSubsequentWrites(@TempDir File snapshotDir)
+            throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext source = new TestSnapshotContext(snapshotDir.getPath());
+        Replica producer = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, source);
+        makeKvReplicaAsLeader(producer);
+        putRecordsToLeader(producer, genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"})));
+        source.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot =
+                source.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        CompletedSnapshot external =
+                new CompletedSnapshot(
+                        bucket,
+                        snapshot.getSnapshotID(),
+                        snapshot.getSnapshotLocation(),
+                        snapshot.getKvSnapshotHandle(),
+                        10_017L,
+                        snapshot.getRowCount(),
+                        snapshot.getAutoIncIDRanges());
+        makeKvReplicaAsFollower(producer, 1);
+        producer.truncateFullyAndStartAt(0L);
+        AtomicBoolean published = new AtomicBoolean(false);
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return ignored -> published.get() ? external : null;
+                    }
+                };
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        makeKvReplicaAsLeader(replica, 2);
+        KvTablet emptyKv = replica.getKvTablet();
+        published.set(true);
+        makeKvReplicaAsLeader(replica, 2);
+        assertThat(replica.getKvTablet()).isSameAs(emptyKv);
+        assertThat(replica.getLocalLogEndOffset()).isZero();
+
+        NotifyLeaderAndIsrData restore =
+                new NotifyLeaderAndIsrData(
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        bucket,
+                        Collections.singletonList(TABLET_SERVER_ID),
+                        new LeaderAndIsr(
+                                TABLET_SERVER_ID,
+                                replica.getLeaderEpoch(),
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
+                                replica.getCoordinatorEpoch(),
+                                replica.getBucketEpoch()),
+                        3,
+                        0L,
+                        external.getSnapshotID());
+        assertThat(replica.restoreImportedSnapshot(restore, Runnable::run)).isFalse();
+        assertThat(replica.restoreImportedSnapshot(restore, Runnable::run)).isTrue();
+        assertThat(replica.getKvTablet()).isNotSameAs(emptyKv);
+        assertThat(replica.getLeaderEpoch()).isEqualTo(2);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(10_017L);
+        assertThat(replica.getLogHighWatermark()).isEqualTo(10_017L);
+        verifyGetKeyValues(
+                replica.getKvTablet(),
+                getKeyValuePairs(genKvRecords(Tuple2.of("k1", new Object[] {1, "a"}))));
+        putRecordsToLeader(replica, genKvRecordBatch(Tuple2.of("k2", new Object[] {2, "b"})));
+        KvTablet activeKv = replica.getKvTablet();
+        assertThat(replica.restoreImportedSnapshot(restore, Runnable::run)).isTrue();
+        assertThat(replica.getKvTablet()).isSameAs(activeKv);
+        verifyGetKeyValues(
+                replica.getKvTablet(),
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {1, "a"}),
+                                Tuple2.of("k2", new Object[] {2, "b"}))));
+    }
+
+    @Test
+    void testSuccessfulSnapshotDownloadIsReclaimedWhenKvOpenFails(@TempDir File snapshotDir)
+            throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext source = new TestSnapshotContext(snapshotDir.getPath());
+        Replica producer = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, source);
+        makeKvReplicaAsLeader(producer);
+        putRecordsToLeader(producer, genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"})));
+        source.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot =
+                source.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        makeKvReplicaAsFollower(producer, 1);
+        producer.truncateFullyAndStartAt(0L);
+        java.util.concurrent.atomic.AtomicReference<Path> downloaded =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        AtomicBoolean published = new AtomicBoolean();
+        String metadataPath =
+                org.apache.fluss.server.zk.data.ZkData.TableZNode.path(DATA1_TABLE_PATH_PK);
+        byte[] tableMetadata = zkClient.getDataWithStat(metadataPath).getData();
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return ignored -> published.get() ? snapshot : null;
+                    }
+
+                    @Override
+                    public org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader
+                            getSnapshotDataDownloader() {
+                        return new org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader(
+                                executorService) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec spec,
+                                    org.apache.fluss.utils.CloseableRegistry registry)
+                                    throws Exception {
+                                super.transferAllDataToDirectory(spec, registry);
+                                downloaded.set(spec.getDownloadDestination().getParent());
+                                zkClient.getCuratorClient()
+                                        .setData()
+                                        .forPath(metadataPath, new byte[0]);
+                            }
+                        };
+                    }
+                };
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        makeKvReplicaAsLeader(replica, 2);
+        published.set(true);
+        NotifyLeaderAndIsrData restore =
+                new NotifyLeaderAndIsrData(
+                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                        bucket,
+                        Collections.singletonList(TABLET_SERVER_ID),
+                        new LeaderAndIsr(
+                                TABLET_SERVER_ID,
+                                replica.getLeaderEpoch(),
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
+                                replica.getCoordinatorEpoch(),
+                                replica.getBucketEpoch()),
+                        3,
+                        0L,
+                        snapshot.getSnapshotID());
+        try {
+            assertThat(replica.restoreImportedSnapshot(restore, Runnable::run)).isFalse();
+            assertThat(downloaded.get()).isNotNull();
+            assertThat(java.nio.file.Files.exists(downloaded.get())).isFalse();
+            assertThat(replica.getKvTablet()).isNull();
+            replica.delete();
+            assertThat(java.nio.file.Files.exists(downloaded.get())).isFalse();
+        } finally {
+            zkClient.getCuratorClient().setData().forPath(metadataPath, tableMetadata);
+        }
     }
 
     private void makeKvReplicaAsLeader(Replica replica) throws Exception {

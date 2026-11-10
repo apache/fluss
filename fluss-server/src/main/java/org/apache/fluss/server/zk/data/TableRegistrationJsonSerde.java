@@ -19,7 +19,6 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableDescriptor.TableDistribution;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
@@ -52,7 +51,6 @@ public class TableRegistrationJsonSerde
     static final String CREATED_TIME = "created_time";
     static final String MODIFIED_TIME = "modified_time";
     static final String BUCKET_COUNT_EPOCH = "bucket_count_epoch";
-    static final String DATA_STATE = "data_state";
     static final String BULK_LOAD_ID = "bulk_load_id";
     private static final String VERSION_KEY = "version";
     static final int VERSION = 3;
@@ -123,7 +121,6 @@ public class TableRegistrationJsonSerde
         // serialize bucketCountEpoch
         generator.writeNumberField(BUCKET_COUNT_EPOCH, tableReg.bucketCountEpoch);
         if (tableReg.bulkLoadId != null) {
-            generator.writeNumberField(DATA_STATE, tableReg.dataState.getCode());
             generator.writeStringField(BULK_LOAD_ID, tableReg.bulkLoadId);
         }
 
@@ -177,20 +174,12 @@ public class TableRegistrationJsonSerde
         // read it as 0 (the table has never been ALTERed).
         long bucketCountEpoch =
                 node.has(BUCKET_COUNT_EPOCH) ? node.get(BUCKET_COUNT_EPOCH).asLong() : 0L;
-        BulkLoadDataState dataState = BulkLoadDataState.ACTIVE;
         String bulkLoadId = null;
         if (version == VERSION) {
-            JsonNode dataStateNode = node.get(DATA_STATE);
             JsonNode bulkLoadIdNode = node.get(BULK_LOAD_ID);
-            checkArgument(
-                    dataStateNode != null
-                            && dataStateNode.isIntegralNumber()
-                            && dataStateNode.canConvertToInt(),
-                    "TableRegistration version 3 data_state must be an integer.");
             checkArgument(
                     bulkLoadIdNode != null && bulkLoadIdNode.isTextual(),
                     "TableRegistration version 3 bulk_load_id must be a string.");
-            dataState = BulkLoadDataState.fromCode(dataStateNode.intValue());
             bulkLoadId = bulkLoadIdNode.textValue();
         }
 
@@ -205,7 +194,6 @@ public class TableRegistrationJsonSerde
                 createdTime,
                 modifiedTime,
                 bucketCountEpoch,
-                dataState,
                 bulkLoadId);
     }
 

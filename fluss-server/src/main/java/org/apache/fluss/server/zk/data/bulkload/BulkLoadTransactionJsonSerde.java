@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.BulkLoadAbortReason;
 import org.apache.fluss.metadata.BulkLoadHandle;
 import org.apache.fluss.metadata.BulkLoadState;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
@@ -30,6 +31,8 @@ import org.apache.fluss.utils.json.JsonSerializer;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -53,7 +56,8 @@ public final class BulkLoadTransactionJsonSerde
     private static final String CREATOR_TYPE = "creator_type";
     private static final String REMOTE_DATA_DIR = "remote_data_dir";
     private static final String SCHEMA_ID = "schema_id";
-    private static final String METADATA_VERSION = "metadata_version";
+    private static final String REGISTRATION_VERSION = "registration_version";
+    private static final String TARGETS = "targets";
     private static final String SNAPSHOT_IDS = "snapshot_ids";
     private static final String DEADLINE_MS = "deadline_ms";
     private static final String INPUT_SHA256 = "input_sha256";
@@ -69,26 +73,27 @@ public final class BulkLoadTransactionJsonSerde
         generator.writeNumberField(STATE, transaction.getState().getCode());
         generator.writeStringField(DATABASE_NAME, transaction.getDatabaseName());
         generator.writeStringField(TABLE_NAME, transaction.getTableName());
-        if (transaction.getPartitionName() != null) {
-            generator.writeStringField(PARTITION_NAME, transaction.getPartitionName());
-        }
         generator.writeNumberField(TABLE_ID, transaction.getTableId());
-        if (transaction.getPartitionId() != null) {
-            generator.writeNumberField(PARTITION_ID, transaction.getPartitionId());
-        }
         generator.writeStringField(CREATOR_NAME, transaction.getCreatorName());
         generator.writeStringField(CREATOR_TYPE, transaction.getCreatorType());
-        generator.writeStringField(REMOTE_DATA_DIR, transaction.getRemoteDataDir());
-        generator.writeNumberField(SCHEMA_ID, transaction.getSchemaId());
-        generator.writeNumberField(METADATA_VERSION, transaction.getMetadataVersion());
-        long[] snapshotIds = transaction.getSnapshotIds();
-        if (snapshotIds != null) {
+        generator.writeArrayFieldStart(TARGETS);
+        for (BulkLoadTarget target : transaction.getTargets()) {
+            generator.writeStartObject();
+            if (target.getPartitionId() != null) {
+                generator.writeStringField(PARTITION_NAME, target.getTarget().getPartitionName());
+                generator.writeNumberField(PARTITION_ID, target.getPartitionId());
+            }
+            generator.writeStringField(REMOTE_DATA_DIR, target.getRemoteDataDir());
+            generator.writeNumberField(SCHEMA_ID, target.getSchemaId());
+            generator.writeNumberField(REGISTRATION_VERSION, target.getRegistrationVersion());
             generator.writeArrayFieldStart(SNAPSHOT_IDS);
-            for (long snapshotId : snapshotIds) {
+            for (long snapshotId : target.getSnapshotIds()) {
                 generator.writeNumber(snapshotId);
             }
             generator.writeEndArray();
+            generator.writeEndObject();
         }
+        generator.writeEndArray();
         generator.writeNumberField(DEADLINE_MS, transaction.getDeadlineMs());
         if (transaction.getInputSha256() != null) {
             generator.writeStringField(INPUT_SHA256, transaction.getInputSha256());
@@ -107,24 +112,33 @@ public final class BulkLoadTransactionJsonSerde
         checkArgument(
                 node != null && node.isObject(), "BulkLoad transaction must be a JSON object.");
         checkVersion(node);
+        TablePath tablePath =
+                TablePath.of(requiredString(node, DATABASE_NAME), requiredString(node, TABLE_NAME));
         BulkLoadHandle handle =
                 new BulkLoadHandle(
-                        PhysicalTablePath.of(
-                                requiredString(node, DATABASE_NAME),
-                                requiredString(node, TABLE_NAME),
-                                optionalString(node, PARTITION_NAME)),
+                        tablePath,
                         requiredLong(node, TABLE_ID),
-                        optionalLong(node, PARTITION_ID),
                         requiredString(node, BULK_LOAD_ID));
+        JsonNode targetNodes = requiredNode(node, TARGETS);
+        checkArgument(targetNodes.isArray(), "BulkLoad field %s must be an array.", TARGETS);
+        List<BulkLoadTarget> targets = new ArrayList<>();
+        for (JsonNode target : targetNodes) {
+            checkArgument(target.isObject(), "BulkLoad target must be a JSON object.");
+            targets.add(
+                    new BulkLoadTarget(
+                            PhysicalTablePath.of(tablePath, optionalString(target, PARTITION_NAME)),
+                            optionalLong(target, PARTITION_ID),
+                            requiredString(target, REMOTE_DATA_DIR),
+                            requiredInt(target, SCHEMA_ID),
+                            requiredInt(target, REGISTRATION_VERSION),
+                            requiredSnapshotIds(target)));
+        }
         return new BulkLoadTransaction(
                 handle,
                 BulkLoadState.fromCode(requiredInt(node, STATE)),
                 requiredString(node, CREATOR_NAME),
                 requiredString(node, CREATOR_TYPE),
-                requiredString(node, REMOTE_DATA_DIR),
-                requiredInt(node, SCHEMA_ID),
-                requiredInt(node, METADATA_VERSION),
-                optionalSnapshotIds(node),
+                targets,
                 requiredLong(node, DEADLINE_MS),
                 optionalString(node, INPUT_SHA256),
                 node.has(ABORT_REASON)
@@ -178,11 +192,7 @@ public final class BulkLoadTransactionJsonSerde
         return node.has(field) ? requiredLong(node, field) : null;
     }
 
-    @Nullable
-    private static long[] optionalSnapshotIds(JsonNode node) {
-        if (!node.has(SNAPSHOT_IDS)) {
-            return null;
-        }
+    private static long[] requiredSnapshotIds(JsonNode node) {
         JsonNode value = requiredNode(node, SNAPSHOT_IDS);
         checkArgument(value.isArray(), "BulkLoad field %s must be an array.", SNAPSHOT_IDS);
         long[] snapshotIds = new long[value.size()];

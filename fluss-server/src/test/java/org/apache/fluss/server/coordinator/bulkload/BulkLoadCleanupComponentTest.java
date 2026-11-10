@@ -26,11 +26,14 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -122,10 +125,14 @@ class BulkLoadCleanupComponentTest {
                 BulkLoadState.ABORTED,
                 "alice",
                 "USER",
-                "file:///warehouse",
-                3,
-                0,
-                new long[] {7L},
+                Collections.singletonList(
+                        new BulkLoadTarget(
+                                PhysicalTablePath.of(TablePath.of("db", "table_" + tableId)),
+                                null,
+                                "file:///warehouse",
+                                3,
+                                0,
+                                new long[] {7L})),
                 100L,
                 SHA256,
                 BulkLoadAbortReason.ABORTED_BY_CALLER,
@@ -133,11 +140,7 @@ class BulkLoadCleanupComponentTest {
     }
 
     private static BulkLoadHandle handle(long tableId, String bulkLoadId) {
-        return new BulkLoadHandle(
-                PhysicalTablePath.of(TablePath.of("db", "table_" + tableId)),
-                tableId,
-                null,
-                bulkLoadId);
+        return new BulkLoadHandle(TablePath.of("db", "table_" + tableId), tableId, bulkLoadId);
     }
 
     private static String transactionPath(BulkLoadTransaction transaction) {

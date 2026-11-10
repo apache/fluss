@@ -95,6 +95,49 @@ class CoordinatorChannelManagerTest {
         coordinatorChannelManager.close();
     }
 
+    @Test
+    void testChannelRemovalCompletesAdmittedAndSubsequentRestoreRequests() throws Exception {
+        Configuration conf = new Configuration();
+        CoordinatorChannelManager manager =
+                new CoordinatorChannelManager(
+                        RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
+                        () -> 0,
+                        conf,
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        ServerNode server = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0);
+        manager.startup(Collections.singletonList(server));
+        java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+        CompletableFuture<ApiVersionsResponse> blocked = new CompletableFuture<>();
+        try {
+            manager.enqueueRequest(
+                    server.id(),
+                    ApiKeys.API_VERSIONS,
+                    0,
+                    gateway -> {
+                        started.countDown();
+                        return blocked;
+                    },
+                    null);
+            assertThat(started.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest request =
+                    new org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest()
+                            .setCoordinatorEpoch(0);
+            request.addNotifyBucketsLeaderReq().setRestoreSnapshotId(7L);
+            CompletableFuture<Throwable> admitted = new CompletableFuture<>();
+            manager.sendBucketLeaderAndIsrRequest(
+                    server.id(), request, (response, failure) -> admitted.complete(failure));
+            manager.removeTabletServer(server.id());
+            assertThat(admitted.get(5, java.util.concurrent.TimeUnit.SECONDS)).isNotNull();
+            assertThat(blocked.isCancelled()).isTrue();
+            CompletableFuture<Throwable> removed = new CompletableFuture<>();
+            manager.sendBucketLeaderAndIsrRequest(
+                    server.id(), request, (response, failure) -> removed.complete(failure));
+            assertThat(removed.get(5, java.util.concurrent.TimeUnit.SECONDS)).isNotNull();
+        } finally {
+            manager.close();
+        }
+    }
+
     private void checkEnqueueRequest(
             CoordinatorChannelManager coordinatorChannelManager,
             int targetServerId,

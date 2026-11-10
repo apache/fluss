@@ -32,6 +32,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
+import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -387,6 +389,21 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.NOTIFY_LEADER_AND_ISR && version < 1) {
+            NotifyLeaderAndIsrRequest request = (NotifyLeaderAndIsrRequest) rawRequest;
+            for (PbNotifyLeaderAndIsrReqForBucket bucket :
+                    request.getNotifyBucketsLeaderReqsList()) {
+                if (bucket.hasRestoreSnapshotId()) {
+                    throw new UnsupportedVersionException(
+                            "Snapshot restoration requires NOTIFY_LEADER_AND_ISR version 1 or newer, but server "
+                                    + node
+                                    + " negotiated version "
+                                    + version
+                                    + '.');
+                }
+            }
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

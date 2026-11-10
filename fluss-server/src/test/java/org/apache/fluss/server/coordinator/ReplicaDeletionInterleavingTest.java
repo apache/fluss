@@ -169,43 +169,6 @@ class ReplicaDeletionInterleavingTest extends CoordinatorEventProcessorTestBase 
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testLateLeaderFailureBeforeDeletionAdmission(boolean partitioned) throws Exception {
-        long blockingTableId =
-                createTable(TablePath.of(defaultDatabase, "blocking_leader_failure_drop"), 1);
-        DeferredDeletionGateway blockingGateway = new DeferredDeletionGateway();
-        gateways.put(1, blockingGateway);
-        DeferredLeaderFailureGateway oldGateway = new DeferredLeaderFailureGateway();
-        gateways.put(0, oldGateway);
-        TablePath tablePath = TablePath.of(defaultDatabase, "leader_failure_before_admission");
-        TableBucket bucket =
-                partitioned
-                        ? createPartition(tablePath, "p1")
-                        : new TableBucket(createTable(tablePath, 0, 1, 2), 0);
-        TableBucketReplica replica = new TableBucketReplica(bucket, 0);
-        oldGateway.notificationReceived.get(30, TimeUnit.SECONDS);
-
-        metadataManager.dropTable(
-                TablePath.of(defaultDatabase, "blocking_leader_failure_drop"), false);
-        blockingGateway.deletionRequested.get(30, TimeUnit.SECONDS);
-        if (partitioned) {
-            zookeeperClient.deletePartition(tablePath, "p1");
-        } else {
-            metadataManager.dropTable(tablePath, false);
-        }
-        verifyContext(ctx -> assertThat(ctx.isToBeDeleted(bucket)).isFalse());
-
-        oldGateway.releaseFailure.complete(null);
-        awaitReplicaState(replica, OfflineReplica);
-        gateways.put(0, new TestTabletServerGateway(false, Collections.emptySet()));
-        blockingGateway.allowDeletion.complete(null);
-        awaitAssignmentRemoved(blockingTableId);
-        retry(
-                Duration.ofSeconds(30),
-                () -> verifyContext(ctx -> assertThat(ctx.getReplicaState(replica)).isNull()));
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
     void testLateLeaderFailureDoesNotResetPendingDeletion(boolean partitioned) throws Exception {
         DeferredLeaderFailureGateway oldGateway = new DeferredLeaderFailureGateway();
         gateways.put(0, oldGateway);

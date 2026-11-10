@@ -333,7 +333,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         testingAdjustIsrZooKeeperClient = new TestingAdjustIsrZooKeeperClient(remoteDataDir);
         CoordinatorEventProcessor previousEventProcessor = eventProcessor;
         CoordinatorEventProcessor testingEventProcessor =
-                buildCoordinatorEventProcessor(testingAdjustIsrZooKeeperClient);
+                buildAdjustIsrEventProcessor(testingAdjustIsrZooKeeperClient);
         // Start the replacement first so it can load the existing table state before the original
         // processor is shut down. Failure injection is enabled only after startup initialization.
         testingEventProcessor.startup();
@@ -392,7 +392,7 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
         }
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor(
+    private CoordinatorEventProcessor buildAdjustIsrEventProcessor(
             ZooKeeperClient coordinatorZooKeeperClient) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
@@ -411,7 +411,9 @@ class CoordinatorEventProcessorAdjustIsrTest extends CoordinatorEventProcessorTe
                 metadataManager,
                 kvSnapshotLeaseManager,
                 scheduler,
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                new java.util.concurrent.Semaphore(
+                        conf.get(ConfigOptions.BULKLOAD_MAX_ACTIVE_TRANSACTIONS)));
     }
 
     private static final class TestingAdjustIsrZooKeeperClient extends ZooKeeperClient {

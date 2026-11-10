@@ -27,12 +27,9 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
-import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -75,9 +72,6 @@ public class CoordinatorContext {
     private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
 
-    // Registrations associated with installed communication facilities, not RPC handshakes.
-    private final Map<Integer, RegisteredTabletServer> boundTabletServerRegistrations =
-            new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
     // a map from the table bucket to the state of the bucket.
@@ -100,8 +94,6 @@ public class CoordinatorContext {
     private final Map<TablePath, Long> tableIdByPath = new HashMap<>();
     private final Map<Long, TableInfo> tableInfoById = new HashMap<>();
 
-    private final Map<String, ChildData> targetMetadata = new HashMap<>();
-
     private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr = new HashMap<>();
     private final Set<TableBucket> kvBuckets = new HashSet<>();
     private final Set<Long> tablesToBeDeleted = new HashSet<>();
@@ -116,10 +108,12 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
-    /** Tracks request-scoped NotifyLeaderAndIsr ownership for pending leader activations. */
-    private final Map<TableBucket, Set<Long>> pendingLeaderActivations = new HashMap<>();
-
-    private long nextPendingLeaderActivationId;
+    /**
+     * Tracks buckets where a leader change has been dispatched (via NotifyLeaderAndIsr) but not yet
+     * confirmed by the target server. A bucket enters this set when we send the notification and
+     * leaves it when the target server successfully responds confirming it is the leader.
+     */
+    private final Set<TableBucket> pendingLeaderActivationBuckets = new HashSet<>();
 
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
@@ -204,28 +198,6 @@ public class CoordinatorContext {
         this.coordinatorServerInfo = coordinatorServerInfo;
     }
 
-    /**
-     * Returns the read-only live view of registrations bound to installed TabletServer gateways.
-     */
-    public Map<Integer, RegisteredTabletServer> getBoundTabletServerRegistrations() {
-        return Collections.unmodifiableMap(boundTabletServerRegistrations);
-    }
-
-    /** Records a gateway binding during startup or on the Coordinator event thread. */
-    void bindTabletServerRegistration(RegisteredTabletServer registration) {
-        boundTabletServerRegistrations.put(registration.getServerId(), registration);
-    }
-
-    /** Invalidates a binding before its live server and communication facilities are removed. */
-    void unbindTabletServerRegistration(int serverId) {
-        boundTabletServerRegistrations.remove(serverId);
-    }
-
-    /** Clears gateway bindings before startup initializes its TabletServer registrations. */
-    void clearBoundTabletServerRegistrations() {
-        boundTabletServerRegistrations.clear();
-    }
-
     public void addLiveTabletServer(ServerInfo serverInfo) {
         this.liveTabletServers.put(serverInfo.id(), serverInfo);
     }
@@ -293,40 +265,24 @@ public class CoordinatorContext {
     // ---- Pending leader activation tracking (for Cluster Health API) ----
 
     public void addPendingLeaderActivation(TableBucket bucket) {
-        addPendingLeaderActivationAndGetId(bucket);
-    }
-
-    /** Adds one request-scoped ownership and returns the id needed to release that exact owner. */
-    public long addPendingLeaderActivationAndGetId(TableBucket bucket) {
-        long activationId = ++nextPendingLeaderActivationId;
-        pendingLeaderActivations
-                .computeIfAbsent(bucket, ignored -> new HashSet<>())
-                .add(activationId);
-        return activationId;
+        pendingLeaderActivationBuckets.add(bucket);
     }
 
     public void addPendingLeaderActivations(Collection<TableBucket> buckets) {
-        buckets.forEach(this::addPendingLeaderActivation);
+        pendingLeaderActivationBuckets.addAll(buckets);
     }
 
-    public void clearPendingLeaderActivation(TableBucket bucket, long activationId) {
-        Set<Long> activationIds = pendingLeaderActivations.get(bucket);
-        if (activationIds == null || !activationIds.remove(activationId)) {
-            return;
-        }
-        if (activationIds.isEmpty()) {
-            pendingLeaderActivations.remove(bucket);
-        }
+    public void clearPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.remove(bucket);
     }
 
     /**
      * Returns whether the given bucket has an active leader. A leader is considered active when:
      *
      * <ul>
-     *   <li>The bucket is in {@link BucketState#OnlineBucket}
      *   <li>A LeaderAndIsr record exists for the bucket
      *   <li>The leader is not {@link LeaderAndIsr#NO_LEADER}
-     *   <li>The leader replica is online according to {@link #isReplicaOnline(int, TableBucket)}
+     *   <li>The leader's tablet server is alive
      *   <li>The bucket is not pending leader activation confirmation
      * </ul>
      */
@@ -334,27 +290,22 @@ public class CoordinatorContext {
         return getBucketLeaderAndIsr(bucket)
                 .map(
                         lai ->
-                                getBucketState(bucket) == BucketState.OnlineBucket
-                                        && lai.leader() != LeaderAndIsr.NO_LEADER
-                                        && isReplicaOnline(lai.leader(), bucket)
-                                        && !pendingLeaderActivations.containsKey(bucket))
+                                lai.leader() != LeaderAndIsr.NO_LEADER
+                                        && liveTabletServers.containsKey(lai.leader())
+                                        && !pendingLeaderActivationBuckets.contains(bucket))
                 .orElse(false);
     }
 
     public Set<TableBucket> getPendingLeaderActivationBuckets() {
-        return Collections.unmodifiableSet(pendingLeaderActivations.keySet());
+        return Collections.unmodifiableSet(pendingLeaderActivationBuckets);
     }
 
     public void removeFromPendingLeaderActivations(Set<TableBucket> buckets) {
-        buckets.forEach(pendingLeaderActivations::remove);
+        pendingLeaderActivationBuckets.removeAll(buckets);
     }
 
     public Map<Long, TablePath> allTables() {
         return tablePathById;
-    }
-
-    public Map<Long, PhysicalTablePath> allPartitions() {
-        return pathByPartitionId;
     }
 
     /**
@@ -444,22 +395,6 @@ public class CoordinatorContext {
                                     }
                                 }));
         return replicasInServer;
-    }
-
-    /** Returns the cached registration snapshot for ordinary replica notifications. */
-    @Nullable
-    public ChildData getTargetMetadata(String path) {
-        return targetMetadata.get(path);
-    }
-
-    /** Caches registration data and its version from one read or successful write. */
-    public void cacheTargetMetadata(ChildData metadata) {
-        targetMetadata.put(metadata.getPath(), metadata);
-    }
-
-    /** Invalidates a registration before a local write or after a watcher notification. */
-    public void invalidateTargetMetadata(String path) {
-        targetMetadata.remove(path);
     }
 
     public void putTablePath(long tableId, TablePath tablePath) {
@@ -837,7 +772,6 @@ public class CoordinatorContext {
         TablePath tablePath = tablePathById.remove(tableId);
         if (tablePath != null) {
             tableIdByPath.remove(tablePath);
-            invalidateTargetMetadata(ZkData.TableZNode.path(tablePath));
         }
         tableInfoById.remove(tableId);
     }
@@ -866,10 +800,6 @@ public class CoordinatorContext {
                 pathByPartitionId.remove(tablePartition.getPartitionId());
         if (physicalTablePath != null) {
             partitionIdByPath.remove(physicalTablePath);
-            invalidateTargetMetadata(
-                    ZkData.PartitionZNode.path(
-                            physicalTablePath.getTablePath(),
-                            physicalTablePath.getPartitionName()));
         }
     }
 
@@ -898,13 +828,12 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
-        pendingLeaderActivations.clear();
+        pendingLeaderActivationBuckets.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();
         tableIdByPath.clear();
         tableInfoById.clear();
-        targetMetadata.clear();
         pathByPartitionId.clear();
         partitionIdByPath.clear();
         kvBuckets.clear();

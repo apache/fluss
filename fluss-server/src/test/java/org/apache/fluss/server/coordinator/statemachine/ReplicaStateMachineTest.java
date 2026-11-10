@@ -330,8 +330,7 @@ class ReplicaStateMachineTest {
                         (event) -> {
                             // do nothing
                         },
-                        coordinatorContext,
-                        zookeeperClient),
+                        coordinatorContext),
                 zookeeperClient);
     }
 
@@ -362,8 +361,7 @@ class ReplicaStateMachineTest {
                                 }
                             }
                         },
-                        coordinatorContext,
-                        zookeeperClient),
+                        coordinatorContext),
                 zookeeperClient);
     }
 

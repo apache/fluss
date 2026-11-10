@@ -77,6 +77,12 @@ class ApiKeysTest {
         assertApi(ApiKeys.GET_IN_PROGRESS_BULK_LOAD, 1079, 0, 0, PUBLIC);
     }
 
+    @Test
+    void testNotifyLeaderAndIsrVersionRange() {
+        assertThat(ApiKeys.NOTIFY_LEADER_AND_ISR.lowestSupportedVersion).isEqualTo((short) 0);
+        assertThat(ApiKeys.NOTIFY_LEADER_AND_ISR.highestSupportedVersion).isEqualTo((short) 1);
+    }
+
     private static void assertApi(
             ApiKeys api,
             int id,

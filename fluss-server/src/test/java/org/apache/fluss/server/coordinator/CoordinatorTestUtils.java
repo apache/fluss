@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.protocol.ApiKeys;
-import org.apache.fluss.server.metadata.RegisteredTabletServer;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -44,12 +43,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Utils related to coordinator for test purpose. */
 public class CoordinatorTestUtils {
-
-    /** Establishes a gateway registration binding for coordinator fixtures. */
-    public static void bindTabletServerRegistration(
-            CoordinatorContext context, RegisteredTabletServer registration) {
-        context.bindTabletServerRegistration(registration);
-    }
 
     /** Persists the table registration used by coordinator notification fixtures. */
     public static void registerTable(

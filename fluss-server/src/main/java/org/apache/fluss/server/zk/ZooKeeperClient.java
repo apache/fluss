@@ -92,7 +92,6 @@ import org.apache.fluss.server.zk.data.ZkData.TabletServerSessionFenceZNode;
 import org.apache.fluss.server.zk.data.ZkData.TabletServerSessionFencesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.server.zk.data.ZkVersion;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
@@ -268,6 +267,20 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Submits a bounded multi whose complete operation list has already been captured. */
     public Map<String, Stat> submitCheckedMulti(List<CuratorOp> operations) throws Exception {
+        validateCheckedMultiSize(operations);
+        Collection<CuratorTransactionResult> results =
+                zkClient.transaction().forOperations(operations);
+        Map<String, Stat> stats = new HashMap<>();
+        for (CuratorTransactionResult result : results) {
+            if (result.getResultStat() != null) {
+                stats.put(result.getForPath(), result.getResultStat());
+            }
+        }
+        return stats;
+    }
+
+    /** Verifies the configured serialized multi budget without executing the operations. */
+    public void validateCheckedMultiSize(List<CuratorOp> operations) throws Exception {
         CountingOutputStream output = new CountingOutputStream(ByteStreams.nullOutputStream());
         new MultiOperationRecord(
                         operations.stream().map(CuratorOp::get).collect(Collectors.toList()))
@@ -281,15 +294,6 @@ public class ZooKeeperClient implements AutoCloseable {
                             + maxMultiSerializedBytes
                             + '.');
         }
-        Collection<CuratorTransactionResult> results =
-                zkClient.transaction().forOperations(operations);
-        Map<String, Stat> stats = new HashMap<>();
-        for (CuratorTransactionResult result : results) {
-            if (result.getResultStat() != null) {
-                stats.put(result.getForPath(), result.getResultStat());
-            }
-        }
-        return stats;
     }
 
     /** Immutable result of one data+stat read. */
@@ -492,7 +496,6 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Ensures the static collection paths used by BulkLoad metadata. */
     public void ensureBulkLoadMetadataPaths() throws Exception {
         ensurePersistentPath(ZkData.BulkLoadTableTransactionsZNode.path());
-        ensurePersistentPath(ZkData.BulkLoadPartitionTransactionsZNode.path());
     }
 
     /** Get the tablet server registered in ZK. */
@@ -1467,42 +1470,6 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(path, BucketSnapshotIdZNode.encode(snapshot));
     }
 
-    /** Registers a snapshot under the observed coordinator, registration and leader versions. */
-    public void registerTableBucketSnapshot(
-            TableBucket tableBucket,
-            BucketSnapshot snapshot,
-            String sourceMetadataPath,
-            int sourceMetadataVersion,
-            int coordinatorZkVersion,
-            int leaderAndIsrZkVersion)
-            throws Exception {
-        String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
-        requireActiveSourceMetadata(tableBucket, sourceMetadataPath, sourceMetadataVersion);
-        List<CuratorOp> operations =
-                ordinaryCommitChecks(
-                        tableBucket,
-                        sourceMetadataPath,
-                        sourceMetadataVersion,
-                        coordinatorZkVersion,
-                        leaderAndIsrZkVersion);
-        String parent = BucketSnapshotsZNode.path(tableBucket);
-        CuratorOp createParent = zkOp.createOp(parent, null, CreateMode.PERSISTENT);
-        if (!pathExists(parent)) {
-            operations.add(createParent);
-        }
-        operations.add(
-                zkOp.createOp(path, BucketSnapshotIdZNode.encode(snapshot), CreateMode.PERSISTENT));
-        try {
-            zkClient.transaction().forOperations(operations);
-        } catch (KeeperException.NodeExistsException race) {
-            if (!operations.remove(createParent)) {
-                throw race;
-            }
-            // Another snapshot may have created the shared parent after the existence read.
-            zkClient.transaction().forOperations(operations);
-        }
-    }
-
     public void deleteTableBucketSnapshot(TableBucket tableBucket, long snapshotId)
             throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshotId);
@@ -1690,84 +1657,6 @@ public class ZooKeeperClient implements AutoCloseable {
             zkClient.create()
                     .creatingParentsIfNeeded()
                     .forPath(path, BucketRemoteLogsZNode.encode(remoteLogManifestHandle));
-        }
-    }
-
-    /**
-     * Upserts a remote-log manifest under the observed coordinator, registration and leader
-     * versions.
-     */
-    public void upsertRemoteLogManifestHandle(
-            TableBucket tableBucket,
-            RemoteLogManifestHandle remoteLogManifestHandle,
-            String sourceMetadataPath,
-            int sourceMetadataVersion,
-            int coordinatorZkVersion,
-            int leaderAndIsrZkVersion)
-            throws Exception {
-        String path = BucketRemoteLogsZNode.path(tableBucket);
-        requireActiveSourceMetadata(tableBucket, sourceMetadataPath, sourceMetadataVersion);
-        byte[] data = BucketRemoteLogsZNode.encode(remoteLogManifestHandle);
-        Optional<DataWithStat> current = getDataWithStatIfExists(path);
-        CuratorOp write =
-                current.isPresent()
-                        ? zkClient.transactionOp()
-                                .setData()
-                                .withVersion(current.get().getStat().getVersion())
-                                .forPath(path, data)
-                        : zkOp.createOp(path, data, CreateMode.PERSISTENT);
-        List<CuratorOp> operations =
-                ordinaryCommitChecks(
-                        tableBucket,
-                        sourceMetadataPath,
-                        sourceMetadataVersion,
-                        coordinatorZkVersion,
-                        leaderAndIsrZkVersion);
-        operations.add(write);
-        zkClient.transaction().forOperations(operations);
-    }
-
-    private List<CuratorOp> ordinaryCommitChecks(
-            TableBucket tableBucket,
-            String sourceMetadataPath,
-            int sourceMetadataVersion,
-            int coordinatorZkVersion,
-            int leaderAndIsrZkVersion)
-            throws Exception {
-        List<CuratorOp> operations = new ArrayList<>();
-        operations.add(zkOp.checkOp(ZkData.CoordinatorEpochZNode.path(), coordinatorZkVersion));
-        operations.add(zkOp.checkOp(LeaderAndIsrZNode.path(tableBucket), leaderAndIsrZkVersion));
-        operations.add(zkOp.checkOp(sourceMetadataPath, sourceMetadataVersion));
-        return operations;
-    }
-
-    private void requireActiveSourceMetadata(
-            TableBucket tableBucket, String sourceMetadataPath, int sourceMetadataVersion)
-            throws Exception {
-        DataWithStat metadata = getDataWithStat(sourceMetadataPath);
-        if (metadata.getStat().getVersion() != sourceMetadataVersion) {
-            throw new KeeperException.BadVersionException(sourceMetadataPath);
-        }
-        BulkLoadDataState state;
-        String bulkLoadId;
-        if (tableBucket.getPartitionId() == null) {
-            TableRegistration registration = TableZNode.decode(metadata.getData());
-            if (registration.tableId != tableBucket.getTableId()) {
-                throw new IllegalStateException("Source table metadata identity changed.");
-            }
-            state = registration.dataState;
-            bulkLoadId = registration.bulkLoadId;
-        } else {
-            PartitionRegistration registration = PartitionZNode.decode(metadata.getData());
-            if (registration.getTableId() != tableBucket.getTableId()
-                    || registration.getPartitionId() != tableBucket.getPartitionId()) {
-                throw new IllegalStateException("Source partition metadata identity changed.");
-            }
-            state = registration.getDataState();
-            bulkLoadId = registration.getBulkLoadId();
-        }
-        if (state != BulkLoadDataState.ACTIVE || bulkLoadId != null) {
-            throw new IllegalStateException("Source metadata is not ordinary ACTIVE metadata.");
         }
     }
 

@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -87,12 +86,12 @@ class ZooKeeperCompletedSnapshotStoreTest {
         SnapshotsCleanerTest.TestCompletedSnapshot snapshot1 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 0, snapshotPath);
 
-        KvTestUtils.commitSnapshot(zooKeeperClient, snapshotStore, snapshot1);
+        snapshotStore.add(snapshot1);
         assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot1);
 
         final SnapshotsCleanerTest.TestCompletedSnapshot snapshot2 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 1, snapshotPath);
-        KvTestUtils.commitSnapshot(zooKeeperClient, snapshotStore, snapshot2);
+        snapshotStore.add(snapshot2);
         final List<CompletedSnapshot> allSnapshots = snapshotStore.getAllSnapshots();
         assertThat(allSnapshots).containsExactly(snapshot2);
 
@@ -120,12 +119,12 @@ class ZooKeeperCompletedSnapshotStoreTest {
                                 new IOException("Snapshot deletion failed"));
                     }
                 };
-        KvTestUtils.commitSnapshot(zooKeeperClient, store, old);
+        store.add(old);
         CompletedSnapshot next =
                 SnapshotsCleanerTest.createSnapshot(
                         bucket, 1, FsPath.fromLocalFile(tmpDir.resolve("1").toFile()));
 
-        KvTestUtils.commitSnapshot(zooKeeperClient, store, next);
+        store.add(next);
 
         assertThat(discardAttempts).hasValue(1);
         assertThat(store.getAllSnapshots()).containsExactly(next);

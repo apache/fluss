@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableDescriptor.TableDistribution;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
 
 import javax.annotation.Nullable;
 
@@ -66,7 +65,6 @@ public class TableRegistration {
 
     public final long createdTime;
     public final long modifiedTime;
-    public final BulkLoadDataState dataState;
     public final @Nullable String bulkLoadId;
 
     /**
@@ -122,7 +120,6 @@ public class TableRegistration {
                 createdTime,
                 modifiedTime,
                 bucketCountEpoch,
-                BulkLoadDataState.ACTIVE,
                 null);
     }
 
@@ -137,12 +134,15 @@ public class TableRegistration {
             long createdTime,
             long modifiedTime,
             long bucketCountEpoch,
-            BulkLoadDataState dataState,
             @Nullable String bulkLoadId) {
         checkArgument(
                 tableDistribution.getBucketCount().isPresent(),
                 "Bucket count is required for table registration.");
-        validateDataState(dataState, bulkLoadId);
+        if (bulkLoadId != null) {
+            org.apache.fluss.utils.Preconditions.checkArgument(
+                    java.util.UUID.fromString(bulkLoadId).toString().equals(bulkLoadId),
+                    "BulkLoad ID must be a canonical UUID.");
+        }
         this.tableId = tableId;
         this.comment = comment;
         this.partitionKeys = partitionKeys;
@@ -154,7 +154,6 @@ public class TableRegistration {
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
         this.bucketCountEpoch = bucketCountEpoch;
-        this.dataState = dataState;
         this.bulkLoadId = bulkLoadId;
     }
 
@@ -230,7 +229,6 @@ public class TableRegistration {
                 createdTime,
                 currentMillis,
                 bucketCountEpoch,
-                dataState,
                 bulkLoadId);
     }
 
@@ -253,7 +251,6 @@ public class TableRegistration {
                 createdTime,
                 currentMillis,
                 bucketCountEpoch + 1,
-                dataState,
                 bulkLoadId);
     }
 
@@ -277,13 +274,11 @@ public class TableRegistration {
                 createdTime,
                 modifiedTime,
                 bucketCountEpoch,
-                dataState,
                 bulkLoadId);
     }
 
-    /** Returns a copy with the validated BulkLoad access state and transaction UUID. */
-    public TableRegistration withDataState(
-            BulkLoadDataState dataState, @Nullable String bulkLoadId) {
+    /** Returns a copy with the transaction UUID owning this target. */
+    public TableRegistration withBulkLoadId(@Nullable String bulkLoadId) {
         return new TableRegistration(
                 tableId,
                 comment,
@@ -295,7 +290,6 @@ public class TableRegistration {
                 createdTime,
                 modifiedTime,
                 bucketCountEpoch,
-                dataState,
                 bulkLoadId);
     }
 
@@ -320,7 +314,6 @@ public class TableRegistration {
                 && Objects.equals(properties, that.properties)
                 && Objects.equals(customProperties, that.customProperties)
                 && Objects.equals(remoteDataDir, that.remoteDataDir)
-                && dataState == that.dataState
                 && Objects.equals(bulkLoadId, that.bulkLoadId);
     }
 
@@ -338,7 +331,6 @@ public class TableRegistration {
                 createdTime,
                 modifiedTime,
                 bucketCountEpoch,
-                dataState,
                 bulkLoadId);
     }
 
@@ -368,17 +360,9 @@ public class TableRegistration {
                 + modifiedTime
                 + ", bucketCountEpoch="
                 + bucketCountEpoch
-                + ", dataState="
-                + dataState
                 + ", bulkLoadId='"
                 + bulkLoadId
                 + '\''
                 + '}';
-    }
-
-    private static void validateDataState(
-            BulkLoadDataState dataState, @Nullable String bulkLoadId) {
-        checkArgument(dataState != null, "BulkLoad data state must not be null.");
-        dataState.validateBulkLoadId(bulkLoadId);
     }
 }

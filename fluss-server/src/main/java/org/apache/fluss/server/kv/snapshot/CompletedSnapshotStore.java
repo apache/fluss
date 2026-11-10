@@ -110,33 +110,17 @@ public class CompletedSnapshotStore {
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
 
-    /** Adds a snapshot under the current registration, coordinator and leader versions. */
-    public void add(
-            final CompletedSnapshot completedSnapshot,
-            final String sourceMetadataPath,
-            final int sourceMetadataVersion,
-            final int coordinatorZkVersion,
-            final int leaderAndIsrZkVersion)
-            throws Exception {
+    /** Adds a completed snapshot after persisting its handle. */
+    public void add(final CompletedSnapshot completedSnapshot) throws Exception {
         checkNotNull(completedSnapshot, "Snapshot");
         inLock(
                 lock,
                 () -> {
-                    checkArgument(
-                            completedSnapshots.isEmpty()
-                                    || completedSnapshots.peekLast().getSnapshotID()
-                                            <= completedSnapshot.getSnapshotID(),
-                            "Cannot commit a snapshot older than the latest completed snapshot.");
                     CompletedSnapshotHandle handle = store(completedSnapshot);
                     completedSnapshotHandleStore.add(
                             completedSnapshot.getTableBucket(),
                             completedSnapshot.getSnapshotID(),
-                            handle,
-                            sourceMetadataPath,
-                            sourceMetadataVersion,
-                            coordinatorZkVersion,
-                            leaderAndIsrZkVersion);
-                    // The node is confirmed now. Only then expose shared handles and retention.
+                            handle);
                     adoptConfirmedSnapshot(completedSnapshot, snapshotsCleaner, () -> {});
                 });
     }

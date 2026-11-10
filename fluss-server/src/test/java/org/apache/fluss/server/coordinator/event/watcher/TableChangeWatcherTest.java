@@ -43,17 +43,12 @@ import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.zk.NOPErrorHandler;
-import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkVersion;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadDataState;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -109,73 +104,6 @@ class TableChangeWatcherTest {
             if (event instanceof AccessContextEvent && manager.getEvents().remove(event)) {
                 ((AccessContextEvent<?>) event).getAccessFunction().apply(context);
             }
-        }
-    }
-
-    @Test
-    void testRegistrationChangesInvalidateTableAndPartitionSnapshots() throws Exception {
-        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
-        TablePath table = TablePath.of(DEFAULT_DB, "cached_registration");
-        String tablePath = ZkData.TableZNode.path(table);
-        String partitionPath = ZkData.PartitionZNode.path(table, "p0");
-        try {
-            zookeeperClient
-                    .getCuratorClient()
-                    .create()
-                    .creatingParentsIfNeeded()
-                    .forPath(
-                            tablePath,
-                            ZkData.TableZNode.encode(
-                                    TableRegistration.newTable(720L, remoteDataDir, TEST_TABLE)));
-            zookeeperClient
-                    .getCuratorClient()
-                    .create()
-                    .creatingParentsIfNeeded()
-                    .forPath(
-                            partitionPath,
-                            ZkData.PartitionZNode.encode(
-                                    new PartitionRegistration(720L, 721L, remoteDataDir, 3)));
-            for (int round = 0; round < 2; round++) {
-                for (String path : new String[] {tablePath, partitionPath}) {
-                    ZooKeeperClient.DataWithStat read = zookeeperClient.getDataWithStat(path);
-                    context.cacheTargetMetadata(
-                            new ChildData(path, read.getStat(), read.getData()));
-                }
-                if (round == 1) {
-                    // Creation was already observed for both targets. Now change their data only.
-                    zookeeperClient
-                            .getCuratorClient()
-                            .setData()
-                            .forPath(
-                                    tablePath,
-                                    ZkData.TableZNode.encode(
-                                            TableRegistration.newTable(
-                                                            720L, remoteDataDir, TEST_TABLE)
-                                                    .withDataState(
-                                                            BulkLoadDataState.LOADING,
-                                                            "550e8400-e29b-41d4-a716-446655440000")));
-                    zookeeperClient
-                            .getCuratorClient()
-                            .setData()
-                            .forPath(
-                                    partitionPath,
-                                    ZkData.PartitionZNode.encode(
-                                            new PartitionRegistration(720L, 721L, remoteDataDir, 3)
-                                                    .withDataState(
-                                                            BulkLoadDataState.LOADING,
-                                                            "550e8400-e29b-41d4-a716-446655440000")));
-                }
-                retry(
-                        Duration.ofSeconds(10),
-                        () -> {
-                            applyMetadataChanges(eventManager, context);
-                            assertThat(context.getTargetMetadata(tablePath)).isNull();
-                            assertThat(context.getTargetMetadata(partitionPath)).isNull();
-                        });
-            }
-        } finally {
-            // This fixture owns LOADING registrations; ordinary DDL deliberately rejects them.
-            zookeeperClient.deleteTable(table);
         }
     }
 
