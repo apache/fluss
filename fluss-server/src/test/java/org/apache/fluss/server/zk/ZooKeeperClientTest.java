@@ -46,7 +46,6 @@ import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
-import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -278,6 +277,57 @@ class ZooKeeperClientTest {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testAssignmentsRetainSuccessfulNodesOnReadFailure(boolean partitioned) throws Exception {
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        1L, Collections.singletonMap(0, BucketAssignment.of(1, 2, 3)));
+        String successfulPath = partitioned ? PartitionIdZNode.path(1L) : TableIdZNode.path(1L);
+        String failedPath = partitioned ? PartitionIdZNode.path(2L) : TableIdZNode.path(2L);
+        byte[] data =
+                partitioned ? PartitionIdZNode.encode(assignment) : TableIdZNode.encode(assignment);
+        for (String path : Arrays.asList(successfulPath, failedPath)) {
+            zookeeperClient
+                    .getCuratorClient()
+                    .create()
+                    .creatingParentsIfNeeded()
+                    .forPath(path, data);
+        }
+
+        try (ZooKeeperClient failingClient = createClientWithReadFailure(failedPath)) {
+            Map<Long, ? extends TableAssignment> result =
+                    partitioned
+                            ? failingClient.getPartitionsAssignments(Arrays.asList(1L, 2L, 3L))
+                            : failingClient.getTablesAssignments(Arrays.asList(1L, 2L, 3L));
+            assertThat(result).containsOnlyKeys(1L);
+            assertThat(result.get(1L).getBucketAssignments())
+                    .isEqualTo(assignment.getBucketAssignments());
+        }
+    }
+
+    @Test
+    void testLeaderAndIsrsRetainSuccessfulNodesOnReadFailure() throws Exception {
+        TableBucket successfulBucket = new TableBucket(1L, 0);
+        TableBucket failedBucket = new TableBucket(1L, 1);
+        TableBucket missingBucket = new TableBucket(1L, 2);
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                successfulBucket, leaderAndIsr, zkEpoch.getCoordinatorEpochZkVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                failedBucket, leaderAndIsr, zkEpoch.getCoordinatorEpochZkVersion());
+
+        try (ZooKeeperClient failingClient =
+                createClientWithReadFailure(LeaderAndIsrZNode.path(failedBucket))) {
+            assertThat(
+                            failingClient.getLeaderAndIsrs(
+                                    Arrays.asList(successfulBucket, failedBucket, missingBucket)))
+                    .containsOnlyKeys(successfulBucket)
+                    .containsEntry(successfulBucket, leaderAndIsr);
+        }
+    }
+
+    @ParameterizedTest
     @CsvSource({"false, false", "false, true", "true, false", "true, true"})
     void testDescribeBucketsPropagatesReadFailures(boolean partitioned, boolean assignmentFailure)
             throws Exception {
@@ -332,25 +382,6 @@ class ZooKeeperClientTest {
                 partitioned ? PartitionIdZNode.path(1L) : TableIdZNode.path(tableId);
         String failedPath = assignmentFailure ? assignmentPath : LeaderAndIsrZNode.path(bucket);
         try (ZooKeeperClient failingClient = createClientWithReadFailure(failedPath)) {
-            if (assignmentFailure) {
-                if (partitioned) {
-                    assertThat(failingClient.getPartitionsAssignments(Collections.singleton(1L)))
-                            .isEmpty();
-                } else {
-                    assertThat(failingClient.getTablesAssignments(Collections.singleton(tableId)))
-                            .isEmpty();
-                }
-            } else {
-                assertThat(failingClient.getLeaderAndIsrs(Collections.singleton(bucket))).isEmpty();
-            }
-            Map<Long, List<BucketMetadata>> metadata =
-                    partitioned
-                            ? failingClient.getBucketMetadataForPartitions(
-                                    Collections.singleton(1L))
-                            : failingClient.getBucketMetadataForTables(
-                                    Collections.singleton(tableId));
-            assertThat(metadata.values().stream().mapToInt(List::size).sum())
-                    .isEqualTo(assignmentFailure ? 0 : 3);
             assertThatThrownBy(
                             () ->
                                     createDescribeBucketsService(failingClient, metadataManager)
@@ -1240,23 +1271,30 @@ class ZooKeeperClientTest {
                                 .namespace(zookeeperClient.getCuratorClient().getNamespace())
                                 .retryPolicy(new RetryOneTime(0)),
                         NOPErrorHandler.INSTANCE);
-        assertThat(curator.asCuratorFramework().blockUntilConnected(10, TimeUnit.SECONDS)).isTrue();
-        return new ZooKeeperClient(curator, configuration) {
-            @Override
-            List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
-                return super.getDataInBackground(paths).stream()
-                        .map(
-                                response ->
-                                        response.getPath().equals(failedPath)
-                                                ? new ZkGetDataResponse(
-                                                        failedPath,
-                                                        KeeperException.Code.CONNECTIONLOSS,
-                                                        null,
-                                                        null)
-                                                : response)
-                        .collect(Collectors.toList());
-            }
-        };
+        try {
+            assertThat(curator.asCuratorFramework().blockUntilConnected(10, TimeUnit.SECONDS))
+                    .isTrue();
+            return new ZooKeeperClient(curator, configuration) {
+                @Override
+                List<ZkGetDataResponse> getDataInBackground(Collection<String> paths)
+                        throws Exception {
+                    return super.getDataInBackground(paths).stream()
+                            .map(
+                                    response ->
+                                            response.getPath().equals(failedPath)
+                                                    ? new ZkGetDataResponse(
+                                                            failedPath,
+                                                            KeeperException.Code.CONNECTIONLOSS,
+                                                            null,
+                                                            null)
+                                                    : response)
+                            .collect(Collectors.toList());
+                }
+            };
+        } catch (InterruptedException | RuntimeException | Error failure) {
+            curator.close();
+            throw failure;
+        }
     }
 
     private static RpcServiceBase createDescribeBucketsService(
