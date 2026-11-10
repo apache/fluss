@@ -456,10 +456,22 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the tables assignments in ZK. */
     public Map<Long, TableAssignment> getTablesAssignments(Collection<Long> tableIds)
             throws Exception {
+        return getTablesAssignments(tableIds, false);
+    }
+
+    private Map<Long, TableAssignment> getTablesAssignments(
+            Collection<Long> tableIds, boolean throwOnError) throws Exception {
         Map<String, Long> path2TableIdMap =
                 tableIds.stream().collect(toMap(TableIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableIdMap.keySet());
+        if (!throwOnError) {
+            return processGetDataResponses(
+                    responses,
+                    response -> path2TableIdMap.get(response.getPath()),
+                    TableIdZNode::decode,
+                    "table assignment");
+        }
         return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableIdMap.get(response.getPath()),
@@ -475,10 +487,22 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the partitions assignments in ZK. */
     public Map<Long, PartitionAssignment> getPartitionsAssignments(Collection<Long> partitionIds)
             throws Exception {
+        return getPartitionsAssignments(partitionIds, false);
+    }
+
+    private Map<Long, PartitionAssignment> getPartitionsAssignments(
+            Collection<Long> partitionIds, boolean throwOnError) throws Exception {
         Map<String, Long> path2PartitionIdMap =
                 partitionIds.stream().collect(toMap(PartitionIdZNode::path, id -> id));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2PartitionIdMap.keySet());
+        if (!throwOnError) {
+            return processGetDataResponses(
+                    responses,
+                    response -> path2PartitionIdMap.get(response.getPath()),
+                    PartitionIdZNode::decode,
+                    "partition assignment");
+        }
         return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2PartitionIdMap.get(response.getPath()),
@@ -605,10 +629,22 @@ public class ZooKeeperClient implements AutoCloseable {
      */
     public Map<TableBucket, LeaderAndIsr> getLeaderAndIsrs(Collection<TableBucket> tableBuckets)
             throws Exception {
+        return getLeaderAndIsrs(tableBuckets, false);
+    }
+
+    private Map<TableBucket, LeaderAndIsr> getLeaderAndIsrs(
+            Collection<TableBucket> tableBuckets, boolean throwOnError) throws Exception {
         Map<String, TableBucket> path2TableBucketMap =
                 tableBuckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableBucketMap.keySet());
+        if (!throwOnError) {
+            return processGetDataResponses(
+                    responses,
+                    response -> path2TableBucketMap.get(response.getPath()),
+                    LeaderAndIsrZNode::decode,
+                    "leader and isr");
+        }
         return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2TableBucketMap.get(response.getPath()),
@@ -1980,11 +2016,22 @@ public class ZooKeeperClient implements AutoCloseable {
      */
     public Map<Long, List<BucketMetadata>> getBucketMetadataForTables(Collection<Long> tableIds)
             throws Exception {
+        return getBucketMetadataForTables(tableIds, false);
+    }
+
+    /** Reads table bucket metadata, propagating ZooKeeper errors other than missing nodes. */
+    public Map<Long, List<BucketMetadata>> getBucketMetadataForTablesOrThrow(
+            Collection<Long> tableIds) throws Exception {
+        return getBucketMetadataForTables(tableIds, true);
+    }
+
+    private Map<Long, List<BucketMetadata>> getBucketMetadataForTables(
+            Collection<Long> tableIds, boolean throwOnError) throws Exception {
         // The replica assignments map may not contain all tableIds
         Map<Long, List<BucketMetadata>> result = new HashMap<>();
         // initialize result with all table ids.
         tableIds.forEach(id -> result.put(id, new ArrayList<>()));
-        Map<Long, TableAssignment> tablesAssignments = getTablesAssignments(tableIds);
+        Map<Long, TableAssignment> tablesAssignments = getTablesAssignments(tableIds, throwOnError);
         List<TableBucket> buckets = new ArrayList<>();
         tablesAssignments.forEach(
                 (tableId, assignment) -> {
@@ -1992,7 +2039,7 @@ public class ZooKeeperClient implements AutoCloseable {
                         buckets.add(new TableBucket(tableId, null, bucketId));
                     }
                 });
-        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = getLeaderAndIsrs(buckets);
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = getLeaderAndIsrs(buckets, throwOnError);
         // The LeaderAndIsr map may not contain all buckets, so we iterate on assignment buckets
         for (TableBucket bucket : buckets) {
             int bucketId = bucket.getBucket();
@@ -2016,9 +2063,20 @@ public class ZooKeeperClient implements AutoCloseable {
      */
     public Map<Long, List<BucketMetadata>> getBucketMetadataForPartitions(
             Collection<Long> partitionIds) throws Exception {
+        return getBucketMetadataForPartitions(partitionIds, false);
+    }
+
+    /** Reads partition bucket metadata, propagating ZooKeeper errors other than missing nodes. */
+    public Map<Long, List<BucketMetadata>> getBucketMetadataForPartitionsOrThrow(
+            Collection<Long> partitionIds) throws Exception {
+        return getBucketMetadataForPartitions(partitionIds, true);
+    }
+
+    private Map<Long, List<BucketMetadata>> getBucketMetadataForPartitions(
+            Collection<Long> partitionIds, boolean throwOnError) throws Exception {
         // The replica assignments map may not contain all partitionIds
         Map<Long, PartitionAssignment> partitionsAssignments =
-                getPartitionsAssignments(partitionIds);
+                getPartitionsAssignments(partitionIds, throwOnError);
         List<TableBucket> buckets = new ArrayList<>();
         partitionsAssignments.forEach(
                 (partitionId, assignment) -> {
@@ -2028,7 +2086,7 @@ public class ZooKeeperClient implements AutoCloseable {
                     }
                 });
         // The LeaderAndIsr map may not contain all buckets
-        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = getLeaderAndIsrs(buckets);
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = getLeaderAndIsrs(buckets, throwOnError);
         Map<Long, List<BucketMetadata>> result = new HashMap<>();
         for (TableBucket bucket : buckets) {
             int bucketId = bucket.getBucket();

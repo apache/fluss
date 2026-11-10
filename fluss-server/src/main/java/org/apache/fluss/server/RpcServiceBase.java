@@ -391,7 +391,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private Map<Long, List<BucketMetadata>> getPartitionBucketMetadataForDescribeBuckets(
             TablePath tablePath, Collection<Long> partitionIds) {
         try {
-            return zkClient.getBucketMetadataForPartitions(partitionIds);
+            return zkClient.getBucketMetadataForPartitionsOrThrow(partitionIds);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to describe buckets for table '%s'.", tablePath), e);
@@ -401,7 +401,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private List<BucketMetadata> getTableBucketMetadataForDescribeBuckets(
             TablePath tablePath, long tableId) {
         try {
-            return zkClient.getBucketMetadataForTables(Collections.singleton(tableId))
+            return zkClient.getBucketMetadataForTablesOrThrow(Collections.singleton(tableId))
                     .getOrDefault(tableId, Collections.emptyList());
         } catch (Exception e) {
             throw new FlussRuntimeException(
