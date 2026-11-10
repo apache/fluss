@@ -2570,6 +2570,16 @@ public class ConfigOptions {
                                     + "and requires a TabletServer restart to take effect. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<MemorySize> KV_COMPACTION_READAHEAD_SIZE =
+            key("kv.rocksdb.compaction.readahead-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription(
+                            "The amount of data to prefetch when reading RocksDB SST files during compaction. "
+                                    + "A value of `0` disables compaction readahead. "
+                                    + "This applies to primary key tables and requires a TabletServer restart to take effect. "
+                                    + "The default value is `2MB`.");
+
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
                     .memoryType()
