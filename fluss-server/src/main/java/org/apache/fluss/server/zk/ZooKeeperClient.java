@@ -2275,6 +2275,8 @@ public class ZooKeeperClient implements AutoCloseable {
             V value = decoder.apply(response.getData());
             if (value != null) {
                 result.put(keyExtractor.apply(response), value);
+            } else {
+                LOG.warn("Data is empty for path {}", response.getPath());
             }
         }
         return result;
