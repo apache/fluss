@@ -71,16 +71,15 @@ public class UndoComputer {
         this.writer = writer;
     }
 
-    @Nullable
-    ByteArrayWrapper selectKey(
+    boolean selectRecord(
             LogRecord record,
             Set<ByteArrayWrapper> processedKeys,
             Set<ByteArrayWrapper> selectedKeys) {
         if (record.getChangeType() == ChangeType.UPDATE_AFTER) {
-            return null;
+            return false;
         }
         ByteArrayWrapper key = new ByteArrayWrapper(keyEncoder.encodeKey(record.getRow()));
-        return !processedKeys.contains(key) && selectedKeys.add(key) ? key : null;
+        return !processedKeys.contains(key) && selectedKeys.add(key);
     }
 
     /**
@@ -100,13 +99,9 @@ public class UndoComputer {
             return null;
         }
 
-        return processRecord(
-                record, new ByteArrayWrapper(keyEncoder.encodeKey(record.getRow())), processedKeys);
-    }
+        byte[] encodedKey = keyEncoder.encodeKey(record.getRow());
+        ByteArrayWrapper keyWrapper = new ByteArrayWrapper(encodedKey);
 
-    @Nullable
-    CompletableFuture<Long> processRecord(
-            ScanRecord record, ByteArrayWrapper keyWrapper, Set<ByteArrayWrapper> processedKeys) {
         // Skip if we already processed this key
         if (processedKeys.contains(keyWrapper)) {
             return null;

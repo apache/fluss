@@ -70,15 +70,14 @@ class UndoComputerTest {
         Set<ByteArrayWrapper> selected = new HashSet<>();
         ScanRecord before = new ScanRecord(0, 0, ChangeType.UPDATE_BEFORE, row(1, "old", 100));
         ScanRecord after = new ScanRecord(1, 0, ChangeType.UPDATE_AFTER, row(1, "new", 200));
-        assertThat(undoComputer.selectKey(after, processed, selected)).isNull();
+        assertThat(undoComputer.selectRecord(after, processed, selected)).isFalse();
         assertThat(selected).isEmpty();
-        ByteArrayWrapper key = undoComputer.selectKey(before, processed, selected);
-        assertThat(key).isNotNull();
-        assertThat(undoComputer.selectKey(before, processed, selected)).isNull();
+        assertThat(undoComputer.selectRecord(before, processed, selected)).isTrue();
+        assertThat(undoComputer.selectRecord(before, processed, selected)).isFalse();
         assertThat(processed).isEmpty();
         assertThat(mockWriter.getUpsertCount()).isZero();
-        undoComputer.processRecord(before, key, processed);
-        assertThat(undoComputer.selectKey(before, processed, new HashSet<>())).isNull();
+        undoComputer.processRecord(before, processed);
+        assertThat(undoComputer.selectRecord(before, processed, new HashSet<>())).isFalse();
         assertThat(mockWriter.getAllUpsertedRows()).containsExactly(before.getRow());
     }
 

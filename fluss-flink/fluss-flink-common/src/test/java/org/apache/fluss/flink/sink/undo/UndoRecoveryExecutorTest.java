@@ -43,7 +43,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiPredicate;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -92,13 +91,6 @@ class UndoRecoveryExecutorTest {
     @Test
     void testFilteredRecoveryIsolatesBucketKeysAndCompletesFromEmptyPollProgress()
             throws Exception {
-        AtomicInteger encodedKeys = new AtomicInteger();
-        KeyEncoder countingEncoder =
-                record -> {
-                    encodedKeys.incrementAndGet();
-                    return keyEncoder.encodeKey(record);
-                };
-        undoComputer = new UndoComputer(countingEncoder, mockWriter);
         TableBucket bucket0 = new TableBucket(TABLE_ID, 0);
         TableBucket bucket1 = new TableBucket(TABLE_ID, 1);
         BucketRecoveryContext ctx0 = new BucketRecoveryContext(bucket0, 0L, 3L);
@@ -126,14 +118,7 @@ class UndoRecoveryExecutorTest {
                             assertThat(ctx0.getProcessedKeys()).isEmpty();
                             assertThat(ctx1.getProcessedKeys()).isEmpty();
                             Map<TableBucket, List<ScanRecord>> selected = new HashMap<>();
-                            selected.put(
-                                    bucket0,
-                                    Collections.singletonList(
-                                            new ScanRecord(
-                                                    0L,
-                                                    0L,
-                                                    ChangeType.UPDATE_BEFORE,
-                                                    row(1, "bucket0", 100))));
+                            selected.put(bucket0, Collections.singletonList(first0));
                             selected.put(bucket1, Collections.singletonList(first1));
                             Map<TableBucket, Long> progress = new HashMap<>();
                             progress.put(bucket0, 2L);
@@ -166,7 +151,6 @@ class UndoRecoveryExecutorTest {
         assertThat(ctx1.getProcessedKeys()).isEmpty();
         assertThat(ctx0.getTotalUndoOperations()).isEqualTo(1);
         assertThat(ctx1.getTotalUndoOperations()).isEqualTo(1);
-        assertThat(encodedKeys.get()).isEqualTo(4);
         verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
         verify(scanner).unsubscribe(0);
         verify(scanner).unsubscribe(1);

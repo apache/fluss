@@ -28,12 +28,8 @@ import org.apache.fluss.utils.ByteArrayWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
 import java.time.Duration;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -46,8 +42,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Executes undo recovery for multiple buckets using streaming execution.
@@ -252,9 +246,7 @@ public class UndoRecoveryExecutor {
                 contextsByBucket.put(context.getBucket(), context);
             }
             ScanRecords records;
-            Map<TableBucket, Deque<SelectedKey>> encodedKeys =
-                    scanner instanceof LogScannerImpl ? new HashMap<>() : null;
-            if (encodedKeys != null) {
+            if (scanner instanceof LogScannerImpl) {
                 // Reserve keys only within this poll. Persistent deduplication is updated after
                 // the selected rows have been copied and their undo writes have been submitted.
                 Map<TableBucket, Set<ByteArrayWrapper>> selectedKeys = new HashMap<>();
@@ -271,23 +263,11 @@ public class UndoRecoveryExecutor {
                                                             >= context.getLogEndOffset()) {
                                                 return false;
                                             }
-                                            ByteArrayWrapper key =
-                                                    undoComputer.selectKey(
-                                                            record,
-                                                            context.getProcessedKeys(),
-                                                            selectedKeys.computeIfAbsent(
-                                                                    bucket,
-                                                                    ignored -> new HashSet<>()));
-                                            if (key == null) {
-                                                return false;
-                                            }
-                                            encodedKeys
-                                                    .computeIfAbsent(
-                                                            bucket, ignored -> new ArrayDeque<>())
-                                                    .addLast(
-                                                            new SelectedKey(
-                                                                    record.logOffset(), key));
-                                            return true;
+                                            return undoComputer.selectRecord(
+                                                    record,
+                                                    context.getProcessedKeys(),
+                                                    selectedKeys.computeIfAbsent(
+                                                            bucket, ignored -> new HashSet<>()));
                                         });
             } else {
                 records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
@@ -315,16 +295,7 @@ public class UndoRecoveryExecutor {
                 BucketRecoveryContext ctx = activeIterator.next();
                 List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
                 if (!bucketRecords.isEmpty()) {
-                    processRecords(
-                            ctx,
-                            bucketRecords,
-                            encodedKeys == null
-                                    ? null
-                                    : checkNotNull(
-                                            encodedKeys.get(ctx.getBucket()),
-                                            "Missing selected keys"),
-                            pendingWrites,
-                            recoveredOffsets);
+                    processRecords(ctx, bucketRecords, pendingWrites, recoveredOffsets);
                 }
                 Long consumedUpToOffset = records.consumedUpToOffset(ctx.getBucket());
                 if (consumedUpToOffset != null) {
@@ -382,7 +353,6 @@ public class UndoRecoveryExecutor {
     private void processRecords(
             BucketRecoveryContext ctx,
             List<ScanRecord> records,
-            @Nullable Deque<SelectedKey> selectedKeys,
             List<CompletableFuture<?>> futures,
             Map<TableBucket, Long> recoveredOffsets)
             throws Exception {
@@ -392,18 +362,7 @@ public class UndoRecoveryExecutor {
             if (record.logOffset() >= ctx.getLogEndOffset()) {
                 continue;
             }
-            CompletableFuture<Long> future;
-            if (selectedKeys == null) {
-                future = undoComputer.processRecord(record, processedKeys);
-            } else {
-                SelectedKey selected = selectedKeys.pollFirst();
-                checkState(
-                        selected != null && selected.offset == record.logOffset(),
-                        "Selected key does not match the materialized record for bucket %s at offset %s",
-                        bucket,
-                        record.logOffset());
-                future = undoComputer.processRecord(record, selected.key, processedKeys);
-            }
+            CompletableFuture<Long> future = undoComputer.processRecord(record, processedKeys);
             if (future != null) {
                 ctx.recordUndoOperation();
                 futures.add(
@@ -423,16 +382,6 @@ public class UndoRecoveryExecutor {
         if (!futures.isEmpty()) {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
             futures.clear();
-        }
-    }
-
-    private static class SelectedKey {
-        private final long offset;
-        private final ByteArrayWrapper key;
-
-        private SelectedKey(long offset, ByteArrayWrapper key) {
-            this.offset = offset;
-            this.key = key;
         }
     }
 
