@@ -106,7 +106,9 @@ public final class FlussConnection implements Connection {
     @Override
     public Table getTable(TablePath tablePath) {
         Admin admin = getOrCreateAdmin();
+        // Check access first because metadata responses omit unauthorized tables.
         TableInfo tableInfo = admin.getTableInfo(tablePath).join();
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         metadataUpdater.ensureTableMapping(tableInfo);
         return new FlussTable(this, tablePath, tableInfo);
     }
