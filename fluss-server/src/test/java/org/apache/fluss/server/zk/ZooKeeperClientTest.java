@@ -37,15 +37,18 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
+import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -371,12 +374,27 @@ class ZooKeeperClientTest {
                 zkEpoch.getCoordinatorEpochZkVersion());
         DescribeBucketsRequest request = new DescribeBucketsRequest();
         request.setTablePath().setDatabaseName("db").setTableName("table");
-        assertThat(
-                        createDescribeBucketsService(zookeeperClient, metadataManager)
-                                .describeBuckets(request)
-                                .get()
-                                .getBucketInfosCount())
-                .isEqualTo(3);
+        DescribeBucketsResponse response =
+                createDescribeBucketsService(zookeeperClient, metadataManager)
+                        .describeBuckets(request)
+                        .get();
+        assertThat(response.getBucketInfosList())
+                .extracting(PbBucketInfo::getBucketId)
+                .containsExactly(0, 1, 2);
+        assertThat(response.getBucketInfosList())
+                .allSatisfy(info -> assertThat(info.getReplicaIds()).containsExactly(1, 2, 3));
+        PbBucketInfo bucketWithLeader = response.getBucketInfosList().get(0);
+        assertThat(bucketWithLeader.getLeaderId()).isEqualTo(1);
+        assertThat(bucketWithLeader.getIsrs()).containsExactly(1);
+        assertThat(bucketWithLeader.getBucketEpoch()).isZero();
+        assertThat(response.getBucketInfosList().subList(1, 3))
+                .allSatisfy(
+                        info -> {
+                            assertThat(info.hasLeaderId()).isFalse();
+                            assertThat(info.getIsrs()).isEmpty();
+                            assertThat(info.getBucketEpoch())
+                                    .isEqualTo(BucketMetadata.NO_LEADER_ISR_STATE_EPOCH);
+                        });
 
         String assignmentPath =
                 partitioned ? PartitionIdZNode.path(1L) : TableIdZNode.path(tableId);
