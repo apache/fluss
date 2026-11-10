@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -92,6 +93,84 @@ class MetadataUpdateITCase {
                         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+    }
+
+    @Test
+    void testPartitionTombstoneLifecycle() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "tombstone_lifecycle");
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .partitionedBy("b")
+                                .distributedBy(3)
+                                .build());
+        PartitionSpec first = new PartitionSpec(Collections.singletonMap("b", "first"));
+        PartitionSpec second = new PartitionSpec(Collections.singletonMap("b", "second"));
+        createPartition(FLUSS_CLUSTER_EXTENSION, tablePath, first, false);
+        createPartition(FLUSS_CLUSTER_EXTENSION, tablePath, second, false);
+        long firstId = zkClient.getPartition(tablePath, "first").get().getPartitionId();
+        long secondId = zkClient.getPartition(tablePath, "second").get().getPartitionId();
+
+        coordinatorGateway.dropPartition(newDropPartitionRequest(tablePath, second, false)).get();
+        assertThat(zkClient.getPartitionTombstone(tablePath).getExplicitSet()).contains(secondId);
+        assertThat(zkClient.getPartitionTombstone(tablePath).isTombstoned(firstId)).isFalse();
+
+        createPartition(FLUSS_CLUSTER_EXTENSION, tablePath, second, false);
+        long recreatedId = zkClient.getPartition(tablePath, "second").get().getPartitionId();
+        assertThat(recreatedId).isGreaterThan(secondId);
+        coordinatorGateway.dropPartition(newDropPartitionRequest(tablePath, first, false)).get();
+        PartitionTombstone expected = zkClient.getPartitionTombstone(tablePath);
+        assertThat(expected.isTombstoned(firstId)).isTrue();
+        assertThat(expected.isTombstoned(secondId)).isTrue();
+        assertThat(expected.isTombstoned(recreatedId)).isFalse();
+        assertThat(expected.getExplicitSet()).isEmpty();
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
+                        assertThat(
+                                        server.getMetadataCache()
+                                                .getPartitionTombstoneIfInitialized(tableId))
+                                .contains(expected);
+                    }
+                });
+        FLUSS_CLUSTER_EXTENSION.restartTabletServer(2, new Configuration());
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
+                        assertThat(
+                                        server.getMetadataCache()
+                                                .getPartitionTombstoneIfInitialized(tableId))
+                                .contains(expected);
+                    }
+                });
+
+        coordinatorGateway
+                .dropTable(
+                        newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .get();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    for (TabletServer server : FLUSS_CLUSTER_EXTENSION.getTabletServers()) {
+                        assertThat(
+                                        server.getMetadataCache()
+                                                .getPartitionTombstoneIfInitialized(tableId))
+                                .as(
+                                        "Tombstone on server %s, table route %s",
+                                        server.getServerId(),
+                                        server.getMetadataCache()
+                                                .getSnapshot()
+                                                .getTablePath(tableId))
+                                .isEmpty();
+                    }
+                });
     }
 
     @Test

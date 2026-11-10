@@ -38,6 +38,7 @@ import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -144,6 +145,7 @@ import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbPartitionTombstone;
 import org.apache.fluss.rpc.messages.PbPhysicalTablePath;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
@@ -216,6 +218,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.shaded.guava32.com.google.common.primitives.Longs;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -564,6 +567,22 @@ public class ServerRpcMessageUtils {
             Set<ServerInfo> aliveTableServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
+        return makeUpdateMetadataRequest(
+                coordinatorServer,
+                coordinatorEpoch,
+                aliveTableServers,
+                tableMetadataList,
+                partitionMetadataList,
+                Collections.emptyMap());
+    }
+
+    public static UpdateMetadataRequest makeUpdateMetadataRequest(
+            @Nullable ServerInfo coordinatorServer,
+            @Nullable Integer coordinatorEpoch,
+            Set<ServerInfo> aliveTableServers,
+            List<TableMetadata> tableMetadataList,
+            List<PartitionMetadata> partitionMetadataList,
+            Map<Long, PartitionTombstone> partitionTombstones) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
@@ -603,10 +622,29 @@ public class ServerRpcMessageUtils {
         updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
+        if (!partitionTombstones.isEmpty()) {
+            List<PbPartitionTombstone> pbList = new ArrayList<>(partitionTombstones.size());
+            for (Map.Entry<Long, PartitionTombstone> e : partitionTombstones.entrySet()) {
+                pbList.add(toPbPartitionTombstone(e.getKey(), e.getValue()));
+            }
+            updateMetadataRequest.addAllPartitionTombstones(pbList);
+        }
+
         if (coordinatorEpoch != null) {
             updateMetadataRequest.setCoordinatorEpoch(coordinatorEpoch);
         }
         return updateMetadataRequest;
+    }
+
+    private static PbPartitionTombstone toPbPartitionTombstone(
+            long tableId, PartitionTombstone tombstone) {
+        PbPartitionTombstone pb =
+                new PbPartitionTombstone()
+                        .setTableId(tableId)
+                        .setFloor(tombstone.getFloor())
+                        .setVersion(tombstone.getVersion());
+        pb.setExplicitSets(Longs.toArray(tombstone.getExplicitSet()));
+        return pb;
     }
 
     public static ClusterMetadata getUpdateMetadataRequestData(UpdateMetadataRequest request) {
@@ -661,8 +699,34 @@ public class ServerRpcMessageUtils {
                         partitionMetadata ->
                                 partitionMetadataList.add(toPartitionMetadata(partitionMetadata)));
 
+        Map<Long, PartitionTombstone> partitionTombstones;
+        if (request.getPartitionTombstonesCount() == 0) {
+            partitionTombstones = Collections.emptyMap();
+        } else {
+            partitionTombstones = new HashMap<>(request.getPartitionTombstonesCount());
+            for (PbPartitionTombstone pb : request.getPartitionTombstonesList()) {
+                long[] explicitArr = pb.getExplicitSets();
+                Set<Long> explicitSet;
+                if (explicitArr.length == 0) {
+                    explicitSet = Collections.emptySet();
+                } else {
+                    explicitSet = new HashSet<>(explicitArr.length);
+                    for (long v : explicitArr) {
+                        explicitSet.add(v);
+                    }
+                }
+                partitionTombstones.put(
+                        pb.getTableId(),
+                        new PartitionTombstone(pb.getFloor(), explicitSet, pb.getVersion()));
+            }
+        }
+
         return new ClusterMetadata(
-                coordinatorServer, aliveTabletServers, tableMetadataList, partitionMetadataList);
+                coordinatorServer,
+                aliveTabletServers,
+                tableMetadataList,
+                partitionMetadataList,
+                partitionTombstones);
     }
 
     private static PbTableMetadata toPbTableMetadata(TableMetadata tableMetadata) {

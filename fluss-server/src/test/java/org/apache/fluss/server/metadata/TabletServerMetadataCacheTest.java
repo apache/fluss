@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.PartitionTombstone;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -158,6 +159,34 @@ public class TabletServerMetadataCacheTest {
                                 partitionId2,
                                 initialBucketMetadata,
                                 initialBucketMetadata.size()));
+    }
+
+    @Test
+    void testPartitionTombstoneBaselineAndVersions() {
+        assertThat(serverMetadataCache.getPartitionTombstoneIfInitialized(partitionTableId))
+                .isEmpty();
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        tableMetadataList,
+                        partitionMetadataList,
+                        Collections.singletonMap(partitionTableId, PartitionTombstone.EMPTY)));
+        assertThat(serverMetadataCache.getPartitionTombstoneIfInitialized(partitionTableId))
+                .contains(PartitionTombstone.EMPTY);
+        PartitionTombstone current = new PartitionTombstone(10L, Collections.singleton(20L), 2L);
+        for (PartitionTombstone tombstone :
+                Arrays.asList(current, new PartitionTombstone(5L, Collections.emptySet(), 1L))) {
+            serverMetadataCache.updateClusterMetadata(
+                    new ClusterMetadata(
+                            coordinatorServer,
+                            aliveTableServers,
+                            Collections.emptyList(),
+                            Collections.emptyList(),
+                            Collections.singletonMap(partitionTableId, tombstone)));
+        }
+        assertThat(serverMetadataCache.getPartitionTombstoneIfInitialized(partitionTableId))
+                .contains(current);
     }
 
     @Test

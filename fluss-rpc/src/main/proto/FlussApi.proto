@@ -248,6 +248,8 @@ message UpdateMetadataRequest {
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
   optional int32 coordinator_epoch = 5;
+  // Partition deletion snapshots propagated from the Coordinator.
+  repeated PbPartitionTombstone partition_tombstones = 6;
 }
 
 message UpdateMetadataResponse {
@@ -1742,4 +1744,13 @@ message PbLiteralValue {
   optional int64 timestamp_millis_value = 11;      // Epoch millis
   optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
   optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
+}
+
+
+// A partition ID is deleted when it is covered by the floor or the explicit set.
+message PbPartitionTombstone {
+  required int64 table_id = 1;
+  required int64 floor = 2;
+  repeated int64 explicit_set = 3 [packed = true];
+  required int64 version = 4;
 }

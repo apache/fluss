@@ -379,7 +379,10 @@ class AutoPartitionManagerTest {
         // manually drop partitions.
         for (String partitionName : params.manualDroppedPartitions) {
             metadataManager.dropPartition(
-                    tablePath, fromPartitionName(table.getPartitionKeys(), partitionName), false);
+                    tablePath,
+                    tableId,
+                    fromPartitionName(table.getPartitionKeys(), partitionName),
+                    false);
             // mock the partition is dropped in zk.
             autoPartitionManager.removePartition(tableId, partitionName);
         }
@@ -460,7 +463,10 @@ class AutoPartitionManagerTest {
         autoPartitionManager.addPartition(table.getTableId(), "2024-09-15");
 
         metadataManager.dropPartition(
-                tablePath, fromPartitionName(table.getPartitionKeys(), "2024-09-10"), false);
+                tablePath,
+                table.getTableId(),
+                fromPartitionName(table.getPartitionKeys(), "2024-09-10"),
+                false);
         autoPartitionManager.removePartition(table.getTableId(), "2024-09-10");
 
         clock.advanceTime(Duration.ofDays(3).plus(Duration.ofHours(23)));
