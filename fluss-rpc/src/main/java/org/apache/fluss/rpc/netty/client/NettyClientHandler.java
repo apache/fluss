@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.netty.client;
 
+import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ErrorResponse;
@@ -26,16 +27,23 @@ import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandshakeCompletionEvent;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandshakeTimeoutException;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
+
 import java.nio.channels.ClosedChannelException;
 
 import static org.apache.fluss.rpc.protocol.MessageCodec.RESPONSE_HEADER_LENGTH;
 import static org.apache.fluss.rpc.protocol.MessageCodec.SERVER_FAILURE_HEADER_LENGTH;
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 
 /**
  * Implementation of the channel handler to process inbound requests for RPC client. The client
@@ -167,6 +175,54 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
                 LOG.warn("Connection {} is idle, closing...", ctx.channel().remoteAddress());
                 ctx.close();
             }
+        } else if (evt instanceof SslHandshakeCompletionEvent) {
+            onHandshakeCompletion(ctx, (SslHandshakeCompletionEvent) evt);
+        }
+    }
+
+    /**
+     * Reports a TLS handshake failure as a non-retriable {@link AuthenticationException} exception.
+     *
+     * <p>An untrusted certificate, a hostname mismatch or a plaintext listener does not go away on
+     * retry. Otherwise the pending ApiVersions write fails with the {@link SSLException}, which is
+     * an IOException and so becomes a retriable error, and the client retries until it times out.
+     *
+     * <p>Netty fires this event before it fails the pending writes, so the connection closes with
+     * this cause first. Causes other than an {@link SSLException} (e.g. the channel closed during
+     * the handshake) and a handshake timeout keep the retriable path.
+     */
+    private void onHandshakeCompletion(ChannelHandlerContext ctx, SslHandshakeCompletionEvent evt) {
+        if (evt.isSuccess()) {
+            if (LOG.isDebugEnabled()) {
+                SSLSession session = ctx.pipeline().get(SslHandler.class).engine().getSession();
+                LOG.debug(
+                        "TLS handshake with {} completed: protocol {}, cipher suite {}",
+                        ctx.channel().remoteAddress(),
+                        session.getProtocol(),
+                        session.getCipherSuite());
+            }
+            return;
+        }
+        if (findThrowable(evt.cause(), SslHandshakeTimeoutException.class).isPresent()
+                || !findThrowable(evt.cause(), SSLException.class).isPresent()) {
+            LOG.warn(
+                    "TLS handshake with {} did not complete ({}). The server "
+                            + "may be restarting, or a firewall or proxy may be interrupting TLS. "
+                            + "The client retries.",
+                    ctx.channel().remoteAddress(),
+                    evt.cause().toString());
+            return;
+        }
+        try {
+            callback.onFailure(
+                    new AuthenticationException(
+                            "TLS handshake with server "
+                                    + ctx.channel().remoteAddress()
+                                    + " failed: "
+                                    + evt.cause(),
+                            evt.cause()));
+        } catch (Throwable t) {
+            LOG.error("Failed to notify callback about failure", t);
         }
     }
 

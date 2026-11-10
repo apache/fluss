@@ -103,17 +103,56 @@ class FlussProtocolPluginTest {
     }
 
     @Test
-    void testTlsOnInternalListenerFailsSetup(@TempDir Path tempDir) throws Exception {
+    void testTlsInternalListenerWithClientTlsPassesSetup(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+
+        assertThatCode(() -> tlsPlugin().setup(conf)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testTlsInternalListenerWithoutClientTlsFailsSetup(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED.key() + "' is false");
+    }
+
+    @Test
+    void testClientTlsWithPlaintextInternalListenerFailsSetup() {
+        // no server TLS configuration at all, but servers would connect to each other over TLS.
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener 'INTERNAL'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED.key() + "' is true");
+    }
+
+    @Test
+    void testMisspelledInternalTlsListenerReportsTypo(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+        // the typo, not the TLS mismatch it causes, is the error to report.
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), "CLIENTS");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("[CLIENTS]")
+                .hasMessageNotContaining(ConfigOptions.CLIENT_SSL_ENABLED.key());
+    }
+
+    private static Configuration tlsOnInternalListener(Path tempDir) throws Exception {
         SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(
                 conf, TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert), null);
         conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, TestSslUtils.TLS_LISTENER);
-
-        assertThatThrownBy(() -> tlsPlugin().setup(conf))
-                .isInstanceOf(IllegalConfigurationException.class)
-                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
-                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+        return conf;
     }
 
     private static FlussProtocolPlugin tlsPlugin() {

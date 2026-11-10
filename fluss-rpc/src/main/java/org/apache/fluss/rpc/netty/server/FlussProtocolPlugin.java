@@ -71,9 +71,10 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
         this.sslConfig = SslConfig.fromServerConfig(conf).orElse(null);
         if (sslConfig != null) {
             checkTlsListenersExist(sslConfig.enabledListeners());
-            checkInternalListenerIsPlaintext(sslConfig.enabledListeners());
-            this.sslContext = SslContextFactory.createServerSslContext(sslConfig);
         }
+        checkInternalListenerMatchesClientTls();
+        this.sslContext =
+                sslConfig == null ? null : SslContextFactory.createServerSslContext(sslConfig);
     }
 
     @Override
@@ -128,19 +129,31 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     }
 
     /**
-     * Servers connect to each other over the internal listener without TLS, so TLS there would fail
-     * every request between servers.
+     * Servers connect to each other over the internal listener with a client built from this server
+     * configuration.
      *
-     * <p>TODO: remove once the client side supports TLS (#3797).
+     * <p>With {@code client.security.ssl.enabled} they communicate via TLS, so the internal
+     * listener must be TLS-enabled exactly when this option is true. A mismatch in either direction
+     * would fail every request between servers at runtime, so it is rejected at startup. The check
+     * runs even without any server TLS configuration, to reject outbound TLS towards a plaintext
+     * internal listener.
      */
-    private void checkInternalListenerIsPlaintext(List<String> tlsListeners) {
+    private void checkInternalListenerMatchesClientTls() {
         String internalListener = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
-        if (tlsListeners.contains(internalListener)) {
+        boolean internalListenerTls = isTlsListener(internalListener);
+        boolean clientTls = conf.get(ConfigOptions.CLIENT_SSL_ENABLED);
+        if (internalListenerTls != clientTls) {
             throw new IllegalConfigurationException(
-                    "TLS is not supported yet on the internal listener '%s' (see '%s'): servers connect to each other without TLS. Remove it from '%s'.",
+                    "The internal listener '%s' (see '%s') is %s in '%s', but '%s' is %s. Servers "
+                            + "connect to each other over the internal listener with the "
+                            + "'client.security.ssl.*' options of the server configuration, so "
+                            + "both must agree.",
                     internalListener,
                     ConfigOptions.INTERNAL_LISTENER_NAME.key(),
-                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+                    internalListenerTls ? "listed" : "not listed",
+                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
+                    ConfigOptions.CLIENT_SSL_ENABLED.key(),
+                    clientTls);
         }
     }
 
