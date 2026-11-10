@@ -482,7 +482,7 @@ public class ZooKeeperClient implements AutoCloseable {
         return processGetDataResponsesOrThrow(
                 responses,
                 response -> path2PartitionIdMap.get(response.getPath()),
-                PartitionIdZNode::decode);
+                data -> data == null || data.length == 0 ? null : PartitionIdZNode.decode(data));
     }
 
     public void updateTableAssignment(

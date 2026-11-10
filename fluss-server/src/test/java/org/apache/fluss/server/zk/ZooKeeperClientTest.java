@@ -46,6 +46,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
@@ -66,6 +67,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -219,6 +221,39 @@ class ZooKeeperClientTest {
                                 Arrays.asList(tableId1, tableId2, tableIdWithoutAssignment)))
                 .containsOnlyKeys(tableId2)
                 .containsEntry(tableId2, tableAssignment2);
+    }
+
+    @Test
+    void testPartitionAssignmentsWithEmptyNode() throws Exception {
+        PartitionAssignment assignment =
+                new PartitionAssignment(
+                        1L, Collections.singletonMap(0, BucketAssignment.of(1, 2, 3)));
+        CuratorFramework curatorClient = zookeeperClient.getCuratorClient();
+        curatorClient
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(PartitionIdZNode.path(1L), PartitionIdZNode.encode(assignment));
+        curatorClient
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(PartitionIdZNode.path(2L) + "/buckets/0/snapshot_seqid", new byte[0]);
+
+        assertThat(zookeeperClient.getPartitionsAssignments(Arrays.asList(1L, 2L, 3L)))
+                .containsOnlyKeys(1L)
+                .containsEntry(1L, assignment);
+    }
+
+    @Test
+    void testPartitionAssignmentsWithMalformedNode() throws Exception {
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(PartitionIdZNode.path(1L), new byte[] {'{'});
+
+        assertThatThrownBy(
+                        () -> zookeeperClient.getPartitionsAssignments(Collections.singleton(1L)))
+                .isInstanceOf(UncheckedIOException.class);
     }
 
     @Test
