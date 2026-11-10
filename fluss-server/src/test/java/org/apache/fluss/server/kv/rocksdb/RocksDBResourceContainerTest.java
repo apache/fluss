@@ -346,6 +346,22 @@ class RocksDBResourceContainerTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource(
+            value = {"default, 2097152", "0b, 0", "4mb, 4194304"},
+            nullValues = "default")
+    void testCompactionReadaheadSize(String configuredSize, long expectedBytes) throws Exception {
+        Configuration configuration = new Configuration();
+        if (configuredSize != null) {
+            configuration.setString(
+                    ConfigOptions.KV_COMPACTION_READAHEAD_SIZE.key(), configuredSize);
+        }
+        try (RocksDBResourceContainer container =
+                new RocksDBResourceContainer(configuration, null)) {
+            assertThat(container.getDbOptions().compactionReadaheadSize()).isEqualTo(expectedBytes);
+        }
+    }
+
     @Test
     void testConfigurationOptionsFromConfig() throws Exception {
         Configuration configuration = new Configuration();
