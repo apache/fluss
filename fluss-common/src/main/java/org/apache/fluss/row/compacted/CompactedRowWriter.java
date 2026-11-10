@@ -118,6 +118,11 @@ public class CompactedRowWriter implements SequentialBinaryWriter {
         return bytes;
     }
 
+    /** Returns the retained buffer size in bytes. */
+    public int capacity() {
+        return buffer.length;
+    }
+
     @VisibleForTesting
     byte[] buffer() {
         return buffer;
