@@ -1033,7 +1033,9 @@ CREATE TABLE daily_user_metrics (
 ```
 
 :::note
-`hll_sketch` expects values to be serialized Apache DataSketches HLL sketches. It does not build sketches from raw input values by itself. Flink/Spark SQL helper functions for building and estimating sketches can be added separately.
+`hll_sketch` expects serialized Apache DataSketches HLL sketches, not raw input values.
+The stored value is a serialized HLL sketch, not a distinct count. After reading the sketch
+bytes, use `HllSketch.heapify(bytes).getEstimate()` to obtain the approximate distinct count.
 :::
 
 </TabItem>
@@ -1058,6 +1060,16 @@ TableDescriptor.builder()
 
 // Input: (2026-05-16, hll{user_a,user_b}), (2026-05-16, hll{user_b,user_c})
 // Result: (2026-05-16, hll{user_a,user_b,user_c}) -- union of the two sketches
+```
+
+Read the stored sketch bytes and extract the approximate distinct count using the Apache
+DataSketches client library:
+
+```java
+import org.apache.datasketches.hll.HllSketch;
+
+// bytes is the serialized sketch read from the user_hll column.
+double estimatedDistinctCount = HllSketch.heapify(bytes).getEstimate();
 ```
 
 </TabItem>
