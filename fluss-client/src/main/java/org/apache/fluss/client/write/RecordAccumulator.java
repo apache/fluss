@@ -783,17 +783,13 @@ public final class RecordAccumulator {
             // it will allocate memory from heap
             return writerBufferPool.allocatePages(pagesPerBatch);
         } else {
-            int estimatedSizeInBytes = writeRecord.getEstimatedSizeInBytes();
-            if (estimatedSizeInBytes > batchSize) {
-                // for row-orient log/kv batch, the pre-allocated memory shouldn't
-                // smaller than the record size
-                int pages =
-                        MathUtils.ceilDiv(
-                                writeRecord.getEstimatedSizeInBytes(), writerBufferPool.pageSize());
-                return writerBufferPool.allocatePages(pages);
-            } else {
-                return writerBufferPool.allocatePages(pagesPerBatch);
-            }
+            int pagesForRecord =
+                    MathUtils.ceilDiv(
+                            writeRecord.getEstimatedSizeInBytes(), writerBufferPool.pageSize());
+            // for row-orient log/kv batch, the pre-allocated memory shouldn't
+            // smaller than the record size
+            int pages = Math.max(pagesPerBatch, pagesForRecord);
+            return writerBufferPool.allocatePages(pages);
         }
     }
 
