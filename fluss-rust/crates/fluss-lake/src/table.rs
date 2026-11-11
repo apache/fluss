@@ -147,6 +147,7 @@ pub(crate) fn resolve_lake_table_path(table_info: &TableInfo) -> Result<TablePat
 }
 
 pub(crate) fn validate_readable_table(table_info: &TableInfo) -> Result<()> {
+    validate_supported_table(table_info)?;
     match table_info.table_config.is_datalake_enabled() {
         Ok(true) => {}
         Ok(false) => return Ok(()),
@@ -166,6 +167,26 @@ pub(crate) fn validate_readable_table(table_info: &TableInfo) -> Result<()> {
         Err(error) => Err(FlussLakeError::NotLakeReadable(format!(
             "table {} has an invalid lake configuration: {error}",
             table_info.table_path
+        ))),
+    }
+}
+
+// Ordinary partition listings omit the shared historical log. Until its ranges
+// participate in capture and reconciliation, accepting this table can lose ACKed writes.
+pub(crate) fn validate_supported_table(table: &TableInfo) -> Result<()> {
+    const OPTION: &str = "table.datalake.historical-partition.enabled";
+    match table.table_config.properties.get(OPTION) {
+        None => Ok(()),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(()),
+        Some(value) if value.eq_ignore_ascii_case("true") => {
+            Err(FlussLakeError::NotLakeReadable(format!(
+                "table {} enables {OPTION}; shared historical-log reads are not supported",
+                table.table_path
+            )))
+        }
+        Some(value) => Err(FlussLakeError::NotLakeReadable(format!(
+            "table {} has invalid {OPTION} {value:?}: expected true or false",
+            table.table_path
         ))),
     }
 }

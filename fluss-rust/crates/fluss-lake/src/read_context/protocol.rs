@@ -181,6 +181,7 @@ impl FlussLakeReadContext {
 }
 
 pub(crate) fn validate_wire_identity(pb: &PbUnionReadContext, live: &TableInfo) -> Result<()> {
+    crate::table::validate_supported_table(live)?;
     if pb.version != Some(1) {
         return Err(invalid_context(
             "unsupported or missing read boundary version",

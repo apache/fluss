@@ -30,7 +30,7 @@ pub type Result<T> = std::result::Result<T, FlussLakeError>;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum FlussLakeError {
-    /// Requested table is not configured for lake reads.
+    /// Requested table configuration is unsupported by UnionRead.
     #[error("table is not lake-readable: {0}")]
     NotLakeReadable(String),
 

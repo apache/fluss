@@ -86,4 +86,6 @@ Call `validate_available()` for required ranges after safe pruning. It detects a
 
 ## Follow-ups
 
-Shared historical logs ([#5001](https://github.com/apache/fluss/issues/5001)) require their own partition kind, snapshot-aligned offsets and record-level partition filtering. They are separate from expired partitions already present in the lake. Streaming discovery, progress and checkpointing require a future API; this context describes bounded reads. Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
+Streaming discovery, progress and checkpointing require a future API; this context describes bounded reads. Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
+
+Tables with `table.datalake.historical-partition.enabled=true` are rejected during boundary capture and import: writes to expired partitions can remain in the shared `__historical__` log before tiering and are missing from ordinary partition ranges and the lake snapshot. Shared historical-log support is tracked in [#5001](https://github.com/apache/fluss/issues/5001). Expired partitions already present in a lake snapshot remain supported when this option is disabled.
