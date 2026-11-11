@@ -17,8 +17,7 @@
 
 package org.apache.fluss.security.auth.sasl.jaas;
 
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.security.auth.sasl.SaslAuthorization;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
@@ -29,7 +28,6 @@ import javax.security.auth.Subject;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslClient;
-import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
 import java.security.PrivilegedActionException;
@@ -48,23 +46,11 @@ import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID
 public class SaslServerFactory {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerFactory.class);
 
-    public static SaslServer createSaslServer(
-            String mechanism,
-            String hostName,
-            Map<String, ?> props,
-            LoginManager loginManager,
-            List<AppConfigurationEntry> configurationEntries)
-            throws SaslException {
-        return createSaslServer(
-                mechanism, configurationEntries, new SaslAuthorization(new Configuration()));
-    }
-
-    /** Creates a PLAIN server using the supplied authorization rules. */
+    /** Creates a PLAIN server using the listener's proxy authorization policy. */
     public static SaslServer createSaslServer(
             String mechanism,
             List<AppConfigurationEntry> configurationEntries,
-            SaslAuthorization authorization)
-            throws SaslException {
+            PlainSaslProxyAuthorization authorization) {
         if (!PlainSaslServer.PLAIN_MECHANISM.equals(mechanism)) {
             throw new IllegalArgumentException("Unsupported mechanism: " + mechanism);
         }

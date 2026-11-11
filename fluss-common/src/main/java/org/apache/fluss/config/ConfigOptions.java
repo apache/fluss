@@ -700,19 +700,6 @@ public class ConfigOptions {
                                     + "from 'security.sasl.plain.credentials' when that credential map is set, "
                                     + "and can also be configured directly for compatibility.");
 
-    public static final ConfigOption<Map<String, String>> SERVER_SASL_PROXY_USERS =
-            key("security.sasl.proxy-users")
-                    .mapType()
-                    .noDefaultValue()
-                    .withDescription(
-                            "Users each authenticated SASL account may act as, "
-                                    + "e.g. `gateway:alice;bob,admin:*`. The wildcard `*` allows any target "
-                                    + "except a super user. Prefix a target rule with `regex:` for a "
-                                    + "full-string Java regular expression match, e.g. "
-                                    + "`gateway:'regex:^tenant_a_[a-z0-9_]+$'`. Other rules match literal "
-                                    + "usernames. Invalid patterns fail when loading the authentication "
-                                    + "configuration. Users in `super.users` cannot be impersonated.");
-
     // ------------------------------------------------------------------------
     //  Server-side TLS (transport encryption + mTLS) options
     // ------------------------------------------------------------------------
@@ -2026,7 +2013,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The user to act as with SASL/PLAIN. If unset or empty, the authenticated "
                                     + "account is used. A different user requires a server-side grant "
-                                    + "in 'security.sasl.proxy-users'.");
+                                    + "in 'security.sasl.listener.name.<listener>.plain.proxy-users'.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table

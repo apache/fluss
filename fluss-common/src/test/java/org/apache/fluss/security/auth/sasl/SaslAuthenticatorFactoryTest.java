@@ -33,6 +33,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Locale;
 
+import static org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization.disabled;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -50,9 +51,11 @@ class SaslAuthenticatorFactoryTest {
         ClientAuthenticator secondClient =
                 SaslAuthenticatorFactory.createClientAuthenticator(configuration);
         ServerAuthenticator firstServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("plain", configuration);
+                SaslAuthenticatorFactory.createServerAuthenticator(
+                        "plain", configuration, disabled());
         ServerAuthenticator secondServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("PLAIN", configuration);
+                SaslAuthenticatorFactory.createServerAuthenticator(
+                        "PLAIN", configuration, disabled());
 
         assertThat(firstClient).isNotSameAs(secondClient);
         assertThat(firstClient.protocol()).isEqualTo("PLAIN");
@@ -90,7 +93,7 @@ class SaslAuthenticatorFactoryTest {
         assertThatThrownBy(
                         () ->
                                 SaslAuthenticatorFactory.createServerAuthenticator(
-                                        "unknown", new Configuration()))
+                                        "unknown", new Configuration(), disabled()))
                 .isInstanceOf(AuthenticationException.class)
                 .hasMessage("Unable to find a matching SASL mechanism for UNKNOWN");
         assertThat(SaslAuthenticatorFactory.supportsServerMechanism("unknown")).isFalse();

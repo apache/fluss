@@ -82,7 +82,7 @@ public final class PlainSaslServerConfigManager implements ServerReconfigurable 
      * Creates a manager from the initial server configuration.
      *
      * @param configuration initial server configuration
-     * @throws ConfigException if the configured credential map is invalid
+     * @throws ConfigException if the configured credentials are invalid
      */
     public PlainSaslServerConfigManager(Configuration configuration) throws ConfigException {
         checkNotNull(configuration, "configuration must not be null");
@@ -266,7 +266,11 @@ public final class PlainSaslServerConfigManager implements ServerReconfigurable 
 
     private boolean isSuperUserName(String username) {
         return superUsers.stream()
-                .anyMatch(superUser -> superUser.matchesName(username, principalIgnoreCase));
+                .anyMatch(
+                        superUser ->
+                                principalIgnoreCase
+                                        ? username.equalsIgnoreCase(superUser.getName())
+                                        : username.equals(superUser.getName()));
     }
 
     private static Set<FlussPrincipal> parseSuperUsers(Configuration configuration) {

@@ -17,7 +17,6 @@
 
 package org.apache.fluss.security.acl;
 
-import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 
 import java.security.Principal;
@@ -110,12 +109,6 @@ public class FlussPrincipal implements Principal {
             return this.equals(other);
         }
         return equalsIgnoreCase(name, other.name) && equalsIgnoreCase(type, other.type);
-    }
-
-    /** Checks a username against this principal's name regardless of principal type. */
-    @Internal
-    public boolean matchesName(String username, boolean ignoreCase) {
-        return ignoreCase ? equalsIgnoreCase(name, username) : Objects.equals(name, username);
     }
 
     private static boolean equalsIgnoreCase(String a, String b) {

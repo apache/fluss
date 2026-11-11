@@ -29,6 +29,8 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertif
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -117,17 +119,27 @@ class FlussProtocolPluginTest {
                 .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
     }
 
-    @Test
-    void testInvalidImpersonationRegexRejectedDuringSetup() {
-        FlussProtocolPlugin plugin = createPlugin(false);
-        Configuration configuration = credentials("root:root-pass,operator:operator-pass");
-        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:SASL");
-        configuration.set(
-                ConfigOptions.SERVER_SASL_PROXY_USERS,
-                Collections.singletonMap("operator", "regex:["));
+    @ParameterizedTest
+    @CsvSource({
+        "CLIENT, CLIENT:SASL, operator:alice; ;bob, Empty proxy target",
+        "CLIENT, CLIENT:PLAINTEXT, operator:alice, matching SASL listener",
+        "OTHER, 'OTHER:SASL,CLIENT:SASL', operator:alice, found 0",
+        "CLIENT, client:SASL, operator:alice, found 0",
+        "'CLIENT,client', 'CLIENT:SASL,client:SASL', operator:alice, found 2"
+    })
+    void testRejectInvalidProxyGrantsAtStartup(
+            String listeners, String protocols, String grants, String error) {
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), protocols);
+        String proxyUsersKey = "security.sasl.listener.name.client.plain.proxy-users";
+        configuration.setString(proxyUsersKey, grants);
+        FlussProtocolPlugin plugin =
+                new FlussProtocolPlugin(
+                        ServerType.COORDINATOR, Arrays.asList(listeners.split(",")));
         assertThatThrownBy(() -> plugin.setup(configuration))
                 .isInstanceOf(ConfigException.class)
-                .hasMessageContaining(ConfigOptions.SERVER_SASL_PROXY_USERS.key());
+                .hasMessageContaining(error)
+                .hasMessageContaining(proxyUsersKey);
     }
 
     private static FlussProtocolPlugin tlsPlugin() {

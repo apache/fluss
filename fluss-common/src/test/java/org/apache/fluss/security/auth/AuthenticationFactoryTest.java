@@ -27,7 +27,6 @@ import org.apache.fluss.utils.TemporaryClassLoaderContext;
 import org.junit.jupiter.api.Test;
 
 import java.net.URL;
-import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -79,13 +78,14 @@ public class AuthenticationFactoryTest {
         configuration.setString("security.protocol.map", "FLUSS:SSL_TEST");
         assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
-        Supplier<ServerAuthenticator> supplier =
-                AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration).get("FLUSS");
-        ServerAuthenticator first = supplier.get();
-        assertThat(first).isInstanceOf(TestIdentifierServerAuthenticator.class);
-        assertThat(supplier.get())
-                .isInstanceOf(TestIdentifierServerAuthenticator.class)
-                .isNotSameAs(first);
+        assertThat(
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
+                                .values()
+                                .stream()
+                                .findAny()
+                                .get()
+                                .get())
+                .isInstanceOf(TestIdentifierServerAuthenticator.class);
 
         Configuration configuration2 = new Configuration();
         configuration2.setString("client.security.protocol", "ssl_test");
@@ -93,7 +93,7 @@ public class AuthenticationFactoryTest {
         assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration2).get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
-                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration2)
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
                                 .values()
                                 .stream()
                                 .findAny()

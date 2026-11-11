@@ -22,7 +22,7 @@ import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.SaslAuthenticatorFactory;
-import org.apache.fluss.security.auth.sasl.SaslAuthorization;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,18 +39,21 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerAuthenticator.class);
 
     private final Configuration configuration;
-    private final SaslAuthorization authorization;
     private final List<String> enabledMechanisms;
+    private final PlainSaslProxyAuthorization proxyAuthorization;
 
     private ServerAuthenticator delegate;
 
+    /** Creates an authenticator with proxy authorization disabled. */
     public SaslServerAuthenticator(Configuration configuration) {
-        this(configuration, new SaslAuthorization(configuration));
+        this(configuration, PlainSaslProxyAuthorization.disabled());
     }
 
-    SaslServerAuthenticator(Configuration configuration, SaslAuthorization authorization) {
-        this.authorization = authorization;
+    /** Creates an authenticator with the accepting listener's proxy policy. */
+    public SaslServerAuthenticator(
+            Configuration configuration, PlainSaslProxyAuthorization proxyAuthorization) {
         this.configuration = configuration;
+        this.proxyAuthorization = proxyAuthorization;
         List<String> enabledMechanisms = configuration.get(SERVER_SASL_ENABLED_MECHANISMS_CONFIG);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty()) {
             throw new IllegalArgumentException("No SASL mechanisms are enabled");
@@ -68,7 +71,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         matchProtocol(mechanism);
         delegate =
                 SaslAuthenticatorFactory.createServerAuthenticator(
-                        mechanism, configuration, authorization);
+                        mechanism, configuration, proxyAuthorization);
         delegate.initialize(context);
     }
 

@@ -103,8 +103,6 @@ public class AuthenticationFactory {
                             ServerAuthenticationPlugin.class,
                             pluginManager);
 
-            serverAuthenticatorPlugin.configure(configuration);
-
             serverAuthenticators.put(
                     protocolEntry.getKey(),
                     () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));

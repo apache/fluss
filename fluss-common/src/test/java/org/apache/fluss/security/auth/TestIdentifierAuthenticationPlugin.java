@@ -23,19 +23,9 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 
 import javax.annotation.Nullable;
 
-import static org.apache.fluss.utils.Preconditions.checkState;
-
 /** A {@link AuthenticationPlugin} that is used to test authentication plugin identifier. */
 public class TestIdentifierAuthenticationPlugin
         implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
-
-    private boolean configured;
-
-    @Override
-    public void configure(Configuration configuration) {
-        checkState(!configured, "Plugin must be configured only once");
-        configured = true;
-    }
 
     public String authProtocol() {
         return "SSL_TEST";
@@ -43,7 +33,6 @@ public class TestIdentifierAuthenticationPlugin
 
     @Override
     public ServerAuthenticator createServerAuthenticator(Configuration configuration) {
-        checkState(configured, "Plugin must be configured before creating authenticators");
         return new TestIdentifierServerAuthenticator();
     }
 
