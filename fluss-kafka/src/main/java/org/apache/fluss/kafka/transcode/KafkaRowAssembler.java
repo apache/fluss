@@ -52,15 +52,13 @@ public final class KafkaRowAssembler {
     }
 
     /**
-     * Assembles one Fluss row from a record and its requested partition for immediate synchronous
-     * encoding.
+     * Fills a caller-owned Fluss row for immediate synchronous encoding.
      *
      * <p>Key bytes are materialized from the command's read-only view for Arrow. The row borrows
      * header value arrays for immediate encoding; consumers must not modify them or retain the row
      * after conversion.
      */
-    public GenericRow assemble(KafkaDecodedValue value, Record record, int partitionId) {
-        GenericRow row = new GenericRow(topicSchema.rowType().getFieldCount());
+    void fillRow(GenericRow row, KafkaDecodedValue value, Record record, int partitionId) {
         setProjectedFields(row, topicSchema.valueProjection(), value.valueFields());
         if (topicSchema.rescuePosition() >= 0) {
             row.setField(
@@ -87,7 +85,6 @@ public final class KafkaRowAssembler {
                             timestampTypeId(record.timestampType()),
                             partitionId));
         }
-        return row;
     }
 
     static @Nullable byte[] copyBytes(@Nullable ByteBuffer buffer) {

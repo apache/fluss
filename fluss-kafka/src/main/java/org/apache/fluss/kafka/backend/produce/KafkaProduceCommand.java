@@ -93,7 +93,9 @@ public final class KafkaProduceCommand {
     }
 
     private static <T> List<T> immutableCopy(List<T> values) {
-        return Collections.unmodifiableList(new ArrayList<>(checkNotNull(values)));
+        return checkNotNull(values).isEmpty()
+                ? Collections.emptyList()
+                : Collections.unmodifiableList(new ArrayList<>(values));
     }
 
     private static @Nullable ByteBuffer readOnlyView(@Nullable ByteBuffer source) {
@@ -229,12 +231,12 @@ public final class KafkaProduceCommand {
 
         /** Returns a read-only key view with an independent position and limit, or null. */
         public @Nullable ByteBuffer key() {
-            return readOnlyView(key);
+            return key == null ? null : key.duplicate();
         }
 
         /** Returns a read-only value view with an independent position and limit, or null. */
         public @Nullable ByteBuffer value() {
-            return readOnlyView(value);
+            return value == null ? null : value.duplicate();
         }
 
         /** Returns an unmodifiable snapshot of the header list in record order. */
