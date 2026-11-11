@@ -62,6 +62,14 @@ pub enum FlussLakeError {
     #[error("UnionRead internal error: {0}")]
     Internal(String),
 
+    /// Access to the lake storage or catalog failed.
+    #[error("UnionRead connection error: {0}")]
+    ConnectionError(String),
+
+    /// Lake backend payload version is unsupported by its reader.
+    #[error("incompatible UnionRead split version: {0}")]
+    IncompatibleSplitVersion(String),
+
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
     InvalidReadContext(String),
@@ -72,6 +80,22 @@ pub(crate) fn planning_client_error(action: &str, error: ClientError) -> FlussLa
         action: action.to_string(),
         source: Box::new(error),
     }
+}
+
+#[cfg(feature = "paimon")]
+/// Retains cause messages in diagnostics without changing the public error variants.
+pub(crate) fn error_message(action: &str, error: &dyn std::error::Error) -> String {
+    let mut message = format!("failed to {action}: {error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let detail = cause.to_string();
+        if !detail.is_empty() && !message.contains(&detail) {
+            message.push_str(": ");
+            message.push_str(&detail);
+        }
+        source = cause.source();
+    }
+    message
 }
 
 #[cfg(test)]

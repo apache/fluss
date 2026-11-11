@@ -97,3 +97,9 @@ Tables with `table.datalake.historical-partition.enabled=true` are rejected duri
 Append lake tasks and bucket log tails are independent. PK tasks group a complete lake baseline and log tail by partition and bucket. The source must reconcile lake versions and deletion vectors before returning a PK baseline. Partition and bucket pruning is conservative; execution must apply the exact filter after reconciliation.
 
 Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.
+
+## Paimon backend
+
+Enable the `paimon` feature to plan and read pinned Paimon snapshots. The backend owns Paimon version merging, deletion vectors and portable task payloads; a PK baseline returns at most one row per full key. Parquet is the supported data file format. Paimon uses Arrow 58 internally; the adapter exposes the core Arrow version through the Arrow C data interface.
+
+`PaimonLakeSource::with_baseline_reader` permits replacing baseline reading while retaining Paimon planning. A replacement must preserve the pinned snapshot, file/deletion-vector association and requested PK current-view semantics.
