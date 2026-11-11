@@ -61,18 +61,26 @@ impl LimitedReadMemoryBudget {
 
 impl ReadMemoryBudget for LimitedReadMemoryBudget {
     fn try_reserve(&self, bytes: usize) -> Result<()> {
-        self.used
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                used.checked_add(bytes).filter(|total| *total <= self.limit)
-            })
-            .map(|_| ())
-            .map_err(|used| Error::BufferExhausted {
-                message: format!(
-                    "read memory budget exceeded: requested {bytes} bytes, \
-                     {used} of {} bytes reserved",
-                    self.limit,
-                ),
-            })
+        let mut used = self.used.load(Ordering::Relaxed);
+        loop {
+            let total = used
+                .checked_add(bytes)
+                .filter(|total| *total <= self.limit)
+                .ok_or_else(|| Error::BufferExhausted {
+                    message: format!(
+                        "read memory budget exceeded: requested {bytes} bytes, \
+                         {used} of {} bytes reserved",
+                        self.limit,
+                    ),
+                })?;
+            match self
+                .used
+                .compare_exchange_weak(used, total, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return Ok(()),
+                Err(current) => used = current,
+            }
+        }
     }
 
     fn release(&self, bytes: usize) {
