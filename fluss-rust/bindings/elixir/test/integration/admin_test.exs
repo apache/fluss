@@ -351,7 +351,10 @@ defmodule Fluss.Integration.AdminTest do
 
       # Schema round-trips: columns in definition order, PK preserved.
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", {:not_null, :int}}, {"name", :string}],
+               columns: [
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "name", data_type: :string}
+               ],
                primary_key: ["id"]
              }
 
@@ -400,9 +403,9 @@ defmodule Fluss.Integration.AdminTest do
 
       assert info.schema == %Fluss.Schema{
                columns: [
-                 {"id", {:not_null, :int}},
-                 {"region", {:not_null, :string}},
-                 {"name", :string}
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "region", data_type: {:not_null, :string}},
+                 %Fluss.Column{name: "name", data_type: :string}
                ],
                primary_key: ["id", "region"]
              }
@@ -465,7 +468,10 @@ defmodule Fluss.Integration.AdminTest do
                Fluss.Admin.get_table_schema(admin, @database, table)
 
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", {:not_null, :int}}, {"name", :string}],
+               columns: [
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "name", data_type: :string}
+               ],
                primary_key: ["id"]
              }
 
@@ -495,16 +501,45 @@ defmodule Fluss.Integration.AdminTest do
 
       assert info.schema == %Fluss.Schema{
                columns: [
-                 {"id", {:not_null, :int}},
-                 {"tags", {:array, :string}},
-                 {"scores", {:array, {:not_null, :int}}},
+                 %Fluss.Column{name: "id", data_type: {:not_null, :int}},
+                 %Fluss.Column{name: "tags", data_type: {:array, :string}},
+                 %Fluss.Column{name: "scores", data_type: {:array, {:not_null, :int}}},
                  # map keys are non-null by Fluss spec, so the `:string`
                  # key reads back wrapped even though it was written bare.
-                 {"attrs", {:map, {:not_null, :string}, :int}},
-                 {"point", {:row, [{"x", :int}, {"y", :int}]}}
+                 %Fluss.Column{name: "attrs", data_type: {:map, {:not_null, :string}, :int}},
+                 %Fluss.Column{name: "point", data_type: {:row, [{"x", :int}, {"y", :int}]}}
                ],
                primary_key: ["id"]
              }
+    end
+
+    test "round-trips column comments", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int, comment: "The order id")
+        |> Fluss.Schema.column("tags", {:array, :string}, comment: "Free-form tags")
+        |> Fluss.Schema.column("note", :string)
+        |> Fluss.Schema.primary_key(["id"])
+
+      :ok = Fluss.Admin.create_table(admin, @database, table, Fluss.TableDescriptor.new!(schema))
+
+      on_exit(fn ->
+        Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true)
+      end)
+
+      expected = [
+        %Fluss.Column{name: "id", data_type: {:not_null, :int}, comment: "The order id"},
+        %Fluss.Column{name: "tags", data_type: {:array, :string}, comment: "Free-form tags"},
+        %Fluss.Column{name: "note", data_type: :string, comment: nil}
+      ]
+
+      assert {:ok, schema_info} = Fluss.Admin.get_table_schema(admin, @database, table)
+      assert schema_info.schema.columns == expected
+
+      assert {:ok, table_info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert table_info.schema.columns == expected
     end
 
     test "fetches a specific schema version by id", %{admin: admin} do
@@ -736,6 +771,199 @@ defmodule Fluss.Integration.AdminTest do
     end
   end
 
+  describe "offsets" do
+    test "earliest and latest offsets of a bucket", %{conn: conn, admin: admin} do
+      table = log_table(admin)
+      append!(conn, table, [[1], [2], [3]])
+
+      assert Fluss.Admin.list_offsets(admin, @database, table, [0], :earliest) == {:ok, %{0 => 0}}
+      assert Fluss.Admin.list_offsets(admin, @database, table, [0], :latest) == {:ok, %{0 => 3}}
+    end
+
+    test "a timestamp finds the first record at or after it", %{conn: conn, admin: admin} do
+      table = log_table(admin)
+      append!(conn, table, [[1]])
+      Process.sleep(100)
+      timestamp = System.system_time(:millisecond)
+      Process.sleep(100)
+      append!(conn, table, [[2]])
+
+      assert Fluss.Admin.list_offsets!(admin, @database, table, [0], {:timestamp, timestamp}) ==
+               %{0 => 1}
+    end
+
+    test "a timestamp after the last record gives the latest offset", %{conn: conn, admin: admin} do
+      table = log_table(admin)
+      append!(conn, table, [[1], [2]])
+      Process.sleep(100)
+      timestamp = System.system_time(:millisecond)
+
+      assert Fluss.Admin.list_offsets!(admin, @database, table, [0], {:timestamp, timestamp}) ==
+               %{0 => 2}
+    end
+
+    test "a timestamp in the future returns an error", %{conn: conn, admin: admin} do
+      table = log_table(admin)
+      append!(conn, table, [[1]])
+      timestamp = System.system_time(:millisecond) + :timer.hours(1)
+
+      assert {:error, %Fluss.Error{code: :invalid_timestamp_exception}} =
+               Fluss.Admin.list_offsets(admin, @database, table, [0], {:timestamp, timestamp})
+    end
+
+    test "returns one offset per bucket", %{conn: conn, admin: admin} do
+      table = log_table(admin, bucket_count: 3)
+      # The writer waits for bucket leaders; querying a brand-new table can race them.
+      append!(conn, table, [[1]])
+
+      offsets = Fluss.Admin.list_offsets!(admin, @database, table, [0, 1, 2], :latest)
+      assert offsets |> Map.keys() |> Enum.sort() == [0, 1, 2]
+      assert offsets |> Map.values() |> Enum.sum() == 1
+    end
+
+    test "offsets of a partition", %{conn: conn, admin: admin} do
+      year = Integer.to_string(Date.utc_today().year)
+      table = partitioned_log_table(admin)
+      append!(conn, table, [[1, year], [2, year]])
+
+      assert Fluss.Admin.list_partition_offsets!(admin, @database, table, year, [0], :latest) ==
+               %{0 => 2}
+
+      assert Fluss.Admin.list_partition_offsets!(
+               admin,
+               @database,
+               table,
+               %{year: year},
+               [0],
+               :latest
+             ) ==
+               %{0 => 2}
+
+      assert {:error, %Fluss.Error{code: :partition_not_exists}} =
+               Fluss.Admin.list_partition_offsets(admin, @database, table, "1999", [0], :latest)
+
+      assert {:error, %Fluss.Error{code: :partition_not_exists}} =
+               Fluss.Admin.list_partition_offsets(
+                 admin,
+                 @database,
+                 table,
+                 %{year: "1999"},
+                 [0],
+                 :latest
+               )
+    end
+
+    test "a spec is resolved in partition-key order", %{conn: conn, admin: admin} do
+      table = partitioned_table(admin, ["region", "year"])
+      :ok = Fluss.Admin.create_partition(admin, @database, table, %{region: "EU", year: "2026"})
+
+      # The writer waits for bucket leaders; querying a brand-new partition can race them.
+      writer =
+        conn
+        |> Fluss.Table.get!(@database, table)
+        |> Fluss.TableUpsert.new!()
+        |> Fluss.TableUpsert.create_writer!()
+
+      {:ok, handle} = Fluss.UpsertWriter.upsert(writer, %{id: 1, region: "EU", year: "2026"})
+      :ok = Fluss.WriteHandle.wait(handle)
+
+      for partition <- [%{"year" => "2026", "region" => "EU"}, "EU$2026"] do
+        offsets =
+          Fluss.Admin.list_partition_offsets!(admin, @database, table, partition, [0, 1], :latest)
+
+        assert offsets |> Map.values() |> Enum.sum() == 1
+      end
+    end
+
+    test "a spec must name exactly the partition keys", %{admin: admin} do
+      table = partitioned_table(admin, ["region", "year"])
+
+      for partition <- [%{region: "EU"}, %{region: "EU", year: "2026", id: "1"}, %{}] do
+        assert {:error, %Fluss.Error{code: :partition_spec_invalid_exception}} =
+                 Fluss.Admin.list_partition_offsets(
+                   admin,
+                   @database,
+                   table,
+                   partition,
+                   [0],
+                   :latest
+                 )
+      end
+    end
+
+    test "a spec on a non-partitioned table returns an error", %{admin: admin} do
+      table = log_table(admin)
+
+      assert {:error, %Fluss.Error{code: :partition_spec_invalid_exception}} =
+               Fluss.Admin.list_partition_offsets(
+                 admin,
+                 @database,
+                 table,
+                 %{year: "2026"},
+                 [0],
+                 :latest
+               )
+    end
+
+    test "raises on malformed arguments", %{admin: admin} do
+      table = log_table(admin)
+
+      for {bucket_ids, spec, message} <- [
+            {[-1], :latest, "expected a list of bucket ids"},
+            {[2 ** 31], :latest, "expected a list of bucket ids"},
+            {[:a], :latest, "expected a list of bucket ids"},
+            {[0 | 1], :latest, "expected a list of bucket ids"},
+            {nil, :latest, "expected a list of bucket ids"},
+            {[0], :newest, "expected :earliest, :latest or {:timestamp, milliseconds}"},
+            {[0], {:timestamp, "now"},
+             "expected :earliest, :latest or {:timestamp, milliseconds}"}
+          ] do
+        assert_raise ArgumentError, ~r/#{Regex.escape(message)}/, fn ->
+          Fluss.Admin.list_offsets(admin, @database, table, bucket_ids, spec)
+        end
+      end
+
+      assert_raise ArgumentError, ~r/expected the table name to be a string/, fn ->
+        Fluss.Admin.list_offsets(admin, @database, nil, [0], :latest)
+      end
+
+      assert_raise ArgumentError, ~r/expected a partition spec map or a partition name/, fn ->
+        Fluss.Admin.list_partition_offsets(admin, @database, table, nil, [0], :latest)
+      end
+
+      assert_raise ArgumentError, ~r/partition value for `year` must be a string/, fn ->
+        Fluss.Admin.list_partition_offsets(admin, @database, table, %{year: 2026}, [0], :latest)
+      end
+    end
+
+    test "returns core's error for an empty bucket list", %{admin: admin} do
+      table = log_table(admin)
+
+      assert {:error, %Fluss.Error{} = error} =
+               Fluss.Admin.list_offsets(admin, @database, table, [], :latest)
+
+      assert error.message =~ "Buckets are empty"
+
+      assert_raise Fluss.Error, fn ->
+        Fluss.Admin.list_offsets!(admin, @database, table, [], :latest)
+      end
+    end
+
+    test "a bucket that doesn't exist returns core's error", %{admin: admin} do
+      table = log_table(admin)
+
+      assert {:error, %Fluss.Error{}} =
+               Fluss.Admin.list_offsets(admin, @database, table, [99], :latest)
+    end
+
+    test "list_offsets on a partitioned table returns an error", %{admin: admin} do
+      table = partitioned_log_table(admin)
+
+      assert {:error, %Fluss.Error{}} =
+               Fluss.Admin.list_offsets(admin, @database, table, [0], :latest)
+    end
+  end
+
   # A primary key table partitioned by `keys` (string columns), with two buckets.
   defp partitioned_table(admin, keys) do
     table = "fluss_table_#{:rand.uniform(100_000)}"
@@ -757,5 +985,46 @@ defmodule Fluss.Integration.AdminTest do
     :ok = Fluss.Admin.create_table(admin, @database, table, descriptor)
     on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true) end)
     table
+  end
+
+  defp log_table(admin, opts \\ []) do
+    table = "fluss_table_#{:rand.uniform(100_000)}"
+    schema = Fluss.Schema.new() |> Fluss.Schema.column("id", :int)
+    descriptor = Fluss.TableDescriptor.new!(schema, Keyword.merge([bucket_count: 1], opts))
+    :ok = Fluss.Admin.create_table(admin, @database, table, descriptor)
+    on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true) end)
+    table
+  end
+
+  # Auto-partitioned by year in UTC, so this `Date.utc_today()` year's partition exists.
+  defp partitioned_log_table(admin) do
+    table = "fluss_table_#{:rand.uniform(100_000)}"
+
+    schema =
+      Fluss.Schema.new()
+      |> Fluss.Schema.column("id", :int)
+      |> Fluss.Schema.column("year", :string)
+
+    descriptor =
+      Fluss.TableDescriptor.new!(schema,
+        bucket_count: 1,
+        partition_keys: ["year"],
+        properties: %{
+          "table.auto-partition.enabled" => "true",
+          "table.auto-partition.time-unit" => "YEAR",
+          "table.auto-partition.time-zone" => "UTC"
+        }
+      )
+
+    :ok = Fluss.Admin.create_table(admin, @database, table, descriptor)
+    on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true) end)
+    table
+  end
+
+  defp append!(conn, table, rows) do
+    writer = conn |> Fluss.Table.get!(@database, table) |> Fluss.AppendWriter.new!()
+
+    for row <- rows, do: {:ok, _} = Fluss.AppendWriter.append(writer, row)
+    :ok = Fluss.AppendWriter.flush(writer)
   end
 end

@@ -2315,10 +2315,18 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         PartitionMetadata partitionMetadata1 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, Collections.emptyList());
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        Collections.emptyList(),
+                        null);
         PartitionMetadata partitionMetadata2 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName2, partitionId2, Collections.emptyList());
+                        partitionTableId,
+                        partitionName2,
+                        partitionId2,
+                        Collections.emptyList(),
+                        null);
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
@@ -2359,14 +2367,15 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedTablePathById.put(nonePartitionTableId, nonePartitionTablePath);
         expectedTablePathById.put(partitionTableId, partitionTablePath);
 
-        expectedTableMetadataById.put(nonePartitionTablePath, tableMetadata1);
+        // Identity-only updates do not make the routing metadata ready.
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
 
         expectedPartitionNameById.put(partitionId1, partitionName1);
         expectedPartitionNameById.put(partitionId2, partitionName2);
 
-        expectedPartitionMetadataById.put(physicalTablePath1, partitionMetadata1);
-        expectedPartitionMetadataById.put(physicalTablePath2, partitionMetadata2);
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
+        expectedPartitionMetadataById.put(physicalTablePath2, null);
 
         assertUpdateMetadataEquals(
                 expectedCoordinatorServer,
@@ -2418,7 +2427,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         partitionTableId,
                                         partitionName1,
                                         DELETED_PARTITION_ID, // mark as deleted.
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(

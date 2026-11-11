@@ -54,6 +54,7 @@ import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
@@ -77,7 +78,9 @@ public class KafkaRequestHandlerTest extends KafkaServerTestBase {
     @Test
     public void testUnsupportedWireVersionFallsBackAndAllowsRenegotiation() {
         RequestChannel requests = new RequestChannel(100);
-        EmbeddedChannel channel = new EmbeddedChannel(new KafkaCommandDecoder(requests, "KAFKA"));
+        EmbeddedChannel channel =
+                new EmbeddedChannel(
+                        new KafkaCommandDecoder(requests, "KAFKA", null, createRequestMetrics()));
         short unsupportedVersion = (short) (ApiKeys.API_VERSIONS.latestVersion() + 1);
         try {
             // An unknown request version must be rejected without parsing its body schema.

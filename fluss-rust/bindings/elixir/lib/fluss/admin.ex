@@ -17,7 +17,7 @@
 
 defmodule Fluss.Admin do
   @moduledoc """
-  Admin client: databases, tables and partitions.
+  Admin client: databases, tables, partitions and bucket offsets.
 
   `create_*` and `drop_*` take keyword options, listed on each function.
 
@@ -25,6 +25,11 @@ defmodule Fluss.Admin do
   `%{region: "EU"}`. A write to a partition that doesn't exist creates it, unless
   `Fluss.Config.set_writer_dynamic_create_partition_enabled/2` turns that off, in which case the
   write fails with `:partition_not_exists`.
+
+  `list_offsets/5` returns `%{bucket_id => offset}` for `:earliest`, `:latest` or
+  `{:timestamp, milliseconds}`, the first offset at or after that time: the latest offset if
+  no record is that recent, `:invalid_timestamp_exception` if the time is in the future.
+  Partitioned tables use `list_partition_offsets/6`.
 
   Malformed arguments (a non-string name, an unknown option, a bad partition spec) raise
   `ArgumentError`; errors from the server are returned as `{:error, %Fluss.Error{}}`.
@@ -60,6 +65,7 @@ defmodule Fluss.Admin do
   @type drop_table_opts :: [ignore_if_not_exists: boolean()]
   @type create_partition_opts :: [ignore_if_exists: boolean()]
   @type drop_partition_opts :: [ignore_if_not_exists: boolean()]
+  @type offset_spec :: :earliest | :latest | {:timestamp, integer()}
 
   @spec new(Fluss.Connection.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(conn) do
@@ -363,6 +369,64 @@ defmodule Fluss.Admin do
     end
   end
 
+  @spec list_offsets(t(), String.t(), String.t(), [non_neg_integer()], offset_spec()) ::
+          {:ok, %{non_neg_integer() => non_neg_integer()}} | {:error, Fluss.Error.t()}
+  def list_offsets(admin, database, table, bucket_ids, spec) do
+    database = validate_name!(database, "database")
+    table = validate_name!(table, "table")
+    bucket_ids = validate_bucket_ids!(bucket_ids)
+    spec = validate_offset_spec!(spec)
+
+    admin
+    |> Native.admin_list_offsets(database, table, bucket_ids, spec)
+    |> Native.await_nif()
+  end
+
+  @spec list_offsets!(t(), String.t(), String.t(), [non_neg_integer()], offset_spec()) ::
+          %{non_neg_integer() => non_neg_integer()}
+  def list_offsets!(admin, database, table, bucket_ids, spec) do
+    case list_offsets(admin, database, table, bucket_ids, spec) do
+      {:ok, offsets} -> offsets
+      {:error, %Fluss.Error{} = error} -> raise error
+    end
+  end
+
+  @doc "Offsets of a partition, given as a full spec map or its name (`\"EU$2026\"`)."
+  @spec list_partition_offsets(
+          t(),
+          String.t(),
+          String.t(),
+          partition_spec() | String.t(),
+          [non_neg_integer()],
+          offset_spec()
+        ) :: {:ok, %{non_neg_integer() => non_neg_integer()}} | {:error, Fluss.Error.t()}
+  def list_partition_offsets(admin, database, table, partition, bucket_ids, spec) do
+    database = validate_name!(database, "database")
+    table = validate_name!(table, "table")
+    partition = validate_partition!(partition)
+    bucket_ids = validate_bucket_ids!(bucket_ids)
+    spec = validate_offset_spec!(spec)
+
+    admin
+    |> Native.admin_list_partition_offsets(database, table, partition, bucket_ids, spec)
+    |> Native.await_nif()
+  end
+
+  @spec list_partition_offsets!(
+          t(),
+          String.t(),
+          String.t(),
+          partition_spec() | String.t(),
+          [non_neg_integer()],
+          offset_spec()
+        ) :: %{non_neg_integer() => non_neg_integer()}
+  def list_partition_offsets!(admin, database, table, partition, bucket_ids, spec) do
+    case list_partition_offsets(admin, database, table, partition, bucket_ids, spec) do
+      {:ok, offsets} -> offsets
+      {:error, %Fluss.Error{} = error} -> raise error
+    end
+  end
+
   defp validate_name!(name, _what) when is_binary(name), do: name
 
   defp validate_name!(name, what) do
@@ -419,5 +483,35 @@ defmodule Fluss.Admin do
   defp spec_column!(column) do
     raise ArgumentError,
           "expected partition columns to be atoms or strings, got: #{inspect(column)}"
+  end
+
+  defp validate_partition!(name) when is_binary(name), do: {:name, name}
+  defp validate_partition!(spec) when is_map(spec), do: {:spec, validate_spec!(spec)}
+
+  defp validate_partition!(partition) do
+    raise ArgumentError,
+          "expected a partition spec map or a partition name, got: #{inspect(partition)}"
+  end
+
+  # Bucket ids are i32 in core.
+  defp validate_bucket_ids!(bucket_ids) do
+    if is_list(bucket_ids) and not List.improper?(bucket_ids) and
+         Enum.all?(bucket_ids, &(is_integer(&1) and &1 in 0..0x7FFFFFFF)) do
+      bucket_ids
+    else
+      raise ArgumentError,
+            "expected a list of bucket ids (0..2147483647), got: #{inspect(bucket_ids)}"
+    end
+  end
+
+  defp validate_offset_spec!(spec) when spec in [:earliest, :latest], do: spec
+
+  defp validate_offset_spec!({:timestamp, milliseconds} = spec)
+       when milliseconds in -0x8000000000000000..0x7FFFFFFFFFFFFFFF,
+       do: spec
+
+  defp validate_offset_spec!(spec) do
+    raise ArgumentError,
+          "expected :earliest, :latest or {:timestamp, milliseconds}, got: #{inspect(spec)}"
   end
 end

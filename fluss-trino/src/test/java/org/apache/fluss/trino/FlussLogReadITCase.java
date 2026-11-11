@@ -26,11 +26,13 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
@@ -396,6 +398,13 @@ class FlussLogReadITCase {
                     .get(30, TimeUnit.SECONDS);
 
             for (String region : Arrays.asList("east", "west", "empty")) {
+                if (region.equals("west")) {
+                    admin.alterTable(
+                                    path,
+                                    Collections.singletonList(TableChange.modifyBucketCount(4)),
+                                    false)
+                            .get(30, TimeUnit.SECONDS);
+                }
                 admin.createPartition(
                                 path,
                                 new PartitionSpec(Collections.singletonMap("region", region)),
@@ -405,9 +414,14 @@ class FlussLogReadITCase {
 
             long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
 
-            for (long partitionId : CLUSTER.waitUntilPartitionsCreated(path, 3).values()) {
-                for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                    CLUSTER.waitAndGetLeader(new TableBucket(tableId, partitionId, bucketId));
+            CLUSTER.waitUntilPartitionsCreated(path, 3);
+            for (PartitionInfo partition :
+                    admin.listPartitionInfos(path).get(30, TimeUnit.SECONDS)) {
+                assertThat(partition.getBucketCount())
+                        .isEqualTo(partition.getPartitionName().equals("east") ? 2 : 4);
+                for (int bucketId = 0; bucketId < partition.getBucketCount(); bucketId++) {
+                    CLUSTER.waitAndGetLeader(
+                            new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
 
@@ -434,8 +448,17 @@ class FlussLogReadITCase {
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east'"))
                     .containsExactly(Arrays.asList(1, "east"));
 
-            // An unknown partition must not create any page sources.
             int before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE id = 1"))
+                    .containsExactlyInAnyOrder(Arrays.asList(1, "east"), Arrays.asList(1, "west"));
+            assertThat(gate.createdSources() - before).isEqualTo(primaryKey ? 3 : 2);
+            before = gate.createdSources();
+            assertThat(rows("SELECT * FROM " + name + " WHERE id = 1 AND region = 'east'"))
+                    .containsExactly(Arrays.asList(1, "east"));
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+
+            // An unknown partition must not create any page sources.
+            before = gate.createdSources();
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'missing'")).isEmpty();
             assertThat(gate.createdSources() - before).isZero();
 
@@ -443,6 +466,162 @@ class FlussLogReadITCase {
             assertThat(rows("SELECT * FROM " + name + " WHERE region = 'east' AND id > 1"))
                     .isEmpty();
         }
+    }
+
+    @Test
+    void testBucketPruningAcrossSupportedKeyTypes() throws Exception {
+        for (boolean primaryKey : new boolean[] {false, true}) {
+            String name = primaryKey ? "bucket_types_pk" : "bucket_types_log";
+            TablePath path = TablePath.of("fluss", name);
+            Schema.Builder schema =
+                    Schema.newBuilder()
+                            .column("id", DataTypes.INT())
+                            .column("s", DataTypes.STRING())
+                            .column("b", DataTypes.BYTES())
+                            .column("flag", DataTypes.BOOLEAN())
+                            .column("tiny", DataTypes.TINYINT())
+                            .column("small", DataTypes.SMALLINT())
+                            .column("dt", DataTypes.DATE())
+                            .column("big", DataTypes.BIGINT())
+                            .column("payload", DataTypes.STRING());
+            String[] keys = {"s", "id", "b", "flag", "tiny", "small", "dt", "big"};
+            if (primaryKey) {
+                schema.primaryKey(keys);
+            }
+            admin.createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(schema.build())
+                                    .distributedBy(8, keys)
+                                    .build(),
+                            false)
+                    .get(30, TimeUnit.SECONDS);
+            CLUSTER.waitUntilTableReady(
+                    admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId());
+            try (Table table = connection.getTable(path)) {
+                AppendWriter append = primaryKey ? null : table.newAppend().createWriter();
+                UpsertWriter upsert = primaryKey ? table.newUpsert().createWriter() : null;
+                for (int id = 0; id < 32; id++) {
+                    GenericRow row =
+                            GenericRow.of(
+                                    id,
+                                    BinaryString.fromString("北京 😀 "),
+                                    new byte[] {0, -1, 127},
+                                    true,
+                                    (byte) -128,
+                                    (short) 32767,
+                                    (int) LocalDate.of(2026, 10, 20).toEpochDay(),
+                                    Long.MIN_VALUE,
+                                    BinaryString.fromString("value-" + id));
+                    (primaryKey ? upsert.upsert(row) : append.append(row))
+                            .get(30, TimeUnit.SECONDS);
+                }
+            }
+            String keyFilter =
+                    "s = '北京 😀 ' AND b = X'00FF7F' AND flag = TRUE"
+                            + " AND tiny = TINYINT '-128' AND small = SMALLINT '32767'"
+                            + " AND dt = DATE '2026-10-20' AND big = BIGINT '-9223372036854775808'";
+            int before = gate.createdSources();
+            assertThat(rows("SELECT id, payload FROM " + name + " WHERE id = 7 AND " + keyFilter))
+                    .containsExactly(Arrays.asList(7, "value-7"));
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+            assertThat(
+                            rows(
+                                    "SELECT id FROM "
+                                            + name
+                                            + " WHERE id = 7 AND "
+                                            + keyFilter
+                                            + " AND length(payload) > 100"))
+                    .isEmpty();
+            before = gate.createdSources();
+            assertThat(
+                            rows(
+                                    "SELECT id FROM "
+                                            + name
+                                            + " WHERE id IN (7, 8) AND "
+                                            + keyFilter
+                                            + " ORDER BY id"))
+                    .containsExactly(Collections.singletonList(7), Collections.singletonList(8));
+            assertThat(gate.createdSources() - before).isGreaterThan(1);
+        }
+    }
+
+    @Test
+    void testReorderedCompositeBucketKeyPruning() throws Exception {
+        String name = "reordered_composite_bucket_pk";
+        TablePath path = TablePath.of("fluss", name);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("region", DataTypes.INT())
+                        .column("tenant", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .primaryKey("region", "id", "tenant")
+                        .build();
+
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(7, "region", "id")
+                                .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 2)
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        TableInfo tableInfo = admin.getTableInfo(path).get(30, TimeUnit.SECONDS);
+        assertThat(tableInfo.getBucketKeys()).containsExactly("region", "id");
+        assertThat(tableInfo.getPhysicalPrimaryKeys()).containsExactly("region", "id", "tenant");
+        assertThat(tableInfo.isDefaultBucketKey()).isFalse();
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            CLUSTER.waitUntilAllReplicaReady(new TableBucket(tableInfo.getTableId(), bucketId));
+        }
+        try (Table table = connection.getTable(path)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            for (int id = 0; id < 32; id++) {
+                writer.upsert(
+                                GenericRow.of(
+                                        id,
+                                        id % 4,
+                                        100 + id,
+                                        BinaryString.fromString("value-" + id)))
+                        .get(30, TimeUnit.SECONDS);
+            }
+        }
+        // First verify that all rows exist without bucket pruning.
+        assertThat(runner.execute("SELECT count(*) FROM " + name).getOnlyValue()).isEqualTo(32L);
+        // The bucket keys are [region, id], while the schema is ordered [id, region, tenant,
+        // payload]. The complete equality predicate must locate exactly one bucket.
+        for (int id : new int[] {0, 7, 17, 31}) {
+            int before = gate.createdSources();
+            assertThat(
+                            rows(
+                                    "SELECT id, tenant, payload FROM "
+                                            + name
+                                            + " WHERE id = "
+                                            + id
+                                            + " AND region = "
+                                            + (id % 4)))
+                    .containsExactly(Arrays.asList(id, 100 + id, "value-" + id));
+            assertThat(gate.createdSources() - before).isEqualTo(1);
+        }
+        // An incomplete bucket-key predicate must not prune.
+        int before = gate.createdSources();
+        assertThat(rows("SELECT id, payload FROM " + name + " WHERE id = 17"))
+                .containsExactly(Arrays.asList(17, "value-17"));
+        assertThat(gate.createdSources() - before).isEqualTo(7);
+
+        before = gate.createdSources();
+        assertThat(rows("SELECT id FROM " + name + " WHERE region = 1 ORDER BY id"))
+                .containsExactly(
+                        Arrays.asList(1),
+                        Arrays.asList(5),
+                        Arrays.asList(9),
+                        Arrays.asList(13),
+                        Arrays.asList(17),
+                        Arrays.asList(21),
+                        Arrays.asList(25),
+                        Arrays.asList(29));
+        assertThat(gate.createdSources() - before).isEqualTo(7);
     }
 
     @Test
@@ -902,15 +1081,6 @@ class FlussLogReadITCase {
                 ConfigOptions.DATALAKE_FORMAT, org.apache.fluss.metadata.DataLakeFormat.PAIMON);
         return configuration;
     }
-
-    //    private void createTable(String name, Schema schema, int buckets) throws Exception {
-    //        admin.createTable(
-    //                        TablePath.of("fluss", name),
-    //
-    // TableDescriptor.builder().schema(schema).distributedBy(buckets).build(),
-    //                        false)
-    //                .get(30, TimeUnit.SECONDS);
-    //    }
 
     private void createTable(String name, Schema schema, int buckets) throws Exception {
         TablePath tablePath = TablePath.of("fluss", name);

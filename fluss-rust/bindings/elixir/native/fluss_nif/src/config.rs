@@ -32,6 +32,7 @@ pub enum NifNoKeyAssigner {
 pub struct NifConfig {
     pub bootstrap_servers: String,
     pub connect_timeout_ms: Option<u64>,
+    pub connection_max_idle_time_ms: Option<u64>,
     pub lookup_batch_timeout_ms: Option<u64>,
     pub lookup_max_batch_size: Option<u64>,
     pub lookup_max_inflight_requests: Option<u64>,
@@ -79,6 +80,9 @@ impl NifConfig {
         };
         if let Some(timeout) = self.connect_timeout_ms {
             config.connect_timeout_ms = timeout;
+        }
+        if let Some(max_idle_time) = self.connection_max_idle_time_ms {
+            config.connection_max_idle_time_ms = max_idle_time;
         }
         if let Some(n) = self.remote_file_download_thread_num {
             config.remote_file_download_thread_num = n as usize;
@@ -200,6 +204,7 @@ mod tests {
         NifConfig {
             bootstrap_servers: "localhost:9123".to_string(),
             connect_timeout_ms: None,
+            connection_max_idle_time_ms: None,
             lookup_batch_timeout_ms: None,
             lookup_max_batch_size: None,
             lookup_max_inflight_requests: None,
@@ -249,6 +254,18 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn connection_max_idle_time_is_preserved_in_core_config() {
+        assert_eq!(
+            default_config().into_core().connection_max_idle_time_ms,
+            600_000
+        );
+
+        let mut config = default_config();
+        config.connection_max_idle_time_ms = Some(0);
+        assert_eq!(config.into_core().connection_max_idle_time_ms, 0);
     }
 
     #[test]

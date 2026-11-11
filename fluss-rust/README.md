@@ -264,6 +264,7 @@ cargo build --example example-table --release
 | `scanner_remote_log_read_concurrency`  | 4                 | Concurrency for remote log reads              |
 | `scanner_io_tmp_dir`                  | OS temp dir/fluss | Parent for isolated remote log download directories |
 | `connect_timeout_ms`                   | 15 s              | Connection timeout                            |
+| `connection_max_idle_time_ms`          | 10 min            | Close idle cached connections (0: disabled)   |
 | `security_sasl_username` / `security_sasl_password` | — | SASL PLAIN authentication             |
 
 Configuration can be set programmatically or via CLI flags (using [`clap`](https://docs.rs/clap)).

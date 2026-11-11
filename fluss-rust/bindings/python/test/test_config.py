@@ -40,6 +40,15 @@ def test_kv_backpressure_configuration():
     assert config.writer_kv_backpressure_max_throttle_ms == 750
 
 
+def test_connection_max_idle_time_configuration():
+    assert fluss.Config().connection_max_idle_time_ms == 600000
+
+    config = fluss.Config({"connection.max-idle-time-ms": "60000"})
+    assert config.connection_max_idle_time_ms == 60000
+    config.connection_max_idle_time_ms = 0
+    assert config.connection_max_idle_time_ms == 0
+
+
 def test_writer_retry_backoff_configuration():
     config = fluss.Config(
         {

@@ -17,23 +17,11 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-import org.apache.fluss.metadata.TableBucket;
-
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
-
-    private final TableBucket tableBucket;
-
-    public RebalanceTaskTimeoutEvent(TableBucket tableBucket) {
-        this.tableBucket = tableBucket;
-    }
-
-    public TableBucket getTableBucket() {
-        return tableBucket;
-    }
+/** An event that checks active rebalance tasks for timeout and reconciliation work. */
+public final class CheckRebalanceTimeoutEvent implements CoordinatorEvent {
 
     @Override
     public String toString() {
-        return "RebalanceTaskTimeoutEvent{tableBucket=" + tableBucket + "}";
+        return "CheckRebalanceTimeoutEvent{}";
     }
 }

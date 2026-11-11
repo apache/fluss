@@ -1685,6 +1685,9 @@ struct Configuration {
     uint64_t writer_retry_max_backoff_ms{1000};
     // Connect timeout in milliseconds for TCP transport connect
     uint64_t connect_timeout_ms{15000};
+    // Close cached connections without reads or writes for this long (ms), failing the requests
+    // still waiting on them with a retriable error. 0 disables closing idle connections
+    uint64_t connection_max_idle_time_ms{600000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)

@@ -241,6 +241,50 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT =
+            key("coordinator.rebalance.target-unavailable-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if its target tablet servers remain unavailable and no "
+                                    + "bucket-state progress is observed. Observed progress or all "
+                                    + "target servers becoming live resets this timer. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT =
+            key("coordinator.rebalance.no-progress-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if no bucket-state progress is observed, even when its target "
+                                    + "tablet servers are live. Observed progress resets this timer; "
+                                    + "this does not limit the total migration duration. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS =
+            key("coordinator.rebalance.max-tracked-timed-out-tasks")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "The maximum number of non-final timed-out bucket migrations tracked "
+                                    + "before the coordinator stops admitting new bucket migrations. "
+                                    + "Admission resumes when a tracked migration reaches a final "
+                                    + "status. This limits concurrent migrations and reconciliation "
+                                    + "work on the coordinator and ZooKeeper. Must be at least 1.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
+            key("coordinator.rebalance.max-inflight-tasks")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "The maximum number of bucket-level rebalance tasks that can be "
+                                    + "executed concurrently by the coordinator. A higher value "
+                                    + "can speed up rebalance, while a lower value reduces the "
+                                    + "number of simultaneous bucket movements. Must be at least "
+                                    + "1.");
+
     public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
             key("coordinator.offline-leader.retry-delay")
                     .durationType()
@@ -843,10 +887,10 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
-                    .defaultValue(Duration.ofDays(7))
+                    .defaultValue(Duration.ofDays(1))
                     .withDescription(
                             "The time that the tablet server will wait without receiving any write request from "
-                                    + "a client before expiring the related status. The default value is 7 days.");
+                                    + "a client before expiring the related status. The default value is 1 day.");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
@@ -2603,6 +2647,16 @@ public class ConfigOptions {
                                     + "and requires a TabletServer restart to take effect. "
                                     + "The default value is `false`.");
 
+    public static final ConfigOption<MemorySize> KV_COMPACTION_READAHEAD_SIZE =
+            key("kv.rocksdb.compaction.readahead-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription(
+                            "The amount of data to prefetch when reading RocksDB SST files during compaction. "
+                                    + "A value of `0` disables compaction readahead. "
+                                    + "This applies to primary key tables and requires a TabletServer restart to take effect. "
+                                    + "The default value is `2MB`.");
+
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
                     .memoryType()
@@ -3144,6 +3198,13 @@ public class ConfigOptions {
                                     + "Multiple directories can be separated by comma or the system path separator. "
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
+
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

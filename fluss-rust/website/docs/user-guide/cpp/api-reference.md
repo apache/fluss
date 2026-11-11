@@ -42,6 +42,7 @@ Complete API reference for the Fluss C++ client.
 | `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling per retry with ±20% jitter; `0` resends immediately |
 | `lookup_retry_max_backoff_ms`         | `uint64_t`    | `1000`               | Cap in ms for the lookup retry delay, applied before jitter; must be >= `lookup_retry_backoff_ms` |
 | `connect_timeout_ms`                  | `uint64_t`    | `15000`              | TCP connect timeout in milliseconds                                                      |
+| `connection_max_idle_time_ms`         | `uint64_t`    | `600000` (10 min)    | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
 | `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |

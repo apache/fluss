@@ -49,7 +49,6 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     private final ApiManager apiManager;
     private final List<String> listeners;
-    private final RequestsMetrics requestsMetrics;
     private Configuration conf;
     private Map<String, Supplier<ServerAuthenticator>> serverAuthenticatorSuppliers;
     private PlainSaslServerConfigManager plainSaslServerConfigManager;
@@ -57,11 +56,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     /** Shared by every TLS listener; {@code null} when no listener enables TLS. */
     @Nullable private SslContext sslContext;
 
-    public FlussProtocolPlugin(
-            ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
+    public FlussProtocolPlugin(ServerType serverType, List<String> listeners) {
         this.apiManager = new ApiManager(serverType);
         this.listeners = listeners;
-        this.requestsMetrics = requestsMetrics;
     }
 
     @Override
@@ -92,7 +89,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName) {
+            RequestChannel[] requestChannels,
+            String listenerName,
+            RequestsMetrics requestsMetrics) {
         return new ServerChannelInitializer(
                 requestChannels,
                 apiManager,

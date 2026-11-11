@@ -33,12 +33,112 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_METADATA_REQUEST_NAME;
+import static org.apache.fluss.rpc.netty.server.RequestsMetrics.KAFKA_PRODUCE_REQUEST_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link RequestsMetrics}. */
 class RequestsMetricsTest {
+
+    @Test
+    void testTabletServerRegistersNativeRequests() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics metrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+
+        assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.FETCH_LOG.id, true, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.LOOKUP.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.LOOKUP.id, false, true)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, false)).isPresent();
+        assertThat(metrics.getMetrics(ApiKeys.PUT_KV.id, false, true)).isPresent();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE))
+                .extracting(metric -> metric.group.getAllVariables().get("request"))
+                .containsExactlyInAnyOrder(
+                        "produceLog",
+                        "putKv",
+                        "historicalPutKv",
+                        "lookup",
+                        "historicalLookup",
+                        "fetchLogClient",
+                        "fetchLogFollower",
+                        "prefixLookup",
+                        "metadata",
+                        "listOffsetsClient",
+                        "listOffsetsFollower",
+                        "limitScan",
+                        "scanKv",
+                        "tableStats",
+                        "notifyLeaderAndIsr",
+                        "stopReplica");
+    }
+
+    @Test
+    void testCoordinatorServerCreatesOnlyRequestGaugeGroup() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        AtomicInteger requestGroupLookups = new AtomicInteger();
+        MetricGroup serverMetricGroup =
+                new GenericMetricGroup(registry, null, "coordinator") {
+                    @Override
+                    public MetricGroup addGroup(String name) {
+                        if ("request".equals(name)) {
+                            requestGroupLookups.incrementAndGet();
+                        }
+                        return super.addGroup(name);
+                    }
+                };
+        RequestsMetrics metrics =
+                RequestsMetrics.createCoordinatorServerRequestMetrics(serverMetricGroup);
+
+        metrics.gauge(MetricNames.REQUEST_QUEUE_SIZE, () -> 0);
+        metrics.gauge("processor_index", "0", MetricNames.REQUEST_QUEUE_SIZE, () -> 0);
+        assertThat(requestGroupLookups.get()).isOne();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE)).isEmpty();
+        assertThat(registry.metrics(MetricNames.REQUEST_QUEUE_SIZE))
+                .extracting(
+                        metric -> metric.group.getLogicalScope(CharacterFilter.NO_OP_FILTER, '_'))
+                .containsExactlyInAnyOrder(
+                        "coordinator_request", "coordinator_request_processor_index");
+    }
+
+    @Test
+    void testKafkaRegistersOnlyProduceAndMetadata() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics metrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+        List<RegisteredMetric> nativeRates = registry.metrics(MetricNames.REQUESTS_RATE);
+        metrics.registerKafkaRequestMetrics();
+
+        assertThat(metrics.getMetrics(KAFKA_PRODUCE_REQUEST_NAME)).isPresent();
+        assertThat(metrics.getMetrics(KAFKA_METADATA_REQUEST_NAME)).isPresent();
+        assertThat(registry.metrics(MetricNames.REQUESTS_RATE))
+                .filteredOn(metric -> !nativeRates.contains(metric))
+                .extracting(metric -> String.join("_", metric.group.getScopeComponents()))
+                .containsExactlyInAnyOrder(
+                        "tabletserver_request_kafka_produce",
+                        "tabletserver_request_kafka_metadata");
+    }
+
+    @Test
+    void testRequestMetricsCalculations() {
+        RequestsMetrics kafka = KafkaMetricsTestUtils.createRequestMetrics();
+        RequestsMetrics.Metrics metrics = kafka.getMetrics(KAFKA_PRODUCE_REQUEST_NAME).get();
+        metrics.recordRequest(42, 100, 105, 116, 123);
+
+        assertThat(metrics.getRequestsCount().getCount()).isOne();
+        assertThat(metrics.getErrorsCount().getCount()).isZero();
+        assertThat(metrics.getRequestBytes().getStatistics().getValues()).containsExactly(42);
+        assertThat(metrics.getRequestQueueTimeMs().getStatistics().getValues()).containsExactly(5);
+        assertThat(metrics.getRequestProcessTimeMs().getStatistics().getValues())
+                .containsExactly(11);
+        assertThat(metrics.getResponseSendTimeMs().getStatistics().getValues()).containsExactly(7);
+        assertThat(metrics.getTotalTimeMs().getStatistics().getValues()).containsExactly(23);
+    }
 
     @Test
     void errorsKeepAggregateAndRegisterBreakdownByError() {
@@ -104,6 +204,24 @@ class RequestsMetricsTest {
                                     .containsEntry("error", Errors.UNKNOWN_SERVER_ERROR.name());
                             assertThat(((Meter) registered.metric).getCount()).isEqualTo(1);
                         });
+    }
+
+    @Test
+    void registersMetricsForAdditionalTabletServerRequests() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics requestsMetrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, true, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIMIT_SCAN.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.SCAN_KV.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.GET_TABLE_STATS.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.NOTIFY_LEADER_AND_ISR.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.STOP_REPLICA.id, false, false)).isPresent();
     }
 
     static class RecordingMetricRegistry implements MetricRegistry {

@@ -331,6 +331,9 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         @Override
         public void release() {
+            // Cancellation can leave the thread interrupted. On macOS, FileUtils aborts recursive
+            // deletion in that case, so preserve the interrupt status while allowing cleanup.
+            boolean interrupted = Thread.interrupted();
             try {
                 if (snapshotDirectory.exists()) {
                     LOG.trace(
@@ -340,6 +343,10 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 }
             } catch (IOException e) {
                 LOG.warn("Could not properly cleanup local RocksDB backup directory.", e);
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }

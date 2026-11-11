@@ -48,14 +48,6 @@ public class PartitionMetadata {
             long tableId,
             String partitionName,
             long partitionId,
-            List<BucketMetadata> bucketMetadataList) {
-        this(tableId, partitionName, partitionId, bucketMetadataList, null);
-    }
-
-    public PartitionMetadata(
-            long tableId,
-            String partitionName,
-            long partitionId,
             List<BucketMetadata> bucketMetadataList,
             @Nullable Integer bucketCount) {
         this.tableId = tableId;

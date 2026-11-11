@@ -17,11 +17,15 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -37,11 +41,16 @@ import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
@@ -51,11 +60,18 @@ import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.Projection;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.io.File;
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -64,6 +80,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.ChangeType.APPEND_ONLY;
 import static org.apache.fluss.record.TestData.DEFAULT_MAGIC;
@@ -99,6 +116,305 @@ class LogRecordReadContextTest {
     };
 
     private static final RowType ROW_TYPE = allTypesRowType();
+
+    @TempDir private File tempDir;
+    private final List<FileLogRecords> files = new ArrayList<>();
+
+    @AfterEach
+    void closeFiles() throws IOException {
+        for (FileLogRecords file : files) {
+            file.close();
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ArrowCompressionType.class)
+    void testArrowProjectionLoadsOnlySelectedColumns(ArrowCompressionType compression)
+            throws Exception {
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("unused", DataTypes.STRING()),
+                        DataTypes.FIELD("value", DataTypes.STRING()));
+        Schema schema = Schema.newBuilder().fromRowType(rowType).build();
+        GenericRow row =
+                GenericRow.of(
+                        42, BinaryString.fromString("unused"), BinaryString.fromString("selected"));
+        for (boolean appendOnly : new boolean[] {true, false}) {
+            LogRecordBatch batch =
+                    buildArrowBatch(
+                            rowType,
+                            DEFAULT_SCHEMA_ID,
+                            compression,
+                            appendOnly,
+                            row,
+                            GenericRow.of(43, null, null));
+            try (LogRecordReadContext context =
+                    LogRecordReadContext.createReadContext(
+                            tableInfo(LogFormat.ARROW, schema, DEFAULT_SCHEMA_ID),
+                            true,
+                            SchemaResolution.TARGET,
+                            Projection.of(new int[] {2, 0}),
+                            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, schema),
+                            null)) {
+                assertThat(context.isProjectionPushDowned()).isFalse();
+                batch.ensureValid();
+                try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                    FieldGetter[] getters = context.getSelectedFieldGetters(DEFAULT_SCHEMA_ID);
+                    LogRecord first = records.next();
+                    assertThat(getters[0].getFieldOrNull(first.getRow()).toString())
+                            .isEqualTo("selected");
+                    assertThat(getters[1].getFieldOrNull(first.getRow())).isEqualTo(42);
+                    assertThat(first.getChangeType())
+                            .isEqualTo(appendOnly ? APPEND_ONLY : ChangeType.UPDATE_AFTER);
+                    InternalRow second = records.next().getRow();
+                    assertThat(getters[0].getFieldOrNull(second)).isNull();
+                    assertThat(getters[1].getFieldOrNull(second)).isEqualTo(43);
+                    assertThat(records.hasNext()).isFalse();
+                    assertThat(
+                                    context.getArrowReadPlan(DEFAULT_SCHEMA_ID)
+                                            .getLoadedRowType()
+                                            .getFieldNames())
+                            .containsExactly("id", "value");
+                }
+                assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+                batch.ensureValid();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("nestedReadModes")
+    void testArrowProjectionWithNestedColumns(ArrowCompressionType compression, boolean fromFile)
+            throws Exception {
+        Schema schema = Schema.newBuilder().fromRowType(ROW_TYPE).build();
+        GenericRow expected = (GenericRow) sampleValue(ROW_TYPE);
+        int count = ROW_TYPE.getFieldCount();
+        int[] selected = {count - 1, count - 2, count - 3, 2, 1, 0};
+        LogRecordBatch batch =
+                readBatch(
+                        buildArrowBatch(
+                                ROW_TYPE,
+                                DEFAULT_SCHEMA_ID,
+                                compression,
+                                true,
+                                expected,
+                                new GenericRow(count)),
+                        fromFile);
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createReadContext(
+                        tableInfo(LogFormat.ARROW, schema, DEFAULT_SCHEMA_ID),
+                        true,
+                        SchemaResolution.TARGET,
+                        Projection.of(selected),
+                        new TestingSchemaGetter(DEFAULT_SCHEMA_ID, schema),
+                        null)) {
+            // Reusing the root must not retain buffers from the preceding batch.
+            for (int iteration = 0; iteration < 2; iteration++) {
+                try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                    FieldGetter[] getters = context.getSelectedFieldGetters(DEFAULT_SCHEMA_ID);
+                    InternalRow first = records.next().getRow();
+                    for (int i = 0; i < selected.length; i++) {
+                        DataType type = ROW_TYPE.getTypeAt(selected[i]);
+                        assertThat(toJava(getters[i].getFieldOrNull(first), type))
+                                .isEqualTo(toJava(expected.getField(selected[i]), type));
+                    }
+                    InternalRow second = records.next().getRow();
+                    for (FieldGetter getter : getters) {
+                        assertThat(getter.getFieldOrNull(second)).isNull();
+                    }
+                    assertThat(records.hasNext()).isFalse();
+                    assertThat(
+                                    context.getArrowReadPlan(DEFAULT_SCHEMA_ID)
+                                            .getLoadedRowType()
+                                            .getFieldCount())
+                            .isEqualTo(selected.length);
+                }
+                assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("schemaReadModes")
+    void testArrowProjectionWithSchemaEvolution(SchemaResolution resolution, boolean fromFile)
+            throws Exception {
+        Schema source =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("unused", DataTypes.STRING())
+                        .column("value", DataTypes.STRING())
+                        .build();
+        Schema target =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column("added", DataTypes.STRING(), null, 100),
+                                        new Schema.Column(
+                                                "renamed",
+                                                DataTypes.STRING(),
+                                                null,
+                                                source.getColumn("value").getColumnId()),
+                                        source.getColumn("id")))
+                        .build();
+        TestingSchemaGetter schemas = new TestingSchemaGetter(0, source);
+        schemas.updateLatestSchemaInfo(new SchemaInfo(target, 1));
+        LogRecordBatch oldBatch =
+                readBatch(
+                        buildArrowBatch(
+                                source.getRowType(),
+                                0,
+                                ArrowCompressionType.ZSTD,
+                                true,
+                                GenericRow.of(
+                                        42,
+                                        BinaryString.fromString("skip"),
+                                        BinaryString.fromString("old"))),
+                        fromFile);
+        LogRecordBatch newBatch =
+                readBatch(
+                        buildArrowBatch(
+                                target.getRowType(),
+                                1,
+                                ArrowCompressionType.LZ4_FRAME,
+                                true,
+                                GenericRow.of(
+                                        BinaryString.fromString("new"),
+                                        BinaryString.fromString("value"),
+                                        43)),
+                        fromFile);
+        try (LogRecordReadContext context =
+                LogRecordReadContext.createReadContext(
+                        tableInfo(LogFormat.ARROW, target, 1),
+                        true,
+                        resolution,
+                        Projection.of(new int[] {1, 0}),
+                        schemas,
+                        null)) {
+            assertThat(context.getArrowReadPlan(0)).isSameAs(context.getArrowReadPlan(0));
+            assertThat(context.getArrowReadPlan(0).getLoadedRowType().getFieldNames())
+                    .containsExactly("value");
+            assertThat(context.getArrowReadPlan(1).getLoadedRowType().getFieldNames())
+                    .containsExactly("added", "renamed");
+            FieldGetter[] getters = context.getSelectedFieldGetters(0);
+            try (CloseableIterator<LogRecord> records = oldBatch.records(context)) {
+                InternalRow row = records.next().getRow();
+                assertThat(getters[0].getFieldOrNull(row).toString()).isEqualTo("old");
+                assertThat(getters[1].getFieldOrNull(row)).isNull();
+            }
+            try (CloseableIterator<LogRecord> records = newBatch.records(context)) {
+                InternalRow row = records.next().getRow();
+                assertThat(getters[0].getFieldOrNull(row).toString()).isEqualTo("value");
+                assertThat(getters[1].getFieldOrNull(row).toString()).isEqualTo("new");
+            }
+            assertThat(context.getBufferAllocator().getAllocatedMemory()).isZero();
+        }
+
+        // A requested column can be absent from every physical field of a historical batch.
+        try (LogRecordReadContext context =
+                        LogRecordReadContext.createReadContext(
+                                tableInfo(LogFormat.ARROW, target, 1),
+                                true,
+                                resolution,
+                                Projection.of(new int[] {0}),
+                                schemas,
+                                null);
+                CloseableIterator<LogRecord> records = oldBatch.records(context)) {
+            assertThat(context.getArrowReadPlan(0).getLoadedRowType().getFieldCount()).isZero();
+            assertThat(
+                            context.getSelectedFieldGetters(0)[0].getFieldOrNull(
+                                    records.next().getRow()))
+                    .isNull();
+            assertThat(records.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testArrowProjectionFastPaths() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        TableInfo table = tableInfo(LogFormat.ARROW, schema, DEFAULT_SCHEMA_ID);
+        TestingSchemaGetter schemas = new TestingSchemaGetter(DEFAULT_SCHEMA_ID, schema);
+        try (LogRecordReadContext allFields =
+                        LogRecordReadContext.createReadContext(
+                                table,
+                                true,
+                                SchemaResolution.TARGET,
+                                Projection.of(new int[] {1, 0}),
+                                schemas,
+                                null);
+                LogRecordReadContext dynamic =
+                        LogRecordReadContext.createReadContext(
+                                table, true, SchemaResolution.DYNAMIC, null, schemas, null);
+                LogRecordReadContext serverProjected =
+                        LogRecordReadContext.createReadContext(
+                                table,
+                                false,
+                                SchemaResolution.TARGET,
+                                Projection.of(new int[] {1}),
+                                schemas,
+                                null)) {
+            for (LogRecordReadContext context : Arrays.asList(allFields, dynamic)) {
+                ArrowReadPlan plan = context.getArrowReadPlan(DEFAULT_SCHEMA_ID);
+                assertThat(plan.getLoadedRowType()).isEqualTo(schema.getRowType());
+                assertThat(plan.createOutputRow()).isNull();
+            }
+            assertThat(serverProjected.isProjectionPushDowned()).isTrue();
+            ArrowReadPlan serverPlan = serverProjected.getArrowReadPlan(DEFAULT_SCHEMA_ID);
+            assertThat(serverPlan.getLoadedRowType().getFieldNames()).containsExactly("b");
+            assertThat(serverPlan.createOutputRow()).isNull();
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = LogFormat.class,
+            names = {"INDEXED", "COMPACTED"})
+    void testOutputProjectedRowWithSchemaEvolution(LogFormat logFormat) {
+        Schema source =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("removed", DataTypes.STRING())
+                        .column("value", DataTypes.STRING())
+                        .build();
+        Schema target =
+                Schema.newBuilder()
+                        .fromColumns(
+                                Arrays.asList(
+                                        new Schema.Column("added", DataTypes.STRING(), null, 100),
+                                        new Schema.Column(
+                                                "renamed",
+                                                DataTypes.STRING(),
+                                                null,
+                                                source.getColumn("value").getColumnId()),
+                                        source.getColumn("id")))
+                        .build();
+        TestingSchemaGetter schemas = new TestingSchemaGetter(0, source);
+        schemas.updateLatestSchemaInfo(new SchemaInfo(target, 1));
+        TableInfo table = tableInfo(logFormat, target, 1);
+        try (LogRecordReadContext fixed =
+                        LogRecordReadContext.createReadContext(
+                                table, true, SchemaResolution.TARGET, null, schemas, null);
+                LogRecordReadContext dynamic =
+                        LogRecordReadContext.createReadContext(
+                                table, true, SchemaResolution.DYNAMIC, null, schemas, null)) {
+            ProjectedRow output = fixed.getOutputProjectedRow(0);
+            assertThat(output).isNotNull();
+            output.replaceRow(
+                    GenericRow.of(
+                            42, BinaryString.fromString("unused"), BinaryString.fromString("old")));
+            assertThat(output.getFieldCount()).isEqualTo(3);
+            assertThat(output.isNullAt(0)).isTrue();
+            assertThat(output.getString(1).toString()).isEqualTo("old");
+            assertThat(output.getInt(2)).isEqualTo(42);
+            assertThat(fixed.getOutputProjectedRow(1)).isNull();
+            assertThat(dynamic.getOutputProjectedRow(0)).isNull();
+            assertThat(dynamic.getOutputProjectedRow(1)).isNull();
+        }
+    }
 
     @Test
     void testRowTypeCoversEveryTypeRoot() {
@@ -155,6 +471,38 @@ class LogRecordReadContextTest {
                         .isEqualTo(toJava(expected.getField(i), fieldType));
             }
         }
+    }
+
+    private LogRecordBatch readBatch(LogRecordBatch memoryBatch, boolean fromFile)
+            throws IOException {
+        if (!fromFile) {
+            return memoryBatch;
+        }
+        DefaultLogRecordBatch batch = (DefaultLogRecordBatch) memoryBatch;
+        FileLogRecords file = FileLogRecords.open(new File(tempDir, "batch-" + files.size()));
+        files.add(file);
+        file.append(
+                MemoryLogRecords.pointToMemory(
+                        batch.segment(), batch.position(), batch.sizeInBytes()));
+        return file.batches().iterator().next();
+    }
+
+    private static Stream<Arguments> nestedReadModes() {
+        return Arrays.stream(ArrowCompressionType.values())
+                .flatMap(
+                        compression ->
+                                Stream.of(
+                                        Arguments.of(compression, false),
+                                        Arguments.of(compression, true)));
+    }
+
+    private static Stream<Arguments> schemaReadModes() {
+        return Arrays.stream(SchemaResolution.values())
+                .flatMap(
+                        resolution ->
+                                Stream.of(
+                                        Arguments.of(resolution, false),
+                                        Arguments.of(resolution, true)));
     }
 
     private static RowType allTypesRowType() {
@@ -336,19 +684,59 @@ class LogRecordReadContextTest {
     }
 
     private static TableInfo tableInfo(LogFormat logFormat) {
+        return tableInfo(
+                logFormat, Schema.newBuilder().fromRowType(ROW_TYPE).build(), DEFAULT_SCHEMA_ID);
+    }
+
+    private static TableInfo tableInfo(LogFormat logFormat, Schema schema, int schemaId) {
         TableDescriptor descriptor =
                 TableDescriptor.builder()
-                        .schema(Schema.newBuilder().fromRowType(ROW_TYPE).build())
+                        .schema(schema)
                         .distributedBy(1)
                         .logFormat(logFormat)
                         .build();
         return TableInfo.of(
                 TablePath.of("test_db", "test_table"),
                 1L,
-                DEFAULT_SCHEMA_ID,
+                schemaId,
                 descriptor,
                 DEFAULT_REMOTE_DATA_DIR,
                 0L,
                 0L);
+    }
+
+    private static LogRecordBatch buildArrowBatch(
+            RowType rowType,
+            int schemaId,
+            ArrowCompressionType compression,
+            boolean appendOnly,
+            GenericRow... rows)
+            throws Exception {
+        try (BufferAllocator allocator = new RootAllocator();
+                ArrowWriterPool pool = new ArrowWriterPool(allocator)) {
+            ArrowWriter writer =
+                    pool.getOrCreateWriter(
+                            1L,
+                            schemaId,
+                            1024 * 1024,
+                            rowType,
+                            new ArrowCompressionInfo(compression, 3));
+            try (MemoryLogRecordsArrowBuilder builder =
+                    MemoryLogRecordsArrowBuilder.builder(
+                            0L,
+                            DEFAULT_MAGIC,
+                            schemaId,
+                            writer,
+                            new UnmanagedPagedOutputView(1024 * 1024),
+                            appendOnly)) {
+                for (GenericRow row : rows) {
+                    builder.append(appendOnly ? APPEND_ONLY : ChangeType.UPDATE_AFTER, row);
+                }
+                MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+                byte[] bytes = new byte[records.sizeInBytes()];
+                records.getMemorySegment().get(records.getPosition(), bytes, 0, bytes.length);
+                return MemoryLogRecords.pointToBytes(bytes).batches().iterator().next();
+            }
+        }
     }
 }

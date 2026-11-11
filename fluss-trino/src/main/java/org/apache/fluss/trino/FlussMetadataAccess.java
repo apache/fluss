@@ -23,7 +23,7 @@ import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -181,7 +181,7 @@ final class FlussMetadataAccess {
         }
     }
 
-    List<FlussPhysicalBucket> listScanBuckets(
+    List<PartitionInfo> listScanPartitions(
             FlussTableHandle table, Optional<PartitionSpec> partitionSpec) {
         checkNotNull(table, "table is null");
         checkNotNull(partitionSpec, "partitionSpec is null");
@@ -189,40 +189,50 @@ final class FlussMetadataAccess {
         TablePath tablePath = TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
 
         try {
-            CompletableFuture<List<BucketInfo>> future =
+            CompletableFuture<List<PartitionInfo>> future =
                     partitionSpec.isPresent()
-                            ? getAdmin().describeBuckets(tablePath, partitionSpec.get())
-                            : getAdmin().describeBuckets(tablePath);
-            List<BucketInfo> bucketInfos =
+                            ? getAdmin().listPartitionInfos(tablePath, partitionSpec.get())
+                            : getAdmin().listPartitionInfos(tablePath);
+            List<PartitionInfo> partitions =
                     await(
                             future,
                             FLUSS_SPLIT_ERROR,
-                            "Failed to describe Fluss buckets for " + table);
+                            "Failed to list Fluss partitions for " + table);
 
-            ImmutableList.Builder<FlussPhysicalBucket> buckets = ImmutableList.builder();
-
-            for (BucketInfo info : bucketInfos) {
-                if (info.getTableId() != table.getTableId()) {
+            Set<Long> partitionIds = new HashSet<>();
+            Set<String> partitionNames = new HashSet<>();
+            for (PartitionInfo info : partitions) {
+                if (info.getPartitionId() < 0) {
                     throw new TrinoException(
                             FLUSS_SPLIT_ERROR,
-                            "Fluss bucket metadata refers to an unexpected table ID");
+                            "Invalid Fluss partition ID during split planning: "
+                                    + info.getPartitionId());
                 }
-
-                Optional<Long> partitionId =
-                        info.getPartitionId().isPresent()
-                                ? Optional.of(info.getPartitionId().getAsLong())
-                                : Optional.empty();
-
-                buckets.add(
-                        new FlussPhysicalBucket(
-                                new FlussBucketHandle(
-                                        info.getTableId(), partitionId, info.getBucketId()),
-                                Optional.ofNullable(info.getPartitionName())));
+                if (info.getBucketCount() <= 0) {
+                    throw new TrinoException(
+                            FLUSS_SPLIT_ERROR,
+                            "Invalid bucket count for Fluss partition " + info.getPartitionId());
+                }
+                if (!partitionIds.add(info.getPartitionId())) {
+                    throw new TrinoException(
+                            FLUSS_SPLIT_ERROR,
+                            "Duplicate Fluss partition ID during split planning: "
+                                    + info.getPartitionId());
+                }
+                if (!partitionNames.add(info.getPartitionName())) {
+                    throw new TrinoException(
+                            FLUSS_SPLIT_ERROR,
+                            "Duplicate Fluss partition name during split planning: "
+                                    + info.getPartitionName());
+                }
             }
 
-            return buckets.build();
+            return ImmutableList.copyOf(partitions);
         } catch (TableNotExistException | DatabaseNotExistException e) {
             throw tableNotFound(table, e);
+        } catch (PartitionNotExistException e) {
+            throw new TrinoException(
+                    FLUSS_SPLIT_ERROR, "Fluss partition disappeared while listing partitions", e);
         }
     }
 
@@ -236,7 +246,6 @@ final class FlussMetadataAccess {
             return ImmutableMap.of();
         }
 
-        validatePhysicalBuckets(table, buckets);
         TablePath tablePath = TablePath.of(table.getFlussDatabaseName(), table.getFlussTableName());
 
         try {
@@ -247,40 +256,6 @@ final class FlussMetadataAccess {
         } catch (TableNotExistException | DatabaseNotExistException e) {
             throw tableNotFound(table, e);
         }
-    }
-
-    List<FlussPhysicalBucket> retainCurrentBuckets(
-            FlussTableHandle table,
-            List<FlussPhysicalBucket> expectedBuckets,
-            Optional<PartitionSpec> partitionSpec) {
-        Set<FlussPhysicalBucket> currentBuckets =
-                new HashSet<>(listScanBuckets(table, partitionSpec));
-        Set<Long> currentPartitionIds = new HashSet<>();
-        for (FlussPhysicalBucket current : currentBuckets) {
-            FlussBucketHandle bucket = current.getBucket();
-            if (bucket.isPartitioned()) {
-                currentPartitionIds.add(bucket.getRequiredPartitionId());
-            }
-        }
-        ImmutableList.Builder<FlussPhysicalBucket> remaining = ImmutableList.builder();
-        for (FlussPhysicalBucket expected : expectedBuckets) {
-            if (currentBuckets.contains(expected)) {
-                remaining.add(expected);
-                continue;
-            }
-            FlussBucketHandle bucket = expected.getBucket();
-            if (bucket.isPartitioned()
-                    && !currentPartitionIds.contains(bucket.getRequiredPartitionId())) {
-                // The original physical partition no longer exists.
-                continue;
-            }
-            throw new TrinoException(
-                    FLUSS_SPLIT_ERROR,
-                    "Fluss bucket topology changed during split planning; retry the query: missing "
-                            + expected);
-        }
-
-        return remaining.build();
     }
 
     private Admin getAdmin() {
@@ -343,7 +318,7 @@ final class FlussMetadataAccess {
                         partitionName,
                         admin.listOffsets(tablePath, partitionName, bucketIds, offsetSpec).all());
             } catch (PartitionNotExistException e) {
-                // The partition may have expired since bucket discovery.
+                // The partition may have expired since partition discovery.
             }
         }
 
@@ -425,35 +400,6 @@ final class FlussMetadataAccess {
                             + offset);
         }
         return offset;
-    }
-
-    private static void validatePhysicalBuckets(
-            FlussTableHandle table, List<FlussPhysicalBucket> buckets) {
-        boolean partitioned = buckets.get(0).getBucket().isPartitioned();
-
-        Set<FlussBucketHandle> seen = new HashSet<>();
-
-        for (FlussPhysicalBucket physicalBucket : buckets) {
-            FlussBucketHandle bucket = physicalBucket.getBucket();
-
-            if (bucket.getTableId() != table.getTableId()) {
-                throw new TrinoException(
-                        GENERIC_INTERNAL_ERROR,
-                        "Fluss bucket " + bucket + " does not belong to table " + table);
-            }
-
-            if (bucket.isPartitioned() != partitioned) {
-                throw new TrinoException(
-                        GENERIC_INTERNAL_ERROR,
-                        "Fluss bucket list mixes partitioned and non-partitioned buckets");
-            }
-
-            if (!seen.add(bucket)) {
-                throw new TrinoException(
-                        GENERIC_INTERNAL_ERROR,
-                        "Duplicate Fluss bucket in scan planning: " + bucket);
-            }
-        }
     }
 
     private static String canonicalize(String name) {

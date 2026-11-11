@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
+import static org.apache.fluss.rpc.netty.server.KafkaMetricsTestUtils.createRequestMetrics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -44,7 +45,9 @@ class KafkaProtocolPluginTest {
             KafkaChannelInitializer initializer =
                     (KafkaChannelInitializer)
                             plugin.createChannelHandler(
-                                    new RequestChannel[] {new RequestChannel(1)}, "KAFKA");
+                                    new RequestChannel[] {new RequestChannel(1)},
+                                    "KAFKA",
+                                    createRequestMetrics());
             initializer.initChannel(channel);
             IdleStateHandler idleHandler = channel.pipeline().get(IdleStateHandler.class);
             assertThat(idleHandler.getAllIdleTimeInMillis()).isZero();

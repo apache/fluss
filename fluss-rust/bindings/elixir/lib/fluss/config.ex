@@ -36,6 +36,7 @@ defmodule Fluss.Config do
   # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct bootstrap_servers: nil,
             connect_timeout_ms: nil,
+            connection_max_idle_time_ms: nil,
             lookup_batch_timeout_ms: nil,
             lookup_max_batch_size: nil,
             lookup_max_inflight_requests: nil,
@@ -76,6 +77,7 @@ defmodule Fluss.Config do
   @type t :: %__MODULE__{
           bootstrap_servers: String.t(),
           connect_timeout_ms: non_neg_integer() | nil,
+          connection_max_idle_time_ms: non_neg_integer() | nil,
           lookup_batch_timeout_ms: non_neg_integer() | nil,
           lookup_max_batch_size: non_neg_integer() | nil,
           lookup_max_inflight_requests: non_neg_integer() | nil,
@@ -131,6 +133,15 @@ defmodule Fluss.Config do
   @spec set_connect_timeout_ms(t(), non_neg_integer()) :: t()
   def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | connect_timeout_ms: ms}
+
+  @doc """
+  Sets how long in milliseconds a cached connection may go without reads or writes before it is
+  closed, failing the requests still waiting on it with a retriable error. `0` disables closing
+  idle connections. Defaults to `600000` (10 minutes).
+  """
+  @spec set_connection_max_idle_time_ms(t(), non_neg_integer()) :: t()
+  def set_connection_max_idle_time_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
+    do: %{config | connection_max_idle_time_ms: ms}
 
   @spec set_lookup_batch_timeout_ms(t(), non_neg_integer()) :: t()
   def set_lookup_batch_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),

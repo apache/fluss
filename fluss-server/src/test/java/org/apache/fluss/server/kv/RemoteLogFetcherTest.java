@@ -47,7 +47,7 @@ import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogTestBase;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TabletService;
-import org.apache.fluss.server.tablet.consumer.group.GroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
@@ -298,6 +298,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         DynamicConfigManager dynamicConfigManager = new DynamicConfigManager(zkClient, conf);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        MetadataManager metadataManager =
+                new MetadataManager(zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true));
         TabletService service =
                 new TabletService(
                         TABLET_SERVER_ID,
@@ -305,8 +307,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         zkClient,
                         replicaManager,
                         serverMetadataCache,
-                        new MetadataManager(
-                                zkClient, conf, new LakeCatalogDynamicLoader(conf, null, true)),
+                        metadataManager,
                         null,
                         dynamicConfigManager,
                         executor,
@@ -314,7 +315,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
                         scannerManager,
                         testCoordinatorGateway,
                         "CLIENT",
-                        GroupManager.from(conf));
+                        ConsumerOffsetTableConfig.from(conf));
         try (RpcServer server =
                 RpcServer.create(
                         conf,

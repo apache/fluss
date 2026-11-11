@@ -3259,7 +3259,6 @@ mod tests {
             crate::cluster::ServerType::TabletServer,
         );
         let mut locations_by_path = HashMap::new();
-        let mut locations_by_bucket = HashMap::new();
         let mut partitions = HashMap::new();
         let mut bucket_counts = HashMap::new();
         if let Some(buckets) = partition_buckets {
@@ -3276,9 +3275,6 @@ mod tests {
                     )
                 })
                 .collect();
-            for location in &locations {
-                locations_by_bucket.insert(location.table_bucket.clone(), location.clone());
-            }
             locations_by_path.insert(Arc::clone(partition_path), locations);
             partitions.insert(Arc::clone(partition_path), partition_id);
             bucket_counts.insert(TableOrPartition::Partition(partition_id), buckets);
@@ -3287,7 +3283,6 @@ mod tests {
             None,
             HashMap::from([(server.id(), server)]),
             locations_by_path,
-            locations_by_bucket,
             HashMap::from([(table_info.table_path.clone(), table_info.table_id)]),
             HashMap::from([(table_info.table_path.clone(), table_info.clone())]),
             partitions,

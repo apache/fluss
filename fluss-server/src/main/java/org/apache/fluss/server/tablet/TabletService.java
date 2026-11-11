@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.tablet;
 
-import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
@@ -82,7 +81,6 @@ import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
-import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -130,15 +128,18 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
-import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableManager;
-import org.apache.fluss.server.tablet.consumer.group.GroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerGroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -160,6 +161,7 @@ import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -171,6 +173,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilter
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitConsumerOffsetsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
@@ -200,8 +203,7 @@ public final class TabletService extends RpcServiceBase
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
-    private final GroupManager groupManager;
-    private final ConsumerOffsetTableManager consumerOffsetTableManager;
+    private final ConsumerGroupManager groupManager;
 
     public TabletService(
             int serverId,
@@ -217,7 +219,7 @@ public final class TabletService extends RpcServiceBase
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
             String interListenerName,
-            GroupManager groupManager) {
+            ConsumerOffsetTableConfig offsetsConfig) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -235,10 +237,11 @@ public final class TabletService extends RpcServiceBase
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
-        this.groupManager = groupManager;
-        this.consumerOffsetTableManager =
-                new ConsumerOffsetTableManager(
-                        groupManager.consumerOffsetTableConfig(),
+        this.groupManager =
+                new ConsumerGroupManager(
+                        serverId,
+                        replicaManager,
+                        offsetsConfig,
                         zkClient,
                         metadataManager,
                         metadataCache,
@@ -685,6 +688,7 @@ public final class TabletService extends RpcServiceBase
                 response,
                 result -> {
                     replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, clusterMetadata);
+                    groupManager.onTableMetadataUpdate(clusterMetadata.getTableMetadataList());
                     result.complete(new UpdateMetadataResponse());
                 });
     }
@@ -808,40 +812,39 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
             FindConsumerGroupOwnerRequest request) {
-        // Copy request/session values before returning: the request buffer is released after this
-        // method and the current session is bound to the RPC worker thread.
-        final String groupId = request.getGroupId();
-        final String listenerName = currentListenerName();
-        groupManager.validateGroupId(groupId);
-
-        return consumerOffsetTableManager
-                .ensureTableAsync()
-                .thenCompose(
-                        bucketCount -> {
-                            int bucketId = groupManager.bucketFor(groupId, bucketCount);
-                            return consumerOffsetTableManager.resolveOwnerAsync(
-                                    bucketId, listenerName);
-                        })
-                .thenApply(this::buildFindConsumerGroupOwnerResponse);
-    }
-
-    private FindConsumerGroupOwnerResponse buildFindConsumerGroupOwnerResponse(
-            ServerNode leaderNode) {
-        return new FindConsumerGroupOwnerResponse()
-                .setOwner(
-                        new PbServerNode()
-                                .setNodeId(leaderNode.id())
-                                .setHost(leaderNode.host())
-                                .setPort(leaderNode.port()));
+        return groupManager
+                .findOwner(request.getGroupId(), currentListenerName())
+                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("commitConsumerOffsets is not supported yet"));
-        return response;
+        String groupId = request.getGroupId();
+        final Replica offsetsReplica;
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
+        try {
+            offsetsReplica = groupManager.validateGroupId(groupId);
+            offsets = decodeCommitConsumerOffsetsRequest(request);
+        } catch (ApiException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+        if (offsets.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
+        }
+
+        // The session is bound to the RPC thread; authorize all sources before starting any write.
+        if (authorizer != null) {
+            offsets.keySet().stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(READ, tableId));
+        }
+
+        return groupManager
+                .handleCommitConsumerOffsets(groupId, offsetsReplica, offsets)
+                .thenApply(ServerRpcMessageUtils::makeCommitConsumerOffsetsResponse);
     }
 
     @Override

@@ -1577,6 +1577,22 @@ fn align_record_batch_to_schema(
     target_schema: SchemaRef,
     schema_alignment: &[i32],
 ) -> Result<RecordBatch> {
+    if schema_alignment.len() == record_batch.num_columns()
+        && schema_alignment.len() == target_schema.fields().len()
+        && schema_alignment
+            .iter()
+            .enumerate()
+            .all(|(index, mapped)| *mapped == index as i32)
+    {
+        // Move the column list without cloning array references, retaining Arrow validation.
+        let (_, columns, row_count) = record_batch.into_parts();
+        return Ok(RecordBatch::try_new_with_options(
+            target_schema,
+            columns,
+            &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+        )?);
+    }
+
     let row_count = record_batch.num_rows();
     let mut columns = Vec::with_capacity(target_schema.fields().len());
 
@@ -1699,6 +1715,174 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use bytes::Bytes;
+
+    #[test]
+    fn identity_alignment_reuses_batch_and_preserves_other_mappings() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("a", ArrowDataType::Int32, true),
+            Field::new("b", ArrowDataType::Int32, true),
+        ]));
+        let make_batch = || {
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), None])),
+                    Arc::new(Int32Array::from(vec![Some(2), Some(3)])),
+                ],
+            )
+            .unwrap()
+        };
+
+        let batch = make_batch();
+        let columns = batch.columns().as_ptr();
+        let aligned = align_record_batch_to_schema(batch, schema.clone(), &[0, 1])?;
+        assert_eq!(aligned.columns().as_ptr(), columns);
+        assert_eq!(aligned, make_batch());
+
+        let reordered = align_record_batch_to_schema(make_batch(), schema.clone(), &[1, 0])?;
+        assert_eq!(reordered.column(0), make_batch().column(1));
+        assert_eq!(reordered.column(1), make_batch().column(0));
+
+        let missing =
+            align_record_batch_to_schema(make_batch(), schema.clone(), &[0, UNEXIST_MAPPING])?;
+        assert_eq!(missing.column(0), make_batch().column(0));
+        assert_eq!(missing.column(1).null_count(), 2);
+
+        let renamed = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("renamed", ArrowDataType::Int32, true),
+            Field::new("b", ArrowDataType::Int32, true),
+        ]));
+        let renamed_batch = align_record_batch_to_schema(make_batch(), renamed.clone(), &[0, 1])?;
+        assert_eq!(renamed_batch.schema(), renamed);
+        assert!(align_record_batch_to_schema(make_batch(), schema, &[0]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_preserves_slices_and_empty_batches() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
+        )?;
+        let sliced = batch.slice(1, 2);
+        let columns = sliced.columns().as_ptr();
+        let expected = sliced.clone();
+        let aligned = align_record_batch_to_schema(sliced, schema.clone(), &[0])?;
+        assert_eq!(aligned.columns().as_ptr(), columns);
+        assert_eq!(aligned, expected);
+
+        let empty = RecordBatch::new_empty(schema.clone());
+        let aligned = align_record_batch_to_schema(empty, schema.clone(), &[0])?;
+        assert_eq!(aligned.schema(), schema);
+        assert_eq!(aligned.num_rows(), 0);
+        assert_eq!(aligned.num_columns(), 1);
+
+        let zero_columns = Arc::new(arrow_schema::Schema::empty());
+        for row_count in [0, 2] {
+            for target in [
+                zero_columns.clone(),
+                Arc::new(arrow_schema::Schema::empty()),
+            ] {
+                let batch = RecordBatch::try_new_with_options(
+                    zero_columns.clone(),
+                    vec![],
+                    &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+                )?;
+                let aligned = align_record_batch_to_schema(batch, target.clone(), &[])?;
+                assert!(Arc::ptr_eq(aligned.schema_ref(), &target));
+                assert_eq!(aligned.num_rows(), row_count);
+                assert_eq!(aligned.num_columns(), 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_checks_schema_contents_and_metadata() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        // Equal schemas need not share the same Arc allocation.
+        let equal_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        assert!(!Arc::ptr_eq(&schema, &equal_schema));
+        let input = batch.clone();
+        let columns = input.columns().as_ptr();
+        let aligned = align_record_batch_to_schema(input, equal_schema.clone(), &[0])?;
+        assert_eq!(aligned.schema(), equal_schema);
+        assert_eq!(aligned.columns().as_ptr(), columns);
+
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let targets = [
+            Arc::new(schema.as_ref().clone().with_metadata(metadata.clone())),
+            Arc::new(arrow_schema::Schema::new(vec![
+                Field::new("id", ArrowDataType::Int32, true).with_metadata(metadata),
+            ])),
+            Arc::new(arrow_schema::Schema::new(vec![Field::new(
+                "id",
+                ArrowDataType::Int32,
+                false,
+            )])),
+        ];
+        for target in targets {
+            let input = batch.clone();
+            let columns = input.columns().as_ptr();
+            let aligned = align_record_batch_to_schema(input, target.clone(), &[0])?;
+            assert_eq!(aligned.columns().as_ptr(), columns);
+            assert_eq!(aligned.schema(), target);
+            assert_eq!(aligned.column(0), batch.column(0));
+            assert_eq!(aligned.num_rows(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_validates_different_target_schemas() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let wrong_type = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int64,
+            true,
+        )]));
+        assert!(align_record_batch_to_schema(batch, wrong_type, &[0]).is_err());
+        let nullable_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
+        )?;
+        let required = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        assert!(align_record_batch_to_schema(nullable_batch, required, &[0]).is_err());
+        Ok(())
+    }
 
     #[test]
     fn nonnullable_append_builder_roundtrips_for_both_append_modes() {
