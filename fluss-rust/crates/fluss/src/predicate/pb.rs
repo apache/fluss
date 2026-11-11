@@ -227,6 +227,144 @@ fn to_pb_literal(field: &DataField, literal: &Literal) -> Result<PbLiteralValue>
     Ok(pb)
 }
 
+impl Predicate {
+    /// Encodes an exact predicate using stable field IDs from the full source schema.
+    /// Unlike conservative scan pushdown, this preserves every condition and rejects
+    /// literals that the wire representation cannot express exactly.
+    pub fn to_protobuf(&self, row_type: &RowType) -> Result<PbPredicate> {
+        to_pb_predicate(self, row_type)
+    }
+
+    /// Decodes a predicate against its captured schema, rejecting unknown operations
+    /// and mismatched literal types. This does not select server pushdown capabilities.
+    pub fn from_protobuf(pb: &PbPredicate, row_type: &RowType) -> Result<Self> {
+        let predicate = from_pb_predicate(pb, row_type)?;
+        super::BoundPredicate::bind(Some(&predicate), row_type)?;
+        Ok(predicate)
+    }
+}
+
+fn from_pb_predicate(pb: &PbPredicate, row_type: &RowType) -> Result<Predicate> {
+    let invalid = || IllegalArgument {
+        message: "invalid protobuf predicate".into(),
+    };
+    let predicate = match (pb.r#type, &pb.leaf, &pb.compound) {
+        (0, Some(leaf), None) => {
+            let field = row_type
+                .fields()
+                .iter()
+                .find(|f| f.field_id() == leaf.field_id)
+                .ok_or_else(invalid)?;
+            let functions = [
+                LeafFunction::Equal,
+                LeafFunction::NotEqual,
+                LeafFunction::LessThan,
+                LeafFunction::LessOrEqual,
+                LeafFunction::GreaterThan,
+                LeafFunction::GreaterOrEqual,
+                LeafFunction::IsNull,
+                LeafFunction::IsNotNull,
+                LeafFunction::StartsWith,
+                LeafFunction::Contains,
+                LeafFunction::EndsWith,
+                LeafFunction::In,
+                LeafFunction::NotIn,
+            ];
+            Predicate::Leaf {
+                field: field.name().into(),
+                function: *functions.get(leaf.function as usize).ok_or_else(invalid)?,
+                literals: leaf
+                    .literals
+                    .iter()
+                    .map(|value| from_pb_literal(field, value))
+                    .collect::<Result<_>>()?,
+            }
+        }
+        (1, None, Some(compound)) => Predicate::Compound {
+            function: match compound.function {
+                0 => CompoundFunction::And,
+                1 => CompoundFunction::Or,
+                _ => return Err(invalid()),
+            },
+            children: compound
+                .children
+                .iter()
+                .map(|child| from_pb_predicate(child, row_type))
+                .collect::<Result<_>>()?,
+        },
+        _ => return Err(invalid()),
+    };
+    Ok(predicate)
+}
+
+fn from_pb_literal(field: &DataField, value: &PbLiteralValue) -> Result<Literal> {
+    use crate::row::{Decimal, TimestampLtz, TimestampNtz};
+    let invalid = || IllegalArgument {
+        message: format!("invalid protobuf literal for '{}'", field.name()),
+    };
+    if value.literal_type != literal_type_code(field)? {
+        return Err(invalid());
+    }
+    if value.is_null {
+        return Ok(Literal::Null);
+    }
+    Ok(match field.data_type() {
+        DataType::Boolean(_) => Literal::Bool(value.boolean_value.ok_or_else(invalid)?),
+        DataType::TinyInt(_) => Literal::Int8(
+            value
+                .int_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
+        ),
+        DataType::SmallInt(_) => Literal::Int16(
+            value
+                .int_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
+        ),
+        DataType::Int(_) => Literal::Int32(value.int_value.ok_or_else(invalid)?),
+        DataType::BigInt(_) => Literal::Int64(value.bigint_value.ok_or_else(invalid)?),
+        DataType::Float(_) => Literal::Float32(value.float_value.ok_or_else(invalid)?),
+        DataType::Double(_) => Literal::Float64(value.double_value.ok_or_else(invalid)?),
+        DataType::Char(_) | DataType::String(_) => {
+            Literal::String(value.string_value.clone().ok_or_else(invalid)?)
+        }
+        DataType::Binary(_) | DataType::Bytes(_) => {
+            Literal::Bytes(value.binary_value.clone().ok_or_else(invalid)?)
+        }
+        DataType::Decimal(ty) => {
+            Literal::Decimal(match (&value.decimal_bytes, value.decimal_value) {
+                (Some(bytes), None) => {
+                    Decimal::from_unscaled_bytes(bytes, ty.precision(), ty.scale())?
+                }
+                (None, Some(number)) => {
+                    Decimal::from_unscaled_long(number, ty.precision(), ty.scale())?
+                }
+                _ => return Err(invalid()),
+            })
+        }
+        DataType::Date(_) => Literal::Date(
+            value
+                .bigint_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
+        ),
+        DataType::Time(_) => Literal::Time(value.int_value.ok_or_else(invalid)?),
+        DataType::Timestamp(_) => Literal::TimestampNtz(TimestampNtz::from_millis_nanos(
+            value.timestamp_millis_value.ok_or_else(invalid)?,
+            value.timestamp_nano_of_millis_value.unwrap_or(0),
+        )?),
+        DataType::TimestampLTz(_) => Literal::TimestampLtz(TimestampLtz::from_millis_nanos(
+            value.timestamp_millis_value.ok_or_else(invalid)?,
+            value.timestamp_nano_of_millis_value.unwrap_or(0),
+        )?),
+        _ => return Err(unsupported_column(field)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,7 +385,10 @@ mod tests {
 
     /// Encodes a single-leaf predicate over one column and returns its literal.
     fn encode_literal(data_type: DataType, predicate: Predicate) -> Result<PbLiteralValue> {
-        let pb = to_pb_predicate(&predicate, &row_type_of(data_type))?;
+        let row_type = row_type_of(data_type);
+        let pb = to_pb_predicate(&predicate, &row_type)?;
+        let decoded = Predicate::from_protobuf(&pb, &row_type)?;
+        assert_eq!(decoded.to_protobuf(&row_type)?, pb);
         Ok(pb.leaf.unwrap().literals.into_iter().next().unwrap())
     }
 
@@ -311,6 +452,11 @@ mod tests {
         )
         .unwrap();
 
+        let decoded = Predicate::from_protobuf(&pb, &row_type).unwrap();
+        assert_eq!(decoded.to_protobuf(&row_type).unwrap(), pb);
+        let mut unknown = pb.clone();
+        unknown.compound.as_mut().unwrap().function = 99;
+        assert!(Predicate::from_protobuf(&unknown, &row_type).is_err());
         assert_eq!(pb.r#type, PREDICATE_TYPE_COMPOUND);
         assert!(pb.leaf.is_none());
         let or = pb.compound.unwrap();

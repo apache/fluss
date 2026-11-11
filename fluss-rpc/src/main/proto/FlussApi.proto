@@ -1743,3 +1743,50 @@ message PbLiteralValue {
   optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
   optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }
+
+/** Frozen source boundaries shared by Java and native engine adapters.
+ * Version 1 describes bounded reads. Engines own task transport and scheduling.
+ * New optional fields must not alter read semantics for an older reader.
+ * Incompatible semantics require a new version; unknown versions/kinds fail.
+ */
+message PbUnionReadContext {
+  optional int32 version = 1;
+  optional string database_name = 2;
+  optional string table_name = 3;
+  optional int64 table_id = 4;
+  optional int32 schema_id = 5;
+  optional int32 table_bucket_count = 6;
+  repeated string bucket_keys = 7;
+  repeated string partition_keys = 8;
+  optional string merge_engine = 9;
+  optional PbUnionReadLake lake = 10;
+  // Exact input scope, not a conservative pushdown hint. Absent means all partitions.
+  optional PbPredicate partition_scope = 11;
+  repeated PbUnionReadLogRange log_ranges = 12;
+  // 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+  // 2: lake snapshot only; no Fluss log ranges are captured.
+  optional int32 coverage = 13;
+}
+
+message PbUnionReadLake {
+  optional string format = 1;
+  optional string database_name = 2;
+  optional string table_name = 3;
+  // Absent: lake is enabled but no readable snapshot was captured. Zero is a valid ID.
+  optional int64 snapshot_id = 4;
+}
+
+message PbUnionReadLogRange {
+  // Absent for an unpartitioned table. Values follow context.partition_keys order.
+  optional int64 partition_id = 1;
+  repeated string partition_values = 2;
+  optional int32 bucket_id = 3;
+  optional int32 bucket_count = 4;
+  // 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+  optional int32 baseline = 5;
+  // Concrete half-open range; no EARLIEST/LATEST sentinels.
+  optional int64 start_offset = 6;
+  optional int64 stop_offset = 7;
+  // Observed retention lower bound, not a lease.
+  optional int64 earliest_offset = 8;
+}
