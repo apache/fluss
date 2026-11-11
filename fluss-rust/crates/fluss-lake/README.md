@@ -92,7 +92,7 @@ Tables with `table.datalake.historical-partition.enabled=true` are rejected duri
 
 ## Default planning and lake sources
 
-`table.new_scan().with_lake_source(source).plan().await?` captures bounded inputs and plans tasks. `plan_with_context(&context)` reuses previously captured boundaries. This layer provides the planner and lake-source contracts; the default backend and execution reader are added separately.
+`table.new_scan().with_lake_source(source).plan().await?` captures bounded inputs and plans tasks. `plan_with_context(&context)` reuses previously captured boundaries. The default reader executes these tasks; enable `paimon` for the built-in lake backend.
 
 Append lake tasks and bucket log tails are independent. PK tasks group a complete lake baseline and log tail by partition and bucket. The source must reconcile lake versions and deletion vectors before returning a PK baseline. Partition and bucket pruning is conservative; execution must apply the exact filter after reconciliation.
 
@@ -102,10 +102,16 @@ Engines own scheduling and transport. `split.descriptor()` exports immutable sou
 
 Create a reader with `scan.new_reader()`. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
 
-The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK reconciliation uses the default deduplicate merge semantics.
 
 ## Paimon backend
 
 Enable the `paimon` feature to plan and read pinned Paimon snapshots. The backend owns Paimon version merging, deletion vectors and portable task payloads; a PK baseline returns at most one row per full key. Parquet is the supported data file format. Paimon uses Arrow 58 internally; the adapter exposes the core Arrow version through the Arrow C data interface.
 
 `PaimonLakeSource::with_baseline_reader` permits replacing baseline reading while retaining Paimon planning. A replacement must preserve the pinned snapshot, file/deletion-vector association and requested PK current-view semantics.
+
+## Primary-key reconciliation
+
+Each PK task owns one partition/bucket baseline and its ordered log tail. The reader folds the tail, removes overwritten baseline keys, then emits surviving tail rows once. Mutable-column filters run after this reconciliation. The lake source must supply a current-view baseline including its version and deletion-vector semantics.
+
+`reader.with_memory_budget(budget)` shares retained-state accounting across tasks. The default is unlimited; budget exhaustion fails the attempt and releases its retained state. There is no spilling. Without a lake baseline, full log history is required; persisted KV snapshot fallback is a separate follow-up. Streaming discovery and shared historical logs remain unsupported.

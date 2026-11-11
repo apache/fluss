@@ -19,6 +19,7 @@
 
 use crate::executor::execute_split;
 use crate::{FlussLakeError, FlussLakeReadSplit, FlussLakeScan, RecordBatchStream, Result};
+use fluss::client::ReadMemoryBudget;
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -32,13 +33,26 @@ use tokio::sync::OnceCell;
 #[derive(Clone, Debug)]
 pub struct FlussLakeReader {
     scan: Arc<FlussLakeScan>,
+    memory_budget: Option<Arc<dyn ReadMemoryBudget>>,
 }
 
 impl FlussLakeReader {
     pub(crate) fn from_scan(scan: FlussLakeScan) -> Self {
         Self {
             scan: Arc::new(scan),
+            memory_budget: None,
         }
+    }
+
+    /// Shares a retained-state budget across this reader's PK tasks and clones.
+    ///
+    /// Defaults to unlimited. The budget covers the default PK overlay, not lake
+    /// backend allocations or output batches. Budget exhaustion is terminal;
+    /// dropping the stream releases its remaining reservations. Engines may
+    /// share one budget across multiple readers belonging to the same query.
+    pub fn with_memory_budget(mut self, budget: Arc<dyn ReadMemoryBudget>) -> Self {
+        self.memory_budget = Some(budget);
+        self
     }
 
     /// Read a frozen local task, which may be cloned from a plan.
@@ -47,7 +61,13 @@ impl FlussLakeReader {
     /// and read failures are terminal stream errors. Drop cancels the read.
     pub fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream> {
         self.scan.validate_configuration()?;
-        execute_split(split, &self.scan, Arc::new(OnceCell::new())).map(stop_after_first_error)
+        execute_split(
+            split,
+            &self.scan,
+            Arc::new(OnceCell::new()),
+            self.memory_budget.clone(),
+        )
+        .map(stop_after_first_error)
     }
 
     /// Read tasks sequentially in the supplied order. Duplicate tasks are rejected.
@@ -69,7 +89,14 @@ impl FlussLakeReader {
         let metadata = Arc::new(OnceCell::new());
         let streams = splits
             .iter()
-            .map(|split| execute_split(split, &self.scan, metadata.clone()))
+            .map(|split| {
+                execute_split(
+                    split,
+                    &self.scan,
+                    metadata.clone(),
+                    self.memory_budget.clone(),
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(concatenate_split_streams(streams))
     }
