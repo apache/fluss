@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
@@ -67,9 +68,12 @@ import org.apache.fluss.rpc.protocol.MessageCodec;
 import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
@@ -97,6 +101,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
@@ -105,7 +110,9 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** Test for {@link NettyServerHandler}. */
@@ -836,6 +843,56 @@ final class NettyServerHandlerTest {
                 ApiKeys.PRODUCE_LOG.highestSupportedVersion,
                 1,
                 request);
+    }
+
+    @Test
+    void testExpiredAuthenticatedSessionClosesConnectionBeforeDispatch() throws Exception {
+        requestChannel = new TestingRequestChannel(100);
+        ctx = mockChannelHandlerContext();
+        AtomicBoolean closed = new AtomicBoolean();
+        ServerAuthenticator expiredAuthenticator =
+                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator() {
+                    @Override
+                    public void validateSession() {
+                        throw new AuthenticationException("session expired");
+                    }
+
+                    @Override
+                    public void close() {
+                        closed.set(true);
+                    }
+                };
+        NettyServerHandler handler =
+                new NettyServerHandler(
+                        requestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                NOPMetricsGroup.newInstance()),
+                        expiredAuthenticator);
+        ChannelFuture closeFuture = mock(ChannelFuture.class);
+        when(ctx.writeAndFlush(any())).thenReturn(closeFuture);
+        when(closeFuture.addListener(ChannelFutureListener.CLOSE)).thenReturn(closeFuture);
+        handler.channelActive(ctx);
+
+        ApiVersionsRequest request =
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("test")
+                        .setClientSoftwareVersion("1.0.0");
+        ByteBuf byteBuf =
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        ApiKeys.API_VERSIONS.id,
+                        ApiKeys.API_VERSIONS.highestSupportedVersion,
+                        1001,
+                        request);
+        handler.channelRead(ctx, byteBuf);
+
+        assertThat(requestChannel.requestsCount()).isZero();
+        assertThat(closed).isTrue();
+        verify(ctx).writeAndFlush(any(ByteBuf.class));
+        verify(closeFuture).addListener(ChannelFutureListener.CLOSE);
     }
 
     private void initializeLegacyFixture() throws Exception {

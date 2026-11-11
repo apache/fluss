@@ -22,9 +22,8 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
-import org.apache.fluss.security.auth.ServerAuthenticator;
-import org.apache.fluss.security.auth.sasl.authenticator.PlainSaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
+import org.apache.fluss.security.auth.sasl.oauthbearer.OAuthBearerClientAuthenticator;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import java.util.Collections;
@@ -36,16 +35,18 @@ import java.util.function.Function;
 /** Factory for creating connection-local SASL authenticators. */
 @Internal
 public final class SaslAuthenticatorFactory {
-    private static final Map<String, AuthenticatorCreators> AUTHENTICATOR_CREATORS;
+    private static final Map<String, Function<Configuration, ClientAuthenticator>>
+            CLIENT_AUTHENTICATOR_CREATORS;
 
     static {
-        Map<String, AuthenticatorCreators> creators = new HashMap<>();
+        Map<String, Function<Configuration, ClientAuthenticator>> creators = new HashMap<>();
         creators.put(
                 PlainSaslServer.PLAIN_MECHANISM,
-                new AuthenticatorCreators(
-                        configuration -> new SaslClientAuthenticator(configuration),
-                        configuration -> new PlainSaslServerAuthenticator(configuration)));
-        AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
+                configuration -> new SaslClientAuthenticator(configuration));
+        creators.put(
+                OAuthBearerClientAuthenticator.OAUTHBEARER_MECHANISM,
+                configuration -> new OAuthBearerClientAuthenticator(configuration));
+        CLIENT_AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
     }
 
     private SaslAuthenticatorFactory() {}
@@ -54,45 +55,48 @@ public final class SaslAuthenticatorFactory {
     public static ClientAuthenticator createClientAuthenticator(Configuration configuration) {
         String mechanism = configuration.get(ConfigOptions.CLIENT_SASL_MECHANISM);
         String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
-        AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
-        if (creators == null) {
-            // Defer mechanism validation to initialization so request failures remain asynchronous.
-            return new SaslClientAuthenticator(configuration);
+        Function<Configuration, ClientAuthenticator> creator =
+                CLIENT_AUTHENTICATOR_CREATORS.get(normalizedMechanism);
+        if (creator == null) {
+            // Authenticators are created lazily by sendRequest, so report this failure during
+            // initialization to complete the request future exceptionally.
+            return new UnsupportedClientAuthenticator(normalizedMechanism);
         }
-        return creators.clientCreator.apply(configuration);
-    }
-
-    /** Creates a server authenticator for the requested mechanism. */
-    public static ServerAuthenticator createServerAuthenticator(
-            String mechanism, Configuration configuration) {
-        String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
-        AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
-        if (creators == null) {
-            throw new AuthenticationException(
-                    "Unable to find a matching SASL mechanism for " + normalizedMechanism);
-        }
-        return creators.serverCreator.apply(configuration);
+        return creator.apply(configuration);
     }
 
     /** Returns whether the client supports the requested mechanism. */
     public static boolean supportsClientMechanism(String mechanism) {
-        return AUTHENTICATOR_CREATORS.containsKey(mechanism.toUpperCase(Locale.ROOT));
+        return CLIENT_AUTHENTICATOR_CREATORS.containsKey(mechanism.toUpperCase(Locale.ROOT));
     }
 
-    /** Returns whether the server supports the requested mechanism. */
-    public static boolean supportsServerMechanism(String mechanism) {
-        return AUTHENTICATOR_CREATORS.containsKey(mechanism.toUpperCase(Locale.ROOT));
-    }
+    private static final class UnsupportedClientAuthenticator implements ClientAuthenticator {
+        private final String mechanism;
 
-    private static final class AuthenticatorCreators {
-        private final Function<Configuration, ClientAuthenticator> clientCreator;
-        private final Function<Configuration, ServerAuthenticator> serverCreator;
+        private UnsupportedClientAuthenticator(String mechanism) {
+            this.mechanism = mechanism;
+        }
 
-        private AuthenticatorCreators(
-                Function<Configuration, ClientAuthenticator> clientCreator,
-                Function<Configuration, ServerAuthenticator> serverCreator) {
-            this.clientCreator = clientCreator;
-            this.serverCreator = serverCreator;
+        @Override
+        public String protocol() {
+            return mechanism;
+        }
+
+        @Override
+        public void initialize(AuthenticateContext context) {
+            throw new AuthenticationException(
+                    "Unable to find a matching SASL mechanism for " + mechanism);
+        }
+
+        @Override
+        public byte[] authenticate(byte[] data) {
+            throw new AuthenticationException(
+                    "Unable to find a matching SASL mechanism for " + mechanism);
+        }
+
+        @Override
+        public boolean isCompleted() {
+            return false;
         }
     }
 }

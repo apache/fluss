@@ -22,8 +22,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticator;
+import org.apache.fluss.security.auth.sasl.authenticator.SaslAuthenticationPlugin;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
-import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 
@@ -34,14 +34,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link SaslAuthenticatorFactory}. */
 class SaslAuthenticatorFactoryTest {
 
     @Test
-    void testCreatesIndependentAuthenticators() {
+    void testCreatesIndependentClientAuthenticators() {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
 
@@ -49,17 +48,9 @@ class SaslAuthenticatorFactoryTest {
                 SaslAuthenticatorFactory.createClientAuthenticator(configuration);
         ClientAuthenticator secondClient =
                 SaslAuthenticatorFactory.createClientAuthenticator(configuration);
-        ServerAuthenticator firstServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("plain", configuration);
-        ServerAuthenticator secondServer =
-                SaslAuthenticatorFactory.createServerAuthenticator("PLAIN", configuration);
 
         assertThat(firstClient).isNotSameAs(secondClient);
         assertThat(firstClient.protocol()).isEqualTo("PLAIN");
-        assertThat(firstServer).isNotSameAs(secondServer);
-        assertThat(firstServer.protocol()).isEqualTo("PLAIN");
-        assertThatCode(() -> firstServer.matchProtocol("plain")).doesNotThrowAnyException();
-        assertThat(SaslAuthenticatorFactory.supportsServerMechanism("plain")).isTrue();
     }
 
     @ParameterizedTest
@@ -74,6 +65,7 @@ class SaslAuthenticatorFactoryTest {
                 ClientAuthenticator directAuthenticator =
                         new SaslClientAuthenticator(configuration)) {
             assertThat(authenticator.protocol()).isEqualTo(normalizedMechanism);
+            assertThat(authenticator.isCompleted()).isFalse();
             assertThatThrownBy(() -> authenticator.initialize(() -> "localhost"))
                     .isInstanceOf(AuthenticationException.class)
                     .hasMessage(
@@ -83,17 +75,6 @@ class SaslAuthenticatorFactoryTest {
                     .hasMessage(
                             "Unable to find a matching SASL mechanism for " + normalizedMechanism);
         }
-    }
-
-    @Test
-    void testRejectsUnsupportedServerMechanism() {
-        assertThatThrownBy(
-                        () ->
-                                SaslAuthenticatorFactory.createServerAuthenticator(
-                                        "unknown", new Configuration()))
-                .isInstanceOf(AuthenticationException.class)
-                .hasMessage("Unable to find a matching SASL mechanism for UNKNOWN");
-        assertThat(SaslAuthenticatorFactory.supportsServerMechanism("unknown")).isFalse();
     }
 
     @Test
@@ -124,7 +105,8 @@ class SaslAuthenticatorFactoryTest {
                 };
 
         LoginManager secondLogin;
-        try (ServerAuthenticator authenticator = new SaslServerAuthenticator(configuration)) {
+        try (ServerAuthenticator authenticator =
+                new SaslAuthenticationPlugin().createServerAuthenticator(configuration)) {
             authenticator.initialize(context);
             LoginManager firstLogin = LoginManager.acquireLoginManager(jaasContext);
             firstLogin.release();
