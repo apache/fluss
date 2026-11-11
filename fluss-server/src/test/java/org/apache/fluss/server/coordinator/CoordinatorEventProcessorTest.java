@@ -129,7 +129,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.Offli
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -730,7 +730,14 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
         assertThat(inFlightGauges).doesNotContainNull();
 
-        failingChannelManager.failNextUpdateMetadata(request -> true);
+        failingChannelManager.failNextUpdateMetadata(
+                request ->
+                        request.getTableMetadatasList().stream()
+                                .anyMatch(
+                                        tableMetadata ->
+                                                tableMetadata.hasDeletedTableId()
+                                                        && tableMetadata.getDeletedTableId()
+                                                                == tableId));
         metadataManager.dropTable(tablePath, false);
         failingChannelManager.awaitFailure();
         fromCtx(context -> null);
@@ -770,8 +777,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                 .anyMatch(
                                         partitionMetadata ->
                                                 partitionMetadata.getTableId() == tableId
-                                                        && partitionMetadata.getPartitionId()
-                                                                == DELETED_PARTITION_ID));
+                                                        && DELETED_PARTITION_NAME.equals(
+                                                                partitionMetadata
+                                                                        .getPartitionName())));
         Map<Integer, BucketAssignment> assignments =
                 generateAssignment(
                                 N_BUCKETS,

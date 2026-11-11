@@ -100,9 +100,10 @@ public class TabletServerMetadataProvider extends ZkBasedMetadataProvider {
     @Override
     public List<PartitionMetadata> getPartitionsMetadataFromZK(
             Collection<PhysicalTablePath> partitionPaths) {
+        ServerMetadataSnapshot snapshot = metadataCache.getSnapshot();
         List<PartitionMetadata> result = super.getPartitionsMetadataFromZK(partitionPaths);
         // Update local cache after successfully fetching from ZooKeeper
-        result.forEach(metadataCache::updatePartitionMetadata);
+        metadataCache.updatePartitionMetadata(result, snapshot);
         return result;
     }
 }

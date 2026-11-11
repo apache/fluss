@@ -652,7 +652,7 @@ public class ReplicaManager implements ServerReconfigurable {
                     // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
                     Set<Long> deletedTableIds =
-                            metadataCache.updateClusterMetadata(clusterMetadata);
+                            metadataCache.updateClusterMetadata(clusterMetadata, coordinatorEpoch);
                     updateReplicaTableInfo(clusterMetadata);
                     if (!deletedTableIds.isEmpty()) {
                         ioExecutor.execute(
