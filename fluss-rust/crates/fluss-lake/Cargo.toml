@@ -31,15 +31,18 @@ categories = { workspace = true }
 
 [features]
 integration_tests = ["fluss/integration_tests"]
+paimon = ["dep:arrow_array_58", "dep:paimon"]
 
 [dependencies]
+arrow_array_58 = { package = "arrow-array", version = "58.4.0", features = ["ffi"], optional = true }
+paimon = { version = "0.3.0", default-features = false, features = ["storage-memory", "storage-fs", "storage-oss", "storage-s3"], optional = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
 arrow = { workspace = true }
 serde = { workspace = true }
 fluss = { package = "fluss-rs", path = "../fluss" }
 futures = "0.3"
 thiserror = "1.0"
-tokio = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 fluss-test-cluster = { path = "../fluss-test-cluster" }

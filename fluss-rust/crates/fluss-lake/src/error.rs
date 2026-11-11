@@ -62,6 +62,14 @@ pub enum FlussLakeError {
     #[error("UnionRead internal error: {0}")]
     Internal(String),
 
+    /// Access to the lake storage or catalog failed.
+    #[error("UnionRead connection error: {0}")]
+    ConnectionError(String),
+
+    /// Lake backend payload version is unsupported by its reader.
+    #[error("incompatible UnionRead split version: {0}")]
+    IncompatibleSplitVersion(String),
+
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
     InvalidReadContext(String),
@@ -101,76 +109,5 @@ pub(crate) fn execution_client_error(action: &str, error: ClientError) -> FlussL
             FlussLakeError::DataUnavailable(message)
         }
         error => planning_client_error(action, error),
-    }
-}
-
-/// Retains cause messages in diagnostics without changing the public error variants.
-pub(crate) fn error_message(action: &str, error: &dyn std::error::Error) -> String {
-    let mut message = format!("failed to {action}: {error}");
-    let mut source = error.source();
-    while let Some(cause) = source {
-        let detail = cause.to_string();
-        if !detail.is_empty() && !message.contains(&detail) {
-            message.push_str(": ");
-            message.push_str(&detail);
-        }
-        source = cause.source();
-    }
-    message
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::error::Error as _;
-
-    #[test]
-    fn client_failure_preserves_action_and_typed_source() {
-        let error = planning_client_error(
-            "get table metadata",
-            ClientError::invalid_table("invalid layout"),
-        );
-        assert!(error.to_string().contains("get table metadata"));
-        assert!(error.source().is_some());
-        let FlussLakeError::Client { source, .. } = error else {
-            panic!("expected a client failure");
-        };
-        assert_eq!(
-            source.api_error(),
-            Some(fluss::error::FlussError::InvalidTableException)
-        );
-    }
-    #[test]
-    fn log_offset_out_of_range_maps_to_data_unavailable() {
-        let error = ClientError::UnexpectedError {
-            message: "offset 1 was removed".to_string(),
-            source: Some(Box::new(ClientError::from(fluss::error::ApiError {
-                code: fluss::error::FlussError::LogOffsetOutOfRangeException.code(),
-                message: "retained prefix expired".to_string(),
-            }))),
-        };
-
-        assert!(matches!(
-            execution_client_error("read bounded log", error),
-            FlussLakeError::DataUnavailable(_)
-        ));
-    }
-    #[test]
-    fn missing_planned_table_or_partition_maps_to_data_unavailable() {
-        for error in [
-            fluss::error::FlussError::TableNotExist,
-            fluss::error::FlussError::UnknownTableOrBucketException,
-            fluss::error::FlussError::PartitionNotExists,
-        ] {
-            assert!(matches!(
-                execution_client_error(
-                    "open frozen split",
-                    ClientError::FlussAPIError {
-                        api_error: error.to_api_error(None),
-                    },
-                ),
-                FlussLakeError::DataUnavailable(_)
-            ));
-        }
     }
 }

@@ -102,8 +102,8 @@ jobs:
       - name: Check all features on the declared MSRV
         run: cargo +1.91.0 check -p fluss-lake --locked --all-features --all-targets
 
-      - name: Test source preparation on the declared MSRV
-        run: cargo +1.91.0 test -p fluss-lake --locked --lib
+      - name: Test Paimon on the declared MSRV
+        run: cargo +1.91.0 test -p fluss-lake --locked --features paimon --lib
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full

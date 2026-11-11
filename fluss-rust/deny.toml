@@ -29,6 +29,8 @@ allow = [
 ]
 
 exceptions = [
+    # Same Mozilla root certificate dataset/license as webpki-roots below.
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
     # open data licenses that SHOULD be OK
     { crate = "webpki-roots", allow = [
         "CDLA-Permissive-2.0",

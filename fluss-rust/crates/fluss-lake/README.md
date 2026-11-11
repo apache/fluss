@@ -103,3 +103,9 @@ Engines own scheduling and transport. `split.descriptor()` exports immutable sou
 Create a reader with `scan.new_reader()`. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
 
 The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
+
+## Paimon backend
+
+Enable the `paimon` feature to plan and read pinned Paimon snapshots. The backend owns Paimon version merging, deletion vectors and portable task payloads; a PK baseline returns at most one row per full key. Parquet is the supported data file format. Paimon uses Arrow 58 internally; the adapter exposes the core Arrow version through the Arrow C data interface.
+
+`PaimonLakeSource::with_baseline_reader` permits replacing baseline reading while retaining Paimon planning. A replacement must preserve the pinned snapshot, file/deletion-vector association and requested PK current-view semantics.
