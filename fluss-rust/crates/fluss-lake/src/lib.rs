@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Reusable source boundaries for bounded lake and log reads.
+//! Source boundaries and format-extensible bounded UnionRead.
 
 #![doc = include_str!("../README.md")]
 
