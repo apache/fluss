@@ -85,14 +85,13 @@ class ConsumerOffsetTableITCase {
         assertThat(tableRegistration.properties)
                 .doesNotContainKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key());
 
+        ConsumerOffsetSchema offsetSchema = new ConsumerOffsetSchema();
         int standardBucket =
                 BucketingFunction.of(tableConfig.getDataLakeFormat().orElse(null))
                         .bucketing(
-                                ConsumerOffsetSchema.encodeGroupPrefix(groupId),
+                                offsetSchema.encodeGroupPrefix(groupId),
                                 tableRegistration.bucketCount);
-        assertThat(
-                        GroupManager.from(clusterConfiguration())
-                                .bucketFor(groupId, tableRegistration.bucketCount))
+        assertThat(offsetSchema.bucketFor(groupId, tableRegistration.bucketCount))
                 .isEqualTo(standardBucket);
     }
 

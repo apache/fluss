@@ -36,6 +36,7 @@ import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
+import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -46,57 +47,47 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** Tests for {@link ConsumerOffsetTableManager}. */
-class ConsumerOffsetTableManagerTest {
+/** Tests for {@link ConsumerGroupManager}. */
+class ConsumerGroupDiscoveryTest extends ReplicaTestBase {
 
     private static final int BUCKET_COUNT = 1;
     private static final TablePath TABLE_PATH = SystemTables.CONSUMER_OFFSETS;
 
-    private ZooKeeperClient zkClient;
+    private ZooKeeperClient discoveryZkClient;
     private MetadataManager metadataManager;
     private TabletServerMetadataCache metadataCache;
     private TabletServerMetadataProvider metadataProvider;
     private CoordinatorGateway coordinatorGateway;
-    private ConsumerOffsetTableManager tableManager;
+    private ConsumerGroupManager tableManager;
 
     @BeforeEach
-    void setup() throws Exception {
-        zkClient = mock(ZooKeeperClient.class);
+    void createManager() throws Exception {
+        discoveryZkClient = mock(ZooKeeperClient.class);
         metadataManager = mock(MetadataManager.class);
         metadataCache = mock(TabletServerMetadataCache.class);
         metadataProvider = mock(TabletServerMetadataProvider.class);
         coordinatorGateway = mock(CoordinatorGateway.class);
-        ExecutorService ioExecutor = mock(ExecutorService.class);
 
-        when(zkClient.tableExist(TABLE_PATH)).thenReturn(false);
-        when(zkClient.databaseExists(TABLE_PATH.getDatabaseName())).thenReturn(true);
+        when(discoveryZkClient.tableExist(TABLE_PATH)).thenReturn(false);
+        when(discoveryZkClient.databaseExists(TABLE_PATH.getDatabaseName())).thenReturn(true);
         when(metadataManager.getTable(TABLE_PATH)).thenReturn(newTableInfo());
         when(coordinatorGateway.createDatabase(any(CreateDatabaseRequest.class)))
                 .thenReturn(CompletableFuture.completedFuture(new CreateDatabaseResponse()));
         when(coordinatorGateway.createTable(any(CreateTableRequest.class)))
                 .thenReturn(CompletableFuture.completedFuture(new CreateTableResponse()));
-        doAnswer(
-                        invocation -> {
-                            invocation.getArgument(0, Runnable.class).run();
-                            return null;
-                        })
-                .when(ioExecutor)
-                .execute(any(Runnable.class));
 
-        ConsumerOffsetTableConfig tableConfig =
+        ConsumerOffsetTableConfig offsetsConfig =
                 new ConsumerOffsetTableConfig(
                         MemorySize.ofMebiBytes(1),
                         Duration.ofDays(1),
@@ -104,14 +95,16 @@ class ConsumerOffsetTableManagerTest {
                         1,
                         Duration.ofSeconds(10));
         tableManager =
-                new ConsumerOffsetTableManager(
-                        tableConfig,
-                        zkClient,
+                new ConsumerGroupManager(
+                        TABLET_SERVER_ID,
+                        replicaManager,
+                        offsetsConfig,
+                        discoveryZkClient,
                         metadataManager,
                         metadataCache,
                         metadataProvider,
                         coordinatorGateway,
-                        ioExecutor);
+                        Runnable::run);
     }
 
     @Test
@@ -128,7 +121,7 @@ class ConsumerOffsetTableManagerTest {
         assertThat(tableManager.resolveOwnerAsync(0, listenerName).get()).isEqualTo(owner);
 
         verify(metadataProvider, never()).getTablesMetadataFromZK(any());
-        verify(zkClient, never()).getTabletServer(leaderId);
+        verify(discoveryZkClient, never()).getTabletServer(leaderId);
     }
 
     @Test
@@ -154,11 +147,13 @@ class ConsumerOffsetTableManagerTest {
 
     @Test
     void testCreateTableThroughCoordinator() throws Exception {
-        when(zkClient.databaseExists(TABLE_PATH.getDatabaseName())).thenReturn(false);
+        when(discoveryZkClient.databaseExists(TABLE_PATH.getDatabaseName())).thenReturn(false);
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
-        verify(zkClient, times(1)).tableExist(TABLE_PATH);
+        verify(discoveryZkClient, times(1)).tableExist(TABLE_PATH);
         verify(metadataManager).getTable(TABLE_PATH);
         verify(metadataManager, never()).createTable(any(), any(), any(), any(), anyBoolean());
 
@@ -197,7 +192,9 @@ class ConsumerOffsetTableManagerTest {
                 .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class)
                 .hasRootCauseMessage("creation failed");
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
         verify(coordinatorGateway, times(2)).createTable(any(CreateTableRequest.class));
         verify(metadataManager, times(1)).getTable(TABLE_PATH);
@@ -205,9 +202,11 @@ class ConsumerOffsetTableManagerTest {
 
     @Test
     void testExistingTableDoesNotCallCoordinator() throws Exception {
-        when(zkClient.tableExist(TABLE_PATH)).thenReturn(true);
+        when(discoveryZkClient.tableExist(TABLE_PATH)).thenReturn(true);
 
-        assertThat(tableManager.ensureTableAsync().get()).isEqualTo(BUCKET_COUNT);
+        assertThat(tableManager.ensureTableAsync())
+                .succeedsWithin(Duration.ofSeconds(10))
+                .isEqualTo(newTableInfo());
 
         verify(coordinatorGateway, never()).createDatabase(any(CreateDatabaseRequest.class));
         verify(coordinatorGateway, never()).createTable(any(CreateTableRequest.class));
@@ -222,6 +221,6 @@ class ConsumerOffsetTableManagerTest {
                         .build()
                         .withBucketCount(BUCKET_COUNT)
                         .withReplicationFactor(1);
-        return TableInfo.of(TABLE_PATH, 1L, 1, descriptor, "/tmp/fluss", 1L, 1L);
+        return TableInfo.of(TABLE_PATH, 42L, 7, descriptor, "/tmp/fluss", 1L, 1L);
     }
 }

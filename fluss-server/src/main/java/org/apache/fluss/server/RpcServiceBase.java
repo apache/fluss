@@ -99,6 +99,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -391,7 +392,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private Map<Long, List<BucketMetadata>> getPartitionBucketMetadataForDescribeBuckets(
             TablePath tablePath, Collection<Long> partitionIds) {
         try {
-            return zkClient.getBucketMetadataForPartitions(partitionIds);
+            return ZooKeeperUtils.describePartitionBuckets(zkClient, partitionIds);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to describe buckets for table '%s'.", tablePath), e);
@@ -401,8 +402,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private List<BucketMetadata> getTableBucketMetadataForDescribeBuckets(
             TablePath tablePath, long tableId) {
         try {
-            return zkClient.getBucketMetadataForTables(Collections.singleton(tableId))
-                    .getOrDefault(tableId, Collections.emptyList());
+            return ZooKeeperUtils.describeTableBuckets(zkClient, tableId);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to describe buckets for table '%s'.", tablePath), e);

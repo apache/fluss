@@ -609,21 +609,23 @@ pub struct FindConsumerGroupOwnerResponse {
     pub owner: PbServerNode,
 }
 /// Commit consumer offsets request and response.
+/// Concurrent commits for the same group may be appended in any order.
+/// Offset values may decrease for intentional consumption resets.
+/// Within one request, the last entry for each bucket supplies its offset and metadata.
+/// If that entry exceeds the metadata limit, the bucket returns a size error and is not updated.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]
     pub group_id: ::prost::alloc::string::String,
-    /// An empty list, or tables containing no buckets, is a valid no-op and produces an empty
-    /// successful response.
+    /// Once the group and ownership are validated, a request with no buckets succeeds.
     #[prost(message, repeated, tag = "2")]
     pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsRequestTable>,
 }
-/// Request-level failures, such as authentication, authorization, malformed requests, or an
-/// unexpected server failure, are returned through the RPC ErrorResponse envelope. Logical commit
-/// failures, including group validation, ownership, and bucket write failures, are reported in each
-/// PbCommitConsumerOffsetsResponseBucket.
+/// Group validation, owner availability, authorization, and malformed requests use the RPC
+/// ErrorResponse envelope. Offset validation and write failures are reported per bucket.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsResponse {
+    /// One result per distinct bucket in the request.
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsResponseTable>,
 }
@@ -1347,6 +1349,10 @@ pub struct PbTableMetadata {
     /// A table-level, monotonically increasing version for bucket.num changes.
     #[prost(int64, optional, tag = "9")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
+    /// The table's default bucket count, independent of bucket location availability.
+    /// When present, bucket_count_epoch is also present, including epoch zero.
+    #[prost(int32, optional, tag = "10")]
+    pub bucket_count: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {
@@ -2128,12 +2134,14 @@ pub struct PbCommitConsumerOffsetsRequestTable {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbCommitConsumerOffsetsRequestBucket {
+    /// Omit for non-partitioned tables; -1 is reserved for internal offset storage and must not be sent.
     #[prost(int64, optional, tag = "1")]
     pub partition_id: ::core::option::Option<i64>,
     #[prost(int32, required, tag = "2")]
     pub bucket_id: i32,
     #[prost(int64, required, tag = "3")]
     pub offset: i64,
+    /// Omitted metadata is stored as null. An explicit empty string is preserved.
     #[prost(string, optional, tag = "4")]
     pub metadata: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -2343,4 +2351,74 @@ pub struct PbLiteralValue {
     /// Serialized decimal (non-compact mode)
     #[prost(bytes = "vec", optional, tag = "13")]
     pub decimal_bytes: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+/// * Frozen source boundaries shared by Java and native engine adapters.
+/// Version 1 describes bounded reads. Engines own task transport and scheduling.
+/// New optional fields must not alter read semantics for an older reader.
+/// Incompatible semantics require a new version; unknown versions/kinds fail.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbUnionReadContext {
+    #[prost(int32, optional, tag = "1")]
+    pub version: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "2")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "4")]
+    pub table_id: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "5")]
+    pub schema_id: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "6")]
+    pub table_bucket_count: ::core::option::Option<i32>,
+    #[prost(string, repeated, tag = "7")]
+    pub bucket_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "8")]
+    pub partition_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "9")]
+    pub merge_engine: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "10")]
+    pub lake: ::core::option::Option<PbUnionReadLake>,
+    /// Exact input scope, not a conservative pushdown hint. Absent means all partitions.
+    #[prost(message, optional, tag = "11")]
+    pub partition_scope: ::core::option::Option<PbPredicate>,
+    #[prost(message, repeated, tag = "12")]
+    pub log_ranges: ::prost::alloc::vec::Vec<PbUnionReadLogRange>,
+    /// 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+    #[prost(int32, optional, tag = "13")]
+    pub coverage: ::core::option::Option<i32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbUnionReadLake {
+    #[prost(string, optional, tag = "1")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent: lake is enabled but no readable snapshot was captured. Zero is a valid ID.
+    #[prost(int64, optional, tag = "4")]
+    pub snapshot_id: ::core::option::Option<i64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbUnionReadLogRange {
+    /// Absent for an unpartitioned table. Values follow context.partition_keys order.
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(string, repeated, tag = "2")]
+    pub partition_values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "3")]
+    pub bucket_id: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "4")]
+    pub bucket_count: ::core::option::Option<i32>,
+    /// 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+    #[prost(int32, optional, tag = "5")]
+    pub baseline: ::core::option::Option<i32>,
+    /// Concrete half-open range; no EARLIEST/LATEST sentinels.
+    #[prost(int64, optional, tag = "6")]
+    pub start_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "7")]
+    pub stop_offset: ::core::option::Option<i64>,
+    /// Observed retention lower bound, not a lease.
+    #[prost(int64, optional, tag = "8")]
+    pub earliest_offset: ::core::option::Option<i64>,
 }

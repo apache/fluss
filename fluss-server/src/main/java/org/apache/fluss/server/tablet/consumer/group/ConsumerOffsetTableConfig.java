@@ -30,12 +30,6 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 public final class ConsumerOffsetTableConfig {
 
-    /** Sentinel indicating that the table id has not been resolved. */
-    public static final long UNRESOLVED_TABLE_ID = -1L;
-
-    /** Sentinel indicating that the schema id has not been resolved. */
-    public static final int UNRESOLVED_SCHEMA_ID = -1;
-
     /**
      * Offset commits always require the full ISR to acknowledge the write. A successful commit must
      * be durably persisted, so this value is intentionally not configurable.
@@ -50,6 +44,7 @@ public final class ConsumerOffsetTableConfig {
     private final int offsetsTableNumBuckets;
     private final int offsetsTableReplicationFactor;
     private final Duration offsetCommitTimeout;
+    private final int offsetCommitTimeoutMs;
 
     /** Creates a consumer-offset table configuration. */
     public ConsumerOffsetTableConfig(
@@ -64,6 +59,7 @@ public final class ConsumerOffsetTableConfig {
         this.offsetsTableReplicationFactor = offsetsTableReplicationFactor;
         this.offsetCommitTimeout =
                 checkNotNull(offsetCommitTimeout, "offsetCommitTimeout must not be null");
+        this.offsetCommitTimeoutMs = Math.toIntExact(offsetCommitTimeout.toMillis());
     }
 
     /** Creates the table configuration from the canonical {@link ConfigOptions} definitions. */
@@ -100,6 +96,11 @@ public final class ConsumerOffsetTableConfig {
     /** Returns the timeout for committing consumer offsets. */
     public Duration getOffsetCommitTimeout() {
         return offsetCommitTimeout;
+    }
+
+    /** Returns the replica acknowledgement timeout in milliseconds. */
+    public int getOffsetCommitTimeoutMs() {
+        return offsetCommitTimeoutMs;
     }
 
     @Override

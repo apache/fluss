@@ -76,7 +76,8 @@ class CoordinatorRequestBatchTest {
         EventManager eventManager = newSynchronousAccessContextEventManager();
 
         CoordinatorRequestBatch batch =
-                new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
+                new CoordinatorRequestBatch(
+                        failingChannel, eventManager, coordinatorContext, ignored -> null);
         // server 0 IS the leader, so this request will mark tb pending.
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(0),
@@ -121,7 +122,8 @@ class CoordinatorRequestBatchTest {
         EventManager eventManager = newSynchronousAccessContextEventManager();
 
         CoordinatorRequestBatch batch =
-                new CoordinatorRequestBatch(failingChannel, eventManager, coordinatorContext);
+                new CoordinatorRequestBatch(
+                        failingChannel, eventManager, coordinatorContext, ignored -> null);
         // Send to server 1, which is a follower for followerTb (leader is 0). Because
         // leader != serverId, this request does NOT add followerTb to pending, so the failure
         // callback must short-circuit without dispatching an AccessContextEvent.
@@ -169,7 +171,8 @@ class CoordinatorRequestBatchTest {
                 new CoordinatorRequestBatch(
                         channelManager,
                         newSynchronousAccessContextEventManager(),
-                        coordinatorContext);
+                        coordinatorContext,
+                        ignored -> null);
 
         batch.addNotifyLeaderRequestForTabletServers(
                 Collections.singleton(0),

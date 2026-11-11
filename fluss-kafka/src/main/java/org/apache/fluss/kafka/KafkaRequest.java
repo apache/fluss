@@ -28,6 +28,7 @@ import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;
+import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.protocol.Message;
 import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.requests.AbstractRequest;
@@ -36,6 +37,7 @@ import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.ResponseHeader;
 
 import java.nio.ByteBuffer;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -55,6 +57,9 @@ public class KafkaRequest implements RpcRequest {
     private final ByteBuf buffer;
     private final ChannelHandlerContext ctx;
     private final long startTimeMs;
+    private final int requestBytes;
+    private volatile long requestDequeTimeMs;
+    private volatile long requestCompletedTimeMs;
     private final CompletableFuture<AbstractResponse> future;
     private final AtomicBoolean bufferReleased = new AtomicBoolean();
     private volatile boolean cancelled = false;
@@ -81,6 +86,7 @@ public class KafkaRequest implements RpcRequest {
         this.buffer = buffer.retain();
         this.ctx = ctx;
         this.startTimeMs = System.currentTimeMillis();
+        this.requestBytes = buffer.readableBytes();
         this.future = future;
     }
 
@@ -143,6 +149,7 @@ public class KafkaRequest implements RpcRequest {
     }
 
     public void complete(AbstractResponse response) {
+        requestCompletedTimeMs = System.currentTimeMillis();
         future.complete(response);
     }
 
@@ -178,6 +185,34 @@ public class KafkaRequest implements RpcRequest {
         } finally {
             releaseBuffer();
         }
+    }
+
+    int requestBytes() {
+        return requestBytes;
+    }
+
+    void setRequestDequeTimeMs(long requestDequeTimeMs) {
+        this.requestDequeTimeMs = requestDequeTimeMs;
+    }
+
+    long requestDequeTimeMs() {
+        return requestDequeTimeMs;
+    }
+
+    long requestCompletedTimeMs() {
+        return requestCompletedTimeMs;
+    }
+
+    boolean failed() {
+        if (future.isCompletedExceptionally()) {
+            return true;
+        }
+        for (Map.Entry<Errors, Integer> error : future.join().errorCounts().entrySet()) {
+            if (error.getKey() != Errors.NONE && error.getValue() > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ByteBuf serialize(AbstractResponse response) {

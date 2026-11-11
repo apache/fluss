@@ -51,7 +51,7 @@ import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.storage.LocalDiskManager;
-import org.apache.fluss.server.tablet.consumer.group.GroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -181,9 +181,6 @@ public class TabletServer extends ServerBase {
 
     @GuardedBy("lock")
     private ExecutorService ioExecutor;
-
-    @GuardedBy("lock")
-    private GroupManager groupManager;
 
     /**
      * Runs replica state changes outside RPC worker threads to prevent potentially slow state
@@ -315,8 +312,6 @@ public class TabletServer extends ServerBase {
                             pluginManager);
             replicaManager.startup();
 
-            this.groupManager = GroupManager.from(conf);
-
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -332,7 +327,7 @@ public class TabletServer extends ServerBase {
                             scannerManager,
                             coordinatorGateway,
                             interListenerName,
-                            groupManager);
+                            ConsumerOffsetTableConfig.from(conf));
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);

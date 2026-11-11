@@ -2854,6 +2854,9 @@ mod tests {
     async fn check_poll_remote_projection(batch_mode: bool) -> Result<()> {
         for compression in ["NONE", "LZ4_FRAME", "ZSTD"] {
             for fields in [
+                vec![1, 0],
+                vec![1, 0, 1],
+                vec![0, 1],
                 vec![2, 1, 0],
                 vec![0],
                 vec![1],
@@ -3195,9 +3198,14 @@ mod tests {
                     .into_iter()
                     .filter(|same| preceding_data || !same)
                 {
-                    for (unsubscribe, file_backed) in
-                        [(false, false), (true, false), (false, true), (true, true)]
-                    {
+                    for (unsubscribe, file_backed, count_mismatch) in [
+                        (false, false, false),
+                        (true, false, false),
+                        (false, true, false),
+                        (true, true, false),
+                        (false, false, true),
+                        (false, true, true),
+                    ] {
                         let (inner, table_info, data) = scanner_fixture(true)?;
                         let fetcher = &inner.log_fetcher;
                         let status = &inner.log_scanner_status;
@@ -3207,7 +3215,19 @@ mod tests {
                         let bad_offset = i64::from(preceding_data);
                         let mut bad = data.clone();
                         bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
-                        bad[RECORDS_OFFSET..].fill(0);
+                        let expected_error = if count_mismatch {
+                            use crate::record::{
+                                CRC_OFFSET, RECORDS_COUNT_OFFSET, SCHEMA_ID_OFFSET,
+                            };
+                            bad[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + 4]
+                                .copy_from_slice(&2_i32.to_le_bytes());
+                            let crc = crc32c::crc32c(&bad[SCHEMA_ID_OFFSET..]);
+                            bad[CRC_OFFSET..CRC_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+                            "Arrow row count"
+                        } else {
+                            bad[RECORDS_OFFSET..].fill(0);
+                            "Invalid continuation marker"
+                        };
                         let directory = tempfile::tempdir()?;
                         let add = |bytes: Vec<u8>, offset| {
                             let size = bytes.len();
@@ -3262,7 +3282,7 @@ mod tests {
                                 .unwrap_err();
                             assert!(std::error::Error::source(&error).is_some());
                             let message = error.to_string();
-                            assert!(message.contains("Invalid continuation marker"), "{message}");
+                            assert!(message.contains(expected_error), "{message}");
                             assert!(
                                 message.contains(&format!("offset {bad_offset}")),
                                 "{message}"

@@ -86,14 +86,16 @@ defmodule Fluss.TableDescriptor do
 
   See the module documentation for the available options. Raises `Fluss.Error`
   if the descriptor cannot be built (e.g. an invalid bucket-key/partition-key
-  combination), or `KeyError` if an unknown option key is given.
+  combination), `KeyError` if an unknown option key is given, or `ArgumentError`
+  for a malformed hand-built schema.
   """
   @spec new!(Fluss.Schema.t(), keyword()) :: t()
   def new!(%Fluss.Schema{} = schema, opts \\ []) do
+    schema = Fluss.Schema.validate!(schema)
     opts_struct = struct!(Fluss.TableDescriptor.Options, opts)
 
     case Native.table_descriptor_new(schema, opts_struct) do
-      {:error, %Fluss.Error{} = err} -> raise err
+      {:error, %Fluss.Error{} = error} -> raise error
       ref -> ref
     end
   end

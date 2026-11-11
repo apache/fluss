@@ -51,7 +51,14 @@ public class BoundedSplitReader implements AutoCloseable {
     private static final Duration POLL_TIMEOUT = Duration.ofMillis(10000L);
 
     private final BatchScanner splitScanner;
+    /**
+     * The records read so far. For a scanner over indexed lake splits, it counts the records of the
+     * inner split {@link #currentSplitIndex} only, so that a position (split index, records count)
+     * can be restored by seeking to the inner split and skipping within it.
+     */
     private long currentReadRecordsCount;
+
+    private int currentSplitIndex;
     private long toSkip;
 
     private final BlockingQueue<RecordAndPosBatch> recordAndPosBatchPool;
@@ -60,6 +67,7 @@ public class BoundedSplitReader implements AutoCloseable {
         this.splitScanner = splitScanner;
         this.toSkip = toSkip;
         this.currentReadRecordsCount = 0;
+        this.currentSplitIndex = RecordAndPos.DEFAULT_SPLIT_INDEX;
         this.recordAndPosBatchPool = new ArrayBlockingQueue<>(1);
         this.recordAndPosBatchPool.add(new RecordAndPosBatch());
     }
@@ -102,7 +110,9 @@ public class BoundedSplitReader implements AutoCloseable {
 
     private CloseableIterator<ScanRecord> poll() throws IOException {
         CloseableIterator<ScanRecord> nextBatch = null;
-        // may skip records
+        long skippedRecordsCount = 0;
+        // may skip records; the skipping may cross indexed lake splits, as checkpoints taken
+        // before positions were split-local store a global count from the first split
         while (toSkip > 0) {
             // pool a batch of records
             nextBatch = pollBatch();
@@ -111,12 +121,13 @@ public class BoundedSplitReader implements AutoCloseable {
                 throw new RuntimeException(
                         String.format(
                                 "Skip more than the number of total records, has skipped %d record(s), but remain %s record(s) to skip.",
-                                currentReadRecordsCount, toSkip));
+                                skippedRecordsCount, toSkip));
             }
             // skip
             while (toSkip > 0 && nextBatch.hasNext()) {
                 nextBatch.next();
                 toSkip--;
+                skippedRecordsCount++;
                 currentReadRecordsCount++;
             }
         }
@@ -133,7 +144,15 @@ public class BoundedSplitReader implements AutoCloseable {
 
     private CloseableIterator<ScanRecord> pollBatch() throws IOException {
         CloseableIterator<InternalRow> records = splitScanner.pollBatch(POLL_TIMEOUT);
-        return records == null ? null : new ScanRecordBatch(records);
+        if (records == null) {
+            return null;
+        }
+        ScanRecordBatch batch = new ScanRecordBatch(records);
+        if (batch.getCurrentSplitIndex() != currentSplitIndex) {
+            currentSplitIndex = batch.getCurrentSplitIndex();
+            currentReadRecordsCount = 0;
+        }
+        return batch;
     }
 
     @Override
@@ -186,15 +205,15 @@ public class BoundedSplitReader implements AutoCloseable {
         private CloseableIterator<ScanRecord> records;
 
         private final MutableRecordAndPos recordAndPosition = new MutableRecordAndPos();
+        private int splitIndex;
 
         RecordAndPosBatch replace(CloseableIterator<ScanRecord> records) {
             this.records = records;
-            if (records instanceof ScanRecordBatch) {
-                int currentSplitIndex = ((ScanRecordBatch) records).getCurrentSplitIndex();
-                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT, currentSplitIndex);
-            } else {
-                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT);
-            }
+            this.splitIndex =
+                    records instanceof ScanRecordBatch
+                            ? ((ScanRecordBatch) records).getCurrentSplitIndex()
+                            : RecordAndPos.DEFAULT_SPLIT_INDEX;
+            recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT, splitIndex);
             return this;
         }
 
@@ -205,7 +224,7 @@ public class BoundedSplitReader implements AutoCloseable {
 
         @Override
         public RecordAndPos next() {
-            recordAndPosition.setRecord(records.next(), ++currentReadRecordsCount);
+            recordAndPosition.setRecord(records.next(), ++currentReadRecordsCount, splitIndex);
             return recordAndPosition;
         }
 

@@ -45,6 +45,8 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.runtime.tasks.mailbox.TaskMailbox.MailboxClosedException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -85,6 +87,17 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     private static final long serialVersionUID = 1L;
 
+    private static final Logger LOG = LoggerFactory.getLogger(TieringCommitOperator.class);
+
+    /** Consecutive failed rounds of a table from which its commit failures are logged at ERROR. */
+    @VisibleForTesting static final int CONSECUTIVE_FAILURES_TO_LOG_ERROR = 3;
+
+    /**
+     * Tables whose consecutive commit failures are counted, under 1 MB in total. Bounds the counts
+     * of tables that are dropped while failing, as they never commit again.
+     */
+    private static final int MAX_TABLES_WITH_COMMIT_FAILURES = 10_000;
+
     private final Configuration flussConfig;
     private final Configuration lakeTieringConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
@@ -104,6 +117,10 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     // Table ID -> accumulator for the current tiering round.
     private final Map<Long, TableWriteResultAccumulator<WriteResult>> tableWriteResultAccumulators;
+
+    // Only picks the log level of commit failures. Mailbox-thread confined.
+    private final ConsecutiveCommitFailureCounter consecutiveCommitFailures =
+            new ConsecutiveCommitFailureCounter(MAX_TABLES_WITH_COMMIT_FAILURES);
 
     /** Creates an operator that collects and commits table tiering rounds. */
     public TieringCommitOperator(
@@ -201,7 +218,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     try {
                         result = tieringCommitter.commitWriteResults(tableId, tablePath, results);
                     } catch (Exception e) {
-                        postCompletion(tableId, () -> reportFailed(tableId, e));
+                        postCompletion(tableId, () -> reportFailed(tableId, tablePath, e));
                         return;
                     }
                     postCompletion(tableId, () -> reportFinished(tableId, result));
@@ -232,7 +249,13 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
+    @VisibleForTesting
+    int getConsecutiveCommitFailures(long tableId) {
+        return consecutiveCommitFailures.getFailures(tableId);
+    }
+
     private void reportFinished(long tableId, TieringCommitResult<Committable> result) {
+        consecutiveCommitFailures.recordSuccess(tableId);
         if (result.getCommittable() != null) {
             output.collect(new StreamRecord<>(new CommittableMessage<>(result.getCommittable())));
         }
@@ -240,13 +263,30 @@ public class TieringCommitOperator<WriteResult, Committable>
                 new SourceEventWrapper(new FinishedTieringEvent(tableId, result.getStats())));
     }
 
-    private void reportFailed(long tableId, Exception cause) {
+    private void reportFailed(long tableId, TablePath tablePath, Exception cause) {
         operatorEventGateway.sendEventToCoordinator(
                 new SourceEventWrapper(
                         new FailedTieringEvent(tableId, ExceptionUtils.stringifyException(cause))));
-        LOG.warn(
-                "Fail to commit tiering write result, will try to tier again in next round.",
-                cause);
+        int failures = consecutiveCommitFailures.recordFailure(tableId);
+        // A permanent failure retries forever without failing the job, so escalate it to make a
+        // table that stopped tiering visible.
+        if (failures >= CONSECUTIVE_FAILURES_TO_LOG_ERROR) {
+            LOG.error(
+                    "Failed to commit the tiering round of table {} (id {}) {} times in a row, "
+                            + "its lake data does not advance until a commit succeeds. "
+                            + "Will try to tier it again in the next round.",
+                    tablePath,
+                    tableId,
+                    failures,
+                    cause);
+        } else {
+            LOG.warn(
+                    "Failed to commit the tiering round of table {} (id {}), "
+                            + "will try to tier it again in the next round.",
+                    tablePath,
+                    tableId,
+                    cause);
+        }
     }
 
     /** Collects one table's tiering round with constant-time validation of each result. */

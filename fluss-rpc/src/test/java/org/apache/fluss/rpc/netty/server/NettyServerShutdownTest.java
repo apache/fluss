@@ -115,7 +115,9 @@ class NettyServerShutdownTest {
 
             @Override
             public ChannelHandler createChannelHandler(
-                    RequestChannel[] channels, String listenerName) {
+                    RequestChannel[] channels,
+                    String listenerName,
+                    RequestsMetrics requestsMetrics) {
                 requestChannels.add(channels);
                 return new ChannelInitializer<Channel>() {
                     @Override

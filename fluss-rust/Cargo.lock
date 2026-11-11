@@ -91,6 +91,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "380962b3d93b99642e50b9febf72c071e97e8b32d86eae9cf4ef582bb960ae6e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrow"
 version = "59.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1104,9 +1113,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluss-lake"
+version = "1.0.0"
+dependencies = [
+ "arrow",
+ "fluss-rs",
+ "fluss-test-cluster",
+ "futures",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "fluss-rs"
 version = "1.0.0"
 dependencies = [
+ "arc-swap",
  "arrow",
  "arrow-schema",
  "bigdecimal",

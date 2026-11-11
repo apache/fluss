@@ -759,6 +759,7 @@ class RecordAccumulatorTest {
                 bucketsByPath,
                 tableIdByPath,
                 Collections.emptyMap(),
+                Collections.emptyMap(),
                 Collections.emptyMap());
     }
 

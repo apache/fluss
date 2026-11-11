@@ -194,10 +194,13 @@ impl ReadContextResolver {
                 .with_fluss_row_type(output_row_type);
 
         if let Some((target_schema, _, schema_alignment)) = fixed_target {
-            local_context = local_context
-                .with_target_schema_alignment(target_schema.clone(), Arc::clone(&schema_alignment));
+            local_context = local_context.with_target_schema_alignment(
+                target_schema.clone(),
+                Arc::clone(&schema_alignment),
+                false,
+            );
             remote_context =
-                remote_context.with_target_schema_alignment(target_schema, schema_alignment);
+                remote_context.with_target_schema_alignment(target_schema, schema_alignment, true);
         }
 
         let local_context = Arc::new(local_context);

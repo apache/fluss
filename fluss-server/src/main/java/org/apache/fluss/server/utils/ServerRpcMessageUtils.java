@@ -28,6 +28,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -68,6 +69,8 @@ import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
@@ -76,6 +79,7 @@ import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -109,6 +113,10 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
@@ -201,6 +209,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -237,6 +246,7 @@ import java.util.stream.Stream;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
+import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.NON_PARTITIONED_PARTITION_ID;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -665,7 +675,8 @@ public class ServerRpcMessageUtils {
                         .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime())
-                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch());
+                        .setBucketCountEpoch(tableInfo.getBucketCountEpoch())
+                        .setBucketCount(tableInfo.getNumBuckets());
         TablePath tablePath = tableInfo.getTablePath();
         pbTableMetadata
                 .setTablePath()
@@ -685,14 +696,8 @@ public class ServerRpcMessageUtils {
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
         Integer bucketCount = partitionMetadata.getBucketCount();
-        int effectiveBucketCount =
-                bucketCount != null
-                        ? bucketCount
-                        : partitionMetadata.getBucketMetadataList().size();
-        // 0 means the partition assignment is not known yet, not a zero-bucket layout;
-        // omitting the field keeps the client on its table-level fallback instead of 0.
-        if (effectiveBucketCount > 0) {
-            pbPartitionMetadata.setBucketCount(effectiveBucketCount);
+        if (bucketCount != null && bucketCount > 0) {
+            pbPartitionMetadata.setBucketCount(bucketCount);
         }
         return pbPartitionMetadata;
     }
@@ -1224,6 +1229,32 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
+    /** Decodes the last offset and metadata supplied for each bucket. */
+    public static Map<TableBucket, ConsumerOffsetAndMetadata> decodeCommitConsumerOffsetsRequest(
+            CommitConsumerOffsetsRequest request) {
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
+        for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
+                if (partitionId != null && partitionId == NON_PARTITIONED_PARTITION_ID) {
+                    throw new InvalidPartitionException(
+                            "partition_id="
+                                    + NON_PARTITIONED_PARTITION_ID
+                                    + " is reserved for internal offset storage; "
+                                    + "omit partition_id for non-partitioned tables.");
+                }
+                TableBucket tableBucket =
+                        new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
+                offsets.put(
+                        tableBucket,
+                        new ConsumerOffsetAndMetadata(
+                                bucket.getOffset(),
+                                bucket.hasMetadata() ? bucket.getMetadata() : null));
+            }
+        }
+        return offsets;
+    }
+
     /**
      * Converts put-KV bucket requests while preserving their historical partition context.
      *
@@ -1355,6 +1386,43 @@ public class ServerRpcMessageUtils {
     public static @Nullable int[] getTargetColumns(PutKvRequest putKvRequest) {
         int[] targetColumns = putKvRequest.getTargetColumns();
         return targetColumns.length == 0 ? null : targetColumns;
+    }
+
+    /** Builds the discovery response with the owner's advertised endpoint. */
+    public static FindConsumerGroupOwnerResponse makeFindConsumerGroupOwnerResponse(
+            ServerNode owner) {
+        return new FindConsumerGroupOwnerResponse()
+                .setOwner(
+                        new PbServerNode()
+                                .setNodeId(owner.id())
+                                .setHost(owner.host())
+                                .setPort(owner.port()));
+    }
+
+    /** Groups the per-bucket offset commit results by table. */
+    public static CommitConsumerOffsetsResponse makeCommitConsumerOffsetsResponse(
+            Map<TableBucket, Errors> results) {
+        CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
+        Map<Long, PbCommitConsumerOffsetsResponseTable> tablesById = new HashMap<>();
+        results.forEach(
+                (tableBucket, error) -> {
+                    PbCommitConsumerOffsetsResponseTable table =
+                            tablesById.computeIfAbsent(
+                                    tableBucket.getTableId(),
+                                    tableId -> response.addTable().setTableId(tableId));
+                    PbCommitConsumerOffsetsResponseBucket bucket =
+                            table.addBucket().setBucketId(tableBucket.getBucket());
+                    if (tableBucket.getPartitionId() != null) {
+                        bucket.setPartitionId(tableBucket.getPartitionId());
+                    }
+                    if (error != Errors.NONE) {
+                        bucket.setErrorCode(error.code());
+                        if (error.message() != null) {
+                            bucket.setErrorMessage(error.message());
+                        }
+                    }
+                });
+        return response;
     }
 
     public static PutKvResponse makePutKvResponse(Collection<PutKvResultForBucket> kvPutResult) {

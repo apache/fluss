@@ -1227,40 +1227,42 @@ pub(crate) fn from_arrow_type(arrow_type: &ArrowDataType) -> Result<DataType> {
 #[derive(Clone)]
 pub struct ReadContext {
     target_schema: SchemaRef,
-    full_schema: SchemaRef,
     row_type: Arc<RowType>,
     projection: Option<Projection>,
-    is_from_remote: bool,
     fluss_row_type: Option<Arc<RowType>>,
-    schema_alignment: Option<Arc<[i32]>>,
-    source_projection: Option<Vec<usize>>,
+    decode_plan: DecodePlan,
+}
+
+#[derive(Clone)]
+struct DecodePlan {
+    schema: SchemaRef,
+    columns: Option<Vec<usize>>,
+    alignment: Option<Arc<[i32]>>,
 }
 
 #[derive(Clone)]
 struct Projection {
-    ordered_schema: SchemaRef,
     projected_fields: Vec<usize>,
     ordered_fields: Vec<usize>,
-
-    reordering_indexes: Vec<usize>,
-    reordering_needed: bool,
 }
 
 impl ReadContext {
     pub fn new(
         arrow_schema: SchemaRef,
         row_type: Arc<RowType>,
-        is_from_remote: bool,
+        _is_from_remote: bool,
     ) -> ReadContext {
+        // Keep the public constructor signature; unprojected IPC has the same layout for either source.
         ReadContext {
             target_schema: arrow_schema.clone(),
-            full_schema: arrow_schema,
             row_type,
             projection: None,
-            is_from_remote,
             fluss_row_type: None,
-            schema_alignment: None,
-            source_projection: None,
+            decode_plan: DecodePlan {
+                schema: arrow_schema,
+                columns: None,
+                alignment: None,
+            },
         }
     }
 
@@ -1285,6 +1287,7 @@ impl ReadContext {
         mut self,
         target_schema: SchemaRef,
         schema_alignment: Arc<[i32]>,
+        is_from_remote: bool,
     ) -> ReadContext {
         debug_assert!(
             self.projection.is_none(),
@@ -1299,7 +1302,7 @@ impl ReadContext {
             schema_alignment.iter().all(|source_index| {
                 *source_index == UNEXIST_MAPPING
                     || usize::try_from(*source_index)
-                        .is_ok_and(|index| index < self.full_schema.fields().len())
+                        .is_ok_and(|index| index < self.decode_plan.schema.fields().len())
             }),
             "schema alignment contains an invalid source index"
         );
@@ -1310,12 +1313,17 @@ impl ReadContext {
                 .zip(schema_alignment.iter())
                 .all(|(target_field, source_index)| {
                     *source_index == UNEXIST_MAPPING
-                        || self.full_schema.field(*source_index as usize).data_type()
+                        || self
+                            .decode_plan
+                            .schema
+                            .field(*source_index as usize)
+                            .data_type()
                             == target_field.data_type()
                 }),
             "schema alignment source and target types must match"
         );
-        let schema_alignment = if self.is_from_remote {
+        self.decode_plan.columns = None;
+        let schema_alignment = if is_from_remote {
             let source_projection: Vec<_> = schema_alignment
                 .iter()
                 .filter(|&&index| index != UNEXIST_MAPPING)
@@ -1324,7 +1332,7 @@ impl ReadContext {
             if source_projection
                 .iter()
                 .copied()
-                .eq(0..self.full_schema.fields().len())
+                .eq(0..self.decode_plan.schema.fields().len())
             {
                 schema_alignment
             } else {
@@ -1342,14 +1350,14 @@ impl ReadContext {
                         }
                     })
                     .collect::<Vec<_>>();
-                self.source_projection = Some(source_projection);
+                self.decode_plan.columns = Some(source_projection);
                 Arc::from(alignment)
             }
         } else {
             schema_alignment
         };
         self.target_schema = target_schema;
-        self.schema_alignment = Some(schema_alignment);
+        self.decode_plan.alignment = Some(schema_alignment);
         self
     }
 
@@ -1362,80 +1370,50 @@ impl ReadContext {
         Self::validate_projection(&arrow_schema, projected_fields.as_slice())?;
         let target_schema =
             Self::project_schema(arrow_schema.clone(), projected_fields.as_slice())?;
-        // the logic is little bit of hard to understand, to refactor it to follow
-        // java side
-        let (need_do_reorder, sorted_fields) = {
-            // Remote decoding preserves projection order; server responses use field order.
-            if !is_from_remote {
-                let mut sorted_fields = projected_fields.clone();
-                sorted_fields.sort_unstable();
-                (!sorted_fields.eq(&projected_fields), sorted_fields)
-            } else {
-                // sorted_fields won't be used when need_do_reorder is false,
-                // let's use an empty vec directly
-                (false, vec![])
-            }
-        };
-
-        let project = {
-            if need_do_reorder {
-                // reordering is required
-                // Calculate reordering indexes to transform from sorted order to user-requested order
-                let mut reordering_indexes = Vec::with_capacity(projected_fields.len());
-                for &original_idx in &projected_fields {
-                    let pos = sorted_fields.binary_search(&original_idx).map_err(|_| {
-                        IllegalArgument {
-                            message: format!(
-                                "Projection index {original_idx} is invalid for the current schema."
-                            ),
-                        }
-                    })?;
-                    reordering_indexes.push(pos);
-                }
-                Projection {
-                    ordered_schema: Self::project_schema(
-                        arrow_schema.clone(),
-                        sorted_fields.as_slice(),
-                    )?,
-                    projected_fields,
-                    ordered_fields: sorted_fields,
-                    reordering_indexes,
-                    reordering_needed: true,
-                }
-            } else {
-                Projection {
-                    ordered_schema: Self::project_schema(
-                        arrow_schema.clone(),
-                        projected_fields.as_slice(),
-                    )?,
-                    ordered_fields: projected_fields.clone(),
-                    projected_fields,
-                    reordering_indexes: vec![],
-                    reordering_needed: false,
-                }
-            }
-        };
-
-        let source_projection = if is_from_remote
-            && !project
-                .projected_fields
+        let mut ordered_fields = projected_fields.clone();
+        let (schema, columns, alignment) = if is_from_remote {
+            let columns = if projected_fields
                 .iter()
                 .copied()
                 .eq(0..arrow_schema.fields().len())
-        {
-            Some(project.projected_fields.clone())
+            {
+                None
+            } else {
+                Some(projected_fields.clone())
+            };
+            (arrow_schema, columns, None)
         } else {
-            None
+            // TabletServer sends only projected columns, in source field order.
+            ordered_fields.sort_unstable();
+            let schema = Self::project_schema(arrow_schema, &ordered_fields)?;
+            let alignment = if ordered_fields != projected_fields {
+                let indexes = projected_fields
+                    .iter()
+                    .map(|field| {
+                        ordered_fields
+                            .binary_search(field)
+                            .expect("validated projection") as i32
+                    })
+                    .collect::<Vec<_>>();
+                Some(Arc::from(indexes))
+            } else {
+                None
+            };
+            (schema, None, alignment)
         };
         Ok(ReadContext {
             target_schema,
-            full_schema: arrow_schema,
             row_type,
-            projection: Some(project),
-            is_from_remote,
+            projection: Some(Projection {
+                projected_fields,
+                ordered_fields,
+            }),
             fluss_row_type: None,
-            schema_alignment: None,
-            source_projection,
+            decode_plan: DecodePlan {
+                schema,
+                columns,
+                alignment,
+            },
         })
     }
 
@@ -1473,102 +1451,22 @@ impl ReadContext {
             .map(|p| p.ordered_fields.as_slice())
     }
 
-    fn remote_decode_projection(&self) -> Option<&[usize]> {
-        self.source_projection.as_deref()
-    }
-
     pub(crate) fn record_batch(&self, data: Bytes) -> Result<RecordBatch> {
         let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
-
-        let resolve_schema = {
-            // Remote IPC metadata describes all source fields, even with decoder projection.
-            if self.is_from_remote || self.schema_alignment.is_some() {
-                self.full_schema.clone()
-            } else {
-                // the record batch from server must be ordered by field pos,
-                // according to project to decide what arrow schema to use
-                // to parse the record batch
-                match self.projection {
-                    Some(ref projection) => {
-                        // projection, should use ordered schema by project field pos
-                        projection.ordered_schema.clone()
-                    }
-                    None => {
-                        // no projection, use target output schema
-                        self.target_schema.clone()
-                    }
-                }
-            }
-        };
-
         let record_batch = read_record_batch(
             &body_buffer,
             batch_metadata,
-            resolve_schema,
+            self.decode_plan.schema.clone(),
             &HashMap::new(),
-            if self.is_from_remote {
-                self.remote_decode_projection()
-            } else {
-                None
-            },
+            self.decode_plan.columns.as_deref(),
             &version,
         )?;
-
-        let record_batch = match &self.projection {
-            Some(projection) => {
-                let reordered_columns = {
-                    // need to do reorder
-                    if !self.is_from_remote && projection.reordering_needed {
-                        Some(&projection.reordering_indexes)
-                    } else {
-                        None
-                    }
-                };
-                match reordered_columns {
-                    Some(reordered_columns) => {
-                        let arrow_columns = reordered_columns
-                            .iter()
-                            .map(|&idx| record_batch.column(idx).clone())
-                            .collect();
-                        RecordBatch::try_new(self.target_schema.clone(), arrow_columns)?
-                    }
-                    _ => record_batch,
-                }
+        match &self.decode_plan.alignment {
+            Some(alignment) => {
+                align_record_batch_to_schema(record_batch, self.target_schema.clone(), alignment)
             }
-            _ => record_batch,
-        };
-        let record_batch = match &self.schema_alignment {
-            Some(schema_alignment) => align_record_batch_to_schema(
-                record_batch,
-                self.target_schema.clone(),
-                schema_alignment,
-            )?,
-            None => record_batch,
-        };
-        Ok(record_batch)
-    }
-
-    pub(crate) fn record_batch_for_remote_log(&self, data: Bytes) -> Result<Option<RecordBatch>> {
-        let (batch_metadata, body_buffer, version) = parse_ipc_message(&data)?;
-
-        let record_batch = read_record_batch(
-            &body_buffer,
-            batch_metadata,
-            self.full_schema.clone(),
-            &HashMap::new(),
-            self.remote_decode_projection(),
-            &version,
-        )?;
-
-        let record_batch = match &self.schema_alignment {
-            Some(schema_alignment) => align_record_batch_to_schema(
-                record_batch,
-                self.target_schema.clone(),
-                schema_alignment,
-            )?,
-            None => record_batch,
-        };
-        Ok(Some(record_batch))
+            None => Ok(record_batch),
+        }
     }
 }
 
@@ -1577,6 +1475,22 @@ fn align_record_batch_to_schema(
     target_schema: SchemaRef,
     schema_alignment: &[i32],
 ) -> Result<RecordBatch> {
+    if schema_alignment.len() == record_batch.num_columns()
+        && schema_alignment.len() == target_schema.fields().len()
+        && schema_alignment
+            .iter()
+            .enumerate()
+            .all(|(index, mapped)| *mapped == index as i32)
+    {
+        // Move the column list without cloning array references, retaining Arrow validation.
+        let (_, columns, row_count) = record_batch.into_parts();
+        return Ok(RecordBatch::try_new_with_options(
+            target_schema,
+            columns,
+            &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+        )?);
+    }
+
     let row_count = record_batch.num_rows();
     let mut columns = Vec::with_capacity(target_schema.fields().len());
 
@@ -1699,6 +1613,174 @@ mod tests {
         TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     };
     use bytes::Bytes;
+
+    #[test]
+    fn identity_alignment_reuses_batch_and_preserves_other_mappings() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("a", ArrowDataType::Int32, true),
+            Field::new("b", ArrowDataType::Int32, true),
+        ]));
+        let make_batch = || {
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), None])),
+                    Arc::new(Int32Array::from(vec![Some(2), Some(3)])),
+                ],
+            )
+            .unwrap()
+        };
+
+        let batch = make_batch();
+        let columns = batch.columns().as_ptr();
+        let aligned = align_record_batch_to_schema(batch, schema.clone(), &[0, 1])?;
+        assert_eq!(aligned.columns().as_ptr(), columns);
+        assert_eq!(aligned, make_batch());
+
+        let reordered = align_record_batch_to_schema(make_batch(), schema.clone(), &[1, 0])?;
+        assert_eq!(reordered.column(0), make_batch().column(1));
+        assert_eq!(reordered.column(1), make_batch().column(0));
+
+        let missing =
+            align_record_batch_to_schema(make_batch(), schema.clone(), &[0, UNEXIST_MAPPING])?;
+        assert_eq!(missing.column(0), make_batch().column(0));
+        assert_eq!(missing.column(1).null_count(), 2);
+
+        let renamed = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("renamed", ArrowDataType::Int32, true),
+            Field::new("b", ArrowDataType::Int32, true),
+        ]));
+        let renamed_batch = align_record_batch_to_schema(make_batch(), renamed.clone(), &[0, 1])?;
+        assert_eq!(renamed_batch.schema(), renamed);
+        assert!(align_record_batch_to_schema(make_batch(), schema, &[0]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_preserves_slices_and_empty_batches() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
+        )?;
+        let sliced = batch.slice(1, 2);
+        let columns = sliced.columns().as_ptr();
+        let expected = sliced.clone();
+        let aligned = align_record_batch_to_schema(sliced, schema.clone(), &[0])?;
+        assert_eq!(aligned.columns().as_ptr(), columns);
+        assert_eq!(aligned, expected);
+
+        let empty = RecordBatch::new_empty(schema.clone());
+        let aligned = align_record_batch_to_schema(empty, schema.clone(), &[0])?;
+        assert_eq!(aligned.schema(), schema);
+        assert_eq!(aligned.num_rows(), 0);
+        assert_eq!(aligned.num_columns(), 1);
+
+        let zero_columns = Arc::new(arrow_schema::Schema::empty());
+        for row_count in [0, 2] {
+            for target in [
+                zero_columns.clone(),
+                Arc::new(arrow_schema::Schema::empty()),
+            ] {
+                let batch = RecordBatch::try_new_with_options(
+                    zero_columns.clone(),
+                    vec![],
+                    &arrow::array::RecordBatchOptions::new().with_row_count(Some(row_count)),
+                )?;
+                let aligned = align_record_batch_to_schema(batch, target.clone(), &[])?;
+                assert!(Arc::ptr_eq(aligned.schema_ref(), &target));
+                assert_eq!(aligned.num_rows(), row_count);
+                assert_eq!(aligned.num_columns(), 0);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_checks_schema_contents_and_metadata() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        // Equal schemas need not share the same Arc allocation.
+        let equal_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        assert!(!Arc::ptr_eq(&schema, &equal_schema));
+        let input = batch.clone();
+        let columns = input.columns().as_ptr();
+        let aligned = align_record_batch_to_schema(input, equal_schema.clone(), &[0])?;
+        assert_eq!(aligned.schema(), equal_schema);
+        assert_eq!(aligned.columns().as_ptr(), columns);
+
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let targets = [
+            Arc::new(schema.as_ref().clone().with_metadata(metadata.clone())),
+            Arc::new(arrow_schema::Schema::new(vec![
+                Field::new("id", ArrowDataType::Int32, true).with_metadata(metadata),
+            ])),
+            Arc::new(arrow_schema::Schema::new(vec![Field::new(
+                "id",
+                ArrowDataType::Int32,
+                false,
+            )])),
+        ];
+        for target in targets {
+            let input = batch.clone();
+            let columns = input.columns().as_ptr();
+            let aligned = align_record_batch_to_schema(input, target.clone(), &[0])?;
+            assert_eq!(aligned.columns().as_ptr(), columns);
+            assert_eq!(aligned.schema(), target);
+            assert_eq!(aligned.column(0), batch.column(0));
+            assert_eq!(aligned.num_rows(), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn identity_alignment_validates_different_target_schemas() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        let schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let wrong_type = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int64,
+            true,
+        )]));
+        assert!(align_record_batch_to_schema(batch, wrong_type, &[0]).is_err());
+        let nullable_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
+        )?;
+        let required = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "id",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        assert!(align_record_batch_to_schema(nullable_batch, required, &[0]).is_err());
+        Ok(())
+    }
 
     #[test]
     fn nonnullable_append_builder_roundtrips_for_both_append_modes() {
@@ -2345,10 +2427,23 @@ mod tests {
                     )?;
                     let expected = batch.project(&fields)?;
                     assert_eq!(context.record_batch(data.clone())?, expected);
-                    assert_eq!(
-                        context.record_batch_for_remote_log(data.clone())?.unwrap(),
-                        expected
-                    );
+                    let mut ordered = fields.clone();
+                    ordered.sort_unstable();
+                    // Duplicate columns are rejected by TabletServer, not by this decoder.
+                    if ordered.windows(2).all(|pair| pair[0] != pair[1]) {
+                        let server_data =
+                            encode_projection_batch(&batch.project(&ordered)?, compression)?;
+                        let local = ReadContext::with_projection_pushdown(
+                            schema.clone(),
+                            Arc::new(row_type.project(&fields)?),
+                            fields.clone(),
+                            false,
+                        )?;
+                        assert_eq!(local.project_fields(), Some(fields.as_slice()));
+                        assert_eq!(local.project_fields_in_order(), Some(ordered.as_slice()));
+                        assert_eq!(local.record_batch(server_data.clone())?, expected);
+                        assert_eq!(local.clone().record_batch(server_data)?, expected);
+                    }
                 }
             }
         }
@@ -2398,7 +2493,9 @@ mod tests {
                 HashMap::from([("version".into(), "target".into())]),
             ));
             let context = ReadContext::new(schema.clone(), row_type.clone(), true)
-                .with_target_schema_alignment(target.clone(), Arc::from(mapping.clone()));
+                .with_target_schema_alignment(target.clone(), Arc::from(mapping.clone()), true);
+            let local = ReadContext::new(schema.clone(), row_type.clone(), false)
+                .with_target_schema_alignment(target.clone(), Arc::from(mapping.clone()), false);
             let expected = align_record_batch_to_schema(batch.clone(), target, &mapping)?;
             for compression in [
                 None,
@@ -2407,10 +2504,7 @@ mod tests {
             ] {
                 let data = encode_projection_batch(&batch, compression)?;
                 assert_eq!(context.record_batch(data.clone())?, expected);
-                assert_eq!(
-                    context.record_batch_for_remote_log(data)?.unwrap(),
-                    expected
-                );
+                assert_eq!(local.record_batch(data)?, expected);
             }
         }
         Ok(())
@@ -2453,10 +2547,6 @@ mod tests {
         )?;
         let expected = batch.project(&[0])?;
         assert_eq!(selected.record_batch(data.clone())?, expected);
-        assert_eq!(
-            selected.record_batch_for_remote_log(data)?.unwrap(),
-            expected
-        );
         Ok(())
     }
 
@@ -2474,14 +2564,14 @@ mod tests {
     #[should_panic(expected = "schema alignment length must match target schema")]
     fn target_schema_alignment_rejects_length_mismatch() {
         let (read_context, target_schema) = single_int_read_context();
-        read_context.with_target_schema_alignment(target_schema, Arc::from([]));
+        read_context.with_target_schema_alignment(target_schema, Arc::from([]), false);
     }
 
     #[test]
     #[should_panic(expected = "schema alignment contains an invalid source index")]
     fn target_schema_alignment_rejects_invalid_source_index() {
         let (read_context, target_schema) = single_int_read_context();
-        read_context.with_target_schema_alignment(target_schema, Arc::from([-2]));
+        read_context.with_target_schema_alignment(target_schema, Arc::from([-2]), false);
     }
 
     #[test]

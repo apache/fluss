@@ -8,6 +8,7 @@ anstyle-parse@1.0.0	X									X
 anstyle-query@1.1.5	X									X			
 anstyle-wincon@3.0.11	X									X			
 anyhow@1.0.102	X									X			
+arc-swap@1.9.3	X									X			
 arrow@59.0.0	X												
 arrow-arith@59.0.0	X												
 arrow-array@59.0.0	X									X			
@@ -94,6 +95,7 @@ fixedbitset@0.5.7	X									X
 flatbuffers@25.12.19	X												
 fluss-cpp@1.0.0	X												
 fluss-examples@1.0.0	X												
+fluss-lake@1.0.0	X												
 fluss-rs@1.0.0	X												
 fluss-test-cluster@1.0.0	X												
 fluss_nif@1.0.0	X												

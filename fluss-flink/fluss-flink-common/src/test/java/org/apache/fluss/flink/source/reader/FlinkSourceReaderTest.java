@@ -270,6 +270,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             assertThat(checkpoint).hasSize(1);
             checkpointSplit = (LakeSnapshotAndFlussLogSplit) checkpoint.get(0);
             assertThat(checkpointSplit.isLakeSplitFinished()).isTrue();
+            // the finished lake splits are never read again, so they are not checkpointed
+            assertThat(checkpointSplit.getLakeSplits()).isNull();
             assertThat(checkpointSplit.getStartingOffset()).isEqualTo(startingOffset);
             assertThat(checkpointSplit.getRecordsToSkip()).isEqualTo(1L);
             assertThat(checkpointSplit.getCurrentLakeSplitIndex()).isZero();

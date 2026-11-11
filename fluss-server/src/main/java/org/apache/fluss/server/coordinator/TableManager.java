@@ -152,6 +152,9 @@ public class TableManager {
                 tablePath);
         Set<TableBucket> newTableBuckets = new HashSet<>();
         // get the partition assignment
+        coordinatorContext.putPartitionBucketCount(
+                new TablePartition(tableId, partitionId),
+                partitionAssignment.getBucketAssignments().size());
         for (Map.Entry<Integer, BucketAssignment> assignment :
                 partitionAssignment.getBucketAssignments().entrySet()) {
             int bucket = assignment.getKey();

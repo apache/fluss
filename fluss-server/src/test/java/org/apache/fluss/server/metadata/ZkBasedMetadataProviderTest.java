@@ -35,6 +35,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkVersion;
@@ -45,6 +46,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -58,6 +61,82 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ZkBasedMetadataProviderTest {
+
+    @ParameterizedTest
+    @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+    void testPartitionRegistrationCountCompatibility(boolean rescaled, boolean legacy)
+            throws Exception {
+        TablePath path = TablePath.of("test_db", "legacy_count");
+        TableRegistration table =
+                TableRegistration.newTable(
+                        123, DEFAULT_REMOTE_DATA_DIR, TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR);
+        if (rescaled) {
+            table = table.newBucketCount(6);
+        }
+        zookeeperClient.registerTable(path, table);
+        Map<Integer, BucketAssignment> buckets = new HashMap<>();
+        for (int id = 0; id < 3; id++) {
+            buckets.put(id, BucketAssignment.of(1));
+        }
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                124,
+                "p",
+                new PartitionAssignment(123, buckets),
+                DEFAULT_REMOTE_DATA_DIR,
+                path,
+                123,
+                3);
+        if (legacy) {
+            zookeeperClient.updatePartitionRegistration(
+                    path, "p", new PartitionRegistration(123, 124, DEFAULT_REMOTE_DATA_DIR, null));
+        }
+        PhysicalTablePath partition = PhysicalTablePath.of(path, "p");
+        if (legacy && rescaled) {
+            assertThatThrownBy(
+                            () ->
+                                    metadataProvider.getPartitionsMetadataFromZK(
+                                            Collections.singleton(partition)))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("missing a per-partition bucket count");
+        } else {
+            assertThat(
+                            metadataProvider
+                                    .getPartitionsMetadataFromZK(Collections.singleton(partition))
+                                    .get(0)
+                                    .getBucketCount())
+                    .isEqualTo(3);
+            zookeeperClient.deletePartitionAssignment(124);
+            assertThatThrownBy(
+                            () ->
+                                    metadataProvider.getPartitionsMetadataFromZK(
+                                            Collections.singleton(partition)))
+                    .isInstanceOf(org.apache.fluss.exception.StaleMetadataException.class);
+        }
+    }
+
+    @Test
+    void testIncompletePartitionAssignmentDoesNotBecomeSmallerLayout() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "partial_assignment");
+        zookeeperClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(
+                        123, DEFAULT_REMOTE_DATA_DIR, TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                124,
+                "p",
+                new PartitionAssignment(123, Collections.singletonMap(0, BucketAssignment.of(1))),
+                DEFAULT_REMOTE_DATA_DIR,
+                tablePath,
+                123,
+                3);
+        assertThatThrownBy(
+                        () ->
+                                metadataProvider.getPartitionsMetadataFromZK(
+                                        Collections.singleton(
+                                                PhysicalTablePath.of(tablePath, "p"))))
+                .isInstanceOf(org.apache.fluss.exception.StaleMetadataException.class);
+    }
+
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
@@ -277,7 +356,7 @@ class ZkBasedMetadataProviderTest {
                         tableId1, Collections.singletonMap(0, BucketAssignment.of(1, 2)));
         PartitionAssignment partitionAssignment2 =
                 new PartitionAssignment(
-                        tableId1, Collections.singletonMap(1, BucketAssignment.of(2, 3)));
+                        tableId1, Collections.singletonMap(0, BucketAssignment.of(2, 3)));
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId1,
@@ -315,7 +394,7 @@ class ZkBasedMetadataProviderTest {
 
         // Create leader and isr for all partition buckets
         TableBucket bucket1 = new TableBucket(tableId1, partitionId1, 0);
-        TableBucket bucket2 = new TableBucket(tableId1, partitionId2, 1);
+        TableBucket bucket2 = new TableBucket(tableId1, partitionId2, 0);
         TableBucket bucket3 = new TableBucket(tableId2, partitionId3, 0);
 
         zookeeperClient.registerLeaderAndIsr(
@@ -363,7 +442,7 @@ class ZkBasedMetadataProviderTest {
         assertThat(partition2Metadata.getTableId()).isEqualTo(tableId1);
         assertThat(partition2Metadata.getPartitionName()).isEqualTo(partitionName2);
         assertThat(partition2Metadata.getBucketMetadataList()).hasSize(1);
-        assertThat(partition2Metadata.getBucketMetadataList().get(0).getBucketId()).isEqualTo(1);
+        assertThat(partition2Metadata.getBucketMetadataList().get(0).getBucketId()).isEqualTo(0);
         assertThat(
                         extractLeaderFromBucketMetadata(
                                 partition2Metadata.getBucketMetadataList().get(0)))
