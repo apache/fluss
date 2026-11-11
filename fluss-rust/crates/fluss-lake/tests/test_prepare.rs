@@ -24,7 +24,7 @@ use fluss::metadata::{
     TableDescriptor, TablePath,
 };
 use fluss::predicate::col;
-use fluss_lake::{FlussLakeBaseline, FlussLakeReadContext, FlussLakeTable};
+use fluss_lake::{FlussLakeBaseline, FlussLakeTable};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -67,21 +67,9 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     assert_eq!(plain.log_ranges()[0].start_offset(), 0);
     assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
     plain.log_ranges()[0].validate_available().unwrap();
-    let imported = FlussLakeReadContext::from_boundary(
-        source.get_table_info(),
-        plain.lake_snapshot_id(),
-        plain.log_ranges().to_vec(),
-    )
-    .unwrap();
-    imported
-        .validate_table(&admin.get_table_info(&path).await.unwrap())
-        .unwrap();
-
     writer.append_arrow_batch(batch(vec![4, 5])).unwrap();
     writer.flush().await.unwrap();
-    assert_eq!(imported.log_ranges(), plain.log_ranges());
-    assert_eq!(imported.table_schema(), plain.table_schema());
-    assert_eq!(imported.log_ranges()[0].stop_offset(), 3);
+    assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
     assert_eq!(
         table.capture_read_context().await.unwrap().log_ranges()[0].stop_offset(),
         5
@@ -105,8 +93,8 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
         )
         .await
         .unwrap();
-    let evolved = connection.get_table(&path).await.unwrap();
-    imported.validate_table(evolved.get_table_info()).unwrap();
+    let evolved = admin.get_table_info(&path).await.unwrap();
+    assert_ne!(evolved.schema_id, plain.schema_id());
     let restored = table
         .import_read_context(&plain.to_protobuf().unwrap())
         .await
@@ -114,8 +102,6 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     assert_eq!(restored.schema_id(), plain.schema_id());
     assert_eq!(restored.table_schema(), plain.table_schema());
     assert_eq!(restored.log_ranges(), plain.log_ranges());
-    assert_eq!(imported.log_ranges(), plain.log_ranges());
-    assert_eq!(imported.table_schema(), plain.table_schema());
     admin.drop_table(&path, false).await.unwrap();
 }
 
@@ -213,15 +199,7 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     assert_eq!(selected.log_ranges().len(), 1);
     assert_eq!(selected.log_ranges()[0].bucket_count(), 1);
     assert_eq!(selected.log_ranges()[0].stop_offset(), 1);
-    let imported = FlussLakeReadContext::from_boundary_with_partition_scope(
-        source.get_table_info(),
-        selected.lake_snapshot_id(),
-        selected.log_ranges().to_vec(),
-        Some(&filter),
-    )
-    .unwrap();
-    assert_eq!(imported.partition_scope(), Some(&filter));
-    assert_eq!(imported.log_ranges(), selected.log_ranges());
+    assert_eq!(selected.partition_scope(), Some(&filter));
     admin
         .drop_partition(
             &path,

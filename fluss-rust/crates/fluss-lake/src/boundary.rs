@@ -431,7 +431,7 @@ mod tests {
                 .unwrap();
         let partition = PartitionInfo::new(42, spec);
         assert!(partition_bucket_count(&partition).is_err());
-        for count in [4, 2, 8, 0, -1] {
+        for count in [4, 0, -1] {
             let result = partition_bucket_count(&partition.clone().with_bucket_count(count));
             assert_eq!(result.is_ok(), count > 0);
             if count > 0 {

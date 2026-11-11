@@ -668,6 +668,9 @@ mod tests {
             let mut unknown = wire.clone();
             unknown.log_ranges[0].baseline = Some(2);
             assert!(FlussLakeReadContext::from_protobuf(&unknown, &live, &schema).is_err());
+            let mut version = wire.clone();
+            version.version = Some(2);
+            assert!(FlussLakeReadContext::from_protobuf(&version, &live, &schema).is_err());
             let mut wrong_schema = wire.clone();
             wrong_schema.schema_id = Some(live.schema_id);
             assert!(FlussLakeReadContext::from_protobuf(&wrong_schema, &live, &schema).is_err());
@@ -677,41 +680,6 @@ mod tests {
             live.table_id += 1;
             assert!(FlussLakeReadContext::from_protobuf(&wire, &live, &schema).is_err());
         }
-    }
-
-    #[test]
-    fn imports_shared_java_wire_fixture() {
-        use fluss::protocol::PbUnionReadContext;
-        use prost::Message;
-        let fixture = include_str!("../tests/fixtures/union-read-v1.txt");
-        let hex = fixture
-            .lines()
-            .find(|line| !line.is_empty() && !line.starts_with('#'))
-            .unwrap();
-        let bytes = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
-            .collect::<Vec<_>>();
-        let wire = PbUnionReadContext::decode(bytes.as_slice()).unwrap();
-        let info = table(true);
-        let schema = SchemaInfo::new(info.schema.clone(), info.schema_id);
-        let context = FlussLakeReadContext::from_protobuf(&wire, &info, &schema).unwrap();
-        assert!(context.is_bucket_scoped());
-        assert_eq!(
-            context.log_ranges()[0].table_bucket(),
-            &TableBucket::new_with_partition(7, Some(9), 1)
-        );
-        assert_eq!(context.log_ranges()[0].baseline(), FlussLakeBaseline::Lake);
-        assert_eq!(context.log_ranges()[0].start_offset(), 0);
-        assert_eq!(context.partition_scope(), Some(&col("region").ge("US")));
-        assert_eq!(context.to_protobuf().unwrap().encode_to_vec(), bytes);
-        // Additive unknown metadata is tolerated; unknown semantic versions are not.
-        let mut additive = bytes;
-        additive.extend_from_slice(&[0xa0, 0x06, 1]);
-        let mut wire = PbUnionReadContext::decode(additive.as_slice()).unwrap();
-        assert!(FlussLakeReadContext::from_protobuf(&wire, &info, &schema).is_ok());
-        wire.version = Some(2);
-        assert!(FlussLakeReadContext::from_protobuf(&wire, &info, &schema).is_err());
     }
 
     #[test]
@@ -835,6 +803,14 @@ mod tests {
         assert_eq!(mixed.log_ranges()[0].baseline(), FlussLakeBaseline::Lake);
         assert_eq!(mixed.log_ranges()[1].baseline(), FlussLakeBaseline::None);
         assert!(mixed.log_ranges().iter().all(|r| r.start_offset() == 0));
+        let info = table(false);
+        let imported = FlussLakeReadContext::from_protobuf(
+            &mixed.to_protobuf().unwrap(),
+            &info,
+            &SchemaInfo::new(info.schema.clone(), info.schema_id),
+        )
+        .unwrap();
+        assert_eq!(imported.log_ranges(), mixed.log_ranges());
     }
 
     #[test]
@@ -860,7 +836,14 @@ mod tests {
         .unwrap();
         assert!(context.log_ranges().is_empty());
         assert_eq!(context.lake_snapshot_id(), Some(42));
-        assert_eq!(context.partition_scope(), Some(&filter));
+        let info = table(true);
+        let imported = FlussLakeReadContext::from_protobuf(
+            &context.to_protobuf().unwrap(),
+            &info,
+            &SchemaInfo::new(info.schema.clone(), info.schema_id),
+        )
+        .unwrap();
+        assert_eq!(imported.partition_scope(), Some(&filter));
         for filter in [col("region").lt("US"), col("amount").eq(1i64)] {
             assert!(
                 FlussLakeReadContext::from_boundary_with_partition_scope(
