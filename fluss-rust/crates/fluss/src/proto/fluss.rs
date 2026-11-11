@@ -2352,3 +2352,74 @@ pub struct PbLiteralValue {
     #[prost(bytes = "vec", optional, tag = "13")]
     pub decimal_bytes: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
+/// * Frozen source boundaries shared by Java and native engine adapters.
+/// Version 1 describes bounded reads. Engines own task transport and scheduling.
+/// New optional fields must not alter read semantics for an older reader.
+/// Incompatible semantics require a new version; unknown versions/kinds fail.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PbUnionReadContext {
+    #[prost(int32, optional, tag = "1")]
+    pub version: ::core::option::Option<i32>,
+    #[prost(string, optional, tag = "2")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "4")]
+    pub table_id: ::core::option::Option<i64>,
+    #[prost(int32, optional, tag = "5")]
+    pub schema_id: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "6")]
+    pub table_bucket_count: ::core::option::Option<i32>,
+    #[prost(string, repeated, tag = "7")]
+    pub bucket_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag = "8")]
+    pub partition_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "9")]
+    pub merge_engine: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "10")]
+    pub lake: ::core::option::Option<PbUnionReadLake>,
+    /// Exact input scope, not a conservative pushdown hint. Absent means all partitions.
+    #[prost(message, optional, tag = "11")]
+    pub partition_scope: ::core::option::Option<PbPredicate>,
+    #[prost(message, repeated, tag = "12")]
+    pub log_ranges: ::prost::alloc::vec::Vec<PbUnionReadLogRange>,
+    /// 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+    /// 2: lake snapshot only; no Fluss log ranges are captured.
+    #[prost(int32, optional, tag = "13")]
+    pub coverage: ::core::option::Option<i32>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbUnionReadLake {
+    #[prost(string, optional, tag = "1")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub database_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub table_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// Absent: lake is enabled but no readable snapshot was captured. Zero is a valid ID.
+    #[prost(int64, optional, tag = "4")]
+    pub snapshot_id: ::core::option::Option<i64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbUnionReadLogRange {
+    /// Absent for an unpartitioned table. Values follow context.partition_keys order.
+    #[prost(int64, optional, tag = "1")]
+    pub partition_id: ::core::option::Option<i64>,
+    #[prost(string, repeated, tag = "2")]
+    pub partition_values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "3")]
+    pub bucket_id: ::core::option::Option<i32>,
+    #[prost(int32, optional, tag = "4")]
+    pub bucket_count: ::core::option::Option<i32>,
+    /// 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+    #[prost(int32, optional, tag = "5")]
+    pub baseline: ::core::option::Option<i32>,
+    /// Concrete half-open range; no EARLIEST/LATEST sentinels.
+    #[prost(int64, optional, tag = "6")]
+    pub start_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "7")]
+    pub stop_offset: ::core::option::Option<i64>,
+    /// Observed retention lower bound, not a lease.
+    #[prost(int64, optional, tag = "8")]
+    pub earliest_offset: ::core::option::Option<i64>,
+}
