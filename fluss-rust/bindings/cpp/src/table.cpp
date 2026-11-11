@@ -2124,15 +2124,18 @@ Result Lookuper::LookupAsync(const GenericRow& pk_row, uint64_t request_id) cons
     return utils::from_ffi_result(lookuper_->lookup_async_poll(*pk_row.inner_, request_id));
 }
 
-Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const {
+Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out,
+                      size_t max_results) const {
     if (!Available()) {
         return utils::make_client_error("Lookuper not available");
     }
-    const auto initial_size = out.size();
+    if (max_results == 0) {
+        return utils::make_client_error("Poll max_results must be greater than zero");
+    }
+    out.clear();
     auto poll = [&](int64_t wait_ms) { return lookuper_->poll_lookup(wait_ms); };
-    bool first = true;
-    while ((first && out.size() == initial_size) || out.size() < initial_size + 1024) {
-        auto ffi_result = poll(first ? timeout_ms : 0);
+    while (out.size() < max_results) {
+        auto ffi_result = poll(out.empty() ? timeout_ms : 0);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (!result.Ok()) {
             return result;
@@ -2149,7 +2152,6 @@ Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) co
         item.result = item.lookup.Adopt(completion->lookup_completion_take_result().into_raw());
         ffi::delete_lookup_completion(completion);
         out.push_back(std::move(item));
-        first = false;
     }
     return {};
 }
@@ -2272,14 +2274,17 @@ Result PrefixLookuper::PrefixLookupAsync(const GenericRow& prefix_row, uint64_t 
         lookuper_->prefix_lookup_async_poll(*prefix_row.inner_, request_id));
 }
 
-Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const {
+Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out,
+                            size_t max_results) const {
     if (!Available()) {
         return utils::make_client_error("PrefixLookuper not available");
     }
-    const auto initial_size = out.size();
-    bool first = true;
-    while ((first && out.size() == initial_size) || out.size() < initial_size + 1024) {
-        auto ffi_result = lookuper_->poll_prefix_lookup(first ? timeout_ms : 0);
+    if (max_results == 0) {
+        return utils::make_client_error("Poll max_results must be greater than zero");
+    }
+    out.clear();
+    while (out.size() < max_results) {
+        auto ffi_result = lookuper_->poll_prefix_lookup(out.empty() ? timeout_ms : 0);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (!result.Ok()) {
             return result;
@@ -2297,7 +2302,6 @@ Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompleti
             item.lookup.Adopt(completion->prefix_lookup_completion_take_result().into_raw());
         ffi::delete_prefix_lookup_completion(completion);
         out.push_back(std::move(item));
-        first = false;
     }
     return {};
 }

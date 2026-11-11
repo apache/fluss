@@ -544,7 +544,7 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 | `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
 | `LookupAsync(const GenericRow& pk_row, uint64_t request_id) const -> Result` | Start a lookup and associate it with an application request ID |
-| `Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const -> Result` | Collect completed lookups in completion order |
+| `Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed lookups in completion order |
 
 Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
 
@@ -567,40 +567,51 @@ For fan-out workloads, use `LookupAsync` and `Poll` instead of retaining one
 pending handle per key:
 
 ```cpp
+size_t next = 0;
 size_t submitted = 0;
-for (size_t i = 0; i < keys.size(); ++i) {
-    if (!lookuper.LookupAsync(keys[i], i).Ok()) {
-        // This lookup did not start.
-    } else {
-        ++submitted;
-    }
-}
 std::vector<fluss::LookupCompletion> completed;
-while (completed.size() < submitted) {
-    if (!lookuper.Poll(1000, completed).Ok()) {
+while (next < keys.size() || submitted != 0) {
+    while (next < keys.size()) {
+        auto result = lookuper.LookupAsync(keys[next], next);
+        if (result.Ok()) {
+            ++next;
+            ++submitted;
+        } else if (result.error_code == fluss::ErrorCode::QUEUE_FULL) {
+            break;  // Poll before retrying this key.
+        } else {
+            // Handle an invalid key or another submission error.
+            ++next;
+        }
+    }
+    if (submitted != 0 && !lookuper.Poll(1000, completed, 128).Ok()) {
         // Handle a polling error.
     }
-}
-for (const auto& completion : completed) {
-    if (completion.result.Ok() && completion.lookup.Found()) {
-        // Match the result with completion.request_id.
+    submitted -= completed.size();
+    for (const auto& completion : completed) {
+        if (completion.result.Ok() && completion.lookup.Found()) {
+            // Match the result with completion.request_id.
+        }
     }
 }
 ```
 
-The number of outstanding requests and queued completions is controlled by
-`Configuration::lookup_queue_size`. If that limit is reached, `LookupAsync`
-returns an error; poll completed requests before submitting more. Each
-completion retains its capacity permit until it is consumed. `Poll` returns at
-most 1024 completions per call and includes lock acquisition in its timeout.
+The number of outstanding asynchronous requests per lookuper is controlled by
+`Configuration::lookup_max_pending_operations`; the core lookup batching queue
+is configured independently by `lookup_queue_size`. If async capacity is reached,
+`LookupAsync` returns `QUEUE_FULL`; poll completed requests before retrying the
+submission. Each completion retains its capacity permit until it is consumed.
+`Poll` replaces `out`, accepts a caller-selected batch limit, and includes lock
+acquisition in its timeout.
 
 `Poll` waits for at most `timeout_ms` for the first completion and then drains
 already completed lookups. A timeout is not an error and does not cancel
 unfinished lookups. Each `LookupCompletion` contains the caller-supplied
 `request_id`, a per-lookup `result`, and the `lookup` result. The completion
 queue is owned by the lookuper and is safe to use from multiple threads.
-The queue holds up to 1024 completed lookups; if it is full, lookup tasks
-remain pending until the caller polls and makes room.
+When `Poll(-1, out)` is called with no outstanding asynchronous lookup, it
+returns immediately with an empty result. Destroying a lookuper aborts its
+in-flight asynchronous tasks. Key conversion and validation happen at
+submission time, before capacity is reserved.
 
 ## `PendingLookup`
 

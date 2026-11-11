@@ -32,7 +32,8 @@ use tokio::task::JoinHandle;
 
 use crate::{
     CLIENT_ERROR_CODE, GenericRowInner, LookupResultInner, Lookuper, PrefixLookupResultInner,
-    PrefixLookuper, RUNTIME, client_err_ptr, err_from_core_error, ffi, ok_ptr, types,
+    PrefixLookuper, QUEUE_FULL_ERROR_CODE, RUNTIME, client_err_ptr, err_from_core_error, ffi,
+    ok_ptr, types,
 };
 
 enum PollOutcome<T> {
@@ -42,14 +43,18 @@ enum PollOutcome<T> {
 }
 
 fn poll_receiver<T>(
-    receiver: &tokio::sync::Mutex<tokio::sync::mpsc::Receiver<T>>,
+    receiver: &tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<T>>,
     timeout_ms: i64,
+    no_pending: bool,
 ) -> PollOutcome<T>
 where
     T: Send + 'static,
 {
     RUNTIME.block_on(async {
         if timeout_ms < 0 {
+            if no_pending {
+                return PollOutcome::Empty;
+            }
             let mut receiver = receiver.lock().await;
             return match receiver.recv().await {
                 Some(completion) => PollOutcome::Completion(completion),
@@ -294,21 +299,22 @@ impl Lookuper {
                     .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
                 let permit = match permit {
                     Ok(permit) => permit,
-                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                    Err(message) => return crate::err_result(QUEUE_FULL_ERROR_CODE, message),
                 };
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
-                RUNTIME.spawn(async move {
+                let task = RUNTIME.spawn(async move {
                     let result = to_lookup_result(inner.lookup(&key).await, &table_info);
-                    let _ = sender
-                        .send(LookupCompletion {
-                            request_id,
-                            result: Some(result),
-                            _permit: Some(permit),
-                        })
-                        .await;
+                    let _ = sender.send(LookupCompletion {
+                        request_id,
+                        result: Some(result),
+                        _permit: Some(permit),
+                    });
                 });
+                let mut tasks = self.async_tasks.lock().unwrap();
+                tasks.retain(|task| !task.is_finished());
+                tasks.push(task);
                 crate::ok_result()
             }
             Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
@@ -316,7 +322,11 @@ impl Lookuper {
     }
 
     pub(crate) fn poll_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
-        match poll_receiver(&self.completion_receiver, timeout_ms) {
+        match poll_receiver(
+            &self.completion_receiver,
+            timeout_ms,
+            self.completion_permits.available_permits() == self.completion_capacity,
+        ) {
             PollOutcome::Completion(completion) => {
                 ok_ptr(Box::into_raw(Box::new(completion)) as usize)
             }
@@ -380,21 +390,22 @@ impl PrefixLookuper {
                     .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
                 let permit = match permit {
                     Ok(permit) => permit,
-                    Err(message) => return crate::err_result(CLIENT_ERROR_CODE, message),
+                    Err(message) => return crate::err_result(QUEUE_FULL_ERROR_CODE, message),
                 };
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
-                RUNTIME.spawn(async move {
+                let task = RUNTIME.spawn(async move {
                     let result = to_prefix_lookup_result(inner.lookup(&key).await, &table_info);
-                    let _ = sender
-                        .send(PrefixLookupCompletion {
-                            request_id,
-                            result: Some(result),
-                            _permit: Some(permit),
-                        })
-                        .await;
+                    let _ = sender.send(PrefixLookupCompletion {
+                        request_id,
+                        result: Some(result),
+                        _permit: Some(permit),
+                    });
                 });
+                let mut tasks = self.async_tasks.lock().unwrap();
+                tasks.retain(|task| !task.is_finished());
+                tasks.push(task);
                 crate::ok_result()
             }
             Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
@@ -402,7 +413,11 @@ impl PrefixLookuper {
     }
 
     pub(crate) fn poll_prefix_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
-        match poll_receiver(&self.completion_receiver, timeout_ms) {
+        match poll_receiver(
+            &self.completion_receiver,
+            timeout_ms,
+            self.completion_permits.available_permits() == self.completion_capacity,
+        ) {
             PollOutcome::Completion(completion) => {
                 ok_ptr(Box::into_raw(Box::new(completion)) as usize)
             }
@@ -479,4 +494,34 @@ fn to_prefix_lookup_result(
 fn core_error<T: Outcome>(e: &fcore::error::Error) -> T {
     let ffi_err = err_from_core_error(e);
     T::from_error(ffi_err.error_code, ffi_err.error_message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poll_timeout_includes_receiver_lock() {
+        let (_, receiver) = tokio::sync::mpsc::unbounded_channel::<u8>();
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+        let locked = Arc::clone(&receiver);
+        let (locked_sender, locked_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+
+        RUNTIME.spawn(async move {
+            let _guard = locked.lock().await;
+            locked_sender.send(()).unwrap();
+            release_receiver.await.unwrap();
+        });
+        locked_receiver.recv().unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            poll_receiver(&receiver, 25, false),
+            PollOutcome::Empty
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        release_sender.send(()).unwrap();
+    }
 }

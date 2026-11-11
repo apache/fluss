@@ -98,6 +98,7 @@ mod ffi {
         security_sasl_username: String,
         security_sasl_password: String,
         lookup_queue_size: usize,
+        lookup_max_pending_operations: usize,
         lookup_max_batch_size: usize,
         lookup_batch_timeout_ms: u64,
         lookup_max_inflight_requests: usize,
@@ -1030,6 +1031,7 @@ mod ffi {
 
 pub struct Connection {
     inner: Arc<fcore::client::FlussConnection>,
+    lookup_max_pending_operations: usize,
 }
 
 pub struct Admin {
@@ -1042,6 +1044,7 @@ pub struct Table {
     table_info: fcore::metadata::TableInfo,
     table_path: fcore::metadata::TablePath,
     has_pk: bool,
+    lookup_max_pending_operations: usize,
 }
 
 pub struct AppendWriter {
@@ -1081,9 +1084,11 @@ pub struct UpsertWriter {
 pub struct Lookuper {
     inner: Arc<fcore::client::Lookuper>,
     table_info: Arc<TableInfo>,
-    completion_sender: tokio::sync::mpsc::Sender<LookupCompletion>,
-    completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<LookupCompletion>>,
+    completion_sender: tokio::sync::mpsc::UnboundedSender<LookupCompletion>,
+    completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<LookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
+    completion_capacity: usize,
+    async_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
 pub struct PrefixLookuper {
@@ -1091,9 +1096,28 @@ pub struct PrefixLookuper {
     table_info: Arc<TableInfo>,
     /// Full-schema indices of the lookup columns, used to compact the input row.
     lookup_column_indices: Vec<usize>,
-    completion_sender: tokio::sync::mpsc::Sender<PrefixLookupCompletion>,
-    completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<PrefixLookupCompletion>>,
+    completion_sender: tokio::sync::mpsc::UnboundedSender<PrefixLookupCompletion>,
+    completion_receiver:
+        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PrefixLookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
+    completion_capacity: usize,
+    async_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Drop for Lookuper {
+    fn drop(&mut self) {
+        for task in self.async_tasks.lock().unwrap().drain(..) {
+            task.abort();
+        }
+    }
+}
+
+impl Drop for PrefixLookuper {
+    fn drop(&mut self) {
+        for task in self.async_tasks.lock().unwrap().drain(..) {
+            task.abort();
+        }
+    }
 }
 
 // C++ callers may share one lookuper across threads.
@@ -1108,6 +1132,7 @@ const _: () = {
 /// detects client-side errors as failures. The value -2 is outside the server API error
 /// code range (-1 .. 57+), so it will never collide with current or future API codes.
 const CLIENT_ERROR_CODE: i32 = -2;
+const QUEUE_FULL_ERROR_CODE: i32 = -3;
 
 fn ok_result() -> ffi::FfiResult {
     ffi::FfiResult {
@@ -1263,7 +1288,10 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
 
     match conn {
         Ok(c) => {
-            let ptr = Box::into_raw(Box::new(Connection { inner: Arc::new(c) }));
+            let ptr = Box::into_raw(Box::new(Connection {
+                inner: Arc::new(c),
+                lookup_max_pending_operations: config.lookup_max_pending_operations,
+            }));
             ok_ptr(ptr as usize)
         }
         Err(e) => err_ptr_from_core(&e),
@@ -1307,6 +1335,7 @@ impl Connection {
                     table_info: t.get_table_info().clone(),
                     table_path: t.table_path().clone(),
                     has_pk: t.has_primary_key(),
+                    lookup_max_pending_operations: self.lookup_max_pending_operations,
                 }));
                 ok_ptr(ptr as usize)
             }
@@ -2208,9 +2237,13 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
-        let completion_capacity = self.connection.config().lookup_queue_size;
-        let (completion_sender, completion_receiver) =
-            tokio::sync::mpsc::channel(completion_capacity);
+        let completion_capacity = self.lookup_max_pending_operations;
+        if completion_capacity == 0 {
+            return client_err_ptr(
+                "lookup_max_pending_operations must be greater than zero".to_string(),
+            );
+        }
+        let (completion_sender, completion_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         let ptr = Box::into_raw(Box::new(Lookuper {
             inner: Arc::new(lookuper),
@@ -2218,6 +2251,8 @@ impl Table {
             completion_sender,
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
+            completion_capacity,
+            async_tasks: Arc::new(Mutex::new(Vec::new())),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2245,9 +2280,13 @@ impl Table {
             Ok(l) => l,
             Err(e) => return err_ptr_from_core(&e),
         };
-        let completion_capacity = self.connection.config().lookup_queue_size;
-        let (completion_sender, completion_receiver) =
-            tokio::sync::mpsc::channel(completion_capacity);
+        let completion_capacity = self.lookup_max_pending_operations;
+        if completion_capacity == 0 {
+            return client_err_ptr(
+                "lookup_max_pending_operations must be greater than zero".to_string(),
+            );
+        }
+        let (completion_sender, completion_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         let ptr = Box::into_raw(Box::new(PrefixLookuper {
             inner: Arc::new(lookuper),
@@ -2256,6 +2295,8 @@ impl Table {
             completion_sender,
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
+            completion_capacity,
+            async_tasks: Arc::new(Mutex::new(Vec::new())),
         }));
         ok_ptr(ptr as usize)
     }

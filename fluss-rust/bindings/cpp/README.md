@@ -82,25 +82,39 @@ request:
 
 ```cpp
 std::vector<fluss::LookupCompletion> completed;
+size_t next = 0;
 size_t submitted = 0;
-for (size_t i = 0; i < keys.size(); ++i) {
-    if (lookuper.LookupAsync(keys[i], i).Ok()) {
-        ++submitted;
+while (next < keys.size() || submitted != 0) {
+    while (next < keys.size()) {
+        auto result = lookuper.LookupAsync(keys[next], next);
+        if (result.Ok()) {
+            ++next;
+            ++submitted;
+        } else if (result.error_code == fluss::ErrorCode::QUEUE_FULL) {
+            break;
+        } else {
+            ++next;
+        }
     }
-}
-while (completed.size() < submitted) {
-    lookuper.Poll(1000, completed);
+    if (submitted != 0) {
+        lookuper.Poll(1000, completed, 128);
+        submitted -= completed.size();
+    }
 }
 ```
 
 Each completion carries the caller's request ID, a per-lookup `Result`, and the
 lookup result. `PrefixLookuper::PrefixLookupAsync` and its `Poll` overload
 provide the same behavior for prefix lookups.
-The number of outstanding asynchronous lookups and queued completions is
-controlled by `Configuration::lookup_queue_size`. When that limit is reached,
-`LookupAsync` returns an error; callers should poll before submitting more work.
+The number of outstanding asynchronous lookups is controlled by
+`Configuration::lookup_max_pending_operations`, independently of the core
+lookup batching queue `lookup_queue_size`. When async capacity is full,
+`LookupAsync` returns `ErrorCode::QUEUE_FULL`; callers should poll and retry that
+submission before submitting more work.
 Each completion retains its capacity permit until the caller consumes it.
-`Poll` returns at most 1024 completions per call.
+`Poll` replaces its output vector and returns at most the caller-selected number
+of completions per call (1024 by default). `lookup_max_pending_operations`
+controls each lookuper's async capacity independently of `lookup_queue_size`.
 
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared
 worker, serially in dispatch order and off the I/O threads. `WriteCompletion.result`

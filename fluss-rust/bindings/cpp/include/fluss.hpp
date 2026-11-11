@@ -74,13 +74,16 @@ enum class FfiPredicateLeafFunction : int32_t;
 /// Named constants for Fluss API error codes.
 ///
 /// Server API errors have error_code > 0 or == -1.
-/// Client-side errors have error_code == CLIENT_ERROR (-2).
+/// Client-side errors have error_code == CLIENT_ERROR (-2), except for
+/// admission failures reported as QUEUE_FULL (-3).
 /// These constants match the Rust core FlussError enum and are stable across protocol versions.
 /// New server error codes work automatically (error_code is a raw int, not a closed enum) —
 /// these constants are convenience names, not an exhaustive list.
 struct ErrorCode {
     /// Client-side error (not from server API protocol). Check error_message for details.
     static constexpr int CLIENT_ERROR = -2;
+    /// The client-side asynchronous lookup capacity is full.
+    static constexpr int QUEUE_FULL = -3;
     /// No error.
     static constexpr int NONE = 0;
     /// The server experienced an unexpected error when processing the request.
@@ -236,7 +239,7 @@ struct ErrorCode {
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
-        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+        return code == QUEUE_FULL || code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
                code == SCHEMA_NOT_EXIST || code == LOG_STORAGE_EXCEPTION ||
                code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
                code == CORRUPT_RECORD_EXCEPTION ||
@@ -1705,6 +1708,8 @@ struct Configuration {
     // Additional lookups for that bucket fail immediately with a buffer exhaustion error
     // Maximum number of pending lookup operations, including async polling completions
     size_t lookup_queue_size{25600};
+    // Maximum number of pending async polling operations per lookuper
+    size_t lookup_max_pending_operations{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
     // Maximum time to wait for the lookup batch to fill (in milliseconds)
@@ -2215,9 +2220,10 @@ class Lookuper {
     Result LookupAsync(const GenericRow& pk_row, uint64_t request_id) const;
 
     /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
-    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
-    /// lookups active.
-    Result Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out) const;
+    /// up to `max_results` completions already available. Replaces `out`. A timeout is
+    /// successful and leaves unfinished lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out,
+                size_t max_results = 1024) const;
 
    private:
     friend class Table;
@@ -2252,9 +2258,10 @@ class PrefixLookuper {
     Result PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const;
 
     /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
-    /// up to 1024 completions already available. A timeout is successful and leaves unfinished
-    /// lookups active.
-    Result Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const;
+    /// up to `max_results` completions already available. Replaces `out`. A timeout is
+    /// successful and leaves unfinished lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out,
+                size_t max_results = 1024) const;
 
    private:
     friend class Table;

@@ -20,6 +20,7 @@
 #include <arrow/api.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -2119,6 +2120,13 @@ void ConnectSlowLookups(fluss::Connection& out, uint64_t batch_timeout_ms) {
     ASSERT_OK(fluss::Connection::Create(config, out));
 }
 
+void ConnectPollingLookups(fluss::Connection& out, size_t max_pending_operations) {
+    fluss::Configuration config;
+    config.bootstrap_servers = fluss_test::FlussTestEnvironment::Instance()->GetBootstrapServers();
+    config.lookup_max_pending_operations = max_pending_operations;
+    ASSERT_OK(fluss::Connection::Create(config, out));
+}
+
 }  // namespace
 
 TEST_F(KvTableTest, OneThreadKeepsManyLookupsInFlight) {
@@ -2223,7 +2231,10 @@ TEST_F(KvTableTest, PollsAsyncLookupsByRequestId) {
 
     std::vector<fluss::LookupCompletion> lookup_completions;
     std::vector<fluss::PrefixLookupCompletion> prefix_completions;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (lookup_completions.size() < kKeys || prefix_completions.size() < kKeys) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+            << "Timed out waiting for asynchronous lookup completions";
         if (lookup_completions.size() < kKeys) {
             ASSERT_OK(lookuper.Poll(5000, lookup_completions));
         }
@@ -2232,17 +2243,85 @@ TEST_F(KvTableTest, PollsAsyncLookupsByRequestId) {
         }
     }
 
+    std::vector<bool> lookup_ids(kKeys, false);
     for (const auto& completion : lookup_completions) {
         ASSERT_TRUE(completion.result.Ok());
         ASSERT_TRUE(completion.lookup.Found());
+        ASSERT_LT(completion.request_id, static_cast<uint64_t>(kKeys));
+        ASSERT_FALSE(lookup_ids[completion.request_id]);
+        lookup_ids[completion.request_id] = true;
         EXPECT_EQ(completion.lookup.GetInt32("id"), static_cast<int32_t>(completion.request_id));
     }
+    EXPECT_TRUE(std::all_of(lookup_ids.begin(), lookup_ids.end(), [](bool found) { return found; }));
+
+    std::vector<bool> prefix_ids(kKeys, false);
     for (const auto& completion : prefix_completions) {
         ASSERT_TRUE(completion.result.Ok());
         EXPECT_EQ(completion.lookup.Size(), 2u);
+        ASSERT_LT(completion.request_id, static_cast<uint64_t>(kKeys));
+        ASSERT_FALSE(prefix_ids[completion.request_id]);
+        prefix_ids[completion.request_id] = true;
         EXPECT_EQ(completion.lookup.GetRow(0).GetInt32("id"),
                   static_cast<int32_t>(completion.request_id));
     }
+    EXPECT_TRUE(std::all_of(prefix_ids.begin(), prefix_ids.end(), [](bool found) { return found; }));
+
+    ASSERT_OK(admin().DropTable(path, false));
+}
+
+TEST_F(KvTableTest, PollAsyncLookupCapacityAndBatchLimit) {
+    fluss::TablePath path("fluss", "test_lookup_poll_capacity_cpp");
+    CreateSequenceTable(admin(), connection(), path);
+
+    fluss::Connection polling_connection;
+    ConnectPollingLookups(polling_connection, 1);
+    fluss::Table table;
+    ASSERT_OK(polling_connection.GetTable(path, table));
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    std::vector<fluss::LookupCompletion> completions;
+    std::vector<fluss::PrefixLookupCompletion> prefix_completions;
+
+    // Poll(-1) must not wait when this lookuper has no outstanding work.
+    const auto idle_start = std::chrono::steady_clock::now();
+    ASSERT_OK(lookuper.Poll(-1, completions));
+    EXPECT_LT(std::chrono::steady_clock::now() - idle_start, std::chrono::seconds(1));
+
+    ASSERT_OK(lookuper.LookupAsync(Key(0, 0), 0));
+    auto queue_full = lookuper.LookupAsync(Key(1, 0), 1);
+    EXPECT_EQ(queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
+    EXPECT_FALSE(queue_full.Ok());
+    EXPECT_TRUE(queue_full.IsRetriable());
+
+    ASSERT_OK(lookuper.Poll(5000, completions, 1));
+    ASSERT_EQ(completions.size(), 1u);
+    EXPECT_EQ(completions[0].request_id, 0u);
+
+    // Consuming the completion releases the permit for the next submission.
+    ASSERT_OK(lookuper.LookupAsync(Key(1, 0), 1));
+    ASSERT_OK(lookuper.Poll(5000, completions, 1));
+    ASSERT_EQ(completions.size(), 1u);
+    EXPECT_EQ(completions[0].request_id, 1u);
+
+    // Prefix lookups have the same independent capacity and polling semantics.
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));
+    auto prefix_queue_full = prefix_lookuper.PrefixLookupAsync(Prefix(1), 1);
+    EXPECT_EQ(prefix_queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
+    EXPECT_FALSE(prefix_queue_full.Ok());
+    EXPECT_TRUE(prefix_queue_full.IsRetriable());
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
+    ASSERT_EQ(prefix_completions.size(), 1u);
+    EXPECT_EQ(prefix_completions[0].request_id, 0u);
+
+    // Poll replaces the output and honors the caller-selected batch size.
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(1), 1));
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
+    ASSERT_EQ(prefix_completions.size(), 1u);
+    EXPECT_EQ(prefix_completions[0].request_id, 1u);
 
     ASSERT_OK(admin().DropTable(path, false));
 }
