@@ -103,6 +103,12 @@ public class FlussPaths {
     /** Suffix of a producer offsets file. */
     private static final String PRODUCER_OFFSETS_FILE_SUFFIX = ".offsets";
 
+    /** The directory name for storing rebalance task snapshots. */
+    private static final String REMOTE_REBALANCE_DIR_NAME = "rebalance";
+
+    /** Suffix of a rebalance task snapshot file. */
+    private static final String REBALANCE_TASK_FILE_SUFFIX = ".task";
+
     private static final String REMOTE_LEASE_DIR_NAME = "lease";
 
     // ----------------------------------------------------------------------------------------
@@ -907,6 +913,19 @@ public class FlussPaths {
                         new FsPath(remoteProducersDir(remoteDataDir), producerId),
                         String.valueOf(tableId)),
                 uuid + PRODUCER_OFFSETS_FILE_SUFFIX);
+    }
+
+    /** Returns a unique remote file path for a rebalance task snapshot. */
+    public static FsPath remoteRebalanceTaskPath(
+            String remoteDataDir, String rebalanceId, UUID fileId) {
+        return new FsPath(
+                new FsPath(remoteRebalanceDir(remoteDataDir), rebalanceId),
+                fileId + REBALANCE_TASK_FILE_SUFFIX);
+    }
+
+    /** Returns the remote directory containing all rebalance task snapshots. */
+    public static FsPath remoteRebalanceDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_REBALANCE_DIR_NAME);
     }
 
     // ----------------------------------------------------------------------------------------

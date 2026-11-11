@@ -157,6 +157,8 @@ Only target-relevant assignment, leader, and ISR changes count as observed progr
 
 Both durations must be at least `1 ms` and fit in a signed 64-bit millisecond value; the task limit must be at least `1`. Invalid values prevent coordinator initialization. Timeouts are evaluated during periodic reconciliation, so the transition to `FAILED` can occur after the configured duration has elapsed.
 
+Large rebalance tasks are stored in remote storage after every live coordinator advertises support for the remote task format; otherwise the task remains inline in ZooKeeper. This makes rolling coordinator upgrades safe, and TabletServer versions are unaffected. After a remote task handle has been written, do not roll a coordinator back to a version that cannot read the remote format. Complete or cancel the active rebalance before such a rollback.
+
 ### 4. Control Rebalance Speed
 
 The coordinator controls rebalance parallelism with `coordinator.rebalance.max-inflight-tasks`, which limits how many bucket-level rebalance tasks can run at the same time. The default value is `1`, which keeps rebalance conservative.

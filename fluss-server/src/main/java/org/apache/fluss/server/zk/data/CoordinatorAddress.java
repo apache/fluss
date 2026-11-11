@@ -19,8 +19,13 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.Endpoint;
 
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+
+import static java.util.Collections.emptySet;
 
 /**
  * The address information of an active coordinator stored in {@link ZkData.CoordinatorLeaderZNode}.
@@ -28,12 +33,23 @@ import java.util.Objects;
  * @see CoordinatorAddressJsonSerde for json serialization and deserialization.
  */
 public class CoordinatorAddress {
+
+    /** Capability indicating that a coordinator can recover remote rebalance task handles. */
+    public static final String REMOTE_REBALANCE_TASK_FEATURE = "remote_rebalance_task";
+
     private final String id;
     private final List<Endpoint> endpoints;
+    private final Set<String> supportedFeatures;
 
     public CoordinatorAddress(String id, List<Endpoint> endpoints) {
+        this(id, endpoints, emptySet());
+    }
+
+    /** Creates a coordinator address with the features supported by this server binary. */
+    public CoordinatorAddress(String id, List<Endpoint> endpoints, Set<String> supportedFeatures) {
         this.id = id;
         this.endpoints = endpoints;
+        this.supportedFeatures = Collections.unmodifiableSet(new HashSet<>(supportedFeatures));
     }
 
     public String getId() {
@@ -44,22 +60,42 @@ public class CoordinatorAddress {
         return endpoints;
     }
 
+    /** Returns the coordinator capabilities used to gate rolling-upgrade-sensitive formats. */
+    public Set<String> getSupportedFeatures() {
+        return supportedFeatures;
+    }
+
+    /** Returns whether this coordinator advertises the given capability. */
+    public boolean supportsFeature(String feature) {
+        return supportedFeatures.contains(feature);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
         CoordinatorAddress that = (CoordinatorAddress) o;
-        return Objects.equals(id, that.id) && Objects.equals(endpoints, that.endpoints);
+        return Objects.equals(id, that.id)
+                && Objects.equals(endpoints, that.endpoints)
+                && Objects.equals(supportedFeatures, that.supportedFeatures);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, endpoints);
+        return Objects.hash(id, endpoints, supportedFeatures);
     }
 
     @Override
     public String toString() {
-        return "CoordinatorAddress{" + "id='" + id + '\'' + ", endpoints=" + endpoints + '}';
+        return "CoordinatorAddress{"
+                + "id='"
+                + id
+                + '\''
+                + ", endpoints="
+                + endpoints
+                + ", supportedFeatures="
+                + supportedFeatures
+                + '}';
     }
 }

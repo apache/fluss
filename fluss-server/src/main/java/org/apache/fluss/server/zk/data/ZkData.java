@@ -895,11 +895,19 @@ public final class ZkData {
         }
 
         public static byte[] encode(RebalanceTask rebalanceTask) {
-            return JsonSerdeUtils.writeValueAsBytes(rebalanceTask, RebalanceTaskJsonSerde.INSTANCE);
+            return encode(RebalanceTaskZNodeData.inline(rebalanceTask));
+        }
+
+        public static byte[] encode(RebalanceTaskZNodeData data) {
+            return JsonSerdeUtils.writeValueAsBytes(data, RebalanceTaskZNodeJsonSerde.INSTANCE);
         }
 
         public static RebalanceTask decode(byte[] json) {
-            return JsonSerdeUtils.readValue(json, RebalanceTaskJsonSerde.INSTANCE);
+            return decodeData(json).getInlineTask();
+        }
+
+        public static RebalanceTaskZNodeData decodeData(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceTaskZNodeJsonSerde.INSTANCE);
         }
     }
 

@@ -168,6 +168,8 @@ class CoordinatorEventProcessorTestBase {
         eventProcessor.startup();
         metadataManager.createDatabase(
                 defaultDatabase, DatabaseDescriptor.builder().build(), false);
+        eventProcessor.startRebalanceRecovery();
+        waitUntilRebalanceRecoveryCompletes();
         completedSnapshotStoreManager = eventProcessor.completedSnapshotStoreManager();
     }
 
@@ -273,6 +275,21 @@ class CoordinatorEventProcessorTestBase {
         AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
+    }
+
+    /** Waits until the asynchronously loaded rebalance state has been applied by the event loop. */
+    protected void waitUntilRebalanceRecoveryCompletes() {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    boolean recoveryPending =
+                            fromCtx(
+                                    ctx ->
+                                            eventProcessor
+                                                    .getRebalanceManager()
+                                                    .isRecoveryPending());
+                    assertThat(recoveryPending).isFalse();
+                });
     }
 
     /** Submits an ISR update through the coordinator event loop. */
