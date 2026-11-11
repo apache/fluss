@@ -23,6 +23,7 @@ use fluss::metadata::{
     AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, PartitionSpec, Schema,
     TableDescriptor, TablePath,
 };
+use fluss::predicate::col;
 use fluss_lake::{FlussLakeBaseline, FlussLakeReadContext, FlussLakeTable};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -106,6 +107,13 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
         .unwrap();
     let evolved = connection.get_table(&path).await.unwrap();
     imported.validate_table(evolved.get_table_info()).unwrap();
+    let restored = table
+        .import_read_context(&plain.to_protobuf().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(restored.schema_id(), plain.schema_id());
+    assert_eq!(restored.table_schema(), plain.table_schema());
+    assert_eq!(restored.log_ranges(), plain.log_ranges());
     assert_eq!(imported.log_ranges(), plain.log_ranges());
     assert_eq!(imported.table_schema(), plain.table_schema());
     admin.drop_table(&path, false).await.unwrap();
@@ -197,7 +205,7 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     let table = FlussLakeTable::new(connection.clone(), &path);
     let all = table.capture_read_context().await.unwrap();
     assert_eq!(all.log_ranges().len(), 3);
-    let filter = PartitionSpec::new(HashMap::from([("region", "US")]));
+    let filter = col("region").ge("US");
     let selected = table
         .capture_read_context_with_partition_scope(&filter)
         .await
@@ -205,27 +213,28 @@ async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     assert_eq!(selected.log_ranges().len(), 1);
     assert_eq!(selected.log_ranges()[0].bucket_count(), 1);
     assert_eq!(selected.log_ranges()[0].stop_offset(), 1);
-    let imported = FlussLakeReadContext::from_boundary_with_partition_filter(
+    let imported = FlussLakeReadContext::from_boundary_with_partition_scope(
         source.get_table_info(),
         selected.lake_snapshot_id(),
         selected.log_ranges().to_vec(),
-        &filter,
+        Some(&filter),
     )
     .unwrap();
-    assert_eq!(
-        imported
-            .partition_filter()
-            .get("region")
-            .map(String::as_str),
-        Some("US")
-    );
+    assert_eq!(imported.partition_scope(), Some(&filter));
     assert_eq!(imported.log_ranges(), selected.log_ranges());
-    admin.drop_partition(&path, &filter, false).await.unwrap();
+    admin
+        .drop_partition(
+            &path,
+            &PartitionSpec::new(HashMap::from([("region", "US")])),
+            false,
+        )
+        .await
+        .unwrap();
     let dropped = table
         .capture_read_context_with_partition_scope(&filter)
         .await
         .unwrap();
     assert!(dropped.log_ranges().is_empty());
-    assert_eq!(dropped.partition_filter(), selected.partition_filter());
+    assert_eq!(dropped.partition_scope(), selected.partition_scope());
     admin.drop_table(&path, false).await.unwrap();
 }

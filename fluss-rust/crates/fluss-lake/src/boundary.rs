@@ -20,27 +20,29 @@
 //! This module does not open a lake catalog, generate splits or schedule reads.
 
 use crate::error::planning_client_error;
+use crate::partition::PartitionScope;
 use crate::{
     FlussLakeError, FlussLakeLogRange, FlussLakePartitionIdentity, FlussLakeReadContext, Result,
 };
 use fluss::client::FlussAdmin;
-use fluss::metadata::{
-    LakeSnapshotInfo, PartitionInfo, PartitionSpec, TableBucket, TableInfo, TablePath,
-};
+use fluss::metadata::{LakeSnapshotInfo, PartitionInfo, TableBucket, TableInfo, TablePath};
+use fluss::predicate::Predicate;
 use fluss::rpc::message::OffsetSpec;
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 
-/// Freezes live boundaries after applying the requested partition spec.
+/// Freezes live boundaries after applying the requested partition predicate.
 pub(crate) async fn freeze_read_context(
     admin: &FlussAdmin,
     table_info: &TableInfo,
-    partition_filter: &PartitionSpec,
+    partition_scope: Option<&Predicate>,
 ) -> Result<FlussLakeReadContext> {
-    crate::partition::validate_partition_filter(
-        partition_filter.get_spec_map().keys(),
+    let scope = PartitionScope::bind(
+        partition_scope,
+        table_info.row_type(),
         &table_info.partition_keys,
     )?;
+    let listing_spec = scope.listing_spec();
     let table_path = &table_info.table_path;
     if table_info.num_buckets <= 0 {
         return Err(FlussLakeError::PlanningFailed(format!(
@@ -80,7 +82,7 @@ pub(crate) async fn freeze_read_context(
         )]
     } else {
         let mut partition_infos = admin
-            .list_partition_infos_with_spec(table_path, Some(partition_filter))
+            .list_partition_infos_with_spec(table_path, Some(&listing_spec))
             .await
             .map_err(|error| planning_client_error("list table partitions", error))?;
         partition_infos.sort_by(|left, right| {
@@ -93,9 +95,14 @@ pub(crate) async fn freeze_read_context(
             .map(|partition| {
                 let count = partition_bucket_count(&partition)?;
                 let (id, name, identity) = partition_identity(partition);
-                Ok((id, name, identity, count))
+                Ok(scope
+                    .matches(&identity)?
+                    .then_some((id, name, identity, count)))
             })
             .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect()
     };
 
     // Bound metadata fan-out and preserve the canonical partition order.
@@ -147,7 +154,7 @@ pub(crate) async fn freeze_read_context(
         // after successful lookups: a name may now refer to a new partition.
         // One recheck covers all captures, including failures of any kind.
         let live_ids = admin
-            .list_partition_infos_with_spec(table_path, Some(partition_filter))
+            .list_partition_infos_with_spec(table_path, Some(&listing_spec))
             .await
             .map(|partitions| {
                 partitions
@@ -159,11 +166,11 @@ pub(crate) async fn freeze_read_context(
         retain_live_ranges(captured, live_ids)?
     };
 
-    let context = FlussLakeReadContext::from_boundary_with_partition_filter(
+    let context = FlussLakeReadContext::from_boundary_with_partition_scope(
         table_info,
         readable_snapshot.map(|snapshot| snapshot.snapshot_id),
         bucket_ranges,
-        partition_filter,
+        partition_scope,
     )?;
     // Name-based offset calls may also cross a table drop/recreate. Validate
     // identity once after capture, without replacing the frozen schema.

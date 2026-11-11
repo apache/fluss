@@ -18,18 +18,101 @@
 //! Source partition identity shared by preparation and default planning.
 
 use crate::{FlussLakeError, Result};
-use std::collections::BTreeMap;
+use fluss::metadata::{DataType, PartitionSpec, RowType};
+use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal, Predicate};
+use std::collections::HashMap;
 
-pub(crate) fn validate_partition_filter<'a>(
-    keys: impl IntoIterator<Item = &'a String>,
-    partition_keys: &[String],
-) -> Result<()> {
-    if keys.into_iter().any(|key| !partition_keys.contains(key)) {
-        return Err(FlussLakeError::InvalidReadContext(
-            "partition filter must reference only partition keys".into(),
-        ));
+pub(crate) struct PartitionScope(BoundPredicate);
+
+impl PartitionScope {
+    pub(crate) fn bind(
+        scope: Option<&Predicate>,
+        row_type: &RowType,
+        partition_keys: &[String],
+    ) -> Result<Self> {
+        // The scope is transported exactly, unlike a conservative pushdown filter.
+        if let Some(scope) = scope {
+            scope.to_protobuf(row_type).map_err(scope_error)?;
+        }
+        let bound = BoundPredicate::bind(scope, row_type).map_err(scope_error)?;
+        if bound.referenced_field_indexes().iter().any(|&index| {
+            !partition_keys
+                .iter()
+                .any(|key| key == row_type.fields()[index].name())
+        }) {
+            return Err(scope_error(
+                "partition scope must reference only partition columns",
+            ));
+        }
+        Ok(Self(bound))
     }
-    Ok(())
+
+    /// Narrow the Admin listing using equalities it can express, then evaluate
+    /// the complete scope locally before issuing any offset queries.
+    pub(crate) fn listing_spec(&self) -> PartitionSpec {
+        let mut spec = HashMap::new();
+        let mut pending = vec![&self.0];
+        while let Some(predicate) = pending.pop() {
+            match predicate {
+                BoundPredicate::Compound {
+                    function: CompoundFunction::And,
+                    children,
+                } => pending.extend(children),
+                BoundPredicate::Leaf {
+                    field_name,
+                    data_type: DataType::String(_),
+                    function: LeafFunction::Equal,
+                    literals,
+                    ..
+                } => {
+                    if let [Literal::String(value)] = literals.as_slice() {
+                        spec.insert(field_name.clone(), value.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        PartitionSpec::new(spec)
+    }
+
+    pub(crate) fn matches(&self, identity: &FlussLakePartitionIdentity) -> Result<bool> {
+        fn evaluate(
+            predicate: &BoundPredicate,
+            identity: &FlussLakePartitionIdentity,
+        ) -> Result<bool> {
+            match predicate {
+                BoundPredicate::AlwaysTrue => Ok(true),
+                BoundPredicate::Leaf { field_name, .. } => {
+                    let FlussLakePartitionIdentity::KeyValues(values) = identity else {
+                        return Err(scope_error(
+                            "partition scope applied to an unpartitioned range",
+                        ));
+                    };
+                    let value = values
+                        .iter()
+                        .find(|(key, _)| key == field_name)
+                        .ok_or_else(|| scope_error("partition scope column is missing"))?;
+                    predicate
+                        .evaluate_partition_value(&value.1)
+                        .map_err(scope_error)
+                }
+                BoundPredicate::Compound { function, children } => {
+                    let and = *function == CompoundFunction::And;
+                    for child in children {
+                        if evaluate(child, identity)? != and {
+                            return Ok(!and);
+                        }
+                    }
+                    Ok(and)
+                }
+            }
+        }
+        evaluate(&self.0, identity)
+    }
+}
+
+fn scope_error(error: impl std::fmt::Display) -> FlussLakeError {
+    FlussLakeError::InvalidReadContext(error.to_string())
 }
 
 /// Association between a physical log partition and business partition values.
@@ -54,19 +137,6 @@ pub enum FlussLakePartitionIdentity {
 }
 
 impl FlussLakePartitionIdentity {
-    /// Whether this partition matches an exact, possibly partial partition spec.
-    /// Values use Fluss partition metadata encoding, not SQL literal coercion.
-    pub fn matches_filter(&self, filter: &BTreeMap<String, String>) -> bool {
-        match self {
-            Self::Unpartitioned => filter.is_empty(),
-            Self::KeyValues(values) => filter.iter().all(|pair| {
-                values
-                    .iter()
-                    .any(|(key, value)| key == pair.0 && value == pair.1)
-            }),
-        }
-    }
-
     /// Checks the identity's shape and key order against a resolved table layout.
     pub(crate) fn matches_keys(&self, partition_keys: &[String]) -> bool {
         match self {

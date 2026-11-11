@@ -20,8 +20,9 @@
 use crate::error::planning_client_error;
 use crate::{FlussLakeError, FlussLakeReadContext, Result};
 use fluss::client::FlussConnection;
-use fluss::metadata::{PartitionSpec, TableInfo, TablePath};
-use std::collections::HashMap;
+use fluss::metadata::{SchemaInfo, TableInfo, TablePath};
+use fluss::predicate::Predicate;
+use fluss::protocol::PbUnionReadContext;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -50,23 +51,59 @@ impl FlussLakeTable {
     /// predicates, including separate references to the table in one query.
     /// This does not open a lake catalog or acquire a retention lease.
     pub async fn capture_read_context(&self) -> Result<FlussLakeReadContext> {
-        self.capture_read_context_with_partition_scope(&PartitionSpec::new(
-            HashMap::<String, String>::new(),
-        ))
-        .await
+        self.capture(None).await
     }
 
-    /// Captures only partitions matching an exact, possibly partial spec.
-    ///
-    /// Scope selection happens before offset queries and also constrains lake
-    /// planning. This is an input restriction, not an optional pruning hint. An empty spec selects
-    /// the whole table. Non-partition keys are rejected; values must use the
-    /// same encoding as Fluss partition metadata. General SQL predicates
-    /// remain the engine's responsibility.
+    /// Captures partitions matching a predicate over partition columns.
+    /// Selection precedes offset queries and constrains lake planning as well.
+    /// The predicate must be exactly representable by the shared wire format.
     pub async fn capture_read_context_with_partition_scope(
         &self,
-        scope: &PartitionSpec,
+        scope: &Predicate,
     ) -> Result<FlussLakeReadContext> {
+        self.capture(Some(scope)).await
+    }
+
+    /// Resolves an engine-transmitted boundary without capturing new offsets or snapshots.
+    /// A newer live schema is allowed: the schema named in the boundary is loaded.
+    /// A table drop/recreate or incompatible source mapping fails the import. This
+    /// resolves metadata once; retain the returned context for subsequent reads.
+    pub async fn import_read_context(
+        &self,
+        boundary: &PbUnionReadContext,
+    ) -> Result<FlussLakeReadContext> {
+        use crate::read_context::protocol::{required, validate_wire_identity};
+        let admin = self
+            .connection
+            .get_admin()
+            .map_err(|e| planning_client_error("create Fluss admin client", e))?;
+        let live = admin
+            .get_table_info(&self.table_path)
+            .await
+            .map_err(|e| planning_client_error("resolve boundary table", e))?;
+        validate_wire_identity(boundary, &live)?;
+        let schema_id = required(boundary.schema_id, "schema_id")?;
+        let schema = if schema_id == live.schema_id {
+            SchemaInfo::new(live.schema.clone(), live.schema_id)
+        } else {
+            admin
+                .get_table_schema(&self.table_path, Some(schema_id))
+                .await
+                .map_err(|e| planning_client_error("resolve captured schema", e))?
+        };
+        let context = FlussLakeReadContext::from_protobuf(boundary, &live, &schema)?;
+        if schema_id != live.schema_id {
+            // Schema lookup is name-based too. Never accept a replacement table's schema.
+            let current = admin
+                .get_table_info(&self.table_path)
+                .await
+                .map_err(|e| planning_client_error("recheck boundary table", e))?;
+            context.validate_table(&current)?;
+        }
+        Ok(context)
+    }
+
+    async fn capture(&self, scope: Option<&Predicate>) -> Result<FlussLakeReadContext> {
         let admin = self
             .connection
             .get_admin()

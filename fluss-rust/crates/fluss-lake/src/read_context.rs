@@ -17,10 +17,14 @@
 
 //! Source boundaries shared by the default reader and engine-native readers.
 
+pub(crate) mod protocol;
+
 use crate::FlussLakeLogPartition;
+use crate::partition::PartitionScope;
 use crate::{FlussLakeError, FlussLakePartitionIdentity, Result};
-use fluss::metadata::{PartitionSpec, Schema, TableBucket, TableInfo, TablePath};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use fluss::metadata::{Schema, TableBucket, TableInfo, TablePath};
+use fluss::predicate::Predicate;
+use std::collections::{HashMap, HashSet};
 
 /// Baseline represented by a bucket's frozen log start.
 ///
@@ -100,7 +104,8 @@ impl FlussLakeLogRange {
     /// Actual bucket count of this physical log partition.
     ///
     /// This may differ from the table default. All ranges of the same partition
-    /// carry the same count and cover exactly `0..bucket_count`. Bucket pruning
+    /// carry the same count. Complete partition captures cover `0..bucket_count`;
+    /// a bucket-scoped context carries only its selected range. Bucket pruning
     /// also requires the routing rules for this log partition kind.
     pub fn bucket_count(&self) -> i32 {
         self.bucket_count
@@ -161,20 +166,20 @@ impl FlussLakeLogRange {
 /// Engines must plan the entire selected lake baseline, including those
 /// partitions; `log_ranges()` is not a complete lake partition inventory.
 /// Engine-native readers own physical planning and reconciliation. Without a
-/// baseline, PK results cover only keys reconstructible from the retained log.
+/// baseline, PK reads require complete logs; truncated history is rejected.
 /// Workers must not refresh boundaries or silently skip missing inputs.
-/// Engines own task serialization and distribution; this object defines no
-/// cross-language wire format. Import engine-decoded fields with
-/// [`Self::from_boundary`], using the captured metadata rather than live metadata.
+/// Engines own task serialization, distribution and placement.
+/// [`Self::to_protobuf`] exposes the shared boundary message;
+/// [`Self::from_protobuf`] restores it with the schema identified by the message.
 #[derive(Debug, Clone)]
 pub struct FlussLakeReadContext {
     table_path: TablePath,
     table_id: i64,
-    table_modified_time: i64,
     schema_id: i32,
     schema: Schema,
     partition_keys: Vec<String>,
-    partition_filter: BTreeMap<String, String>,
+    partition_scope: Option<Predicate>,
+    bucket_scoped: bool,
     bucket_keys: Vec<String>,
     num_buckets: i32,
     merge_engine: Option<String>,
@@ -234,37 +239,39 @@ impl FlussLakeReadContext {
         lake_snapshot_id: Option<i64>,
         log_ranges: Vec<FlussLakeLogRange>,
     ) -> Result<Self> {
-        Self::from_boundary_with_partition_filter(
-            table,
-            lake_snapshot_id,
-            log_ranges,
-            &PartitionSpec::new(HashMap::<String, String>::new()),
-        )
+        Self::from_boundary_with_partition_scope(table, lake_snapshot_id, log_ranges, None)
     }
 
-    /// Imports a boundary restricted by an exact, possibly partial partition spec.
+    /// Imports complete partition boundaries restricted by a partition predicate.
     ///
-    /// Ordinary log partitions must match the filter. Consumers must apply the
-    /// same business-partition filter to the pinned lake snapshot, including lake-only partitions,
+    /// Ordinary log partitions must match the predicate. Consumers must apply the
+    /// same business-partition scope to the pinned lake snapshot, including lake-only partitions,
     /// and must not reuse this context for a scan outside that scope.
-    pub fn from_boundary_with_partition_filter(
+    pub fn from_boundary_with_partition_scope(
         table: &TableInfo,
         lake_snapshot_id: Option<i64>,
         log_ranges: Vec<FlussLakeLogRange>,
-        partition_filter: &PartitionSpec,
+        partition_scope: Option<&Predicate>,
     ) -> Result<Self> {
-        let context = Self {
+        let context = Self::from_inputs(table, lake_snapshot_id, log_ranges, partition_scope)?;
+        context.validate()?;
+        Ok(context)
+    }
+
+    fn from_inputs(
+        table: &TableInfo,
+        lake_snapshot_id: Option<i64>,
+        log_ranges: Vec<FlussLakeLogRange>,
+        partition_scope: Option<&Predicate>,
+    ) -> Result<Self> {
+        Ok(Self {
             table_path: table.table_path.clone(),
             table_id: table.table_id,
-            table_modified_time: table.modified_time,
             schema_id: table.schema_id,
             schema: table.schema.clone(),
             partition_keys: table.partition_keys.to_vec(),
-            partition_filter: partition_filter
-                .get_spec_map()
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect(),
+            partition_scope: partition_scope.cloned(),
+            bucket_scoped: false,
             bucket_keys: table.bucket_keys.clone(),
             num_buckets: table.num_buckets,
             merge_engine: table
@@ -274,9 +281,7 @@ impl FlussLakeReadContext {
                 .map(|engine| engine.to_string()),
             lake: LakeDescriptor::capture(table, lake_snapshot_id)?,
             log_ranges,
-        };
-        context.validate()?;
-        Ok(context)
+        })
     }
 
     /// Logical Fluss table path. Catalog credentials are supplied separately.
@@ -293,14 +298,6 @@ impl FlussLakeReadContext {
     /// Server-assigned identity, used to reject a dropped/recreated table.
     pub fn table_id(&self) -> i64 {
         self.table_id
-    }
-
-    /// Source metadata modification time, not a query snapshot timestamp.
-    ///
-    /// Informational only: unrelated property or comment changes do not
-    /// invalidate the frozen read identity.
-    pub fn table_modified_time(&self) -> i64 {
-        self.table_modified_time
     }
 
     /// Frozen Fluss schema identity.
@@ -324,10 +321,53 @@ impl FlussLakeReadContext {
         &self.bucket_keys
     }
 
-    /// Exact partition scope shared by lake planning and log capture.
-    /// An empty map means the whole table. Values use Fluss metadata encoding.
-    pub fn partition_filter(&self) -> &BTreeMap<String, String> {
-        &self.partition_filter
+    /// Exact partition predicate shared by lake planning and log capture.
+    /// None means all partitions; this is not a conservative pushdown hint.
+    pub fn partition_scope(&self) -> Option<&Predicate> {
+        self.partition_scope.as_ref()
+    }
+
+    /// Whether this boundary selects one bucket rather than complete partitions.
+    /// Lake planning must select only that bucket; this cannot seed a full-table scan.
+    pub fn is_bucket_scoped(&self) -> bool {
+        self.bucket_scoped
+    }
+
+    /// Selects a bucket boundary without changing its frozen bounds.
+    /// The task owns that bucket's complete baseline and tail. The coordinator
+    /// remains responsible for assigning all selected buckets to the query.
+    pub fn for_bucket(&self, bucket: &TableBucket) -> Result<Self> {
+        let range = self
+            .log_ranges
+            .iter()
+            .find(|range| range.table_bucket() == bucket)
+            .ok_or_else(|| invalid_context("bucket is outside the captured boundary"))?;
+        Ok(Self {
+            table_path: self.table_path.clone(),
+            table_id: self.table_id,
+            schema_id: self.schema_id,
+            schema: self.schema.clone(),
+            partition_keys: self.partition_keys.clone(),
+            partition_scope: self.partition_scope.clone(),
+            bucket_scoped: true,
+            bucket_keys: self.bucket_keys.clone(),
+            num_buckets: self.num_buckets,
+            merge_engine: self.merge_engine.clone(),
+            lake: self.lake.clone(),
+            log_ranges: vec![range.clone()],
+        })
+    }
+
+    /// Imports a single bucket task. It is validated independently of other buckets.
+    pub fn from_bucket_boundary(
+        table: &TableInfo,
+        snapshot_id: Option<i64>,
+        range: FlussLakeLogRange,
+    ) -> Result<Self> {
+        let mut context = Self::from_inputs(table, snapshot_id, vec![range], None)?;
+        context.bucket_scoped = true;
+        context.validate()?;
+        Ok(context)
     }
 
     /// Frozen table default for new partitions, not execution parallelism.
@@ -357,7 +397,7 @@ impl FlussLakeReadContext {
         self.lake.as_ref().and_then(|lake| lake.snapshot_id)
     }
 
-    /// Physical log ranges required within the business `partition_filter()` scope.
+    /// Physical log ranges required within the business `partition_scope()` scope.
     /// Consumers must handle every log partition kind or reject the read; ranges
     /// must not be skipped merely because their kind is unsupported.
     /// Lake-only partitions must be planned separately within the same scope.
@@ -387,6 +427,8 @@ impl FlussLakeReadContext {
         if self.table_path() != &table.table_path
             || self.table_id() != table.table_id
             || lake_changed
+            || self.partition_keys.as_slice() != table.partition_keys.as_ref()
+            || self.bucket_keys != table.bucket_keys
         {
             return Err(FlussLakeError::SchemaIncompatible(format!(
                 "table metadata no longer matches the frozen read context for {} (table id {}, schema id {})",
@@ -404,7 +446,6 @@ impl FlussLakeReadContext {
         if self.table_path.database().is_empty()
             || self.table_path.table().is_empty()
             || self.table_id < 0
-            || self.table_modified_time < 0
             || self.schema_id < 0
             || self.num_buckets <= 0
         {
@@ -416,8 +457,9 @@ impl FlussLakeReadContext {
             return Err(invalid_context("invalid lake identity"));
         }
         let schema = &self.schema;
-        crate::partition::validate_partition_filter(
-            self.partition_filter.keys(),
+        let scope = PartitionScope::bind(
+            self.partition_scope.as_ref(),
+            schema.row_type(),
             &self.partition_keys,
         )?;
         let primary_keys = schema.primary_key_column_names();
@@ -447,7 +489,7 @@ impl FlussLakeReadContext {
                 || range.bucket_count <= 0
                 || bucket.bucket_id() >= range.bucket_count
                 || bucket.partition_id().is_some_and(|id| id < 0)
-                || !identity.matches_filter(&self.partition_filter)
+                || !scope.matches(identity)?
                 || range.start_offset < 0
                 || range.earliest_offset < 0
                 || range.start_offset > range.stop_offset
@@ -462,6 +504,15 @@ impl FlussLakeReadContext {
                 }
             {
                 return Err(invalid_context("invalid bucket identity or log boundary"));
+            }
+            if schema.primary_key().is_some()
+                && range.baseline == FlussLakeBaseline::None
+                && range.earliest_offset > 0
+            {
+                return Err(FlussLakeError::DataUnavailable(format!(
+                    "PK bucket {bucket} has no baseline and its log begins at {}; KV snapshot fallback is required",
+                    range.earliest_offset
+                )));
             }
             match identity {
                 FlussLakePartitionIdentity::Unpartitioned => {
@@ -503,7 +554,13 @@ impl FlussLakeReadContext {
                 ));
             }
         }
-        if (self.partition_keys.is_empty() && groups.len() != 1)
+        if self.bucket_scoped {
+            if self.log_ranges.len() != 1 {
+                return Err(invalid_context(
+                    "bucket task must contain exactly one range",
+                ));
+            }
+        } else if (self.partition_keys.is_empty() && groups.len() != 1)
             || groups
                 .values()
                 .any(|(_, count, buckets)| buckets.len() != *count as usize)
@@ -523,7 +580,8 @@ fn invalid_context(error: impl std::fmt::Display) -> FlussLakeError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fluss::metadata::DataTypes;
+    use fluss::metadata::{DataTypes, SchemaInfo};
+    use fluss::predicate::col;
 
     fn table(partitioned: bool) -> TableInfo {
         TableInfo::new(
@@ -594,16 +652,66 @@ mod tests {
     fn typed_boundaries_preserve_schema_and_offsets() {
         for partitioned in [false, true] {
             let original = context(partitioned);
-            let imported = FlussLakeReadContext::from_boundary(
-                &table(partitioned),
-                Some(42),
-                original.log_ranges().to_vec(),
-            )
-            .unwrap();
-            assert_eq!(imported.log_ranges(), original.log_ranges());
-            assert_eq!(imported.table_schema(), &table(partitioned).schema);
-            imported.validate_table(&table(partitioned)).unwrap();
+            let range = original.log_ranges()[0].clone();
+            let selected = original.for_bucket(range.table_bucket()).unwrap();
+            let wire = selected.to_protobuf().unwrap();
+            assert_eq!(wire.log_ranges.len(), 1);
+            let mut live = table(partitioned);
+            let schema = SchemaInfo::new(live.schema.clone(), live.schema_id);
+            live.schema_id += 1;
+            live.modified_time += 1;
+            let imported = FlussLakeReadContext::from_protobuf(&wire, &live, &schema).unwrap();
+            assert!(imported.is_bucket_scoped());
+            assert_eq!(imported.log_ranges(), &[range]);
+            assert_eq!(imported.table_schema(), schema.schema());
+            assert_eq!(imported.schema_id(), schema.schema_id());
+            let mut unknown = wire.clone();
+            unknown.log_ranges[0].baseline = Some(2);
+            assert!(FlussLakeReadContext::from_protobuf(&unknown, &live, &schema).is_err());
+            let mut wrong_schema = wire.clone();
+            wrong_schema.schema_id = Some(live.schema_id);
+            assert!(FlussLakeReadContext::from_protobuf(&wrong_schema, &live, &schema).is_err());
+            let mut full = wire.clone();
+            full.coverage = Some(0);
+            assert!(FlussLakeReadContext::from_protobuf(&full, &live, &schema).is_err());
+            live.table_id += 1;
+            assert!(FlussLakeReadContext::from_protobuf(&wire, &live, &schema).is_err());
         }
+    }
+
+    #[test]
+    fn imports_shared_java_wire_fixture() {
+        use fluss::protocol::PbUnionReadContext;
+        use prost::Message;
+        let fixture = include_str!("../tests/fixtures/union-read-v1.txt");
+        let hex = fixture
+            .lines()
+            .find(|line| !line.is_empty() && !line.starts_with('#'))
+            .unwrap();
+        let bytes = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect::<Vec<_>>();
+        let wire = PbUnionReadContext::decode(bytes.as_slice()).unwrap();
+        let info = table(true);
+        let schema = SchemaInfo::new(info.schema.clone(), info.schema_id);
+        let context = FlussLakeReadContext::from_protobuf(&wire, &info, &schema).unwrap();
+        assert!(context.is_bucket_scoped());
+        assert_eq!(
+            context.log_ranges()[0].table_bucket(),
+            &TableBucket::new_with_partition(7, Some(9), 1)
+        );
+        assert_eq!(context.log_ranges()[0].baseline(), FlussLakeBaseline::Lake);
+        assert_eq!(context.log_ranges()[0].start_offset(), 0);
+        assert_eq!(context.partition_scope(), Some(&col("region").ge("US")));
+        assert_eq!(context.to_protobuf().unwrap().encode_to_vec(), bytes);
+        // Additive unknown metadata is tolerated; unknown semantic versions are not.
+        let mut additive = bytes;
+        additive.extend_from_slice(&[0xa0, 0x06, 1]);
+        let mut wire = PbUnionReadContext::decode(additive.as_slice()).unwrap();
+        assert!(FlussLakeReadContext::from_protobuf(&wire, &info, &schema).is_ok());
+        wire.version = Some(2);
+        assert!(FlussLakeReadContext::from_protobuf(&wire, &info, &schema).is_err());
     }
 
     #[test]
@@ -662,6 +770,30 @@ mod tests {
         info.table_config
             .properties
             .insert("table.datalake.enabled".into(), "false".into());
+        for stop in [8, 20] {
+            let ranges = (0..2)
+                .map(|bucket| {
+                    FlussLakeLogRange::new(
+                        TableBucket::new(7, bucket),
+                        FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+                        2,
+                        None,
+                        stop,
+                        8,
+                    )
+                })
+                .collect();
+            assert!(matches!(
+                FlussLakeReadContext::from_boundary(&info, None, ranges),
+                Err(FlussLakeError::DataUnavailable(_))
+            ));
+        }
+        info.schema = Schema::builder()
+            .column("id", DataTypes::int())
+            .column("region", DataTypes::string())
+            .column("amount", DataTypes::bigint())
+            .build()
+            .unwrap();
         let ranges = (0..2)
             .map(|bucket| {
                 FlussLakeLogRange::new(
@@ -669,7 +801,7 @@ mod tests {
                     FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
                     2,
                     None,
-                    20,
+                    8,
                     8,
                 )
             })
@@ -718,30 +850,24 @@ mod tests {
 
     #[test]
     fn scope_covers_lake_only_partitions_and_rejects_unrelated_ranges() {
-        let filter = PartitionSpec::new(HashMap::from([("region", "US")]));
-        let context = FlussLakeReadContext::from_boundary_with_partition_filter(
+        let filter = col("region").ge("US");
+        let context = FlussLakeReadContext::from_boundary_with_partition_scope(
             &table(true),
             Some(42),
             vec![],
-            &filter,
+            Some(&filter),
         )
         .unwrap();
         assert!(context.log_ranges().is_empty());
         assert_eq!(context.lake_snapshot_id(), Some(42));
-        assert_eq!(
-            context.partition_filter().get("region").map(String::as_str),
-            Some("US")
-        );
-        for filter in [
-            PartitionSpec::new(HashMap::from([("region", "EU")])),
-            PartitionSpec::new(HashMap::from([("amount", "1")])),
-        ] {
+        assert_eq!(context.partition_scope(), Some(&filter));
+        for filter in [col("region").lt("US"), col("amount").eq(1i64)] {
             assert!(
-                FlussLakeReadContext::from_boundary_with_partition_filter(
+                FlussLakeReadContext::from_boundary_with_partition_scope(
                     &table(true),
                     Some(42),
                     self::context(true).log_ranges().to_vec(),
-                    &filter,
+                    Some(&filter),
                 )
                 .is_err()
             );
