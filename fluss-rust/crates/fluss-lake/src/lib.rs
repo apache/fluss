@@ -22,6 +22,31 @@ mod boundary;
 mod bucket_pruning;
 mod error;
 mod executor;
-
 #[cfg(feature = "paimon")]
 mod paimon;
+mod partition;
+mod plan;
+mod planner;
+mod pruning;
+mod read_context;
+mod reader;
+mod source;
+mod split;
+mod split_descriptor;
+mod table;
+
+pub use error::{FlussLakeError, Result};
+#[cfg(feature = "paimon")]
+pub use paimon::{PaimonBaselineReader, PaimonLakeSource, PaimonReadContext};
+pub use partition::{FlussLakeLogPartition, FlussLakePartitionIdentity};
+pub use plan::{FlussLakePlanStatistics, FlussLakeReadPlan};
+pub use read_context::{FlussLakeBaseline, FlussLakeLogRange, FlussLakeReadContext};
+pub use reader::FlussLakeReader;
+pub use source::{LakePlannerContext, LakeReadSemantics, LakeReaderContext, LakeSource, LakeSplit};
+pub use split::FlussLakeReadSplit;
+pub use split_descriptor::FlussLakeSplitDescriptor;
+pub use table::{FlussLakeScan, FlussLakeTable};
+
+/// A finite stream of Arrow record batches returned by a lake source.
+pub type RecordBatchStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<arrow::record_batch::RecordBatch>> + Send>>;
