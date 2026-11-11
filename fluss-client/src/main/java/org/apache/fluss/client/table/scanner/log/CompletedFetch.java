@@ -19,8 +19,8 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.exception.CorruptRecordException;
-import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.exception.LogDecodeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
@@ -45,8 +45,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.function.Predicate;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -73,6 +75,12 @@ public abstract class CompletedFetch {
     protected final LogRecordReadContext readContext;
 
     private LogRecordBatch currentBatch;
+    // The batch a decode failure is attributed to; null while the next batch is being read from
+    // the fetched data, so such a failure is not blamed on the previous batch.
+    @Nullable private LogRecordBatch decodingBatch;
+    // Whether decodingBatch passed ensureHeaderComplete and maybeEnsureValid, so its end can be
+    // reported. A skipped CRC check leaves a complete header unverified, as decoding trusts it.
+    private boolean decodingBatchHeaderTrusted;
     private int currentBatchSchemaId = -1;
     private LogRecord lastRecord;
     private CloseableIterator<LogRecord> records;
@@ -223,11 +231,7 @@ public abstract class CompletedFetch {
     List<ScanRecord> fetchRecords(int maxRecords, @Nullable Predicate<LogRecord> recordFilter) {
         lastFetchRecordCount = 0;
         if (corruptLastRecord) {
-            throw new FetchException(
-                    "Received exception when fetching the next record from "
-                            + tableBucket
-                            + ". If needed, please back to past the record to continue scanning.",
-                    cachedRecordException);
+            throw decodeException(cachedRecordException);
         }
 
         if (isConsumed) {
@@ -255,11 +259,7 @@ public abstract class CompletedFetch {
         } catch (Exception e) {
             cachedRecordException = e;
             if (scanRecords.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next record from "
-                                + tableBucket
-                                + ". If needed, please back to past the record to continue scanning.",
-                        e);
+                throw decodeException(e);
             }
         }
 
@@ -303,11 +303,7 @@ public abstract class CompletedFetch {
      */
     List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
         if (cachedRecordException != null) {
-            throw new FetchException(
-                    "Received exception when fetching the next Arrow batch from "
-                            + tableBucket
-                            + ". If needed, please back past the batch to continue scanning.",
-                    cachedRecordException);
+            throw decodeException(cachedRecordException);
         }
 
         if (isConsumed) {
@@ -355,11 +351,7 @@ public abstract class CompletedFetch {
             // and the iterator position all in sync.
             cachedRecordException = e;
             if (arrowBatches.isEmpty()) {
-                throw new FetchException(
-                        "Received exception when fetching the next Arrow batch from "
-                                + tableBucket
-                                + ". If needed, please back past the batch to continue scanning.",
-                        e);
+                throw decodeException(e);
             }
         }
 
@@ -388,15 +380,61 @@ public abstract class CompletedFetch {
 
     private LogRecordBatch nextFetchedBatch() {
         maybeCloseRecordStream();
+        decodingBatch = null;
         if (!batches.hasNext()) {
             finishFetchedBatches();
             return null;
         }
 
         currentBatch = batches.next();
+        decodingBatch = currentBatch;
+        decodingBatchHeaderTrusted = false;
         // TODO get last epoch.
+        ensureHeaderComplete(currentBatch);
         maybeEnsureValid(currentBatch);
+        decodingBatchHeaderTrusted = true;
         return currentBatch;
+    }
+
+    /**
+     * Builds the exception for a decode failure. A failed fetch does not advance, so repeated calls
+     * for the same cached failure describe the same batch.
+     */
+    private LogDecodeException decodeException(Exception cause) {
+        long offset = decodingBatch == null ? nextFetchOffset : decodingBatch.baseLogOffset();
+        OptionalLong nextOffset = OptionalLong.empty();
+        // A negative base offset is never valid; resuming before 0 would mean resuming from the
+        // earliest offset rather than skipping the batch.
+        if (decodingBatch != null && decodingBatchHeaderTrusted && offset >= 0) {
+            try {
+                long batchEnd = decodingBatch.nextLogOffset();
+                // A garbled header may put the end at or before the start. With a non-negative
+                // base and an int offset delta, an overflowing end wraps negative, so this check
+                // also rejects it.
+                if (batchEnd > offset) {
+                    nextOffset = OptionalLong.of(batchEnd);
+                }
+            } catch (RuntimeException e) {
+                // E.g. the header of a file-backed batch cannot be loaded: report the original
+                // failure without the end.
+                LOG.debug(
+                        "Cannot read the offset after the failed batch of bucket {} at offset {}.",
+                        tableBucket,
+                        offset,
+                        e);
+            }
+        }
+        String message =
+                String.format(
+                        "Failed to decode the log batch of bucket %s at offset %s. %s",
+                        tableBucket,
+                        offset,
+                        nextOffset.isPresent()
+                                ? "Subscribe the bucket at offset "
+                                        + nextOffset.getAsLong()
+                                        + " to skip the batch."
+                                : "The offset after the failed batch is unknown.");
+        return new LogDecodeException(message, cause, tableBucket, offset, nextOffset);
     }
 
     private void finishFetchedBatches() {
@@ -415,23 +453,30 @@ public abstract class CompletedFetch {
         drain();
     }
 
+    /**
+     * Checks that the batch is large enough to hold its header. Unlike the CRC check, this always
+     * runs: the header of a batch smaller than it overlaps the bytes after the batch, so decoding
+     * would read garbage and the batch end could point into or past healthy batches.
+     */
+    private static void ensureHeaderComplete(LogRecordBatch batch) {
+        // Throws for an unsupported magic, whose header layout is unknown.
+        int headerSize = recordBatchHeaderSize(batch.magic());
+        int sizeInBytes = batch.sizeInBytes();
+        if (sizeInBytes < headerSize) {
+            throw new CorruptMessageException(
+                    String.format(
+                            "Record batch is corrupt (the size %s is smaller than its header size %s)",
+                            sizeInBytes, headerSize));
+        }
+    }
+
     private void maybeEnsureValid(LogRecordBatch batch) {
         if (isCheckCrcs) {
             if (readContext.isProjectionPushDowned()) {
                 LOG.debug("Skipping CRC check for column projected log record batch.");
                 return;
             }
-            try {
-                batch.ensureValid();
-            } catch (CorruptRecordException e) {
-                throw new FetchException(
-                        "Record batch for bucket "
-                                + tableBucket
-                                + " at offset "
-                                + batch.baseLogOffset()
-                                + " is invalid, cause: "
-                                + e.getMessage());
-            }
+            batch.ensureValid();
         }
     }
 

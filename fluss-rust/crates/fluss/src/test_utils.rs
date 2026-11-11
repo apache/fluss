@@ -33,8 +33,9 @@ use crate::proto::{
 };
 use crate::record::{
     APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, ArrowBatchConfig, CRC_LENGTH, CRC_OFFSET, ChangeType,
-    LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V1, LOG_OVERHEAD, MAGIC_OFFSET,
-    MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, SCHEMA_ID_OFFSET,
+    LEADER_EPOCH_LENGTH, LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1,
+    LOG_MAGIC_VALUE_V2, LOG_OVERHEAD, MAGIC_OFFSET, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET,
+    SCHEMA_ID_OFFSET, V2_LEADER_EPOCH_OFFSET,
 };
 use crate::row::GenericRow;
 use crc32c::crc32c;
@@ -288,6 +289,51 @@ pub(crate) fn splice_change_type_vector(
     let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
     data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
     data
+}
+
+/// Turns a V1 batch into a wire-valid V2 batch by inserting the leader
+/// epoch before the CRC and fixing up the magic, length field and CRC.
+pub(crate) fn splice_leader_epoch(v1_batch: &[u8], leader_epoch: i32) -> Vec<u8> {
+    let mut data = v1_batch.to_vec();
+    data[MAGIC_OFFSET] = LOG_MAGIC_VALUE_V2;
+    data.splice(
+        V2_LEADER_EPOCH_OFFSET..V2_LEADER_EPOCH_OFFSET,
+        leader_epoch.to_le_bytes(),
+    );
+
+    let new_length = (data.len() - LOG_OVERHEAD) as i32;
+    data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_length.to_le_bytes());
+    update_crc(&mut data);
+    data
+}
+
+/// Converts a wire-valid V0 batch to `magic`, adding an empty statistics
+/// section for V1 and V2 and a leader epoch of 0 for V2.
+pub(crate) fn with_magic(v0_batch: Vec<u8>, magic: u8) -> Vec<u8> {
+    match magic {
+        LOG_MAGIC_VALUE_V0 => v0_batch,
+        LOG_MAGIC_VALUE_V1 => splice_statistics_section(&v0_batch, &[]),
+        LOG_MAGIC_VALUE_V2 => splice_leader_epoch(&splice_statistics_section(&v0_batch, &[]), 0),
+        _ => panic!("unsupported magic {magic}"),
+    }
+}
+
+/// Byte shift of every header field at or after the CRC relative to V0 and
+/// V1: V2 inserts the leader epoch before the CRC.
+pub(crate) fn header_field_shift(magic: u8) -> usize {
+    if magic >= LOG_MAGIC_VALUE_V2 {
+        LEADER_EPOCH_LENGTH
+    } else {
+        0
+    }
+}
+
+/// Recomputes the CRC of a single batch of any magic so it passes its CRC
+/// check.
+pub(crate) fn update_crc(batch: &mut [u8]) {
+    let shift = header_field_shift(batch[MAGIC_OFFSET]);
+    let crc = crc32c(&batch[SCHEMA_ID_OFFSET + shift..]);
+    batch[CRC_OFFSET + shift..CRC_OFFSET + shift + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
 }
 
 pub(crate) fn pb_table_metadata(

@@ -1101,6 +1101,8 @@ impl LogScannerInner {
 impl LogScanner {
     /// Poll for records, returning collected records before a later fetch error.
     /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
+    /// A batch that cannot be decoded fails every poll with [`Error::LogDecodeError`];
+    /// subscribe the bucket at the error's `next_offset` to skip the batch.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
         self.inner.poll_records(timeout).await
     }
@@ -1152,6 +1154,8 @@ impl RecordBatchLogScanner {
     /// If a later fetch fails to initialize or decode, already decoded batches are returned first.
     /// The error is reported by the next poll, unless the bucket is unsubscribed
     /// or its offset is changed before that poll.
+    /// A batch that cannot be decoded fails every poll with [`Error::LogDecodeError`];
+    /// subscribe the bucket at the error's `next_offset` to skip the batch.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         self.inner.poll_batches(timeout).await
     }
@@ -2774,13 +2778,16 @@ mod tests {
     };
     use crate::proto::{PbFetchLogRespForBucket, PbFetchLogRespForTable};
     use crate::record::MemoryLogRecordsArrowBuilder;
-    use crate::record::{RECORDS_OFFSET, SCHEMA_ID_OFFSET};
+    use crate::record::{
+        LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2, RECORDS_COUNT_LENGTH,
+        RECORDS_COUNT_OFFSET, RECORDS_OFFSET, SCHEMA_ID_OFFSET, record_batch_header_size,
+    };
     use crate::row::{Datum, GenericRow};
     use crate::rpc::ApiKey;
     use crate::rpc::FlussError;
     use crate::test_utils::{
-        assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
-        uncompressed_arrow_batch_config,
+        assert_scanner_entries_labeled, build_cluster_arc, build_table_info, header_field_shift,
+        test_scanner_metrics, uncompressed_arrow_batch_config, update_crc, with_magic,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -2827,17 +2834,29 @@ mod tests {
     }
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
+        build_records_with_rows(table_info, table_path, 1)
+    }
+
+    /// Builds one batch holding `rows` records, at offsets 0 to `rows - 1`.
+    fn build_records_with_rows(
+        table_info: &TableInfo,
+        table_path: Arc<TablePath>,
+        rows: i32,
+    ) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
             false,
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
-        let row = GenericRow {
-            values: vec![Datum::Int32(1)],
-        };
-        let record =
-            WriteRecord::for_append(Arc::new(table_info.clone()), physical_table_path, 1, &row);
-        builder.append(&record)?;
+        let table_info = Arc::new(table_info.clone());
+        for value in 1..=rows {
+            let row = GenericRow {
+                values: vec![Datum::Int32(value)],
+            };
+            let record =
+                WriteRecord::for_append(table_info.clone(), physical_table_path.clone(), 1, &row);
+            builder.append(&record)?;
+        }
         builder.build()
     }
 
@@ -3198,14 +3217,19 @@ mod tests {
                     .into_iter()
                     .filter(|same| preceding_data || !same)
                 {
-                    for (unsubscribe, file_backed, count_mismatch) in [
+                    for (unsubscribe, file_backed, count_mismatch, magic) in [
                         (false, false, false),
                         (true, false, false),
                         (false, true, false),
                         (true, true, false),
                         (false, false, true),
                         (false, true, true),
-                    ] {
+                    ]
+                    .into_iter()
+                    .flat_map(|(unsubscribe, file_backed, count_mismatch)| {
+                        [LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2]
+                            .map(|magic| (unsubscribe, file_backed, count_mismatch, magic))
+                    }) {
                         let (inner, table_info, data) = scanner_fixture(true)?;
                         let fetcher = &inner.log_fetcher;
                         let status = &inner.log_scanner_status;
@@ -3213,21 +3237,28 @@ mod tests {
                         status.assign_scan_bucket(bucket.clone(), 0);
 
                         let bad_offset = i64::from(preceding_data);
-                        let mut bad = data.clone();
+                        // A multi-record batch, so resuming at `bad_offset + 1` would land in
+                        // it again: recovery must use the reported `next_offset`.
+                        const BAD_ROWS: i32 = 3;
+                        let mut bad = with_magic(
+                            build_records_with_rows(
+                                &table_info,
+                                Arc::new(table_info.get_table_path().clone()),
+                                BAD_ROWS,
+                            )?,
+                            magic,
+                        );
                         bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
                         let expected_error = if count_mismatch {
-                            use crate::record::{
-                                CRC_OFFSET, RECORDS_COUNT_OFFSET, SCHEMA_ID_OFFSET,
-                            };
-                            bad[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + 4]
-                                .copy_from_slice(&2_i32.to_le_bytes());
-                            let crc = crc32c::crc32c(&bad[SCHEMA_ID_OFFSET..]);
-                            bad[CRC_OFFSET..CRC_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
+                            let count_offset = RECORDS_COUNT_OFFSET + header_field_shift(magic);
+                            bad[count_offset..count_offset + RECORDS_COUNT_LENGTH]
+                                .copy_from_slice(&(BAD_ROWS + 1).to_le_bytes());
                             "Arrow row count"
                         } else {
-                            bad[RECORDS_OFFSET..].fill(0);
+                            bad[record_batch_header_size(magic)?..].fill(0);
                             "Invalid continuation marker"
                         };
+                        update_crc(&mut bad);
                         let directory = tempfile::tempdir()?;
                         let add = |bytes: Vec<u8>, offset| {
                             let size = bytes.len();
@@ -3275,11 +3306,25 @@ mod tests {
                             }
                         ));
                         let mut previous_error = None;
+                        let mut skip_offset = None;
                         for _ in 0..3 {
                             let error = poll_test_offsets(&inner, batch_mode)
                                 .now_or_never()
                                 .expect("cached error must not await I/O")
                                 .unwrap_err();
+                            match &error {
+                                Error::LogDecodeError {
+                                    table_bucket,
+                                    offset,
+                                    next_offset,
+                                    ..
+                                } => {
+                                    assert_eq!(table_bucket, &bucket);
+                                    assert_eq!(*offset, bad_offset);
+                                    skip_offset = *next_offset;
+                                }
+                                other => panic!("expected LogDecodeError, got {other:?}"),
+                            }
                             assert!(std::error::Error::source(&error).is_some());
                             let message = error.to_string();
                             assert!(message.contains(expected_error), "{message}");
@@ -3303,7 +3348,8 @@ mod tests {
                             assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
                         }
                         // The public subscribe API is also how callers seek to another offset.
-                        let recovery_offset = bad_offset + 1;
+                        let recovery_offset = skip_offset.expect("next offset of the failed batch");
+                        assert_eq!(recovery_offset, bad_offset + i64::from(BAD_ROWS));
                         change_subscription(&inner, batch_mode, Some(recovery_offset)).await?;
                         let mut recovery = data;
                         recovery[..8].copy_from_slice(&recovery_offset.to_le_bytes());
