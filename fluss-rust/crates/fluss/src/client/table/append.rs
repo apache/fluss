@@ -17,14 +17,16 @@
 
 use crate::bucketing::BucketingFunction;
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
-use crate::client::{WriteRecord, WriteResultFuture, WriterClient};
+use crate::client::{ResultHandle, WriteRecord, WriteResultFuture, WriterClient};
 use crate::error::Error::{IllegalArgument, UnexpectedError};
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
 use crate::record::prepare_append_record_batch;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
 use crate::row::{ColumnarRow, InternalRow};
-use arrow::array::{RecordBatch, UInt32Array};
+use arrow::array::{RecordBatch, Scalar, UInt32Array};
+use arrow::buffer::BooleanBuffer;
+use arrow::compute::kernels::cmp;
 use bytes::Bytes;
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -177,9 +179,8 @@ impl AppendWriter {
     /// This method returns a [`WriteResultFuture`] immediately after queueing the write,
     /// enabling fire-and-forget semantics for efficient batching.
     ///
-    /// For a partitioned table, all rows in the batch must belong to the same partition.
-    /// A batch containing different partitions is rejected before any rows are queued.
-    /// Rows are distributed across buckets by their bucket key automatically.
+    /// Rows are routed to their respective partitions and distributed across buckets by key.
+    /// A null partition value is reported with its zero-based row index before queuing writes.
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
@@ -201,112 +202,180 @@ impl AppendWriter {
             // Nothing to write; also avoids a keyless send to a bucket-key table.
             return Ok(WriteResultFuture::join(Vec::new()));
         }
+        let partition_keys = self.table_info.get_partition_keys();
+        // Check before schema validation so NOT NULL partition columns also report the row index.
+        for key in partition_keys.iter() {
+            if let Some(index) = batch
+                .column_by_name(key)
+                .and_then(|column| column.nulls())
+                .filter(|nulls| nulls.null_count() != 0)
+                .and_then(|nulls| nulls.iter().position(|valid| !valid))
+            {
+                return Err(IllegalArgument {
+                    message: format!("Partition column '{key}' is null at row {index}."),
+                });
+            }
+        }
         let batch = prepare_append_record_batch(&batch, self.table_info.row_type())?;
-        let physical_table_path = if let Some(getter) = &self.partition_getter {
-            let mut row = ColumnarRow::new(
-                Arc::new(batch.clone()),
-                Arc::new(self.table_info.row_type.clone()),
-                0,
-                None,
-            )?;
-            let expected_partition = getter.get_partition(&row)?;
-            for i in 1..batch.num_rows() {
-                row.set_row_id(i);
-                let partition = getter.get_partition(&row)?;
-                if partition != expected_partition {
-                    return Err(IllegalArgument {
-                        message: format!(
-                            "Arrow batch contains rows from different partitions: row {i} belongs to \
-                             '{partition}', expected '{expected_partition}'. \
-                             All rows must belong to the same partition."
-                        ),
-                    });
+        if self.partition_getter.is_none() && self.bucket_router.is_none() {
+            let path = Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)));
+            return self
+                .send_arrow_batch(batch, &path, None, None, deadline)
+                .map(WriteResultFuture::new);
+        }
+        if u32::try_from(batch.num_rows()).is_err() {
+            return Err(IllegalArgument {
+                message: format!(
+                    "Arrow batch has too many rows to route: {}.",
+                    batch.num_rows()
+                ),
+            });
+        }
+        let mut row = ColumnarRow::new(
+            Arc::new(batch.clone()),
+            Arc::new(self.table_info.row_type.clone()),
+            0,
+            None,
+        )?;
+        let mut handles = Vec::new();
+        if let Some(getter) = &self.partition_getter {
+            let first_partition = getter.get_partition(&row)?;
+            let mut matches_first = BooleanBuffer::new_set(batch.num_rows());
+            for key in partition_keys.iter() {
+                // The prepared batch has the same column names as the table schema.
+                let column = batch
+                    .column_by_name(key)
+                    .expect("validated partition column");
+                let first_value = Scalar::new(column.slice(0, 1));
+                let matches = cmp::not_distinct(&column.as_ref(), &first_value)?;
+                matches_first = &matches_first & matches.values();
+            }
+            if matches_first.count_set_bits() == batch.num_rows() {
+                let path = Arc::new(PhysicalTablePath::of_partitioned(
+                    Arc::clone(&self.table_path),
+                    Some(first_partition),
+                ));
+                self.enqueue_partition_batch(
+                    &batch,
+                    &path,
+                    None,
+                    &mut row,
+                    deadline,
+                    &mut handles,
+                )?;
+            } else {
+                let mut partitions = HashMap::<String, Vec<u32>>::new();
+                let mut first_indices = Vec::new();
+                for (i, same_partition) in matches_first.iter().enumerate() {
+                    if same_partition {
+                        first_indices.push(i as u32);
+                    } else {
+                        row.set_row_id(i);
+                        let partition = getter.get_partition(&row)?;
+                        if partition == first_partition {
+                            first_indices.push(i as u32);
+                        } else {
+                            partitions.entry(partition).or_default().push(i as u32);
+                        }
+                    }
+                }
+                partitions.insert(first_partition, first_indices);
+                for (partition, indices) in partitions {
+                    let path = Arc::new(PhysicalTablePath::of_partitioned(
+                        Arc::clone(&self.table_path),
+                        Some(partition),
+                    ));
+                    self.enqueue_partition_batch(
+                        &batch,
+                        &path,
+                        Some(&indices),
+                        &mut row,
+                        deadline,
+                        &mut handles,
+                    )?;
                 }
             }
-            Arc::new(PhysicalTablePath::of_partitioned(
-                Arc::clone(&self.table_path),
-                Some(expected_partition),
-            ))
         } else {
-            Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)))
-        };
+            let path = Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)));
+            self.enqueue_partition_batch(&batch, &path, None, &mut row, deadline, &mut handles)?;
+        }
+        if handles.len() == 1 {
+            Ok(WriteResultFuture::new(handles.pop().unwrap()))
+        } else {
+            Ok(WriteResultFuture::join(handles))
+        }
+    }
 
+    fn enqueue_partition_batch(
+        &self,
+        batch: &RecordBatch,
+        path: &Arc<PhysicalTablePath>,
+        partition_indices: Option<&[u32]>,
+        row: &mut ColumnarRow,
+        deadline: Option<Instant>,
+        handles: &mut Vec<ResultHandle>,
+    ) -> Result<()> {
         let Some(router) = self.bucket_router.as_ref() else {
-            return self.send_arrow_batch(batch, physical_table_path, None, None, deadline);
+            let batch = match partition_indices {
+                Some(indices) => take_rows(batch, indices)?,
+                None => batch.clone(),
+            };
+            handles.push(self.send_arrow_batch(batch, path, None, None, deadline)?);
+            return Ok(());
         };
 
         // Group rows by bucket, keeping one key per bucket (it hashes back there).
         let num_buckets = self
             .writer_client
-            .routing_bucket_count(&physical_table_path, &self.table_info)?;
-        let batch_arc = Arc::new(batch.clone());
-        let row_type = Arc::new(self.table_info.row_type.clone());
+            .routing_bucket_count(path, &self.table_info)?;
         let mut groups: HashMap<i32, (Vec<u32>, Bytes)> = HashMap::new();
-        // Reuse one row view; ColumnarRow::new re-downcasts every column.
-        let mut row = ColumnarRow::new(Arc::clone(&batch_arc), Arc::clone(&row_type), 0, None)?;
-        for i in 0..batch.num_rows() {
-            row.set_row_id(i);
-            let (bucket, key) = router.bucket_of(&row, num_buckets)?;
+        let num_rows = partition_indices.map_or(batch.num_rows(), <[u32]>::len);
+        for i in 0..num_rows {
+            let index = partition_indices.map_or(i as u32, |indices| indices[i]);
+            row.set_row_id(index as usize);
+            let (bucket, key) = router.bucket_of(row, num_buckets)?;
             groups
                 .entry(bucket)
                 .or_insert_with(|| (Vec::new(), key))
                 .0
-                .push(i as u32);
+                .push(index);
         }
 
-        if groups.len() == 1 {
-            let (_, (_, rep_key)) = groups.into_iter().next().unwrap();
-            return self.send_arrow_batch(
-                batch,
-                physical_table_path,
+        for (indices, rep_key) in groups.into_values() {
+            let sub_batch = take_rows(batch, &indices)?;
+            handles.push(self.send_arrow_batch(
+                sub_batch,
+                path,
                 Some(rep_key),
                 Some(num_buckets),
                 deadline,
-            );
+            )?);
         }
-
-        let mut handles = Vec::with_capacity(groups.len());
-        for (_bucket, (indices, rep_key)) in groups {
-            let sub_batch = take_rows(&batch, &indices)?;
-            let record = WriteRecord::for_append_record_batch(
-                Arc::clone(&self.table_info),
-                Arc::clone(&physical_table_path),
-                self.table_info.schema_id,
-                sub_batch,
-            )
-            .with_bucket_key(Some(rep_key))
-            .with_submit_deadline(deadline);
-            handles.push(
-                self.writer_client
-                    .send_with_bucket_count(&record, num_buckets)?,
-            );
-        }
-        Ok(WriteResultFuture::join(handles))
+        Ok(())
     }
 
     fn send_arrow_batch(
         &self,
         batch: RecordBatch,
-        physical_table_path: Arc<PhysicalTablePath>,
+        physical_table_path: &Arc<PhysicalTablePath>,
         bucket_key: Option<Bytes>,
         bucket_count: Option<i32>,
         deadline: Option<Instant>,
-    ) -> Result<WriteResultFuture> {
+    ) -> Result<ResultHandle> {
         let record = WriteRecord::for_append_record_batch(
             Arc::clone(&self.table_info),
-            physical_table_path,
+            Arc::clone(physical_table_path),
             self.table_info.schema_id,
             batch,
         )
         .with_bucket_key(bucket_key)
         .with_submit_deadline(deadline);
-        let result_handle = match bucket_count {
+        match bucket_count {
             Some(bucket_count) => self
                 .writer_client
-                .send_with_bucket_count(&record, bucket_count)?,
-            None => self.writer_client.send(&record)?,
-        };
-        Ok(WriteResultFuture::new(result_handle))
+                .send_with_bucket_count(&record, bucket_count),
+            None => self.writer_client.send(&record),
+        }
     }
 
     pub async fn flush(&self) -> Result<()> {
@@ -315,6 +384,10 @@ impl AppendWriter {
 }
 
 fn take_rows(batch: &RecordBatch, indices: &[u32]) -> Result<RecordBatch> {
+    // Routing produces unique indices in input order, so a full group needs no copy.
+    if indices.len() == batch.num_rows() {
+        return Ok(batch.clone());
+    }
     let idx = UInt32Array::from(indices.to_vec());
     let columns = batch
         .columns()
@@ -322,7 +395,7 @@ fn take_rows(batch: &RecordBatch, indices: &[u32]) -> Result<RecordBatch> {
         .map(|column| arrow::compute::take(column, &idx, None))
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| UnexpectedError {
-            message: format!("Failed to split arrow batch by bucket: {e}"),
+            message: format!("Failed to split Arrow batch: {e}"),
             source: None,
         })?;
     RecordBatch::try_new(batch.schema(), columns).map_err(|e| UnexpectedError {
@@ -343,7 +416,7 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
-    async fn invalid_partition_batches_are_rejected_before_routing() -> Result<()> {
+    async fn null_partition_values_report_the_original_row_index() -> Result<()> {
         for bucket_keys in [vec![], vec!["id".to_string()]] {
             let table_path = TablePath::new("db", "partitioned");
             let descriptor = TableDescriptor::builder()
@@ -371,31 +444,25 @@ mod tests {
             let client = Arc::new(WriterClient::new(Config::default(), metadata, admin)?);
             let writer =
                 TableAppend::new(table_path, table_info.clone(), client.clone()).create_writer()?;
-            for (region, country, mixed) in [
-                (Some("EU"), Some("US"), true),
-                (Some("US"), Some("CA"), true),
-                (None, Some("US"), false),
-            ] {
+            for null_row in [0, 2] {
+                let mut countries = vec![Some("US"), Some("CA"), Some("US")];
+                countries[null_row] = None;
                 let batch = RecordBatch::try_new(
                     crate::record::to_arrow_schema(table_info.row_type())?,
                     vec![
                         Arc::new(Int32Array::from(vec![1, 2, 3])),
-                        Arc::new(StringArray::from(vec![Some("US"), Some("US"), region])),
-                        Arc::new(StringArray::from(vec![Some("US"), Some("US"), country])),
+                        Arc::new(StringArray::from(vec!["US", "US", "US"])),
+                        Arc::new(StringArray::from(countries)),
                     ],
                 )?;
                 writer.append_arrow_batch(batch.slice(0, 0))?.await?;
                 let error = writer.append_arrow_batch(batch).expect_err("invalid batch");
                 match error {
-                    IllegalArgument { message } if mixed => {
-                        assert!(
-                            message
-                                .starts_with("Arrow batch contains rows from different partitions")
-                        );
-                        assert!(message.contains("row 2"));
-                    }
                     IllegalArgument { message } => {
-                        assert_eq!(message, "Partition value shouldn't be null.");
+                        assert_eq!(
+                            message,
+                            format!("Partition column 'country' is null at row {null_row}.")
+                        );
                     }
                     error => panic!("Expected partition validation error, got {error}"),
                 }

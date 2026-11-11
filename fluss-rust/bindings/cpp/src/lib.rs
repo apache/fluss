@@ -688,8 +688,8 @@ mod ffi {
         // configured buffer wait timeout, >= 0 caps the wait at that many ms
         // (0 = non-blocking), letting callers keep a submit within a fixed budget.
         fn append(self: &mut AppendWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
-        // Partition (if partitioned) comes from the first row, so all rows must
-        // share one partition; rows are distributed across buckets by key.
+        // Rows are routed to their respective partitions and distributed across
+        // buckets by their bucket key when configured.
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,

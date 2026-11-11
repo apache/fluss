@@ -922,16 +922,14 @@ class AppendWriter:
     def write_arrow(self, table: pa.Table) -> None:
         """Write a PyArrow Table (one batch at a time).
 
-        For a partitioned table, every batch must contain rows of a single
-        partition (see write_arrow_batch()).
+        Rows are routed to their respective partitions within each batch.
         """
         ...
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle:
         """Write a PyArrow RecordBatch.
 
-        For a partitioned table the partition is derived from the first row, so
-        all rows must belong to the same partition. Rows are distributed across
-        buckets by their bucket key automatically.
+        Rows are routed to their respective partitions and distributed across
+        buckets by their bucket key when configured.
         """
         ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
