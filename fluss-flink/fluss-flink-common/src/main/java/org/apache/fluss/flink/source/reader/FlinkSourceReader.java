@@ -68,6 +68,7 @@ public class FlinkSourceReader<OUT>
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
             Configuration flussConfig,
             TablePath tablePath,
+            boolean hasPrimaryKey,
             RowType sourceOutputType,
             SourceReaderContext context,
             @Nullable int[] projectedFields,
@@ -83,6 +84,7 @@ public class FlinkSourceReader<OUT>
                                 new FlinkSourceSplitReader(
                                         flussConfig,
                                         tablePath,
+                                        hasPrimaryKey,
                                         sourceOutputType,
                                         projectedFields,
                                         logRecordBatchFilter,

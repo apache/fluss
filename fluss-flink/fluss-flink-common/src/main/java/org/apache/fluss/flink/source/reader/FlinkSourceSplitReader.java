@@ -130,6 +130,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     public FlinkSourceSplitReader(
             Configuration flussConf,
             TablePath tablePath,
+            boolean hasPrimaryKey,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
             @Nullable Predicate logRecordBatchFilter,
@@ -146,8 +147,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
+        // Use the scan's primary key flag: virtual tables must retain every change event even
+        // when their backing table has a primary key.
         this.projectedRowEquals =
-                org.apache.flink.configuration.Configuration.fromMap(flussConf.toMap())
+                hasPrimaryKey
+                                && org.apache.flink.configuration.Configuration.fromMap(
+                                                flussConf.toMap())
                                         .get(SCAN_FILTER_UNCHANGED_ROW_ENABLED)
                                 && projectedFields != null
                                 && projectedFields.length

@@ -452,6 +452,7 @@ public class FlinkSource<OUT>
                 elementsQueue,
                 readerConf,
                 tablePath,
+                hasPrimaryKey,
                 scanRowType,
                 context,
                 projectedFields,
