@@ -38,8 +38,8 @@ serde = { workspace = true }
 fluss = { package = "fluss-rs", path = "../fluss" }
 futures = "0.3"
 thiserror = "1.0"
+tokio = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 fluss-test-cluster = { path = "../fluss-test-cluster" }
-tokio = { workspace = true }

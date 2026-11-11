@@ -19,9 +19,7 @@
 
 pub use crate::partition::FlussLakePartitionIdentity;
 use crate::{FlussLakeError, FlussLakeSplitDescriptor, Result};
-#[cfg(test)]
-use fluss::metadata::TableBucket;
-use fluss::metadata::{TableInfo, TablePath};
+use fluss::metadata::{TableBucket, TableInfo, TablePath};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -105,6 +103,39 @@ impl FlussLakeReadSplit {
         Arc::make_mut(&mut self.descriptor)
             .split_id
             .push_str(suffix);
+    }
+
+    pub(crate) fn table_info(&self) -> &TableInfo {
+        &self.table_info
+    }
+    pub(crate) fn validate_live_table(&self, live: &TableInfo) -> Result<()> {
+        crate::table::validate_supported_table(live)?;
+        let frozen = &self.table_info;
+        let lake_changed = frozen
+            .table_config
+            .is_datalake_enabled()
+            .map_err(|e| invalid_descriptor(e.to_string()))?
+            && (!live
+                .table_config
+                .is_datalake_enabled()
+                .map_err(|e| invalid_descriptor(e.to_string()))?
+                || crate::table::resolve_lake_table_path(frozen)?
+                    != crate::table::resolve_lake_table_path(live)?
+                || frozen
+                    .table_config
+                    .get_datalake_format()
+                    .map_err(|e| invalid_descriptor(e.to_string()))?
+                    != live
+                        .table_config
+                        .get_datalake_format()
+                        .map_err(|e| invalid_descriptor(e.to_string()))?);
+        if live.table_id != frozen.table_id || live.table_path != frozen.table_path || lake_changed
+        {
+            return Err(FlussLakeError::SchemaIncompatible(
+                "source identity or lake mapping changed after planning".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -210,8 +241,37 @@ impl FlussLakeReadSplit {
         self.table_info.schema_id
     }
 
+    pub(crate) fn table_bucket(&self) -> &TableBucket {
+        &self.descriptor.table_bucket
+    }
+
+    pub(crate) fn start_offset(&self) -> i64 {
+        self.descriptor.start_offset
+    }
+
+    pub(crate) fn stop_offset(&self) -> i64 {
+        self.descriptor.stop_offset
+    }
+
+    pub(crate) fn snapshot_id(&self) -> Option<i64> {
+        self.descriptor.snapshot_id
+    }
+
+    pub(crate) fn lake_splits(&self) -> &[crate::LakeSplit] {
+        &self.descriptor.lake_splits
+    }
+
+    pub(crate) fn primary_key_indexes(&self) -> &[usize] {
+        &self.primary_key_indexes
+    }
+
     pub(crate) fn is_primary_key(&self) -> bool {
         !self.primary_key_indexes.is_empty()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.descriptor.start_offset == self.descriptor.stop_offset
+            && self.descriptor.lake_splits.is_empty()
     }
 
     pub(crate) fn is_append_lake(&self) -> bool {
@@ -302,6 +362,36 @@ mod tests {
             },
             keys,
         )
+    }
+
+    #[test]
+    fn frozen_metadata_allows_schema_evolution_but_rejects_recreated_sources() {
+        let mut info = testing_table(TablePath::new("fluss", "orders"), 1, false, 7);
+        info.properties
+            .insert("private-key".into(), "SECRET".into());
+        let task = test_split(
+            Arc::new(info.clone()),
+            TableBucket::new(7, 0),
+            0,
+            10,
+            None,
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        assert!(!format!("{task:?}").contains("SECRET"));
+        info.schema_id += 1;
+        task.validate_live_table(&info).unwrap();
+        assert_eq!(task.table_info().schema_id, 1);
+        info.table_id += 1;
+        assert!(matches!(
+            task.validate_live_table(&info),
+            Err(FlussLakeError::SchemaIncompatible(_))
+        ));
+        info.table_id -= 1;
+        info.properties
+            .insert("table.datalake.table-name".into(), "other".into());
+        assert!(task.validate_live_table(&info).is_err());
     }
 
     #[test]

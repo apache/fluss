@@ -19,7 +19,9 @@
 
 use crate::error::planning_client_error;
 use crate::planner::{plan_union_read, plan_with_context};
-use crate::{FlussLakeError, FlussLakeReadContext, FlussLakeReadPlan, LakeSource, Result};
+use crate::{
+    FlussLakeError, FlussLakeReadContext, FlussLakeReadPlan, FlussLakeReader, LakeSource, Result,
+};
 use fluss::client::FlussConnection;
 use fluss::metadata::{RowType, SchemaInfo, TableInfo, TablePath};
 use fluss::predicate::{BoundPredicate, Predicate};
@@ -79,6 +81,7 @@ impl FlussLakeTable {
             table_path: self.table_path.clone(),
             projection: None,
             filter: None,
+            batch_size: None,
             lake_only: false,
             lake_source: None,
             catalog_property_overrides: self.catalog_property_overrides.clone(),
@@ -190,6 +193,7 @@ pub struct FlussLakeScan {
     table_path: TablePath,
     projection: Option<FlussLakeProjection>,
     filter: Option<Predicate>,
+    batch_size: Option<usize>,
     lake_only: bool,
     lake_source: Option<Arc<dyn crate::LakeSource>>,
     catalog_property_overrides: HashMap<String, String>,
@@ -220,6 +224,12 @@ impl FlussLakeScan {
         self
     }
 
+    /// Sets the target output batch size.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = Some(batch_size);
+        self
+    }
+
     /// Enables or disables lake-only execution.
     /// Requires a lake-enabled table; before its first snapshot the result is empty.
     pub fn with_lake_only(mut self, lake_only: bool) -> Self {
@@ -233,9 +243,21 @@ impl FlussLakeScan {
     /// Other predicates still participate in planning and exact result filtering.
     /// Use `FlussLakeTable::capture_read_context` for a table-wide boundary shared by scans.
     ///
-    /// Lake planning uses the source supplied through `with_lake_source`.
+    /// Create the reader using this scan's `new_reader()`. Lake planning and reading
+    /// use the injected source or the feature-selected default implementation.
     pub async fn plan(&self) -> Result<FlussLakeReadPlan> {
         plan_union_read(self).await
+    }
+
+    /// Creates a reader without planning or refreshing read boundaries.
+    ///
+    /// Use the same projection, filter, read mode and batch size that produced
+    /// the tasks, with a compatible lake backend. Task metadata does not encode
+    /// these settings; mismatches can produce incomplete results or the wrong
+    /// output schema. A task can outlive its plan without changing its bounds.
+    /// This constructor performs no I/O; initialization is lazy when reading.
+    pub fn new_reader(&self) -> FlussLakeReader {
+        FlussLakeReader::from_scan(self.clone())
     }
 
     /// Builds a default plan without choosing new snapshots or log offsets.
@@ -419,6 +441,10 @@ impl FlussLakeScan {
         self.filter.as_ref()
     }
 
+    pub(crate) fn batch_size(&self) -> Option<usize> {
+        self.batch_size
+    }
+
     pub(crate) fn lake_only(&self) -> bool {
         self.lake_only
     }
@@ -427,6 +453,11 @@ impl FlussLakeScan {
         if self.table_path.database().is_empty() || self.table_path.table().is_empty() {
             return Err(FlussLakeError::PlanningFailed(
                 "database and table names must not be empty".to_string(),
+            ));
+        }
+        if self.batch_size == Some(0) {
+            return Err(FlussLakeError::PlanningFailed(
+                "batch size must be greater than zero".to_string(),
             ));
         }
         Ok(())
@@ -440,6 +471,7 @@ impl Debug for FlussLakeScan {
             .field("table_path", &self.table_path)
             .field("projection", &self.projection)
             .field("filter", &self.filter)
+            .field("batch_size", &self.batch_size)
             .field("lake_only", &self.lake_only)
             .field(
                 "catalog_property_override_count",
