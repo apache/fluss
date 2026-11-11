@@ -1764,6 +1764,7 @@ message PbUnionReadContext {
   optional PbPredicate partition_scope = 11;
   repeated PbUnionReadLogRange log_ranges = 12;
   // 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+  // 2: lake snapshot only; no Fluss log ranges are captured.
   optional int32 coverage = 13;
 }
 

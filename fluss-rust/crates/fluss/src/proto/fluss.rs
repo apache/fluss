@@ -2384,6 +2384,7 @@ pub struct PbUnionReadContext {
     #[prost(message, repeated, tag = "12")]
     pub log_ranges: ::prost::alloc::vec::Vec<PbUnionReadLogRange>,
     /// 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+    /// 2: lake snapshot only; no Fluss log ranges are captured.
     #[prost(int32, optional, tag = "13")]
     pub coverage: ::core::option::Option<i32>,
 }
