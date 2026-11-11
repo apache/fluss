@@ -307,7 +307,7 @@ libc@0.2.184
 linked-hash-map@0.5.6
 linux-raw-sys@0.12.1
 lock_api@0.4.14
-log@0.4.29
+log@0.4.35
 lru-slab@0.1.2
 md-5@0.10.6
 num-bigint@0.4.6
@@ -417,8 +417,13 @@ Project URL: https://github.com/BurntSushi/rust-csv
 Declared license: Unlicense/MIT
 Selected crate license: MIT
 
-The Python wheels use the Rust crate jiff@0.2.23.
+The Python wheels use the Rust crate jiff@0.2.41.
 Project URL: https://github.com/BurntSushi/jiff
+Declared license: Unlicense OR MIT
+Selected crate license: MIT
+
+The Python wheels use the Rust crate jiff-core@0.1.4.
+Project URL: https://github.com/BurntSushi/jiff/tree/master/crates/jiff-core
 Declared license: Unlicense OR MIT
 Selected crate license: MIT
 
