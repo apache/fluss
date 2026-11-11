@@ -16,9 +16,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# UnionRead source boundaries
+# Bounded UnionRead
 
-`fluss-lake` captures reusable boundaries for Fluss-only and lake-plus-log reads without opening a lake catalog or reading lake files. The default planner and reader are delivered separately.
+`fluss-lake` captures reusable source boundaries and plans bounded Fluss-only or lake-plus-log reads. Supply a `LakeSource` for lake planning. Default lake backends and combined execution are added separately.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -38,7 +38,7 @@ let scoped = table.capture_read_context_with_partition_scope(&col("region").ge("
 
 ## Partition scope
 
-The explicit scope is a core `Predicate` over partition columns. Conditions are evaluated against partition values before offset queries. Safe STRING equalities also narrow the Admin listing; ranges and disjunctions are evaluated locally. The predicate must be exactly encodable by the existing Fluss predicate protocol. Unsupported expressions fail before capture rather than being rounded or silently dropped. Automatic extraction of safe partition conditions from a query filter belongs to the subsequent planner.
+The explicit scope is a core `Predicate` over partition columns. Conditions are evaluated against partition values before offset queries. Safe STRING equalities also narrow the Admin listing; ranges and disjunctions are evaluated locally. The predicate must be exactly encodable by the existing Fluss predicate protocol. Unsupported expressions fail before capture rather than being rounded or silently dropped. The planner extracts safe string equalities from the query filter before capturing boundaries; the full predicate remains for exact evaluation.
 
 Lake planning must apply the same scope, including to lake-only expired partitions. An empty log-range list does not imply an empty lake selection. Scans sharing a scoped context must stay within it; use table-wide capture when sharing across different selections.
 
@@ -70,7 +70,7 @@ For cached metadata, `FlussLakeReadContext::from_protobuf(message, live_table, c
 
 The protocol starts at version 1. Optional additive fields are compatible only when ignoring them preserves the read semantics. Unknown optional fields are accepted; unknown versions, coverage kinds and baseline kinds are rejected. Incompatible semantics require a new version. Rolling upgrades must keep producers within the version and semantic kinds supported by all consumers. Shared historical logs and KV snapshots need explicit future semantics; they cannot be introduced as optional hints that old consumers silently ignore.
 
-`coverage = 0` means complete captured partitions; `coverage = 1` means one bucket. Neither implies that the live log ranges enumerate every partition in the lake. The engine owns message transport, scheduling and runtime credentials.
+`coverage = 0` means complete captured partitions; `coverage = 1` means one bucket; `coverage = 2` means a lake-only snapshot with no captured log ranges. Log ranges do not enumerate every partition in the lake. The engine owns message transport, scheduling and runtime credentials.
 
 ## PK correctness and retained data
 
