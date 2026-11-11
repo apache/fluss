@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -2198,9 +2199,13 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
         // Register the rebalance. Only the FIRST task should trigger a leader election
         // because subsequent tasks must wait for the NotifyLeaderAndIsr response.
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance("rebalance-leader-sequential", rebalancePlan);
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("rebalance-leader-sequential", rebalancePlan);
+                    return null;
+                });
 
         // === Step 1: Verify only the first task started ===
         // registerRebalance() is synchronous, so after it returns, the first task's
@@ -2237,11 +2242,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         drainPendingNotifyTriggers(pendingTriggers);
 
         // === Step 4: Wait for the rebalance to complete ===
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
 
         // Verify all leaders changed correctly.
         verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
@@ -2700,19 +2701,25 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
     }
 
-    private int countInProgressRebalanceTasks(TableBucket... buckets) {
-        int count = 0;
-        for (TableBucket tb : buckets) {
-            if (!RebalanceStatus.FINAL_STATUSES.contains(
-                    eventProcessor
-                            .getRebalanceManager()
-                            .listRebalanceProgress(null)
-                            .progressForBucketMap()
-                            .get(tb)
-                            .status())) {
-                count++;
-            }
-        }
-        return count;
+    private boolean hasInProgressRebalance() throws Exception {
+        return fromCtx(ctx -> eventProcessor.getRebalanceManager().hasInProgressRebalance());
+    }
+
+    private int countInProgressRebalanceTasks(TableBucket... buckets) throws Exception {
+        return fromCtx(
+                ctx -> {
+                    Map<TableBucket, RebalanceResultForBucket> progress =
+                            eventProcessor
+                                    .getRebalanceManager()
+                                    .listRebalanceProgress(null)
+                                    .progressForBucketMap();
+                    int count = 0;
+                    for (TableBucket tb : buckets) {
+                        if (!RebalanceStatus.FINAL_STATUSES.contains(progress.get(tb).status())) {
+                            count++;
+                        }
+                    }
+                    return count;
+                });
     }
 }

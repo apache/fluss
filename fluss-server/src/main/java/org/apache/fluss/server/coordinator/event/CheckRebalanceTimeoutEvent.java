@@ -17,20 +17,11 @@
 
 package org.apache.fluss.server.coordinator.event;
 
-/** An event that retries persisting the final state of a rebalance. */
-public final class FinalizeRebalanceEvent implements CoordinatorEvent {
-    private final String rebalanceId;
-
-    public FinalizeRebalanceEvent(String rebalanceId) {
-        this.rebalanceId = rebalanceId;
-    }
-
-    public String getRebalanceId() {
-        return rebalanceId;
-    }
+/** An event that checks active rebalance tasks for timeout and reconciliation work. */
+public final class CheckRebalanceTimeoutEvent implements CoordinatorEvent {
 
     @Override
     public String toString() {
-        return "FinalizeRebalanceEvent{rebalanceId='" + rebalanceId + "'}";
+        return "CheckRebalanceTimeoutEvent{}";
     }
 }
