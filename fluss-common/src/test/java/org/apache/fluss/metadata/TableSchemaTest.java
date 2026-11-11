@@ -33,6 +33,31 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableSchemaTest {
 
     @Test
+    void testDuplicateColumnNames() {
+        Schema.Builder builder = Schema.newBuilder();
+        for (String name : Arrays.asList("a", "b", "b", "c", "a", "b")) {
+            builder.column(name, DataTypes.INT());
+        }
+        assertThatThrownBy(builder::build)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageMatching(
+                        "Table column \\[a, b, b, c, a, b\\] must not contain duplicate fields\\. Found: \\[(a, b|b, a)\\]");
+    }
+
+    @Test
+    void testDuplicatePrimaryKeyColumns() {
+        assertThatThrownBy(
+                        () ->
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("missing", "id", "id")
+                                        .build())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage(
+                        "Primary key constraint CONSTRAINT PK_missing_id_id PRIMARY KEY (missing, id, id) must not contain duplicate columns. Found: [id]");
+    }
+
+    @Test
     void testAutoIncrementColumnSchema() {
         assertThatThrownBy(
                         () ->
