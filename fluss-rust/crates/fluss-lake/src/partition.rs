@@ -20,6 +20,7 @@
 use crate::{FlussLakeError, Result};
 use fluss::metadata::{DataType, PartitionSpec, RowType};
 use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal, Predicate};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub(crate) struct PartitionScope(BoundPredicate);
@@ -128,11 +129,13 @@ pub enum FlussLakeLogPartition {
 }
 
 /// Stable partition identity exposed for scheduling and diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FlussLakePartitionIdentity {
     /// Root identity for an unpartitioned table.
+    #[serde(rename = "unpartitioned")]
     Unpartitioned,
     /// Logical partition-key/value pairs in table partition-key order.
+    #[serde(rename = "key_values")]
     KeyValues(Vec<(String, String)>),
 }
 

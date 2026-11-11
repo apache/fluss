@@ -89,3 +89,11 @@ Call `validate_available()` for required ranges after safe pruning. It detects a
 Streaming discovery, progress and checkpointing require a future API; this context describes bounded reads. Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
 
 Tables with `table.datalake.historical-partition.enabled=true` are rejected during boundary capture and import: writes to expired partitions can remain in the shared `__historical__` log before tiering and are missing from ordinary partition ranges and the lake snapshot. Shared historical-log support is tracked in [#5001](https://github.com/apache/fluss/issues/5001). Expired partitions already present in a lake snapshot remain supported when this option is disabled.
+
+## Default planning and lake sources
+
+`table.new_scan().with_lake_source(source).plan().await?` captures bounded inputs and plans tasks. `plan_with_context(&context)` reuses previously captured boundaries. This layer provides the planner and lake-source contracts; the default backend and execution reader are added separately.
+
+Append lake tasks and bucket log tails are independent. PK tasks group a complete lake baseline and log tail by partition and bucket. The source must reconcile lake versions and deletion vectors before returning a PK baseline. Partition and bucket pruning is conservative; execution must apply the exact filter after reconciliation.
+
+Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.

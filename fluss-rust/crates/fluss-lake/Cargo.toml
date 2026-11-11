@@ -33,12 +33,13 @@ categories = { workspace = true }
 integration_tests = ["fluss/integration_tests"]
 
 [dependencies]
+arrow = { workspace = true }
+serde = { workspace = true }
 fluss = { package = "fluss-rs", path = "../fluss" }
 futures = "0.3"
 thiserror = "1.0"
 
 [dev-dependencies]
 serde_json = { workspace = true }
-arrow = { workspace = true }
 fluss-test-cluster = { path = "../fluss-test-cluster" }
 tokio = { workspace = true }
