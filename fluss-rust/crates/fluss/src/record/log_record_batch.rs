@@ -411,6 +411,20 @@ impl LogRecordsBatches {
         })
     }
 
+    /// Reads the next batch's base offset without advancing the iterator or reading the full batch.
+    pub(crate) fn peek_next_batch_base_offset(&mut self) -> Result<Option<i64>> {
+        let Some(batch_size) = self.next_batch_size()? else {
+            return Ok(None);
+        };
+        let prefix = self.source.read_batch_data(
+            self.current_pos,
+            batch_size.min(V2_RECORD_BATCH_HEADER_SIZE),
+        )?;
+        let header = LogRecordBatch::new(prefix);
+        header.ensure_header_complete()?;
+        Ok(Some(header.base_log_offset()))
+    }
+
     /// Try to get the size of the next batch.
     fn next_batch_size(&mut self) -> Result<Option<usize>> {
         if self.remaining_bytes < LOG_OVERHEAD {
@@ -572,6 +586,16 @@ impl LogRecordBatch {
 
     pub fn next_log_offset(&self) -> i64 {
         self.last_log_offset() + 1
+    }
+
+    /// Computes the next offset from an already-validated batch header.
+    pub(crate) fn checked_next_log_offset(&self) -> Option<i64> {
+        let base_offset = self.base_log_offset();
+        let delta = self.last_offset_delta();
+        if base_offset < 0 || delta < 0 {
+            return None;
+        }
+        base_offset.checked_add(i64::from(delta) + 1)
     }
 
     pub fn checksum(&self) -> u32 {
@@ -815,8 +839,8 @@ mod tests {
     use std::io::Write;
 
     use crate::test_utils::{
-        build_append_only_batch, build_table_info, splice_change_type_vector,
-        splice_statistics_section, uncompressed_arrow_batch_config, update_crc,
+        build_append_only_batch, build_table_info, splice_change_type_vector, splice_leader_epoch,
+        splice_statistics_section, uncompressed_arrow_batch_config,
     };
     #[test]
     fn rejects_invalid_arrow_record_counts() -> Result<()> {
@@ -1309,24 +1333,6 @@ mod tests {
             "{err}"
         );
     }
-
-    /// Turns a V1 batch into a wire-valid V2 batch by inserting the leader
-    /// epoch before the CRC and fixing up the magic, length field and CRC.
-    fn splice_leader_epoch(v1_batch: &[u8], leader_epoch: i32) -> Vec<u8> {
-        let mut data = v1_batch.to_vec();
-        data[MAGIC_OFFSET] = LOG_MAGIC_VALUE_V2;
-        data.splice(
-            V2_LEADER_EPOCH_OFFSET..V2_LEADER_EPOCH_OFFSET,
-            leader_epoch.to_le_bytes(),
-        );
-
-        let new_length = (data.len() - LOG_OVERHEAD) as i32;
-        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
-            .copy_from_slice(&new_length.to_le_bytes());
-        update_crc(&mut data);
-        data
-    }
-
     #[test]
     fn decode_v2_batch_reads_records_after_the_leader_epoch() -> Result<()> {
         let (row_type, append_only) = build_append_only_batch(&[(1, "alice"), (2, "bob")]);

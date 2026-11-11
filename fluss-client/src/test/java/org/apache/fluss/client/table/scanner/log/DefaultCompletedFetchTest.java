@@ -18,12 +18,17 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.LogDecodeException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
@@ -37,19 +42,25 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.OutOfMemoryException;
 import org.apache.fluss.testutils.InternalRowAssert;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.Projection;
+import org.apache.fluss.utils.crc.Crc32C;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.io.File;
 import java.nio.ByteBuffer;
@@ -59,10 +70,21 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeoutException;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
@@ -74,9 +96,14 @@ import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.DefaultCompletedFetch}. */
 public class DefaultCompletedFetchTest {
+    private final List<DefaultCompletedFetch> fetches = new ArrayList<>();
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory =
+            new ChunkedAllocationManager.ChunkedFactory();
+
     private LogScannerStatus logScannerStatus;
     private @TempDir File tempDir;
     private TableInfo tableInfo;
@@ -96,6 +123,18 @@ public class DefaultCompletedFetchTest {
         scanBuckets.put(new TableBucket(DATA2_TABLE_ID, 2), 0L);
         logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
+    }
+
+    @AfterEach
+    void closeFetches() {
+        try {
+            for (DefaultCompletedFetch fetch : fetches) {
+                fetch.drain();
+                fetch.readContext.close();
+            }
+        } finally {
+            chunkedFactory.close();
+        }
     }
 
     @ParameterizedTest
@@ -189,6 +228,215 @@ public class DefaultCompletedFetchTest {
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "0, RECORDS, false, false, 10, false, 10, 20, ",
+        "1, RECORDS_WITH_VALID_CRC, false, false, 10, false, 10, 20, 20",
+        "2, RECORDS_WITH_VALID_CRC, true, false, 10, false, 10, 20, 20",
+        "2, ARROW_ROW_COUNT, true, false, 10, false, 10, 20, 20",
+        "2, RECORDS_WITH_VALID_CRC, true, false, 10, false, 10, 19, ",
+        "2, RECORDS, true, false, 10, false, 10, 20, ",
+        "1, RECORDS, true, true, 10, false, 10, 20, 20",
+        "1, RECORDS, true, true, 10, false, 10, 30, ",
+        "1, RECORDS_WITH_VALID_CRC, true, true, 10, false, 10, 19, ",
+        "1, RECORDS, true, true, 0, true, 10, , ",
+        "1, RECORDS_WITH_VALID_CRC, true, true, 0, true, 10, , 20",
+        "1, RECORDS_WITH_VALID_CRC, false, false, 0, true, 10, , 20",
+        "1, RECORDS_WITH_VALID_CRC, true, false, 10, false, 10, , ",
+        "1, RECORDS_WITH_VALID_CRC, true, false, 10, false, 100, , ",
+        "1, RECORDS_WITH_VALID_CRC, true, false, 0, true, 11, , ",
+        "1, RECORDS_WITH_VALID_CRC, true, false, 20, false, 10, 20, ",
+        "0, INCOMPLETE_HEADER, false, false, 10, false, 10, , ",
+        "2, INCOMPLETE_HEADER, false, true, 10, false, 10, 20, ",
+        "0, MAGIC, false, false, 10, false, 10, 20, "
+    })
+    void testDecodeFailureReportsVerifiedNextOffset(
+            byte magic,
+            Corruption corruption,
+            boolean checkCrcs,
+            boolean projected,
+            long fetchOffset,
+            boolean hasPrecedingBatch,
+            long failedBaseOffset,
+            @Nullable Long followingOffset,
+            @Nullable Long expectedNextOffset)
+            throws Exception {
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        Projection projection = projected ? Projection.of(new int[] {0, 1, 2}) : null;
+        MemoryLogRecords data = corruptBatch(corruption, magic, failedBaseOffset, followingOffset);
+        if (hasPrecedingBatch) {
+            data = concatBatches(arrowBatch(0L, magic), toBytes(data));
+        }
+        for (boolean arrowBatches : new boolean[] {false, true}) {
+            DefaultCompletedFetch fetch =
+                    makeCompletedFetch(
+                            tb,
+                            FetchLogResultForBucket.records(tb, data, 40L, -1L, -1L),
+                            fetchOffset,
+                            projection,
+                            checkCrcs);
+            if (hasPrecedingBatch) {
+                readFetch(fetch, arrowBatches);
+            }
+            assertThatThrownBy(() -> readFetch(fetch, arrowBatches))
+                    .isInstanceOfSatisfying(
+                            LogDecodeException.class,
+                            e -> {
+                                assertThat(e.getTableBucket()).isEqualTo(tb);
+                                assertThat(e.getOffset()).isEqualTo(failedBaseOffset);
+                                if (expectedNextOffset == null) {
+                                    assertThat(e.getNextOffset()).isEmpty();
+                                } else {
+                                    assertThat(e.getNextOffset()).hasValue(expectedNextOffset);
+                                }
+                            });
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBatchOffsetRanges")
+    void testInvalidBatchOffsetRangeFailsBeforeReadingRecords(
+            long baseOffset, int lastOffsetDelta, int recordCount, boolean arrowBatches)
+            throws Exception {
+        byte magic = LOG_MAGIC_VALUE_V2;
+        byte[] batch = arrowBatch(0L, magic);
+        MemorySegment segment = MemorySegment.wrap(batch);
+        segment.putLong(BASE_OFFSET_OFFSET, baseOffset);
+        segment.putInt(lastOffsetDeltaOffset(magic), lastOffsetDelta);
+        segment.putInt(recordsCountOffset(magic), recordCount);
+        updateCrc(batch, magic);
+
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.records(
+                                tb, MemoryLogRecords.pointToBytes(batch), 30L, -1L, -1L),
+                        0L,
+                        null,
+                        false);
+        assertThatThrownBy(() -> readFetch(fetch, arrowBatches))
+                .isInstanceOfSatisfying(
+                        LogDecodeException.class,
+                        e -> {
+                            assertThat(e.getOffset()).isEqualTo(baseOffset);
+                            assertThat(e.getNextOffset()).isEmpty();
+                        })
+                .hasRootCauseMessage("Invalid log batch offset range at " + baseOffset);
+    }
+
+    @Test
+    void testDecodeFailureAfterPartOfTheBatchWasReturned() throws Exception {
+        byte magic = LOG_MAGIC_VALUE_V0;
+        MemoryLogRecords records =
+                createRecordsWithoutBaseLogOffset(
+                        rowType,
+                        DEFAULT_SCHEMA_ID,
+                        0L,
+                        1000L,
+                        magic,
+                        DATA2,
+                        LogFormat.ARROW,
+                        false);
+        byte[] bytes = toBytes(records);
+        bytes[recordBatchHeaderSize(magic) + 1] = Byte.MAX_VALUE;
+        updateCrc(bytes, magic);
+
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.records(
+                                tb, concatBatches(bytes, arrowBatch(10L, magic)), 20L, -1L, -1L),
+                        0L);
+        assertThat(fetch.fetchRecords(100)).extracting(ScanRecord::logOffset).containsExactly(0L);
+        assertThatThrownBy(() -> fetch.fetchRecords(100))
+                .isInstanceOfSatisfying(
+                        LogDecodeException.class,
+                        e -> {
+                            assertThat(e.getOffset()).isEqualTo(0L);
+                            assertThat(e.getNextOffset()).hasValue(10L);
+                        });
+    }
+
+    @ParameterizedTest
+    @MethodSource("schemaLookupFailures")
+    void testSchemaLookupFailureRemainsAFetchException(
+            RuntimeException failure, boolean arrowBatches) throws Exception {
+        int missingSchema = DEFAULT_SCHEMA_ID + 1;
+        testingSchemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, tableInfo.getSchema()) {
+                    @Override
+                    public Schema getSchema(int schemaId) {
+                        if (schemaId == missingSchema) {
+                            throw failure;
+                        }
+                        return super.getSchema(schemaId);
+                    }
+                };
+        byte magic = LOG_MAGIC_VALUE_V0;
+        byte[] batch = arrowBatch(0L, magic);
+        MemorySegment.wrap(batch).putShort(schemaIdOffset(magic), (short) missingSchema);
+        updateCrc(batch, magic);
+
+        TableBucket bucket = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        bucket,
+                        FetchLogResultForBucket.records(
+                                bucket, MemoryLogRecords.pointToBytes(batch), 10L, -1L, -1L),
+                        0L);
+        assertThatThrownBy(() -> readFetch(fetch, arrowBatches))
+                .isExactlyInstanceOf(FetchException.class)
+                .hasCause(failure);
+        assertThat(fetch.nextFetchOffset()).isZero();
+        assertThatThrownBy(() -> readFetch(fetch, arrowBatches))
+                .isExactlyInstanceOf(FetchException.class)
+                .hasCause(failure);
+    }
+
+    private static Collection<Arguments> schemaLookupFailures() {
+        RuntimeException timeout = new RuntimeException(new TimeoutException("schema lookup"));
+        return Arrays.asList(
+                Arguments.of(timeout, false),
+                Arguments.of(timeout, true),
+                Arguments.of(new RuntimeException(new InterruptedException("schema lookup")), true),
+                Arguments.of(new TableNotExistException("table was dropped"), false));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testArrowAllocationFailureRemainsAFetchException(boolean arrowBatches) throws Exception {
+        byte magic = LOG_MAGIC_VALUE_V0;
+        int batchSize = DATA2.size();
+        MemoryLogRecords records =
+                concatBatches(arrowBatch(0L, magic), arrowBatch(batchSize, magic));
+        TableBucket bucket = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        bucket,
+                        FetchLogResultForBucket.records(bucket, records, 2L * batchSize, -1L, -1L),
+                        0L);
+
+        if (arrowBatches) {
+            try (ArrowBatchData firstBatch = fetch.fetchArrowBatches(batchSize).get(0)) {
+                assertThat(firstBatch.getRecordCount()).isEqualTo(batchSize);
+                firstBatch.getVectorSchemaRoot().getVector(0).getAllocator().setLimit(0L);
+            }
+        } else {
+            assertThat(fetch.fetchRecords(batchSize)).hasSize(batchSize);
+            fetch.readContext.getBufferAllocator().setLimit(0L);
+        }
+
+        assertThatThrownBy(() -> readFetch(fetch, arrowBatches))
+                .isExactlyInstanceOf(FetchException.class)
+                .hasRootCauseInstanceOf(
+                        arrowBatches
+                                ? org.apache.arrow.memory.OutOfMemoryException.class
+                                : OutOfMemoryException.class);
+        assertThat(fetch.nextFetchOffset()).isEqualTo(batchSize);
     }
 
     @Test
@@ -450,21 +698,122 @@ public class DefaultCompletedFetchTest {
             FetchLogResultForBucket resultForBucket,
             long offset,
             Projection projection) {
-        return new DefaultCompletedFetch(
-                tableBucket,
-                DATA2_TABLE_PATH,
-                resultForBucket,
-                LogRecordReadContext.createReadContext(
-                        tableInfo,
-                        false,
-                        LogRecordReadContext.SchemaResolution.DYNAMIC,
-                        projection,
-                        new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
-                        new ChunkedAllocationManager.ChunkedFactory()),
-                logScannerStatus,
-                true,
-                offset,
-                null);
+        return makeCompletedFetch(tableBucket, resultForBucket, offset, projection, true);
+    }
+
+    private DefaultCompletedFetch makeCompletedFetch(
+            TableBucket tableBucket,
+            FetchLogResultForBucket resultForBucket,
+            long offset,
+            Projection projection,
+            boolean checkCrcs) {
+        DefaultCompletedFetch fetch =
+                new DefaultCompletedFetch(
+                        tableBucket,
+                        DATA2_TABLE_PATH,
+                        resultForBucket,
+                        LogRecordReadContext.createReadContext(
+                                tableInfo,
+                                false,
+                                LogRecordReadContext.SchemaResolution.DYNAMIC,
+                                projection,
+                                testingSchemaGetter,
+                                chunkedFactory),
+                        logScannerStatus,
+                        checkCrcs,
+                        offset,
+                        null);
+        fetches.add(fetch);
+        return fetch;
+    }
+
+    private static Collection<Arguments> invalidBatchOffsetRanges() {
+        int recordCount = DATA2.size();
+        return Arrays.asList(
+                Arguments.of(-3L, 0, recordCount, false),
+                Arguments.of(1L, -1, recordCount, true),
+                Arguments.of(Long.MAX_VALUE - 1, 0, recordCount, false),
+                Arguments.of(Long.MAX_VALUE, 0, recordCount, true),
+                Arguments.of(1L, 0, recordCount, false),
+                Arguments.of(1L, 0, recordCount, true),
+                Arguments.of(1L, 0, -1, true));
+    }
+
+    private enum Corruption {
+        RECORDS,
+        RECORDS_WITH_VALID_CRC,
+        ARROW_ROW_COUNT,
+        MAGIC,
+        INCOMPLETE_HEADER
+    }
+
+    private MemoryLogRecords corruptBatch(
+            Corruption corruption, byte magic, long baseOffset, @Nullable Long followingOffset)
+            throws Exception {
+        byte[] corrupt;
+        if (corruption == Corruption.INCOMPLETE_HEADER) {
+            corrupt = new byte[recordBatchHeaderSize(magic) - 1];
+            MemorySegment segment = MemorySegment.wrap(corrupt);
+            segment.putInt(LENGTH_OFFSET, corrupt.length - LOG_OVERHEAD);
+            corrupt[MAGIC_OFFSET] = magic;
+        } else {
+            corrupt = arrowBatch(10L, magic);
+            if (corruption == Corruption.MAGIC) {
+                corrupt[MAGIC_OFFSET] = Byte.MAX_VALUE;
+            } else if (corruption == Corruption.ARROW_ROW_COUNT) {
+                MemorySegment.wrap(corrupt).putInt(recordsCountOffset(magic), DATA2.size() - 1);
+                updateCrc(corrupt, magic);
+            } else {
+                Arrays.fill(corrupt, recordBatchHeaderSize(magic), corrupt.length, (byte) 0xff);
+                if (corruption == Corruption.RECORDS_WITH_VALID_CRC) {
+                    updateCrc(corrupt, magic);
+                }
+            }
+        }
+        MemorySegment.wrap(corrupt).putLong(BASE_OFFSET_OFFSET, baseOffset);
+        if (followingOffset == null) {
+            return MemoryLogRecords.pointToBytes(corrupt);
+        }
+        return concatBatches(corrupt, arrowBatch(followingOffset, magic));
+    }
+
+    private static MemoryLogRecords concatBatches(byte[] first, byte[] second) {
+        byte[] data = Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, data, first.length, second.length);
+        return MemoryLogRecords.pointToBytes(data);
+    }
+
+    private byte[] arrowBatch(long baseOffset, byte magic) throws Exception {
+        return toBytes(
+                createRecordsWithoutBaseLogOffset(
+                        rowType,
+                        DEFAULT_SCHEMA_ID,
+                        baseOffset,
+                        1000L,
+                        magic,
+                        DATA2,
+                        LogFormat.ARROW,
+                        true));
+    }
+
+    private static void updateCrc(byte[] batch, byte magic) {
+        int crcStart = schemaIdOffset(magic);
+        long crc = Crc32C.compute(batch, crcStart, batch.length - crcStart);
+        MemorySegment.wrap(batch).putInt(crcOffset(magic), (int) crc);
+    }
+
+    private static byte[] toBytes(MemoryLogRecords records) {
+        byte[] bytes = new byte[records.sizeInBytes()];
+        records.getMemorySegment().get(records.getPosition(), bytes, 0, bytes.length);
+        return bytes;
+    }
+
+    private static void readFetch(DefaultCompletedFetch fetch, boolean arrowBatches) {
+        if (arrowBatches) {
+            fetch.fetchArrowBatches(100).forEach(ArrowBatchData::close);
+        } else {
+            fetch.fetchRecords(100);
+        }
     }
 
     private static Collection<Arguments> typeAndMagic() {

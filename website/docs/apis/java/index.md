@@ -298,6 +298,43 @@ conf.setBoolean("client.consumer.auto-commit.enabled", false);
 Connection connection = ConnectionFactory.createConnection(conf);
 ```
 
+#### Undecodable Log Batches
+
+When a bucket has an undecodable log batch, `poll` throws a `LogDecodeException` until you
+unsubscribe the bucket or subscribe it at a different offset. To skip the unreturned records
+of the failed batch, subscribe at `getNextOffset()` when available. Subscribing at
+`getOffset() + 1` can land inside the same batch.
+
+`getOffset()` reports the failed batch's base offset from the header when available. Otherwise
+it gives the scan position, which may be inside a batch. Operational failures, such as schema
+lookup or Arrow allocation failures, surface as `FetchException`.
+
+`getNextOffset()` is present when the client can verify a batch boundary ahead of the scan
+position. When the same fetch contains a following batch, its base offset must match the
+resume offset. For the last batch in a fetch, the failed batch's base offset must match
+the end of the preceding decoded batch. A matching following batch is sufficient after
+server projection. In all other cases the failed batch must pass its CRC check, even when
+`client.scanner.log.check-crc` is disabled.
+
+```java
+try {
+    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+    // Process the records
+} catch (LogDecodeException e) {
+    if (!e.getNextOffset().isPresent()) {
+        throw e;
+    }
+    TableBucket bucket = e.getTableBucket();
+    long nextOffset = e.getNextOffset().getAsLong();
+    System.out.println("Skipping undecodable batch at offset " + e.getOffset() + " of " + bucket);
+    if (bucket.getPartitionId() != null) {
+        logScanner.subscribe(bucket.getPartitionId(), bucket.getBucket(), nextOffset);
+    } else {
+        logScanner.subscribe(bucket.getBucket(), nextOffset);
+    }
+}
+```
+
 #### Filter Pushdown
 
 Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against

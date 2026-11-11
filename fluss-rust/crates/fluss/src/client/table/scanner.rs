@@ -1147,6 +1147,8 @@ impl LogScannerInner {
 impl LogScanner {
     /// Poll for records, returning collected records before a later fetch error.
     /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
+    /// A batch that cannot be decoded fails every poll with [`Error::LogDecodeError`];
+    /// subscribe the bucket at the error's `next_offset` to skip the batch.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
         self.inner.poll_records(timeout).await
     }
@@ -1198,6 +1200,8 @@ impl RecordBatchLogScanner {
     /// If a later fetch fails to initialize or decode, already decoded batches are returned first.
     /// The error is reported by the next poll, unless the bucket is unsubscribed
     /// or its offset is changed before that poll.
+    /// A batch that cannot be decoded fails every poll with [`Error::LogDecodeError`];
+    /// subscribe the bucket at the error's `next_offset` to skip the batch.
     pub async fn poll(&self, timeout: Duration) -> Result<Vec<ScanBatch>> {
         Ok(self.poll_with_progress(timeout).await?.batches)
     }
@@ -2899,17 +2903,28 @@ mod tests {
     }
 
     fn build_records(table_info: &TableInfo, table_path: Arc<TablePath>) -> Result<Vec<u8>> {
+        build_records_with_rows(table_info, table_path, 1)
+    }
+
+    fn build_records_with_rows(
+        table_info: &TableInfo,
+        table_path: Arc<TablePath>,
+        rows: i32,
+    ) -> Result<Vec<u8>> {
         let mut builder = MemoryLogRecordsArrowBuilder::new(
             uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
             false,
         )?;
         let physical_table_path = Arc::new(PhysicalTablePath::of(table_path));
-        let row = GenericRow {
-            values: vec![Datum::Int32(1)],
-        };
-        let record =
-            WriteRecord::for_append(Arc::new(table_info.clone()), physical_table_path, 1, &row);
-        builder.append(&record)?;
+        let table_info = Arc::new(table_info.clone());
+        for value in 1..=rows {
+            let row = GenericRow {
+                values: vec![Datum::Int32(value)],
+            };
+            let record =
+                WriteRecord::for_append(table_info.clone(), physical_table_path.clone(), 1, &row);
+            builder.append(&record)?;
+        }
         builder.build()
     }
 
@@ -3371,138 +3386,101 @@ mod tests {
     #[tokio::test]
     async fn public_polls_retain_decode_errors_until_the_subscription_changes() -> Result<()> {
         for batch_mode in [false, true] {
-            for preceding_data in [false, true] {
-                for same_fetch in [false, true]
-                    .into_iter()
-                    .filter(|same| preceding_data || !same)
-                {
-                    for (unsubscribe, file_backed, count_mismatch) in [
-                        (false, false, false),
-                        (true, false, false),
-                        (false, true, false),
-                        (true, true, false),
-                        (false, false, true),
-                        (false, true, true),
-                    ] {
-                        let (inner, table_info, data) = scanner_fixture(true)?;
-                        let fetcher = &inner.log_fetcher;
-                        let status = &inner.log_scanner_status;
-                        let bucket = TableBucket::new(1, 0);
-                        status.assign_scan_bucket(bucket.clone(), 0);
+            let (inner, table_info, first) = scanner_fixture(true)?;
+            let fetcher = &inner.log_fetcher;
+            let status = &inner.log_scanner_status;
+            let bucket = TableBucket::new(1, 0);
+            status.assign_scan_bucket(bucket.clone(), 0);
 
-                        let bad_offset = i64::from(preceding_data);
-                        let mut bad = data.clone();
-                        bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
-                        let expected_error = if count_mismatch {
-                            use crate::record::RECORDS_COUNT_OFFSET;
-                            bad[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + 4]
-                                .copy_from_slice(&2_i32.to_le_bytes());
-                            "Arrow row count"
-                        } else {
-                            bad[RECORDS_OFFSET..].fill(0);
-                            "Invalid continuation marker"
-                        };
-                        update_crc(&mut bad);
-                        let directory = tempfile::tempdir()?;
-                        let add = |bytes: Vec<u8>, offset| {
-                            let size = bytes.len();
-                            let records = if file_backed {
-                                let path = directory.path().join(format!("{offset}.log"));
-                                std::fs::write(&path, &bytes).unwrap();
-                                LogRecordsBatches::from_file(
-                                    std::fs::File::open(&path).unwrap(),
-                                    0,
-                                    path,
-                                )
-                                .unwrap()
-                            } else {
-                                LogRecordsBatches::new(bytes)
-                            };
-                            fetcher
-                                .log_fetch_buffer
-                                .add(Box::new(DefaultCompletedFetch::new(
-                                    bucket.clone(),
-                                    records,
-                                    size,
-                                    test_resolver(&table_info),
-                                    file_backed,
-                                    offset,
-                                    0,
-                                )));
-                        };
-                        if preceding_data && same_fetch {
-                            add([data.clone(), bad].concat(), 0);
-                        } else {
-                            if preceding_data {
-                                add(data.clone(), 0);
-                            }
-                            add(bad, bad_offset);
-                        }
-                        if preceding_data {
-                            assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
-                        }
-                        let failed_file = directory.path().join(format!(
-                            "{}.log",
-                            if same_fetch && preceding_data {
-                                0
-                            } else {
-                                bad_offset
-                            }
-                        ));
-                        let mut previous_error = None;
-                        for _ in 0..3 {
-                            let error = poll_test_offsets(&inner, batch_mode)
-                                .now_or_never()
-                                .expect("cached error must not await I/O")
-                                .unwrap_err();
-                            assert!(std::error::Error::source(&error).is_some());
-                            let message = error.to_string();
-                            assert!(message.contains(expected_error), "{message}");
-                            assert!(
-                                message.contains(&format!("offset {bad_offset}")),
-                                "{message}"
-                            );
-                            if let Some(previous) = &previous_error {
-                                assert_eq!(&message, previous);
-                            }
-                            previous_error = Some(message);
-                            if file_backed {
-                                assert!(failed_file.exists());
-                            }
-                            assert_eq!(status.get_bucket_offset(&bucket), Some(bad_offset));
-                            assert!(fetcher.fetchable_buckets().is_empty());
-                            assert!(fetcher.nodes_with_pending_fetch_requests.lock().is_empty());
-                        }
-                        if unsubscribe {
-                            change_subscription(&inner, batch_mode, None).await?;
-                            assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
-                        }
-                        // The public subscribe API is also how callers seek to another offset.
-                        let recovery_offset = bad_offset + 1;
-                        change_subscription(&inner, batch_mode, Some(recovery_offset)).await?;
-                        let mut recovery = data;
-                        recovery[..8].copy_from_slice(&recovery_offset.to_le_bytes());
-                        add(recovery, recovery_offset);
-                        assert_eq!(
-                            poll_test_offsets(&inner, batch_mode).await?,
-                            vec![recovery_offset]
-                        );
-                        assert_eq!(status.get_bucket_offset(&bucket), Some(recovery_offset + 1));
-                        if file_backed {
-                            assert!(
-                                !failed_file.exists(),
-                                "discarded fetch must release its file"
-                            );
-                        }
-                        assert!(
-                            fetcher
-                                .nodes_with_pending_fetch_requests
-                                .lock()
-                                .contains(&1)
-                        );
-                    }
-                }
+            const FAILED_OFFSET: i64 = 1;
+            const FAILED_ROWS: i32 = 3;
+            const RECOVERY_OFFSET: i64 = FAILED_OFFSET + FAILED_ROWS as i64;
+            let mut bad = build_records_with_rows(
+                &table_info,
+                Arc::new(table_info.get_table_path().clone()),
+                FAILED_ROWS,
+            )?;
+            bad[..8].copy_from_slice(&FAILED_OFFSET.to_le_bytes());
+            bad[RECORDS_OFFSET..].fill(0);
+            update_crc(&mut bad);
+            let mut recovery = first.clone();
+            recovery[..8].copy_from_slice(&RECOVERY_OFFSET.to_le_bytes());
+            let data = [first, bad, recovery.clone()].concat();
+            let size = data.len();
+
+            let directory = tempfile::tempdir()?;
+            let failed_file = directory.path().join("failed.log");
+            let records = if batch_mode {
+                std::fs::write(&failed_file, &data)?;
+                LogRecordsBatches::from_file(
+                    std::fs::File::open(&failed_file)?,
+                    0,
+                    failed_file.clone(),
+                )?
+            } else {
+                LogRecordsBatches::new(data)
+            };
+            fetcher
+                .log_fetch_buffer
+                .add(Box::new(DefaultCompletedFetch::new(
+                    bucket.clone(),
+                    records,
+                    size,
+                    test_resolver(&table_info),
+                    batch_mode,
+                    0,
+                    0,
+                )));
+            assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+
+            let mut recovery_offset = None;
+            for _ in 0..2 {
+                let error = poll_test_offsets(&inner, batch_mode)
+                    .now_or_never()
+                    .expect("cached error must not await I/O")
+                    .unwrap_err();
+                let Error::LogDecodeError {
+                    table_bucket,
+                    offset,
+                    next_offset,
+                    ..
+                } = error
+                else {
+                    panic!("expected LogDecodeError, got {error:?}");
+                };
+                assert_eq!(table_bucket, bucket);
+                assert_eq!(offset, FAILED_OFFSET);
+                assert_eq!(next_offset, Some(RECOVERY_OFFSET));
+                assert_eq!(status.get_bucket_offset(&bucket), Some(FAILED_OFFSET));
+                assert!(fetcher.fetchable_buckets().is_empty());
+                recovery_offset = next_offset;
             }
+            if batch_mode {
+                assert!(failed_file.exists());
+                change_subscription(&inner, batch_mode, None).await?;
+                assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
+                assert!(!failed_file.exists());
+            }
+
+            let recovery_offset = recovery_offset.expect("next offset of failed batch");
+            change_subscription(&inner, batch_mode, Some(recovery_offset)).await?;
+            let size = recovery.len();
+            fetcher
+                .log_fetch_buffer
+                .add(Box::new(DefaultCompletedFetch::new(
+                    bucket.clone(),
+                    LogRecordsBatches::new(recovery),
+                    size,
+                    test_resolver(&table_info),
+                    false,
+                    recovery_offset,
+                    0,
+                )));
+            assert_eq!(
+                poll_test_offsets(&inner, batch_mode).await?,
+                vec![recovery_offset]
+            );
+            assert_eq!(status.get_bucket_offset(&bucket), Some(recovery_offset + 1));
         }
         Ok(())
     }

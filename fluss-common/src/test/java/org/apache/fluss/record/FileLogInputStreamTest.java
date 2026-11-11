@@ -19,6 +19,7 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.compression.ArrowCompressionType;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
@@ -40,6 +41,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.File;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -48,9 +50,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAGIC;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffset;
@@ -68,6 +74,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link FileLogInputStream}. */
 public class FileLogInputStreamTest extends LogTestBase {
     private @TempDir File tempDir;
+
+    @Test
+    void testCompleteBatchPrefixAtEndOfFile() throws IOException {
+        byte[] header = new byte[HEADER_SIZE_UP_TO_MAGIC];
+        MemorySegment.wrap(header).putInt(LENGTH_OFFSET, MAGIC_LENGTH);
+        File path = new File(tempDir, "short-batch.log");
+        Files.write(path.toPath(), header);
+
+        try (FileLogRecords records = FileLogRecords.open(path)) {
+            assertThat(new FileLogInputStream(records, 0, LOG_OVERHEAD).nextBatch()).isNull();
+            FileLogInputStream stream = new FileLogInputStream(records, 0, header.length);
+            assertThat(stream.nextBatch()).isNotNull();
+            assertThat(stream.nextBatch()).isNull();
+        }
+    }
 
     @ParameterizedTest
     @MethodSource("projectedFileModes")

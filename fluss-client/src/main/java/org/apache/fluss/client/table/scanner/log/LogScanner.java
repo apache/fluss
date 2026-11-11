@@ -67,6 +67,10 @@ public interface LogScanner extends AutoCloseable {
      * @return the result of poll.
      * @throws java.lang.IllegalStateException if the scanner is not subscribed to any buckets to
      *     read from.
+     * @throws org.apache.fluss.exception.LogDecodeException if a subscribed bucket has an
+     *     undecodable batch. See {@link
+     *     org.apache.fluss.exception.LogDecodeException#getNextOffset()} for the offset after the
+     *     failed batch.
      */
     ScanRecords poll(Duration timeout);
 

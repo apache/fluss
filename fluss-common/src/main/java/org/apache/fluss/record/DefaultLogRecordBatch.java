@@ -84,6 +84,8 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @PublicEvolving
 public class DefaultLogRecordBatch implements LogRecordBatch {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultLogRecordBatch.class);
+    private static final String ARROW_ROW_COUNT_MISMATCH =
+            "Arrow row count does not match log batch record count.";
 
     public static final byte APPEND_ONLY_FLAG_MASK = 0x01;
 
@@ -285,6 +287,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             ArrowBatchData arrowBatchData =
                     batchAccess.createArrowBatchData(baseLogOffset(), commitTimestamp(), schemaId);
             batchAccess = null;
+            if (arrowBatchData.getRecordCount() != getRecordCount()) {
+                arrowBatchData.close();
+                throw new IllegalArgumentException(ARROW_ROW_COUNT_MISMATCH);
+            }
             return arrowBatchData;
         } catch (Throwable t) {
             IOUtils.closeQuietly(batchAccess);
@@ -410,6 +416,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     /** Creates an iterator from already loaded Arrow data and this batch's header. */
     CloseableIterator<LogRecord> columnRecordIterator(
             ArrowReadPlan plan, ArrowReader reader, @Nullable ChangeTypeVector changeTypes) {
+        if (reader.getRowCount() != getRecordCount()) {
+            plan.clear();
+            throw new IllegalArgumentException(ARROW_ROW_COUNT_MISMATCH);
+        }
         return new ArrowLogRecordIterator(plan, reader, commitTimestamp(), plan.createOutputRow()) {
             @Override
             protected ChangeType getChangeType(int rowId) {

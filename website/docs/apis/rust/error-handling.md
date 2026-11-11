@@ -55,6 +55,7 @@ match result {
 | `IllegalArgument`              | Invalid arguments passed to an API method                    |
 | `UnsupportedOperation`         | Operation not supported on the table type                    |
 | `FlussAPIError`                | Server-side API errors returned by the Fluss cluster         |
+| `LogDecodeError`               | A log scan cannot decode a log batch of a bucket             |
 
 Server side errors are represented as `FlussAPIError` with a specific error code. Use the `api_error()` helper to match them ergonomically:
 
@@ -205,6 +206,44 @@ match result {
         eprintln!("Row does not match table schema");
     }
     _ => {}
+}
+```
+
+### Undecodable Log Batch
+
+When a bucket has an undecodable log batch, polling returns `Error::LogDecodeError` until you
+unsubscribe the bucket or subscribe it at a different offset. To skip all records in the
+failed batch, subscribe at `next_offset` when available. Subscribing at `offset + 1` can
+land inside the same batch.
+
+`offset` reports the failed batch's base offset from the header when available. Otherwise
+it gives the scan position, which may be inside a batch.
+
+`next_offset` is present when the client can verify a batch boundary ahead of the scan
+position. When the same fetch contains a following batch, its base offset must match the
+resume offset. For the last batch in a fetch, the failed batch's base offset must match
+the end of the preceding decoded batch. A matching following batch is sufficient after
+server projection. In all other cases the failed batch must pass its CRC check, even when
+routine CRC checking is disabled.
+
+```rust
+use fluss::error::Error;
+
+match scanner.poll(timeout).await {
+    Err(Error::LogDecodeError { table_bucket, offset, next_offset: Some(next_offset), .. }) => {
+        eprintln!("Skipping undecodable batch at offset {offset} of {table_bucket}");
+        let bucket = table_bucket.bucket_id();
+        match table_bucket.partition_id() {
+            Some(partition_id) => {
+                scanner.subscribe_partition(partition_id, bucket, next_offset).await?
+            }
+            None => scanner.subscribe(bucket, next_offset).await?,
+        }
+    }
+    Err(e) => return Err(e),
+    Ok(records) => {
+        // handle records
+    }
 }
 ```
 
