@@ -18,7 +18,7 @@ limitations under the License.
 
 # Bounded UnionRead
 
-`fluss-lake` captures reusable source boundaries and plans bounded Fluss-only or lake-plus-log reads. Enable `paimon` for pinned Paimon planning and baseline reading, or supply a custom `LakeSource`. Combined lake/log execution is added separately.
+`fluss-lake` plans and executes bounded Append or lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
 
 ```rust,no_run
 # use std::sync::Arc;
