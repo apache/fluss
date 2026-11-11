@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2231,15 +2232,25 @@ TEST_F(KvTableTest, PollsAsyncLookupsByRequestId) {
 
     std::vector<fluss::LookupCompletion> lookup_completions;
     std::vector<fluss::PrefixLookupCompletion> prefix_completions;
+    std::vector<fluss::LookupCompletion> lookup_batch;
+    std::vector<fluss::PrefixLookupCompletion> prefix_batch;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (lookup_completions.size() < kKeys || prefix_completions.size() < kKeys) {
         ASSERT_LT(std::chrono::steady_clock::now(), deadline)
             << "Timed out waiting for asynchronous lookup completions";
         if (lookup_completions.size() < kKeys) {
-            ASSERT_OK(lookuper.Poll(5000, lookup_completions));
+            ASSERT_OK(lookuper.Poll(5000, lookup_batch));
+            lookup_completions.insert(
+                lookup_completions.end(),
+                std::make_move_iterator(lookup_batch.begin()),
+                std::make_move_iterator(lookup_batch.end()));
         }
         if (prefix_completions.size() < kKeys) {
-            ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions));
+            ASSERT_OK(prefix_lookuper.Poll(5000, prefix_batch));
+            prefix_completions.insert(
+                prefix_completions.end(),
+                std::make_move_iterator(prefix_batch.begin()),
+                std::make_move_iterator(prefix_batch.end()));
         }
     }
 
