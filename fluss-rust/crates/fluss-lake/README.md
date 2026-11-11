@@ -118,3 +118,9 @@ Task payloads preserve Paimon's native file paths, including `data-file.external
 Partition scope is passed to Paimon before planning. Paimon 0.5 does not expose a public bucket filter, so selected-bucket planning still scans the selected partitions' manifests and filters the resulting tasks by bucket.
 
 Fluss S3/OSS data requests use rustls and return the stored object bytes without HTTP decompression, independently of reqwest features enabled by Paimon. Paimon 0.5 still enables native TLS, so the combined build retains OpenSSL on Linux. OpenDAL's credential providers use a separate internal HTTP client; their TLS selection also requires an upstream fix.
+
+## Append execution
+
+Create a reader with `scan.new_reader()`. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
+
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
