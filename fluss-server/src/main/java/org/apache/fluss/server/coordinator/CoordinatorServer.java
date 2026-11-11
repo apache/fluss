@@ -64,6 +64,7 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -378,6 +379,10 @@ public class CoordinatorServer extends ServerBase {
             dynamicConfigManager.pauseListening();
 
             createDefaultDatabase();
+
+            // Rebalance plans can be large and may live in remote storage. Recover them only
+            // after the leader's base services are ready, and never block leader startup on I/O.
+            coordinatorEventProcessor.startRebalanceRecovery();
         }
     }
 
@@ -496,7 +501,9 @@ public class CoordinatorServer extends ServerBase {
     private CoordinatorAddress buildCoordinatorAddress() {
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         return new CoordinatorAddress(
-                this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+                this.serverId,
+                Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
+                Collections.singleton(CoordinatorAddress.REMOTE_REBALANCE_TASK_FEATURE));
     }
 
     /**
