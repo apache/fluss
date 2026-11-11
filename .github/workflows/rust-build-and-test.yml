@@ -78,6 +78,36 @@ jobs:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
 
+  lake-msrv:
+    name: "Lake MSRV (1.91)"
+    # The development toolchain floats to stable; check the lake package's
+    # declared MSRV explicitly without raising the core workspace's MSRV.
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install the lake MSRV toolchain
+        run: rustup toolchain install 1.91.0 --profile minimal
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+
+      - name: Check default features on the declared MSRV
+        run: cargo +1.91.0 check -p fluss-lake --locked --all-targets
+
+      # Compile integration targets without starting Docker or Java services.
+      - name: Check all features on the declared MSRV
+        run: cargo +1.91.0 check -p fluss-lake --locked --all-features --all-targets
+
+      - name: Test source preparation on the declared MSRV
+        run: cargo +1.91.0 test -p fluss-lake --locked --lib
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
   proto-up-to-date:
     timeout-minutes: 15
     runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
