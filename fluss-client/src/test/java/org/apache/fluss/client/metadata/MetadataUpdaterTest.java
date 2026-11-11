@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
@@ -46,6 +47,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
@@ -474,6 +476,100 @@ public class MetadataUpdaterTest {
                                 .getBucketLocationsByPath()
                                 .get(PhysicalTablePath.of("db", "table", "p")))
                 .hasSize(1);
+    }
+
+    @Test
+    void testPartitionMetadataRequestsMissingParentPath() throws Exception {
+        TablePath tablePath = TablePath.of("db", "table");
+        TablePath otherTablePath = TablePath.of("db", "other");
+        Set<TablePath> tablePaths = Collections.singleton(otherTablePath);
+        AdminReadOnlyGateway gateway =
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        assertThat(request.getTablePathsList())
+                                .extracting(path -> path.getTableName())
+                                .containsExactlyInAnyOrder("other", "table");
+                        assertThat(request.getPartitionsPathsList())
+                                .extracting(path -> path.getPartitionName())
+                                .containsExactly("p", "p2");
+                        assertThat(request.getPartitionsIds()).containsExactly(2L);
+                        return CompletableFuture.completedFuture(
+                                requestedPartitionMetadata(request));
+                    }
+                };
+
+        Cluster updated =
+                MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                        gateway,
+                        true,
+                        Cluster.empty(),
+                        tablePaths,
+                        Arrays.asList(
+                                PhysicalTablePath.of(tablePath, "p"),
+                                PhysicalTablePath.of(tablePath, "p2")),
+                        Collections.singleton(2L));
+
+        assertThat(tablePaths).containsExactly(otherTablePath);
+        assertThat(updated.getTableId(tablePath)).hasValue(1L);
+        assertThat(updated.getPartitionId(PhysicalTablePath.of(tablePath, "p"))).hasValue(2L);
+        assertThat(updated.getBucketCount(TableOrPartition.ofPartition(2))).hasValue(3);
+        assertThat(updated.getPartitionId(PhysicalTablePath.of(tablePath, "p2"))).hasValue(3L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartitionMetadataWithoutCachedParentKeepsServerAvailable(boolean physicalTableUpdate)
+            throws Exception {
+        Cluster origin =
+                updateRouting(requestedPartitionMetadata(new MetadataRequest()), null, false);
+        TestingRpcClient rpcClient =
+                new TestingRpcClient(
+                        (node, apiKey) -> {
+                            throw new AssertionError("Requests are handled by sendRequest");
+                        }) {
+                    @Override
+                    public CompletableFuture<ApiMessage> sendRequest(
+                            ServerNode node, ApiKeys apiKey, ApiMessage request) {
+                        assertThat(node).isEqualTo(TS_NODE);
+                        assertThat(apiKey).isEqualTo(ApiKeys.GET_METADATA);
+                        return CompletableFuture.completedFuture(
+                                requestedPartitionMetadata((MetadataRequest) request));
+                    }
+                };
+        Configuration configuration = new Configuration();
+        configuration.set(
+                ConfigOptions.BOOTSTRAP_SERVERS, Collections.singletonList("localhost:8080"));
+        MetadataUpdater updater = new MetadataUpdater(rpcClient, configuration, origin);
+        PhysicalTablePath partitionPath = PhysicalTablePath.of("db", "table", "p");
+
+        if (physicalTableUpdate) {
+            updater.updatePhysicalTableMetadata(Collections.singleton(partitionPath));
+        } else {
+            assertThat(updater.checkAndUpdatePartitionMetadata(partitionPath)).isTrue();
+        }
+
+        assertThat(updater.getCluster().getTableId(partitionPath.getTablePath())).hasValue(1L);
+        assertThat(updater.getPartitionId(partitionPath)).hasValue(2L);
+        assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofPartition(2)))
+                .hasValue(3);
+        updater.refreshClusterUntilAvailable();
+        assertThat(updater.getPartitionId(partitionPath)).hasValue(2L);
+    }
+
+    private static MetadataResponse requestedPartitionMetadata(MetadataRequest request) {
+        MetadataResponse response = routingPartitionResponse(3, 0, false);
+        if (request.getTablePathsList().stream()
+                .noneMatch(path -> path.getTableName().equals("table"))) {
+            response.clearTableMetadata();
+        }
+        for (int i = 0; i < request.getPartitionsPathsCount(); i++) {
+            response.addPartitionMetadata()
+                    .setTableId(1)
+                    .setPartitionId(2L + i)
+                    .setPartitionName(request.getPartitionsPathAt(i).getPartitionName());
+        }
+        return response;
     }
 
     @Test
