@@ -90,6 +90,27 @@ impl FlussLakeLogRange {
         }
     }
 
+    pub(crate) fn estimated_log_rows(&self) -> Option<usize> {
+        usize::try_from(self.stop_offset.checked_sub(self.start_offset)?).ok()
+    }
+
+    pub(crate) fn lake_only(
+        table_id: i64,
+        bucket_id: i32,
+        bucket_count: i32,
+        partition_identity: FlussLakePartitionIdentity,
+    ) -> Self {
+        Self {
+            table_bucket: TableBucket::new(table_id, bucket_id),
+            partition: FlussLakeLogPartition::Ordinary(partition_identity),
+            bucket_count,
+            baseline: FlussLakeBaseline::Lake,
+            start_offset: 0,
+            stop_offset: 0,
+            earliest_offset: 0,
+        }
+    }
+
     /// Server table, partition, and bucket identity used to subscribe.
     pub fn table_bucket(&self) -> &TableBucket {
         &self.table_bucket
@@ -180,6 +201,7 @@ pub struct FlussLakeReadContext {
     partition_keys: Vec<String>,
     partition_scope: Option<Predicate>,
     bucket_scoped: bool,
+    lake_only: bool,
     bucket_keys: Vec<String>,
     num_buckets: i32,
     merge_engine: Option<String>,
@@ -258,6 +280,24 @@ impl FlussLakeReadContext {
         Ok(context)
     }
 
+    /// Imports a pinned lake-only boundary without querying Fluss log offsets.
+    /// It cannot be used for a union read, even when there are no live partitions.
+    pub fn from_lake_snapshot(
+        table: &TableInfo,
+        snapshot_id: Option<i64>,
+        scope: Option<&Predicate>,
+    ) -> Result<Self> {
+        let mut context = Self::from_inputs(table, snapshot_id, Vec::new(), scope)?;
+        context.lake_only = true;
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Whether only the lake snapshot was captured, without log boundaries.
+    pub fn is_lake_only(&self) -> bool {
+        self.lake_only
+    }
+
     fn from_inputs(
         table: &TableInfo,
         lake_snapshot_id: Option<i64>,
@@ -273,6 +313,7 @@ impl FlussLakeReadContext {
             partition_keys: table.partition_keys.to_vec(),
             partition_scope: partition_scope.cloned(),
             bucket_scoped: false,
+            lake_only: false,
             bucket_keys: table.bucket_keys.clone(),
             num_buckets: table.num_buckets,
             merge_engine: table
@@ -351,6 +392,7 @@ impl FlussLakeReadContext {
             partition_keys: self.partition_keys.clone(),
             partition_scope: self.partition_scope.clone(),
             bucket_scoped: true,
+            lake_only: false,
             bucket_keys: self.bucket_keys.clone(),
             num_buckets: self.num_buckets,
             merge_engine: self.merge_engine.clone(),
@@ -444,7 +486,51 @@ impl FlussLakeReadContext {
 }
 
 impl FlussLakeReadContext {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn table_info(&self, live: &TableInfo) -> Result<TableInfo> {
+        self.validate_table(live)?;
+        let schema = self.schema.clone();
+        let mut properties = live.properties.clone();
+        for key in [
+            "table.merge-engine",
+            "table.datalake.enabled",
+            "table.datalake.format",
+            "table.datalake.database-name",
+            "table.datalake.table-name",
+        ] {
+            properties.remove(key);
+        }
+        if let Some(engine) = &self.merge_engine {
+            properties.insert("table.merge-engine".into(), engine.clone());
+        }
+        if let Some(lake) = &self.lake {
+            properties.insert("table.datalake.enabled".into(), "true".into());
+            properties.insert("table.datalake.format".into(), lake.format.clone());
+            properties.insert(
+                "table.datalake.database-name".into(),
+                lake.table_path.database().into(),
+            );
+            properties.insert(
+                "table.datalake.table-name".into(),
+                lake.table_path.table().into(),
+            );
+        }
+        Ok(TableInfo::new(
+            self.table_path.clone(),
+            self.table_id,
+            self.schema_id,
+            schema,
+            self.bucket_keys.clone(),
+            self.partition_keys.clone().into(),
+            self.num_buckets,
+            properties,
+            live.custom_properties.clone(),
+            live.comment.clone(),
+            live.created_time,
+            live.modified_time,
+        ))
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.table_path.database().is_empty()
             || self.table_path.table().is_empty()
             || self.table_id < 0
@@ -480,6 +566,15 @@ impl FlussLakeReadContext {
         }
         if schema.primary_key().is_some() && self.bucket_keys.is_empty() {
             return Err(invalid_context("PK tables must have bucket keys"));
+        }
+        if self.lake_only {
+            return if self.lake.is_some() && self.log_ranges.is_empty() && !self.bucket_scoped {
+                Ok(())
+            } else {
+                Err(invalid_context(
+                    "lake-only capture requires lake metadata and no log ranges",
+                ))
+            };
         }
         let mut groups = HashMap::new();
         let mut partition_ids = HashMap::new();

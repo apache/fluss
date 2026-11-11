@@ -51,28 +51,10 @@ pub(crate) async fn freeze_read_context(
         )));
     }
 
-    let readable_snapshot = if table_info
-        .table_config
-        .is_datalake_enabled()
-        .map_err(|error| FlussLakeError::PlanningFailed(error.to_string()))?
-    {
-        match admin.get_lake_snapshot(table_path, None, Some(true)).await {
-            Ok(snapshot) => Some(snapshot),
-            Err(error)
-                if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) =>
-            {
-                None
-            }
-            Err(error) => {
-                return Err(planning_client_error("get readable lake snapshot", error));
-            }
-        }
-    } else {
-        None
-    };
+    let readable_snapshot = load_readable_snapshot(admin, table_info).await?;
 
     let snapshot_offsets =
-        collect_snapshot_offsets(table_path, table_info.table_id, readable_snapshot.as_ref())?;
+        collect_snapshot_offsets(table_info.table_id, readable_snapshot.as_ref())?;
     let partitions = if table_info.partition_keys.is_empty() {
         vec![(
             None,
@@ -172,14 +154,83 @@ pub(crate) async fn freeze_read_context(
         bucket_ranges,
         partition_scope,
     )?;
-    // Name-based offset calls may also cross a table drop/recreate. Validate
-    // identity once after capture, without replacing the frozen schema.
+    validate_source_identity(admin, table_info, &context).await?;
+    Ok(context)
+}
+
+pub(crate) async fn freeze_lake_read_context(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+    scope: Option<&Predicate>,
+) -> Result<FlussLakeReadContext> {
+    if !table_info
+        .table_config
+        .is_datalake_enabled()
+        .map_err(|error| planning_client_error("check lake configuration", error))?
+    {
+        return Err(FlussLakeError::NotLakeReadable(
+            "lake-only read requires a lake-enabled table".into(),
+        ));
+    }
+    PartitionScope::bind(scope, table_info.row_type(), &table_info.partition_keys)?;
+    let snapshot = load_readable_snapshot(admin, table_info).await?;
+    let context = FlussLakeReadContext::from_lake_snapshot(
+        table_info,
+        snapshot.map(|snapshot| snapshot.snapshot_id),
+        scope,
+    )?;
+    validate_source_identity(admin, table_info, &context).await?;
+    Ok(context)
+}
+
+async fn load_readable_snapshot(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+) -> Result<Option<LakeSnapshotInfo>> {
+    let table_path = &table_info.table_path;
+    let snapshot = if table_info
+        .table_config
+        .is_datalake_enabled()
+        .map_err(|error| FlussLakeError::PlanningFailed(error.to_string()))?
+    {
+        match admin.get_lake_snapshot(table_path, None, Some(true)).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error)
+                if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) =>
+            {
+                None
+            }
+            Err(error) => {
+                return Err(planning_client_error("get readable lake snapshot", error));
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(snapshot) = &snapshot
+        && snapshot.table_id != table_info.table_id
+    {
+        return Err(FlussLakeError::PlanningFailed(format!(
+            "readable snapshot {} belongs to table id {}, but {table_path} resolved to table id {}",
+            snapshot.snapshot_id, snapshot.table_id, table_info.table_id
+        )));
+    }
+    Ok(snapshot)
+}
+
+async fn validate_source_identity(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+    context: &FlussLakeReadContext,
+) -> Result<()> {
+    // Name-based metadata calls may cross a table drop/recreate. Recheck the
+    // source identity without replacing the captured schema or boundaries.
     let live_table = admin
-        .get_table_info(table_path)
+        .get_table_info(&table_info.table_path)
         .await
         .map_err(|error| planning_client_error("recheck source table identity", error))?;
-    context.validate_table(&live_table)?;
-    Ok(context)
+    context.validate_table(&live_table)
 }
 
 fn retain_live_ranges(
@@ -235,20 +286,12 @@ fn partition_identity(
 }
 
 fn collect_snapshot_offsets(
-    table_path: &TablePath,
     table_id: i64,
     readable_snapshot: Option<&LakeSnapshotInfo>,
 ) -> Result<HashMap<TableBucket, i64>> {
     let Some(snapshot) = readable_snapshot else {
         return Ok(HashMap::new());
     };
-    if snapshot.table_id != table_id {
-        return Err(FlussLakeError::PlanningFailed(format!(
-            "readable snapshot {} belongs to table id {}, but {table_path} resolved to table id {table_id}",
-            snapshot.snapshot_id, snapshot.table_id
-        )));
-    }
-
     let mut offsets = HashMap::new();
     for bucket_snapshot in &snapshot.bucket_snapshots {
         let Some(offset) = bucket_snapshot.log_offset else {
