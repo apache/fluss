@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.UnsupportedRequestVersionException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -68,6 +69,7 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasKvMutationType;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
@@ -76,6 +78,7 @@ final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
+    private static final short MUTATION_TYPE_PUT_KV_MIN_VERSION = 4;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
@@ -387,6 +390,18 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV
+                && version < MUTATION_TYPE_PUT_KV_MIN_VERSION
+                && hasKvMutationType((PutKvRequest) rawRequest)) {
+            throw new UnsupportedRequestVersionException(
+                    "KV records with mutation types require PUT_KV version "
+                            + MUTATION_TYPE_PUT_KV_MIN_VERSION
+                            + " or newer, but server "
+                            + node
+                            + " negotiated version "
+                            + version
+                            + '.');
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

@@ -31,6 +31,7 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
@@ -209,6 +210,17 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             validateDistributionModeForMergeEngine(mergeEngineType, distributionMode);
         }
 
+        org.apache.flink.configuration.Configuration resolvedOptions =
+                org.apache.flink.configuration.Configuration.fromMap(
+                        resolvedCatalogTable.getOptions());
+        // Resolve table field rules only for explicit retract mode. The runtime provider validates
+        // the participating fields once the planner supplies the target columns.
+        Set<String> nonRetractableColumns =
+                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT)
+                        ? FlinkConversions.computeNonRetractableAggregationColumns(
+                                resolvedCatalogTable.getResolvedSchema(), resolvedOptions)
+                        : Collections.emptySet();
+
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -224,7 +236,11 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
                 distributionMode,
-                tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null));
+                tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
+                nonRetractableColumns,
+                tableOptions.get(FlinkConnectorOptions.SINK_ENABLE_RETRACT),
+                tableOptions.get(
+                        toFlinkOption(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE)));
     }
 
     @Override
@@ -261,6 +277,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_BACKGROUND_JOBS,
                                 FlinkConnectorOptions.LOOKUP_FULL_CACHE_MAX_OPEN_FILES,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                                FlinkConnectorOptions.SINK_ENABLE_RETRACT,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
                                 FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,
                                 FlinkConnectorOptions.SINK_PRODUCER_ID,

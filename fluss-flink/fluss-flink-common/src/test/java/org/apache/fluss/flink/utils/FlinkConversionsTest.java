@@ -739,6 +739,85 @@ public class FlinkConversionsTest {
                 .doesNotContainKey(MATERIALIZED_TABLE_EXPANDED_QUERY.key());
     }
 
+    // --- computeNonRetractableAggregationColumns() tests ---
+
+    @Test
+    void testRetractableAggregationFunctionsAllowPlanning() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "total", org.apache.flink.table.api.DataTypes.BIGINT()),
+                                Column.physical(
+                                        "factor", org.apache.flink.table.api.DataTypes.BIGINT()),
+                                Column.physical(
+                                        "items",
+                                        org.apache.flink.table.api.DataTypes.ARRAY(
+                                                org.apache.flink.table.api.DataTypes.INT())),
+                                Column.physical(
+                                        "attributes",
+                                        org.apache.flink.table.api.DataTypes.MAP(
+                                                org.apache.flink.table.api.DataTypes.INT(),
+                                                org.apache.flink.table.api.DataTypes.STRING())),
+                                Column.physical(
+                                        "name", org.apache.flink.table.api.DataTypes.STRING())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.total.agg", "sum");
+        options.put("fields.factor.agg", "product");
+        options.put("fields.items.agg", "collect");
+        options.put("fields.attributes.agg", "merge_map");
+        assertThat(
+                        FlinkConversions.computeNonRetractableAggregationColumns(
+                                schema,
+                                org.apache.flink.configuration.Configuration.fromMap(options)))
+                .isEmpty();
+    }
+
+    @Test
+    void testComputeNonRetractableAggregationColumns() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "sum_val", org.apache.flink.table.api.DataTypes.BIGINT()),
+                                Column.physical(
+                                        "min_val", org.apache.flink.table.api.DataTypes.INT())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.sum_val.agg", "sum");
+        options.put("fields.min_val.agg", "min");
+
+        org.apache.flink.configuration.Configuration conf =
+                org.apache.flink.configuration.Configuration.fromMap(options);
+
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf))
+                .containsExactlyInAnyOrder("min_val");
+        conf.setString("fields.min_val.ignore-retract", "true");
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf))
+                .isEmpty();
+
+        CatalogTable table =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        null,
+                        Collections.emptyList(),
+                        conf.toMap());
+        TableDescriptor descriptor =
+                FlinkConversions.toFlussTable(new ResolvedCatalogTable(table, schema));
+        assertThat(descriptor.getProperties())
+                .containsEntry("fields.min_val.ignore-retract", "true");
+    }
+
     /** Test refresh handler for testing purpose. */
     public static class TestRefreshHandler implements RefreshHandler {
 

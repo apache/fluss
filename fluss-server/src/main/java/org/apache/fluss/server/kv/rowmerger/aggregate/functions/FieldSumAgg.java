@@ -84,4 +84,77 @@ public class FieldSumAgg extends FieldAggregator {
         }
         return sum;
     }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    @Override
+    public Object retract(Object accumulator, Object retractField) {
+        if (retractField == null) {
+            return accumulator;
+        }
+        if (accumulator == null) {
+            // A missing contribution starts at zero; it does not cancel the retract input.
+            return negative(retractField);
+        }
+
+        return subtractByType(accumulator, retractField);
+    }
+
+    private Object subtractByType(Object accumulator, Object retractField) {
+        switch (typeRoot) {
+            case DECIMAL:
+                Decimal accDD = (Decimal) accumulator;
+                Decimal retDD = (Decimal) retractField;
+                assert accDD.scale() == retDD.scale() : "Inconsistent scale of aggregate Decimal!";
+                assert accDD.precision() == retDD.precision()
+                        : "Inconsistent precision of aggregate Decimal!";
+                return DecimalUtils.subtract(accDD, retDD, accDD.precision(), accDD.scale());
+            case TINYINT:
+                return (byte) ((byte) accumulator - (byte) retractField);
+            case SMALLINT:
+                return (short) ((short) accumulator - (short) retractField);
+            case INTEGER:
+                return (int) accumulator - (int) retractField;
+            case BIGINT:
+                return (long) accumulator - (long) retractField;
+            case FLOAT:
+                return (float) accumulator - (float) retractField;
+            case DOUBLE:
+                return (double) accumulator - (double) retractField;
+            default:
+                String msg =
+                        String.format(
+                                "Type %s is not supported in %s",
+                                typeRoot, this.getClass().getName());
+                throw new IllegalArgumentException(msg);
+        }
+    }
+
+    private Object negative(Object value) {
+        switch (typeRoot) {
+            case DECIMAL:
+                Decimal decimal = (Decimal) value;
+                return Decimal.fromBigDecimal(
+                        decimal.toBigDecimal().negate(), decimal.precision(), decimal.scale());
+            case TINYINT:
+                return (byte) -((byte) value);
+            case SMALLINT:
+                return (short) -((short) value);
+            case INTEGER:
+                return -((int) value);
+            case BIGINT:
+                return -((long) value);
+            case FLOAT:
+                return -((float) value);
+            case DOUBLE:
+                return -((double) value);
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Type %s is not supported in %s", typeRoot, getClass().getName()));
+        }
+    }
 }

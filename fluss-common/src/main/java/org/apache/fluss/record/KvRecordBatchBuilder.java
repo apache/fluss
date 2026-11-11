@@ -17,6 +17,7 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
@@ -58,6 +59,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private int sizeInBytes;
     private volatile boolean isClosed;
     private final KvFormat kvFormat;
+    private final boolean hasMutationType;
     private boolean aborted = false;
 
     private KvRecordBatchBuilder(
@@ -65,7 +67,8 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             byte magic,
             int writeLimit,
             AbstractPagedOutputView pagedOutputView,
-            KvFormat kvFormat) {
+            KvFormat kvFormat,
+            boolean hasMutationType) {
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -83,30 +86,80 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         pagedOutputView.setPosition(RECORD_BATCH_HEADER_SIZE);
         this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
         this.kvFormat = kvFormat;
+        this.hasMutationType = hasMutationType;
     }
 
     public static KvRecordBatchBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, KvFormat kvFormat) {
+        return builder(schemaId, writeLimit, outputView, kvFormat, false);
+    }
+
+    public static KvRecordBatchBuilder builder(
+            int schemaId,
+            int writeLimit,
+            AbstractPagedOutputView outputView,
+            KvFormat kvFormat,
+            boolean hasMutationType) {
         return new KvRecordBatchBuilder(
-                schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
+                schemaId,
+                CURRENT_KV_MAGIC_VALUE,
+                writeLimit,
+                outputView,
+                kvFormat,
+                hasMutationType);
     }
 
     /**
-     * Check if we have room for a new record containing the given row. If no records have been
-     * appended, then this returns true.
+     * Check if we have room for a new record containing the given row. The record size is computed
+     * according to whether this builder includes the extra MutationType byte.
      */
     public boolean hasRoomFor(byte[] key, @Nullable BinaryRow row) {
-        return sizeInBytes + DefaultKvRecord.sizeOf(key, row) <= writeLimit;
+        int recordSize =
+                hasMutationType
+                        ? DefaultKvRecord.sizeOfWithMutationType(key, row)
+                        : DefaultKvRecord.sizeOf(key, row);
+        return sizeInBytes + recordSize <= writeLimit;
     }
 
     /**
      * Wrap a KvRecord with the given key, value and append the KvRecord to DefaultKvRecordBatch.
+     * The mutation type is inferred from the row: {@link MutationType#DELETE} for a null row,
+     * {@link MutationType#UPSERT} otherwise.
      *
      * @param key the key in the KvRecord to be appended
      * @param row the value in the KvRecord to be appended. If the value is null, it means the
      *     KvRecord is for delete the corresponding key.
      */
     public void append(byte[] key, @Nullable BinaryRow row) throws IOException {
+        append(row == null ? MutationType.DELETE : MutationType.UPSERT, key, row);
+    }
+
+    /**
+     * Append a KvRecord with an explicit {@link MutationType} to the batch. The record is written
+     * according to the batch attributes. Builders with mutation types persist a per-record byte.
+     * Builders without mutation types infer the operation from row nullability and only accept
+     * {@link MutationType#UPSERT} and {@link MutationType#DELETE} consistent with the row.
+     *
+     * @param mutationType the mutation type of this record
+     * @param key the key in the KvRecord to be appended
+     * @param row the value in the KvRecord to be appended. Null for DELETE records.
+     */
+    public void append(MutationType mutationType, byte[] key, @Nullable BinaryRow row)
+            throws IOException {
+        if (!hasMutationType) {
+            if (mutationType == MutationType.RETRACT) {
+                throw new IllegalStateException(
+                        "RETRACT records require a builder with mutation types. "
+                                + "Use builder(..., hasMutationType=true).");
+            }
+            if ((mutationType == MutationType.DELETE) != (row == null)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Inconsistent mutation type %s for a %s row without an explicit mutation type, "
+                                        + "which encodes the mutation type via row nullability.",
+                                mutationType, row == null ? "null" : "non-null"));
+            }
+        }
         if (aborted) {
             throw new IllegalStateException(
                     "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
@@ -116,7 +169,11 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             throw new IllegalStateException(
                     "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
         }
-        int recordByteSizes = DefaultKvRecord.writeTo(pagedOutputView, key, validateRowFormat(row));
+        int recordByteSizes =
+                hasMutationType
+                        ? DefaultKvRecord.writeToWithMutationType(
+                                pagedOutputView, mutationType, key, validateRowFormat(row))
+                        : DefaultKvRecord.writeTo(pagedOutputView, key, validateRowFormat(row));
         currentRecordNumber++;
         if (currentRecordNumber == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
@@ -132,10 +189,18 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     public void resetWriterState(long writerId, int batchSequence) {
-        // trigger to rewrite batch header
-        this.builtBuffer = null;
         this.writerId = writerId;
         this.batchSequence = batchSequence;
+        if (builtBuffer != null) {
+            // Requests queued by the RPC connection already hold a view of these bytes.
+            // Refresh the header and CRC before the connection can send that view.
+            try {
+                writeBatchHeader();
+            } catch (IOException e) {
+                throw new FlussRuntimeException("Failed to reset KV batch writer state", e);
+            }
+        }
+        this.builtBuffer = null;
     }
 
     public BytesView build() throws IOException {
@@ -208,7 +273,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     private byte computeAttributes() {
-        return 0;
+        return hasMutationType ? DefaultKvRecordBatch.HAS_MUTATION_TYPE_FLAG : 0;
     }
 
     /** Validate the row instance according to the kv format. */

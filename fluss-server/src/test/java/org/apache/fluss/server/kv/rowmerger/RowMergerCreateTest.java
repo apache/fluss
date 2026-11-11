@@ -32,6 +32,9 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullSource;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -238,6 +241,27 @@ class RowMergerCreateTest {
 
         // Verify the merger is AggregateRowMerger
         assertThat(merger).isInstanceOf(AggregateRowMerger.class);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @EnumSource(
+            value = MergeEngineType.class,
+            names = {"FIRST_ROW", "VERSIONED"})
+    void testNonAggregationMergerRejectsRetract(MergeEngineType engine) {
+        Configuration conf = new Configuration();
+        if (engine != null) {
+            conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), engine.name());
+        }
+        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "value");
+        RowMerger merger =
+                RowMerger.create(
+                        new TableConfig(conf), KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
+        merger.configureTargetColumns(null, SCHEMA_ID, TEST_SCHEMA);
+        BinaryRow row = compactedRow(TEST_SCHEMA.getRowType(), new Object[] {1, 10L});
+        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support retract");
     }
 
     @Test

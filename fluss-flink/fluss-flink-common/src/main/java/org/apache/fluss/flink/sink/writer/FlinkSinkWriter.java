@@ -140,12 +140,11 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
         try {
             RowWithOp rowWithOp = serializationSchema.serialize(inputValue);
             OperationType opType = rowWithOp.getOperationType();
-            InternalRow row = rowWithOp.getRow();
             if (opType == OperationType.IGNORE) {
                 // skip writing the row
                 return;
             }
-            CompletableFuture<?> writeFuture = writeRow(opType, row);
+            CompletableFuture<?> writeFuture = writeRow(rowWithOp);
             writeFuture.whenComplete(
                     (ignored, throwable) -> {
                         if (throwable != null) {
@@ -169,6 +168,10 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
     public abstract void flush(boolean endOfInput) throws IOException, InterruptedException;
 
     abstract CompletableFuture<?> writeRow(OperationType opType, InternalRow internalRow);
+
+    CompletableFuture<?> writeRow(RowWithOp row) {
+        return writeRow(row.getOperationType(), row.getRow());
+    }
 
     @Override
     public void close() throws Exception {

@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -1090,7 +1091,12 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
-            batch.tryAppend(writeRecord, callback);
+            if (!batch.tryAppend(writeRecord, callback)) {
+                batch.close();
+                throw new FlussRuntimeException(
+                        "Failed to append record to a freshly created batch. "
+                                + "The record may be too large for the configured batch size.");
+            }
             deque.addLast(batch);
             incomplete.add(batch);
             return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true);
@@ -1124,6 +1130,10 @@ public final class RecordAccumulator {
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
                         isHistoricalPartition,
+                        // Only RETRACT starts a batch with mutation types. Ordinary upsert/delete
+                        // records start batches without this attribute for compatibility with
+                        // older servers, but may join a batch that already carries mutation types.
+                        writeRecord.getMutationType() == MutationType.RETRACT,
                         clock.milliseconds());
 
             case ARROW_LOG:
@@ -1192,21 +1202,16 @@ public final class RecordAccumulator {
         }
         WriteBatch last = deque.peekLast();
         if (last != null) {
-            boolean success =
-                    last.getBucketCount() == bucketCount && last.tryAppend(writeRecord, callback);
-            if (!success) {
-                // The last batch is either full/closed or belongs to a different table, write
-                // format, schema, or bucket layout. Close it so the incoming record rolls over to
-                // a compatible new batch.
-                // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
-                // logic), we need to avoid do that in an lock which locked dq. However, why we not
-                // remove build logic out of close for ArrowLogWriteBatch is that we want to release
-                // non-heap memory hold by arrowWriter as soon as possible to avoid OOM. Maybe we
-                // need to introduce a more reasonable way to solve these two problems.
-                last.close();
-            } else {
+            if (last.getBucketCount() == bucketCount && last.tryAppend(writeRecord, callback)) {
                 return new RecordAppendResult(deque.size() > 1 || last.isClosed(), false);
             }
+            // BATCH_FULL or FORMAT_MISMATCH — close the current batch so a new one is created.
+            // TODO For ArrowLogWriteBatch, close here is a heavy operation (including build
+            // logic), we need to avoid do that in an lock which locked dq. However, why we not
+            // remove build logic out of close for ArrowLogWriteBatch is that we want to release
+            // non-heap memory hold by arrowWriter as soon as possible to avoid OOM. Maybe we
+            // need to introduce a more reasonable way to solve these two problems.
+            last.close();
         }
         return null;
     }

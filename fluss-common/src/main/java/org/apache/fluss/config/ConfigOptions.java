@@ -2339,6 +2339,18 @@ public class ConfigOptions {
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
 
+    public static final ConfigOption<Boolean> TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE =
+            key("table.aggregation.remove-record-on-delete")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For an aggregation table, interpret changelog DELETE as record deletion "
+                                    + "instead of field retraction when the Flink sink enables retract. "
+                                    + "UPDATE_BEFORE still retracts fields. Requires table.delete.behavior=allow. "
+                                    + "Cannot be combined with "
+                                    + "fields.<column>.ignore-retract=true. Does not change the Java "
+                                    + "writer's explicit delete or retract operations.");
+
     public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
             key("table.upsert.skip-unchanged")
                     .booleanType()

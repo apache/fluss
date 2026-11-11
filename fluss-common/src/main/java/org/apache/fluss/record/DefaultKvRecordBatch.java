@@ -49,15 +49,15 @@ import java.util.NoSuchElementException;
  * </ul>
  *
  * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
- * follow the CRC). It is located after the magic byte, which means that servers must parse the
- * magic byte before deciding how to interpret the bytes between the batch length and the magic
- * byte. The CRC-32C (Castagnoli) polynomial is used for the computation.
+ * follow the CRC), including the attributes that select optional record fields. PUT_KV version
+ * negotiation prevents sending batches with mutation types to servers that cannot decode them. The
+ * CRC-32C (Castagnoli) polynomial is used for the computation.
  *
  * <p>The current attributes are given below:
  *
  * <pre>
  * -----------------------------------------------------------------------------------------------
- * | Unused (0-8)
+ * | Unused (1-7) | Has MutationType (0)
  * -----------------------------------------------------------------------------------------------
  * </pre>
  *
@@ -86,6 +86,12 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
     public static final int RECORD_BATCH_HEADER_SIZE = RECORDS_OFFSET;
 
+    /** Attribute flag indicating that each record carries a mutation type byte. */
+    static final byte HAS_MUTATION_TYPE_FLAG = 0x01;
+
+    /** Mask of all attribute bits that this version understands. */
+    static final byte KNOWN_ATTRIBUTES_MASK = HAS_MUTATION_TYPE_FLAG;
+
     public static final int KV_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
 
     private MemorySegment segment;
@@ -111,6 +117,17 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
                             + " is smaller than the minimum allowed overhead "
                             + RECORD_BATCH_HEADER_SIZE
                             + ")");
+        }
+        // Reject batches that use attribute bits this version does not understand.
+        // Reject unrecognized extensions rather than decoding them with this version's layout.
+        byte attributes = segment.get(position + ATTRIBUTES_OFFSET);
+        byte unknownBits = (byte) (attributes & ~KNOWN_ATTRIBUTES_MASK);
+        if (unknownBits != 0) {
+            throw new CorruptMessageException(
+                    "Record batch uses unsupported attribute bits: 0x"
+                            + Integer.toHexString(unknownBits & 0xFF)
+                            + ". This may indicate a newer record format that this server version"
+                            + " does not support.");
         }
         if (!isValid()) {
             throw new CorruptMessageException(
@@ -157,6 +174,19 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         return segment.getInt(position + RECORDS_COUNT_OFFSET);
     }
 
+    @Override
+    public boolean hasMutationType() {
+        return (segment.get(position + ATTRIBUTES_OFFSET) & HAS_MUTATION_TYPE_FLAG) != 0;
+    }
+
+    /**
+     * Reads the mutation type flag from a batch header at the buffer's current position without
+     * changing the buffer position.
+     */
+    public static boolean hasMutationType(ByteBuffer buffer) {
+        return (buffer.get(buffer.position() + ATTRIBUTES_OFFSET) & HAS_MUTATION_TYPE_FLAG) != 0;
+    }
+
     public MemorySegment getMemorySegment() {
         return segment;
     }
@@ -174,6 +204,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         if (getRecordCount() == 0) {
             return Collections.emptyIterator();
         }
+        final boolean hasMutationType = hasMutationType();
 
         return new KvRecordIterator() {
             final short schemaId = schemaId();
@@ -182,8 +213,14 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
 
             @Override
             protected KvRecord readNext() {
-                KvRecord kvRecord =
-                        DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
+                KvRecord kvRecord;
+                if (hasMutationType) {
+                    kvRecord =
+                            DefaultKvRecord.readFromWithMutationType(
+                                    segment, position, schemaId, readContext);
+                } else {
+                    kvRecord = DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
+                }
                 iteratorNumber++;
                 position += kvRecord.getSizeInBytes();
                 return kvRecord;

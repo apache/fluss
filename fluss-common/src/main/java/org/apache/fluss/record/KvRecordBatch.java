@@ -61,7 +61,8 @@ public interface KvRecordBatch {
     short schemaId();
 
     /**
-     * Get the record format version of this record batch (i.e its magic value).
+     * Get the base format version of this record batch (i.e. its magic value). Batch attributes
+     * describe optional record fields such as the mutation type.
      *
      * @return the magic byte
      */
@@ -96,6 +97,14 @@ public interface KvRecordBatch {
      * @return The number of records in the batch.
      */
     int getRecordCount();
+
+    /**
+     * Whether each record in this batch carries an explicit {@link MutationType}. This is indicated
+     * by attributes bit 0 and does not change the batch magic.
+     */
+    default boolean hasMutationType() {
+        return false;
+    }
 
     /**
      * Get the iterable of {@link KvRecord} in this batch.

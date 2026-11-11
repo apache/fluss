@@ -19,6 +19,7 @@ package org.apache.fluss.server.utils;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -63,6 +64,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
+import static org.apache.fluss.config.FlussConfigUtils.isFieldIgnoreRetractConfig;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.config.StatisticsConfigUtils.validateStatisticsConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -100,12 +102,25 @@ public class TableDescriptorValidation {
         boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
 
-        // check properties should only contain table.* options,
-        // and this cluster know it, and value is valid
+        // Accept known table options and field retract options with values supported by this
+        // cluster version. Other properties belong in custom properties.
         for (String key : tableConf.keySet()) {
             ConfigOption<?> option = TABLE_OPTIONS.get(key);
             if (option != null) {
                 validateOptionValue(tableConf, option);
+                continue;
+            }
+
+            if (isFieldIgnoreRetractConfig(key)) {
+                String field =
+                        key.substring(
+                                "fields.".length(), key.length() - ".ignore-retract".length());
+                if (!schema.getColumnNames().contains(field)) {
+                    throw new InvalidConfigException(
+                            String.format("'%s' refers to unknown column '%s'.", key, field));
+                }
+                validateOptionValue(
+                        tableConf, ConfigBuilder.key(key).booleanType().defaultValue(false));
                 continue;
             }
 
@@ -133,6 +148,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkAggregationRetractOptions(tableConf, schema);
         checkUpsertSkipUnchanged(tableConf, hasPrimaryKey);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
@@ -607,6 +623,34 @@ public class TableDescriptorValidation {
                 }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    private static void checkAggregationRetractOptions(Configuration tableConf, Schema schema) {
+        boolean hasRetractOptions =
+                tableConf.contains(ConfigOptions.TABLE_AGGREGATION_REMOVE_RECORD_ON_DELETE)
+                        || tableConf.keySet().stream()
+                                .anyMatch(key -> isFieldIgnoreRetractConfig(key));
+        if (hasRetractOptions
+                && tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE) != MergeEngineType.AGGREGATION) {
+            throw new InvalidConfigException(
+                    "Aggregation retract options require the aggregation merge engine.");
+        }
+        TableConfig config = new TableConfig(tableConf);
+        if (config.isAggregationRemoveRecordOnDelete()) {
+            for (String column : schema.getColumnNames()) {
+                if (config.isFieldIgnoreRetract(column)) {
+                    throw new InvalidConfigException(
+                            "table.aggregation.remove-record-on-delete and fields."
+                                    + column
+                                    + ".ignore-retract have conflicting behavior and cannot both be enabled.");
+                }
+            }
+            if (config.getDeleteBehavior().orElse(DeleteBehavior.IGNORE) != DeleteBehavior.ALLOW) {
+                throw new InvalidConfigException(
+                        "table.aggregation.remove-record-on-delete=true requires "
+                                + "table.delete.behavior=allow. Aggregation tables default to ignore.");
             }
         }
     }

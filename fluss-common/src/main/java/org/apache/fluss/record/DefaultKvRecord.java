@@ -38,10 +38,20 @@ import java.nio.ByteBuffer;
 
 /**
  * This class is an immutable kv record. Different from {@link IndexedLogRecord}, it isn't designed
- * for persistence. The schema is as follows:
+ * for persistence. The layout without an explicit mutation type is as follows:
  *
  * <ul>
  *   <li>Length => int32
+ *   <li>KeyLength => unsigned varint
+ *   <li>Key => bytes
+ *   <li>Row => {@link BinaryRow}
+ * </ul>
+ *
+ * <p>With the batch mutation type attribute set, a MutationType byte follows Length:
+ *
+ * <ul>
+ *   <li>Length => int32
+ *   <li>MutationType => int8 (see {@link MutationType})
  *   <li>KeyLength => unsigned varint
  *   <li>Key => bytes
  *   <li>Row => {@link BinaryRow}
@@ -55,6 +65,10 @@ import java.nio.ByteBuffer;
 public class DefaultKvRecord implements KvRecord {
 
     static final int LENGTH_LENGTH = 4;
+
+    /** Size of the explicit MutationType byte. */
+    static final int MUTATION_TYPE_LENGTH = 1;
+
     private final RowDecoder rowDecoder;
 
     private MemorySegment segment;
@@ -63,6 +77,15 @@ public class DefaultKvRecord implements KvRecord {
 
     private ByteBuffer key;
     private BinaryRow value;
+
+    // Records without an explicit mutation type infer it from row presence.
+    @Nullable private MutationType mutationType;
+
+    /**
+     * Minimum record body size with a mutation type: 1 byte MutationType + 1 byte varint key
+     * length.
+     */
+    static final int MIN_RECORD_SIZE_WITH_MUTATION_TYPE = MUTATION_TYPE_LENGTH + 1;
 
     private DefaultKvRecord(RowDecoder rowDecoder) {
         this.rowDecoder = rowDecoder;
@@ -99,20 +122,14 @@ public class DefaultKvRecord implements KvRecord {
 
     public static int writeTo(OutputView outputView, byte[] key, @Nullable BinaryRow row)
             throws IOException {
-        // bytes for key length + bytes for key + bytes for row
         int sizeInBytes = sizeWithoutLength(key, row);
 
         // TODO using varint instead int to reduce storage size.
-        // write record total bytes size.
         outputView.writeInt(sizeInBytes);
-
-        // write key length, unsigned var int;
         VarLengthUtils.writeUnsignedVarInt(key.length, outputView);
-        // write the real key
         outputView.write(key);
 
         if (row != null) {
-            // write internal row, which is the value.
             serializeInternalRow(outputView, row);
         }
         return sizeInBytes + LENGTH_LENGTH;
@@ -134,6 +151,84 @@ public class DefaultKvRecord implements KvRecord {
         return sizeWithoutLength(key, row) + LENGTH_LENGTH;
     }
 
+    /**
+     * Write a KvRecord carrying an explicit mutation type to the output view.
+     *
+     * <ul>
+     *   <li>Length => int32 (covers MutationType + KeyLength + Key + Row)
+     *   <li>MutationType => int8
+     *   <li>KeyLength => unsigned varint
+     *   <li>Key => bytes
+     *   <li>Row => {@link BinaryRow} (absent when row is null)
+     * </ul>
+     */
+    public static int writeToWithMutationType(
+            OutputView outputView, MutationType mutationType, byte[] key, @Nullable BinaryRow row)
+            throws IOException {
+        int sizeInBytes = sizeWithoutLengthWithMutationType(key, row);
+
+        outputView.writeInt(sizeInBytes);
+        outputView.writeByte(mutationType.getValue());
+        VarLengthUtils.writeUnsignedVarInt(key.length, outputView);
+        outputView.write(key);
+
+        if (row != null) {
+            serializeInternalRow(outputView, row);
+        }
+        return sizeInBytes + LENGTH_LENGTH;
+    }
+
+    /**
+     * Read a KvRecord carrying an explicit mutation type from the given memory segment. The
+     * MutationType byte is read and stored explicitly. Must set mutationType BEFORE pointTo so that
+     * readKeyAndRow knows to skip the extra byte.
+     */
+    public static KvRecord readFromWithMutationType(
+            MemorySegment segment,
+            int position,
+            short schemaId,
+            KvRecordBatch.ReadContext readContext) {
+        int sizeInBytes = segment.getInt(position);
+        if (sizeInBytes < MIN_RECORD_SIZE_WITH_MUTATION_TYPE) {
+            throw new InvalidRecordException(
+                    "Invalid KvRecord size with mutation type: "
+                            + sizeInBytes
+                            + " at position "
+                            + position
+                            + ". Minimum size is "
+                            + MIN_RECORD_SIZE_WITH_MUTATION_TYPE
+                            + " bytes.");
+        }
+        DefaultKvRecord kvRecord = new DefaultKvRecord(readContext.getRowDecoder(schemaId));
+        // Read the mutation type byte before pointTo, so readKeyAndRow can skip it.
+        byte mutationByte = segment.get(position + LENGTH_LENGTH);
+        try {
+            kvRecord.mutationType = MutationType.fromValue(mutationByte);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidRecordException(
+                    "Invalid MutationType byte 0x"
+                            + Integer.toHexString(mutationByte & 0xFF)
+                            + " at position "
+                            + (position + LENGTH_LENGTH)
+                            + ".",
+                    e);
+        }
+        kvRecord.pointTo(segment, position, sizeInBytes + LENGTH_LENGTH);
+        return kvRecord;
+    }
+
+    /**
+     * Calculate the size of a kv record carrying a mutation type, including {@link #LENGTH_LENGTH}.
+     * This is {@link #sizeOf(byte[], BinaryRow)} + 1 byte for MutationType.
+     */
+    public static int sizeOfWithMutationType(byte[] key, @Nullable BinaryRow row) {
+        return sizeWithoutLengthWithMutationType(key, row) + LENGTH_LENGTH;
+    }
+
+    private static int sizeWithoutLengthWithMutationType(byte[] key, @Nullable BinaryRow row) {
+        return MUTATION_TYPE_LENGTH + sizeWithoutLength(key, row);
+    }
+
     private static int sizeWithoutLength(byte[] key, @Nullable BinaryRow row) {
         return VarLengthUtils.sizeOfUnsignedVarInt(key.length)
                 + key.length
@@ -141,8 +236,11 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     private void readKeyAndRow() throws IOException {
-        // start to read from the offset of key
         int currentOffset = offset + LENGTH_LENGTH;
+        // Skip the explicit mutation type byte, if present (already read before pointTo).
+        if (mutationType != null) {
+            currentOffset += MUTATION_TYPE_LENGTH;
+        }
         // now, read key;
         // read the length of key size
         int keyLength = VarLengthUtils.readUnsignedVarInt(segment, currentOffset);
@@ -171,6 +269,15 @@ public class DefaultKvRecord implements KvRecord {
     @Override
     public @Nullable BinaryRow getRow() {
         return value;
+    }
+
+    @Override
+    public MutationType getMutationType() {
+        if (mutationType != null) {
+            return mutationType;
+        }
+        // Infer the mutation type from row presence when it is not explicit.
+        return value == null ? MutationType.DELETE : MutationType.UPSERT;
     }
 
     @Override

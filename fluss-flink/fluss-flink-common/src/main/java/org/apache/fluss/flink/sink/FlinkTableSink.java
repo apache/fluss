@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.utils.PushdownUtils;
@@ -54,6 +55,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -87,9 +89,20 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
     @Nullable private final String producerId;
 
+    /** Whether the table needs aggregation undo recovery, independent of retract opt-in. */
+    private final boolean isAggregationTable;
+
+    /** Non-PK aggregation columns whose effective aggregation function is not retract-capable. */
+    private final Set<String> nonRetractableColumns;
+
+    private final boolean enableRetract;
+    private final boolean removeRecordOnDelete;
+    private boolean requiresRetract;
+
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
 
+    /** Creates a sink with the existing upsert changelog behavior. */
     public FlinkTableSink(
             TablePath tablePath,
             Configuration flussConfig,
@@ -105,6 +118,45 @@ public class FlinkTableSink
             List<String> bucketKeys,
             DistributionMode distributionMode,
             @Nullable String producerId) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                sinkIgnoreDelete,
+                tableDeleteBehavior,
+                numBucket,
+                bucketKeys,
+                distributionMode,
+                producerId,
+                Collections.emptySet(),
+                false,
+                false);
+    }
+
+    /** Creates a sink with the supplied retract capabilities and changelog DELETE policy. */
+    public FlinkTableSink(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            int[] primaryKeyIndexes,
+            List<String> partitionKeys,
+            boolean streaming,
+            @Nullable MergeEngineType mergeEngineType,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
+            int numBucket,
+            List<String> bucketKeys,
+            DistributionMode distributionMode,
+            @Nullable String producerId,
+            Set<String> nonRetractableColumns,
+            boolean enableRetract,
+            boolean removeRecordOnDelete) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -119,22 +171,37 @@ public class FlinkTableSink
         this.distributionMode = distributionMode;
         this.lakeFormat = lakeFormat;
         this.producerId = producerId;
+        this.isAggregationTable = mergeEngineType == MergeEngineType.AGGREGATION;
+        this.nonRetractableColumns = new HashSet<>(nonRetractableColumns);
+        this.enableRetract = enableRetract;
+        this.removeRecordOnDelete = removeRecordOnDelete;
+        if (enableRetract && !isAggregationTable) {
+            throw new ValidationException("sink.enable-retract requires an aggregation table.");
+        }
     }
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
+        if (enableRetract && !sinkIgnoreDelete) {
+            // Target columns are only available when constructing the runtime provider. Defer
+            // field-capability validation until then so unrelated columns do not reject a write.
+            requiresRetract =
+                    requestedMode.contains(RowKind.UPDATE_BEFORE)
+                            || (!removeRecordOnDelete && requestedMode.contains(RowKind.DELETE));
+            return requestedMode;
+        }
+
         if (primaryKeyIndexes.length > 0 || (streaming && sinkIgnoreDelete)) {
-            // Primary-key tables can accept row-level changes in batch mode. In streaming mode,
-            // ignore-delete sinks can also accept and drop DELETE messages.
+            // Preserve the upsert changelog requested by existing jobs, including ignore-delete.
             ChangelogMode.Builder builder = ChangelogMode.newBuilder();
             for (RowKind kind : requestedMode.getContainedKinds()) {
-                // optimize out the update_before messages
                 if (kind != RowKind.UPDATE_BEFORE) {
                     builder.addContainedKind(kind);
                 }
             }
             return builder.build();
         }
+
         return ChangelogMode.insertOnly();
     }
 
@@ -204,7 +271,20 @@ public class FlinkTableSink
 
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
         // Enable undo recovery for aggregation tables
-        boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+        boolean enableUndoRecovery = isAggregationTable;
+        boolean writerSupportsRetract = enableRetract && supportsRetract(targetColumnIndexes);
+        if (requiresRetract && !writerSupportsRetract) {
+            throw new ValidationException(
+                    String.format(
+                            "Table %s cannot retract target aggregation columns %s. "
+                                    + "Use retract-capable functions or fields.<column>.ignore-retract=true.",
+                            tablePath,
+                            (targetColumnIndexes == null
+                                    ? nonRetractableColumns
+                                    : columns(targetColumnIndexes).stream()
+                                            .filter(nonRetractableColumns::contains)
+                                            .collect(Collectors.toList()))));
+        }
 
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
@@ -218,9 +298,17 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete),
+                                new RowDataSerializationSchema(
+                                        enableRetract
+                                                ? SinkOperationMode.aggregation(
+                                                        sinkIgnoreDelete,
+                                                        writerSupportsRetract,
+                                                        removeRecordOnDelete)
+                                                : SinkOperationMode.upsert(sinkIgnoreDelete)),
                                 enableUndoRecovery,
-                                producerId)
+                                producerId,
+                                writerSupportsRetract,
+                                enableRetract && removeRecordOnDelete)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -230,7 +318,8 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(true, sinkIgnoreDelete));
+                                new RowDataSerializationSchema(
+                                        SinkOperationMode.appendOnly(sinkIgnoreDelete)));
 
         return new FlinkSink<>(flinkSinkWriterBuilder, tablePath);
     }
@@ -241,6 +330,23 @@ public class FlinkTableSink
             columns.add(tableRowType.getFieldNames().get(columnIndex));
         }
         return columns;
+    }
+
+    private boolean supportsRetract(@Nullable int[] targetColumnIndexes) {
+        if (!isAggregationTable) {
+            return false;
+        }
+        if (targetColumnIndexes == null
+                || targetColumnIndexes.length == tableRowType.getFieldCount()) {
+            return nonRetractableColumns.isEmpty();
+        }
+
+        for (String column : columns(targetColumnIndexes)) {
+            if (nonRetractableColumns.contains(column)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -260,8 +366,12 @@ public class FlinkTableSink
                         numBucket,
                         bucketKeys,
                         distributionMode,
-                        producerId);
+                        producerId,
+                        nonRetractableColumns,
+                        enableRetract,
+                        removeRecordOnDelete);
         sink.appliedUpdates = appliedUpdates;
+        sink.requiresRetract = requiresRetract;
         sink.deleteRow = deleteRow;
         return sink;
     }

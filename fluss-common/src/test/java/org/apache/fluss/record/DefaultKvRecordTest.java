@@ -28,6 +28,8 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Random;
 
@@ -71,6 +73,7 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         // check value
         assertThat(kvRecord.getRow()).isEqualTo(row);
+        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.UPSERT);
 
         // now, check write record with value is null
         key = new byte[] {2, 3};
@@ -90,6 +93,7 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         // check value
         assertThat(kvRecord.getRow()).isNull();
+        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.DELETE);
     }
 
     @Test
@@ -103,7 +107,7 @@ class DefaultKvRecordTest extends KvTestBase {
         RowType rowType = TestInternalRowGenerator.createAllRowType();
         DataType[] colTypes = rowType.getChildren().toArray(new DataType[0]);
 
-        // Test read form.
+        // Test read from.
         KvRecord kvRecord =
                 DefaultKvRecord.readFrom(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),
@@ -116,5 +120,65 @@ class DefaultKvRecordTest extends KvTestBase {
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);
         // check value
         assertThat(kvRecord.getRow()).isEqualTo(row);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = MutationType.class,
+            names = {"UPSERT", "RETRACT"})
+    void testRowWithMutationTypeRoundTrip(MutationType mutation) throws Exception {
+        KvRecordReadContext readContext =
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
+
+        CompactedRow row;
+        try (CompactedRowEncoder writer = new CompactedRowEncoder(baseRowFieldTypes)) {
+            writer.startNewRow();
+            writer.encodeField(0, 10);
+            writer.encodeField(1, BinaryString.fromString("abc"));
+            row = writer.finishRow();
+        }
+
+        byte[] key = new byte[] {1, 2};
+        DefaultKvRecord.writeToWithMutationType(outputView, mutation, key, row);
+
+        KvRecord kvRecord =
+                DefaultKvRecord.readFromWithMutationType(
+                        MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
+
+        // The explicit mutation type adds one byte.
+        // 4 (length) + 1 (mutationType) + 1 (keyLen varint) + 2 (key) + 6 (row) = 14
+        assertThat(kvRecord.getSizeInBytes()).isEqualTo(14);
+        assertThat(keyToBytes(kvRecord)).isEqualTo(key);
+        assertThat(kvRecord.getRow()).isEqualTo(row);
+        assertThat(kvRecord.getMutationType()).isEqualTo(mutation);
+    }
+
+    @Test
+    void testDeleteWithMutationTypeRoundTrip() throws Exception {
+        KvRecordReadContext readContext =
+                KvRecordReadContext.createReadContext(
+                        KvFormat.COMPACTED, new TestingSchemaGetter(1, DATA1_SCHEMA));
+
+        byte[] key = new byte[] {3, 4};
+        DefaultKvRecord.writeToWithMutationType(outputView, MutationType.DELETE, key, null);
+
+        KvRecord kvRecord =
+                DefaultKvRecord.readFromWithMutationType(
+                        MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, readContext);
+
+        // 4 (length) + 1 (mutationType) + 1 (keyLen varint) + 2 (key) = 8
+        assertThat(kvRecord.getSizeInBytes()).isEqualTo(8);
+        assertThat(keyToBytes(kvRecord)).isEqualTo(key);
+        assertThat(kvRecord.getRow()).isNull();
+        assertThat(kvRecord.getMutationType()).isEqualTo(MutationType.DELETE);
+    }
+
+    @Test
+    void testSizeOfWithMutationType() {
+        byte[] key = new byte[] {1, 2};
+        // The explicit mutation type adds one byte.
+        assertThat(DefaultKvRecord.sizeOfWithMutationType(key, null))
+                .isEqualTo(DefaultKvRecord.sizeOf(key, null) + 1);
     }
 }

@@ -88,6 +88,21 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     private final boolean ignoreDelete;
 
     /**
+     * Whether this sink writer can legally interpret UPDATE_BEFORE as retract. For full-row
+     * aggregation writes this requires every non-PK aggregation column to support retract; for
+     * partial writes this may be true for a retract-safe target-column subset.
+     */
+    private final boolean schemaSupportsRetract;
+
+    /**
+     * Whether aggregation retract mode is explicitly enabled. In this mode unsupported retracts
+     * must fail instead of falling back to deletion. Legacy aggregation jobs use upsert mode.
+     */
+    private final boolean isAggregationTable;
+
+    private final boolean removeRecordOnDelete;
+
+    /**
      * The converter used to transform Flink {@link RowData} to Fluss {@link InternalRow}.
      * Initialized in {@link #open(InitializationContext)}.
      */
@@ -106,6 +121,10 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
      */
     @Nullable private transient ProjectedRow outputProjection;
 
+    private transient int[] inputIndexes;
+    private transient int lastInputArity = -1;
+    @Nullable private transient int[] retractTargetColumns;
+
     /**
      * Estimator for calculating the size of RowData instances. Maybe null if there is no need to
      * calculate size.
@@ -113,14 +132,24 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     @Nullable private transient RowDataSizeEstimator sizeEstimator;
 
     /**
-     * Constructs a new {@code RowSerializationSchema}.
+     * Constructs a new {@code RowDataSerializationSchema} from a {@link SinkOperationMode}.
      *
-     * @param isAppendOnly whether the schema is append-only (only INSERTs allowed)
-     * @param ignoreDelete whether to ignore DELETE and UPDATE_BEFORE operations
+     * @param mode the sink operation mode encapsulating all boolean flags
      */
+    public RowDataSerializationSchema(SinkOperationMode mode) {
+        this.isAppendOnly = mode.isAppendOnly();
+        this.ignoreDelete = mode.isIgnoreDelete();
+        this.isAggregationTable = mode.isAggregationTable();
+        this.schemaSupportsRetract = mode.supportsRetract();
+        this.removeRecordOnDelete = mode.removesRecordOnDelete();
+    }
+
+    /** Creates a serializer with the existing append/upsert and ignore-delete behavior. */
     public RowDataSerializationSchema(boolean isAppendOnly, boolean ignoreDelete) {
-        this.isAppendOnly = isAppendOnly;
-        this.ignoreDelete = ignoreDelete;
+        this(
+                isAppendOnly
+                        ? SinkOperationMode.appendOnly(ignoreDelete)
+                        : SinkOperationMode.upsert(ignoreDelete));
     }
 
     /**
@@ -132,18 +161,17 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
     @Override
     public void open(InitializationContext context) throws Exception {
         this.converter = new FlinkAsFlussRow();
+        this.lastInputArity = -1;
         List<String> targetFieldNames = context.getRowSchema().getFieldNames();
         List<String> inputFieldNames = context.getInputRowSchema().getFieldNames();
         this.outputPadding = new PaddingRow(inputFieldNames.size());
+        inputIndexes = new int[targetFieldNames.size()];
+        for (int i = 0; i < inputIndexes.length; i++) {
+            inputIndexes[i] = inputFieldNames.indexOf(targetFieldNames.get(i));
+        }
         if (targetFieldNames.size() != inputFieldNames.size()) {
             // there is a schema evolution happens (e.g., ADD COLUMN), need to build index mapping
-            int[] indexMapping = new int[targetFieldNames.size()];
-            for (int i = 0; i < targetFieldNames.size(); i++) {
-                String fieldName = targetFieldNames.get(i);
-                int fieldIndex = inputFieldNames.indexOf(fieldName);
-                indexMapping[i] = fieldIndex;
-            }
-            outputProjection = ProjectedRow.from(indexMapping);
+            outputProjection = ProjectedRow.from(inputIndexes);
         }
         if (context.isStatisticEnabled()) {
             this.sizeEstimator = new RowDataSizeEstimator(context.getRowSchema());
@@ -179,6 +207,23 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         if (sizeEstimator != null) {
             estimatedSizeInBytes = sizeEstimator.estimateSize(value);
         }
+        if (opType == OperationType.RETRACT) {
+            // Padding supplies storage nulls, not retract contributions for absent input fields.
+            if (lastInputArity != value.getArity()) {
+                lastInputArity = value.getArity();
+                List<Integer> present = new ArrayList<>();
+                for (int i = 0; i < inputIndexes.length; i++) {
+                    if (inputIndexes[i] >= 0 && inputIndexes[i] < lastInputArity) {
+                        present.add(i);
+                    }
+                }
+                retractTargetColumns =
+                        present.size() == inputIndexes.length
+                                ? null
+                                : present.stream().mapToInt(Integer::intValue).toArray();
+            }
+            return new RowWithOp(row, opType, estimatedSizeInBytes, retractTargetColumns);
+        }
         return new RowWithOp(row, opType, estimatedSizeInBytes);
     }
 
@@ -204,9 +249,24 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                 case INSERT:
                 case UPDATE_AFTER:
                     return OperationType.UPSERT;
-                case DELETE:
                 case UPDATE_BEFORE:
-                    return OperationType.DELETE;
+                case DELETE:
+                    if (rowKind == RowKind.DELETE && removeRecordOnDelete) {
+                        return OperationType.DELETE;
+                    }
+                    if (schemaSupportsRetract) {
+                        return OperationType.RETRACT;
+                    } else if (isAggregationTable) {
+                        // Validate custom serializers and runtime schema changes as well as the
+                        // target-field check performed when constructing the runtime provider.
+                        throw new UnsupportedOperationException(
+                                "Received "
+                                        + rowKind
+                                        + " for an aggregation table whose target "
+                                        + "fields do not support retract.");
+                    } else {
+                        return OperationType.DELETE;
+                    }
                 default:
                     throw new UnsupportedOperationException("Unsupported row kind: " + rowKind);
             }

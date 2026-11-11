@@ -244,6 +244,19 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    public static final ConfigOption<Boolean> SINK_ENABLE_RETRACT =
+            ConfigOptions.key("sink.enable-retract")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enable field retraction for aggregation sinks. UPDATE_BEFORE and, by "
+                                    + "default, DELETE retract their input contributions. "
+                                    + "table.aggregation.remove-record-on-delete selects whole-row "
+                                    + "deletion for DELETE and requires table.delete.behavior=allow. "
+                                    + "sink.ignore-delete still drops both kinds. "
+                                    + "When false, changelog negotiation and deletion retain their "
+                                    + "existing behavior.");
+
     public static final ConfigOption<String> SINK_PRODUCER_ID =
             ConfigOptions.key("sink.producer-id")
                     .stringType()

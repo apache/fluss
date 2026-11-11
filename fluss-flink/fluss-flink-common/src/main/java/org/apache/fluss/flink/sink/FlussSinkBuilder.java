@@ -213,6 +213,12 @@ public class FlussSinkBuilder<InputT> {
         MergeEngineType mergeEngineType =
                 tableInfo.getTableConfig().getMergeEngineType().orElse(null);
         boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+        boolean enableRetract =
+                org.apache.flink.configuration.Configuration.fromMap(configOptions)
+                        .get(org.apache.fluss.flink.FlinkConnectorOptions.SINK_ENABLE_RETRACT);
+        checkArgument(
+                !enableRetract || enableUndoRecovery,
+                "sink.enable-retract requires an aggregation table.");
 
         if (isUpsert) {
             // Validate distribution mode for primary key tables with merge engine
@@ -237,7 +243,12 @@ public class FlussSinkBuilder<InputT> {
                             distributionMode,
                             serializationSchema,
                             enableUndoRecovery,
-                            producerId);
+                            producerId,
+                            enableRetract,
+                            enableRetract
+                                    && tableInfo
+                                            .getTableConfig()
+                                            .isAggregationRemoveRecordOnDelete());
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
             writerBuilder =

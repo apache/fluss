@@ -67,6 +67,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -1524,7 +1525,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testComprehensiveAggregationFunctions() throws Exception {
+        disableSinkRequireOnConflict();
         // Test all 11 aggregate functions (each function tested once with representative data type)
         tEnv.executeSql(
                 "create table comprehensive_agg ("
@@ -1727,7 +1730,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testPartialUpdateOnAggregationMergeEngine() throws Exception {
+        disableSinkRequireOnConflict();
         tEnv.executeSql(
                 "create table agg_partial_update ("
                         + "id int not null primary key not enforced, "
@@ -1758,6 +1763,213 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         expectedRows = Arrays.asList("+I[2, 77, null]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    /**
+     * Verifies field retraction and both DELETE policies through a partial Flink SQL sink.
+     *
+     * <p>The query exposes per-key SUM values from a primary-key input table. A non-target field
+     * distinguishes whole-row deletion from partial clearing. Updates retain their intermediate
+     * state transitions, independent of whether Flink simplifies the aggregation query.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    @MultiVersionTest
+    void testRetractOnAggregationTableEndToEnd(boolean removeRecordOnDelete) throws Exception {
+        disableSinkRequireOnConflict();
+        // The pipeline, changelog reader, and bounded writes run concurrently in a four-slot
+        // mini-cluster. Give each job one task so writes can be scheduled while both readers run.
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        // Step 1: Create a PK input table (updates produce changelog with UPDATE_BEFORE)
+        tEnv.executeSql(
+                "CREATE TABLE retract_input ("
+                        + "k INT NOT NULL, "
+                        + "b BIGINT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED"
+                        + ")");
+
+        // Step 2: Create an aggregation target table with SUM
+        tEnv.executeSql(
+                "CREATE TABLE retract_agg ("
+                        + "k INT NOT NULL, "
+                        + "total BIGINT, "
+                        + "other BIGINT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED"
+                        + ") WITH ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'sink.enable-retract' = 'true', "
+                        + "'table.delete.behavior' = 'allow', "
+                        + "'table.aggregation.remove-record-on-delete' = '"
+                        + removeRecordOnDelete
+                        + "', "
+                        + "'fields.total.agg' = 'sum'"
+                        + ")");
+
+        tEnv.executeSql("INSERT INTO retract_agg VALUES (1, 0, 7), (2, 0, 7)").await();
+
+        // Write only k and total so the existing non-target value must be preserved on updates.
+        TableResult pipelineResult =
+                tEnv.executeSql(
+                        "INSERT INTO retract_agg (k, total) SELECT k, SUM(b) FROM retract_input GROUP BY k");
+
+        // Step 4: Start reading changelog from the aggregation table
+        TableResult queryResult = tEnv.executeSql("SELECT k, total FROM retract_agg");
+
+        try (CloseableIterator<Row> rowIter = queryResult.collect()) {
+            // Consume the seeded state before changing the input, establishing the read boundary.
+            assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
+            // Step 5: Insert initial data into the input table
+            tEnv.executeSql("INSERT INTO retract_input VALUES (1, 10), (2, 20)").await();
+
+            List<String> initialExpected =
+                    Arrays.asList("-U[1, 0]", "+U[1, 10]", "-U[2, 0]", "+U[2, 20]");
+            assertResultsIgnoreOrder(rowIter, initialExpected, false);
+
+            // Each UPDATE_BEFORE retracts the old total to zero before UPDATE_AFTER adds the new
+            // contribution. The resulting CDC includes both transitions.
+            tEnv.executeSql("INSERT INTO retract_input VALUES (1, 30), (2, 40)").await();
+
+            List<String> updateExpected =
+                    Arrays.asList(
+                            "-U[1, 10]",
+                            "+U[1, 0]",
+                            "-U[1, 0]",
+                            "+U[1, 30]",
+                            "-U[2, 20]",
+                            "+U[2, 0]",
+                            "-U[2, 0]",
+                            "+U[2, 40]");
+            assertResultsIgnoreOrder(rowIter, updateExpected, false);
+
+            tBatchEnv.executeSql("DELETE FROM retract_input WHERE k = 1").await();
+            assertResultsIgnoreOrder(
+                    rowIter,
+                    removeRecordOnDelete
+                            ? Collections.singletonList("-D[1, 30]")
+                            : Arrays.asList("-U[1, 30]", "+U[1, 0]"),
+                    false);
+        } finally {
+            JobClient pipelineJob = pipelineResult.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
+        }
+    }
+
+    @Test
+    @MultiVersionTest
+    void testDirectContributionsFromDistinctRowsShareAggregationKey() throws Exception {
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        // Preserve contributions from distinct source rows through the sink.
+        tEnv.getConfig().set("table.exec.sink.upsert-materialize", "NONE");
+        tEnv.executeSql(
+                "CREATE TABLE contribution_input ("
+                        + "id INT NOT NULL, k INT NOT NULL, amount BIGINT, "
+                        + "PRIMARY KEY (id) NOT ENFORCED)");
+        tEnv.executeSql(
+                "CREATE TABLE contribution_agg ("
+                        + "k INT NOT NULL, total BIGINT, PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'sink.enable-retract' = 'true', "
+                        + "'fields.total.agg' = 'sum')");
+        tEnv.executeSql("INSERT INTO contribution_agg VALUES (1, 0), (2, 0)").await();
+        TableResult pipeline =
+                tEnv.executeSql(
+                        "INSERT INTO contribution_agg SELECT k, amount FROM contribution_input");
+        TableResult queryResult = tEnv.executeSql("SELECT k, total FROM contribution_agg");
+
+        try (CloseableIterator<Row> rows = queryResult.collect()) {
+            assertResultsIgnoreOrder(rows, Arrays.asList("+I[1, 0]", "+I[2, 0]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 1, 10)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 0]", "+U[1, 10]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (102, 1, 20)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 10]", "+U[1, 30]"), false);
+
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 1, 15)").await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[1, 30]", "+U[1, 20]", "-U[1, 20]", "+U[1, 35]"), false);
+            tBatchEnv.executeSql("DELETE FROM contribution_input WHERE id = 102").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[1, 35]", "+U[1, 15]"), false);
+
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, 15)").await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[1, 15]", "+U[1, 0]", "-U[2, 0]", "+U[2, 15]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, CAST(NULL AS BIGINT))")
+                    .await();
+            assertResultsIgnoreOrder(
+                    rows, Arrays.asList("-U[2, 15]", "+U[2, 0]", "-U[2, 0]", "+U[2, 0]"), false);
+            tEnv.executeSql("INSERT INTO contribution_input VALUES (101, 2, 7)").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U[2, 0]", "+U[2, 7]"), false);
+        } finally {
+            JobClient pipelineJob = pipeline.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
+        }
+    }
+
+    @Test
+    @MultiVersionTest
+    void testProductCollectAndMergeMapRetractEndToEnd() throws Exception {
+        disableSinkRequireOnConflict();
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tEnv.executeSql(
+                "CREATE TABLE collection_retract_input ("
+                        + "k INT NOT NULL, factor BIGINT, items ARRAY<INT>, attrs MAP<INT, STRING>, "
+                        + "PRIMARY KEY (k) NOT ENFORCED)");
+        tEnv.executeSql(
+                "CREATE TABLE collection_retract_agg ("
+                        + "k INT NOT NULL, factor BIGINT, items ARRAY<INT>, attrs MAP<INT, STRING>, "
+                        + "PRIMARY KEY (k) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'sink.enable-retract' = 'true', "
+                        + "'fields.factor.agg' = 'product', 'fields.items.agg' = 'collect', "
+                        + "'fields.attrs.agg' = 'merge_map')");
+        tEnv.executeSql(
+                        "INSERT INTO collection_retract_agg VALUES (1, 4, ARRAY[7, 7], MAP[2, 'b'])")
+                .await();
+        TableResult pipeline =
+                tEnv.executeSql(
+                        "INSERT INTO collection_retract_agg "
+                                + "SELECT k, factor, items, attrs FROM collection_retract_input");
+        TableResult queryResult =
+                tEnv.executeSql(
+                        "SELECT k, factor, CARDINALITY(items), "
+                                + "items[1], items[2], items[CARDINALITY(items)], CARDINALITY(attrs), "
+                                + "attrs[1], attrs[2], attrs[3] FROM collection_retract_agg");
+        String seeded = "[1, 4, 2, 7, 7, 7, 1, null, b, null]";
+        String initial = "[1, 12, 5, 7, 7, 2, 1, null, a, null]";
+        String retracted = "[1, 4, 2, 7, 7, 7, 0, null, null, null]";
+        String updated = "[1, 24, 4, 7, 7, 3, 2, c, null, d]";
+        try (CloseableIterator<Row> rows = queryResult.collect()) {
+            assertResultsIgnoreOrder(rows, Collections.singletonList("+I" + seeded), false);
+            tEnv.executeSql(
+                            "INSERT INTO collection_retract_input VALUES "
+                                    + "(1, 3, ARRAY[1, 2, 2], MAP[2, 'a'])")
+                    .await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U" + seeded, "+U" + initial), false);
+            tEnv.executeSql(
+                            "INSERT INTO collection_retract_input VALUES "
+                                    + "(1, 6, ARRAY[2, 3], MAP[1, 'c', 3, 'd'])")
+                    .await();
+            // Retraction removes the overwritten map key instead of restoring the seeded value.
+            assertResultsIgnoreOrder(
+                    rows,
+                    Arrays.asList(
+                            "-U" + initial, "+U" + retracted, "-U" + retracted, "+U" + updated),
+                    false);
+            tBatchEnv.executeSql("DELETE FROM collection_retract_input WHERE k = 1").await();
+            assertResultsIgnoreOrder(rows, Arrays.asList("-U" + updated, "+U" + retracted), false);
+        } finally {
+            JobClient pipelineJob = pipeline.getJobClient().get();
+            pipelineJob.cancel().get();
+            waitForJobTermination(pipelineJob);
+            waitForJobTermination(queryResult.getJobClient().get());
+        }
+    }
+
+    private static void waitForJobTermination(JobClient jobClient) throws Exception {
+        // Cancellation completes exceptionally. The result future also works after a local
+        // job has shut down its mini-cluster, when status queries are no longer available.
+        jobClient.getJobExecutionResult().handle((result, error) -> null).get(30, TimeUnit.SECONDS);
     }
 
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {

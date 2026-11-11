@@ -86,4 +86,49 @@ public class FieldProductAgg extends FieldAggregator {
         }
         return product;
     }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    /**
+     * Divides by the retracted contribution without reconstructing earlier values. A null
+     * accumulator remains null, and a null contribution leaves it unchanged. Division follows the
+     * numeric type's rules, including integer truncation and decimal division failures.
+     */
+    @Override
+    public Object retract(Object accumulator, Object inputField) {
+        if (accumulator == null || inputField == null) {
+            return accumulator;
+        }
+        switch (typeRoot) {
+            case DECIMAL:
+                Decimal acc = (Decimal) accumulator;
+                Decimal input = (Decimal) inputField;
+                assert acc.scale() == input.scale() : "Inconsistent scale of aggregate Decimal!";
+                assert acc.precision() == input.precision()
+                        : "Inconsistent precision of aggregate Decimal!";
+                return fromBigDecimal(
+                        acc.toBigDecimal().divide(input.toBigDecimal()),
+                        acc.precision(),
+                        acc.scale());
+            case TINYINT:
+                return (byte) ((byte) accumulator / (byte) inputField);
+            case SMALLINT:
+                return (short) ((short) accumulator / (short) inputField);
+            case INTEGER:
+                return (int) accumulator / (int) inputField;
+            case BIGINT:
+                return (long) accumulator / (long) inputField;
+            case FLOAT:
+                return (float) accumulator / (float) inputField;
+            case DOUBLE:
+                return (double) accumulator / (double) inputField;
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Type %s is not supported in %s", typeRoot, getClass().getName()));
+        }
+    }
 }

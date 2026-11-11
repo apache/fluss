@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.rowmerger.aggregate;
 
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
@@ -27,6 +29,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldAggregatorFactory;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldIgnoreRetractAgg;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
@@ -219,6 +222,12 @@ public class AggregationContext {
      * @return the aggregation context
      */
     public static AggregationContext create(Schema schema, KvFormat kvFormat) {
+        return create(schema, kvFormat, new TableConfig(new Configuration()));
+    }
+
+    /** Creates an aggregation context using the table's field retract rules. */
+    public static AggregationContext create(
+            Schema schema, KvFormat kvFormat, TableConfig tableConfig) {
         RowType rowType = schema.getRowType();
         int fieldCount = rowType.getFieldCount();
 
@@ -230,7 +239,7 @@ public class AggregationContext {
         }
 
         // Create aggregators
-        FieldAggregator[] aggregators = createAggregators(schema);
+        FieldAggregator[] aggregators = createAggregators(schema, tableConfig);
 
         // Create row encoder
         RowEncoder rowEncoder = RowEncoder.create(kvFormat, rowType);
@@ -247,7 +256,7 @@ public class AggregationContext {
      * @param schema the Schema object containing column definitions and aggregation functions
      * @return an array of field aggregators, one for each field
      */
-    private static FieldAggregator[] createAggregators(Schema schema) {
+    private static FieldAggregator[] createAggregators(Schema schema, TableConfig tableConfig) {
         RowType rowType = schema.getRowType();
         List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
         List<String> fieldNames = rowType.getFieldNames();
@@ -272,6 +281,9 @@ public class AggregationContext {
                                 type));
             }
             aggregators[i] = factory.create(fieldType, aggFunc);
+            if (!primaryKeys.contains(fieldName) && tableConfig.isFieldIgnoreRetract(fieldName)) {
+                aggregators[i] = new FieldIgnoreRetractAgg(aggregators[i]);
+            }
         }
 
         return aggregators;
