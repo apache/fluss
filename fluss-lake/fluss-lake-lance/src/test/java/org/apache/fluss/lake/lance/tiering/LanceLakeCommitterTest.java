@@ -21,12 +21,16 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.metadata.TablePath;
 
+import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.memory.BufferAllocator;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.Collections;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -45,6 +49,26 @@ class LanceLakeCommitterTest {
         LanceLakeCommitter committer = newCommitter("db", "t");
         // Simply constructing and closing must not leak memory.
         committer.close();
+    }
+
+    @Test
+    void testCloseWrapsLeakedChildBufferAsIOException() throws Exception {
+        LanceLakeCommitter committer = newCommitter("db", "t");
+        BufferAllocator child =
+                committer.getAllocator().newChildAllocator("leaked-child", 0, Long.MAX_VALUE);
+        ArrowBuf leaked = child.buffer(64);
+        try {
+            assertThatThrownBy(committer::close)
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("LanceLakeCommitter allocator reported leaked memory")
+                    .cause()
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("Memory was leaked");
+        } finally {
+            // The parent allocator is already closed. Releasing the buffer frees the native
+            // memory; closing the child afterwards fails because its parent is closed.
+            leaked.close();
+        }
     }
 
     @Test
@@ -69,20 +93,11 @@ class LanceLakeCommitterTest {
 
     @Test
     void testGetMissingLakeSnapshotReturnsNullWhenDatasetAbsent() throws Exception {
-        // If the dataset does not exist yet, listing versions must not raise a checked failure to
-        // callers; the historical contract is to return null so that fluss can decide to recreate
-        // it. This test also implicitly exercises the exception path inside
-        // getCommittedLatestSnapshotOfLake because Dataset.open on a missing path raises.
+        // A dataset that has not been created has no committed snapshot. The LakeCommitter
+        // contract is to return null so callers can start a fresh tiering commit.
         LanceLakeCommitter committer = newCommitter("db", "no_such_table");
         try {
-            // This may either return null gracefully or propagate a runtime error from Lance;
-            // either way we must be able to close without leaking memory afterwards.
-            try {
-                committer.getMissingLakeSnapshot(null);
-            } catch (RuntimeException ignored) {
-                // The current Lance contract is to raise for missing datasets. Our concern here is
-                // strictly the resource-cleanup path, verified below.
-            }
+            assertThat(committer.getMissingLakeSnapshot(null)).isNull();
         } finally {
             committer.close();
         }

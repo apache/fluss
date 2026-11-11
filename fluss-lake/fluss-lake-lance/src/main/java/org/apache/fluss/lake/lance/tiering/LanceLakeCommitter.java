@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.lance.tiering;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -139,8 +140,16 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
                     }
                 }
             }
+        } catch (IllegalArgumentException e) {
+            // Dataset.open raises IllegalArgumentException when the dataset does not exist yet.
+            return null;
         }
         return null;
+    }
+
+    @VisibleForTesting
+    RootAllocator getAllocator() {
+        return allocator;
     }
 
     @Override
