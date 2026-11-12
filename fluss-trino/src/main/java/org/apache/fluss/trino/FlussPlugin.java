@@ -17,13 +17,32 @@
 
 package org.apache.fluss.trino;
 
+import org.apache.fluss.trino.functions.HllBuildAggregation;
+import org.apache.fluss.trino.functions.HllMergeAggregation;
+import org.apache.fluss.trino.functions.KllDoubleBuildAggregation;
+import org.apache.fluss.trino.functions.KllDoubleMergeAggregation;
+import org.apache.fluss.trino.functions.SketchReaders;
+
 import io.trino.spi.Plugin;
 import io.trino.spi.connector.ConnectorFactory;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 /** Apache Fluss connector plugin for Trino. */
 public class FlussPlugin implements Plugin {
+    @Override
+    public Set<Class<?>> getFunctions() {
+        return new HashSet<>(
+                Arrays.asList(
+                        HllBuildAggregation.class,
+                        HllMergeAggregation.class,
+                        KllDoubleBuildAggregation.class,
+                        KllDoubleMergeAggregation.class,
+                        SketchReaders.class));
+    }
 
     @Override
     public Iterable<ConnectorFactory> getConnectorFactories() {
