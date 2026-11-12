@@ -83,7 +83,7 @@ jobs:
     # The development toolchain floats to stable; check the lake package's
     # declared MSRV explicitly without raising the core workspace's MSRV.
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6
 
