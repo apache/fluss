@@ -28,6 +28,8 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 /** Test for {@link TabletServerRegistrationJsonSerde}. */
 public class TabletServerRegistrationJsonSerdeTest
         extends JsonSerdeTestBase<TabletServerRegistration> {
@@ -56,7 +58,8 @@ public class TabletServerRegistrationJsonSerdeTest
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000,
-                        new TabletServerResource(8.0, 1024L));
+                        new TabletServerResource(8.0, 1024L),
+                        "1.1-SNAPSHOT");
         return new TabletServerRegistration[] {
             tabletServerRegistration1, tabletServerRegistration2, tabletServerRegistration3
         };
@@ -65,10 +68,23 @@ public class TabletServerRegistrationJsonSerdeTest
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
-            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024}"
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
+            "{\"version\":5,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024,\"software_version\":\"1.1-SNAPSHOT\"}"
         };
+    }
+
+    @Test
+    void testVersion4RetainsResourcesWithoutSoftwareVersion() throws IOException {
+        JsonNode json =
+                new ObjectMapper()
+                        .readTree(
+                                "{\"version\":4,\"listeners\":\"FLUSS://localhost:1001\",\"register_timestamp\":10000,"
+                                        + "\"cpu_cores\":8.0,\"memory_bytes\":1024}");
+        TabletServerRegistration registration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(json);
+        assertThat(registration.getSoftwareVersion()).isNull();
+        assertThat(registration.getResource()).isEqualTo(new TabletServerResource(8.0, 1024L));
     }
 
     @Test

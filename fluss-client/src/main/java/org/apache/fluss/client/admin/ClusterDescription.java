@@ -34,9 +34,9 @@ import java.util.TreeMap;
  * Cluster information returned by {@link Admin#describeCluster()}.
  *
  * <p>Both tablet server maps are keyed by server ID. The node map contains only live servers,
- * including their addresses, racks and tags. The load map also contains offline servers that still
- * have assigned replicas. A missing load entry means statistics are unavailable, never that the
- * server has zero replicas or is safe to remove.
+ * including their addresses, racks, tags and reported software versions. The load map also contains
+ * offline servers that still have assigned replicas. A missing load entry means statistics are
+ * unavailable, never that the server has zero replicas or is safe to remove.
  *
  * @since 1.1
  */
@@ -107,25 +107,33 @@ public final class ClusterDescription {
         return Objects.equals(coordinatorServer, that.coordinatorServer)
                 && coordinatorStandbys.equals(that.coordinatorStandbys)
                 && tabletServers.equals(that.tabletServers)
-                // ServerNode equality describes node identity and does not compare server tags.
+                // ServerNode equality describes node identity and excludes inspection attributes.
                 && tabletServers.entrySet().stream()
                         .allMatch(
-                                entry ->
-                                        entry.getValue().serverTag()
-                                                == that.tabletServers
-                                                        .get(entry.getKey())
-                                                        .serverTag())
+                                entry -> {
+                                    ServerNode node = entry.getValue();
+                                    ServerNode other = that.tabletServers.get(entry.getKey());
+                                    return node.serverTag() == other.serverTag()
+                                            && Objects.equals(
+                                                    node.softwareVersion(),
+                                                    other.softwareVersion());
+                                })
                 && tabletServerLoads.equals(that.tabletServerLoads);
     }
 
     @Override
     public int hashCode() {
-        int tagsHash = 1;
+        int attributesHash = 1;
         for (ServerNode node : tabletServers.values()) {
-            tagsHash = 31 * tagsHash + Objects.hashCode(node.serverTag());
+            attributesHash = 31 * attributesHash + Objects.hashCode(node.serverTag());
+            attributesHash = 31 * attributesHash + Objects.hashCode(node.softwareVersion());
         }
         return Objects.hash(
-                coordinatorServer, coordinatorStandbys, tabletServers, tabletServerLoads, tagsHash);
+                coordinatorServer,
+                coordinatorStandbys,
+                tabletServers,
+                tabletServerLoads,
+                attributesHash);
     }
 
     @Override
