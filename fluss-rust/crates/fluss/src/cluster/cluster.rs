@@ -934,9 +934,7 @@ mod tests {
                 node_id: 1,
                 host: "ts1".to_string(),
                 port: 9123,
-                listeners: None,
-                rack: None,
-                server_tag: None,
+                ..Default::default()
             }],
             table_metadata: vec![PbTableMetadata {
                 table_path: PbTablePath {
@@ -1005,9 +1003,7 @@ mod tests {
             node_id: 1,
             host: "ts1".to_string(),
             port: 9123,
-            listeners: None,
-            rack: None,
-            server_tag: None,
+            ..Default::default()
         };
         let table_response = MetadataResponse {
             coordinator_server: None,

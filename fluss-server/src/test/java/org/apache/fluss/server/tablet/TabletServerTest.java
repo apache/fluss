@@ -86,6 +86,8 @@ class TabletServerTest extends ServerTestBase {
 
         TabletServerRegistration tabletServerRegistration = optionalTabletServerRegistration.get();
         assertThat(tabletServerRegistration.getRack()).isEqualTo(RACK);
+        assertThat(tabletServerRegistration.getSoftwareVersion())
+                .isEqualTo(TabletServer.class.getPackage().getImplementationVersion());
         verifyEndpoint(
                 tabletServerRegistration.getEndpoints(), server.getRpcServer().getBindEndpoints());
     }

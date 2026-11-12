@@ -341,6 +341,9 @@ public class ServerRpcMessageUtils {
             if (serverNode.serverTag() != null) {
                 pbServerNode.setServerTag(serverNode.serverTag().value);
             }
+            if (serverNode.softwareVersion() != null) {
+                pbServerNode.setSoftwareVersion(serverNode.softwareVersion());
+            }
             pbServerNodeList.add(pbServerNode);
         }
 

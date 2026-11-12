@@ -259,7 +259,7 @@ message DescribeClusterRequest {
 
 message DescribeClusterResponse {
   optional PbServerNode coordinator_server = 1;
-  // Live tablet servers with addresses, racks and server tags.
+  // Live tablet servers with addresses, racks, server tags and software versions.
   repeated PbServerNode tablet_servers = 2;
   // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
   repeated PbTabletServerLoad tablet_server_loads = 3;
@@ -1011,6 +1011,8 @@ message PbServerNode {
   optional string listeners = 4;
   optional string rack = 5;
   optional int32 server_tag = 6;
+  // Reported only for live tablet servers in DescribeClusterResponse.
+  optional string software_version = 7;
 }
 
 message PbTableMetadata {
