@@ -158,6 +158,7 @@ public final class KvTablet {
     private final KvPreWriteBuffer kvPreWriteBuffer;
     private final KvStateAccessor kvStateAccessor;
     private final KvWriteProcessor kvWriteProcessor;
+    private final boolean deduplicating;
     private final TabletServerMetricGroup serverMetricGroup;
     private final KvFlushScheduler kvFlushScheduler;
     private final boolean closeFlushScheduler;
@@ -247,10 +248,14 @@ public final class KvTablet {
         this.kvStateAccessor =
                 new KvStateAccessor(kvPreWriteBuffer, rocksDBKv, historicalPartition);
         this.kvValueLayout = kvValueLayout;
+        this.deduplicating =
+                schemaGetter.getLatestSchemaInfo().getSchema().getDeduplicationKey().isPresent();
         this.stateValueEncoder =
-                historicalPartition
-                        ? valueEncoder::encodeValue
-                        : (value, logOffset) -> valueEncoder.encodeValue(value);
+                deduplicating
+                        ? (value, offset) -> new byte[] {1}
+                        : historicalPartition
+                                ? valueEncoder::encodeValue
+                                : (value, logOffset) -> valueEncoder.encodeValue(value);
         this.historicalCleanupOffset = historicalCleanupOffset;
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.rowTtlEnabled = rowTtlEnabled;
@@ -278,7 +283,10 @@ public final class KvTablet {
         // Historical state only contains the WAL tail that has not been tiered to lake, so it
         // cannot maintain a table-level row count.
         this.rowCount =
-                historicalPartition || changelogImage == ChangelogImage.WAL || rowTtlEnabled
+                deduplicating
+                                || historicalPartition
+                                || changelogImage == ChangelogImage.WAL
+                                || rowTtlEnabled
                         ? ROW_COUNT_DISABLED
                         : 0L;
     }

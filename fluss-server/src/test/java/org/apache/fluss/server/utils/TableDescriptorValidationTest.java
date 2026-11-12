@@ -55,6 +55,34 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testValidatesDeduplicationAndRejectsKeyExpiry() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .deduplicationKey("id")
+                                        .build())
+                        .distributedBy(4)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor.withProperties(
+                                                Collections.singletonMap("table.kv.ttl", "1 d")),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("KV TTL");
+    }
+
+    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

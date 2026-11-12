@@ -33,7 +33,7 @@ public enum ApiKeys {
     DROP_DATABASE(1002, 0, 0, PUBLIC),
     LIST_DATABASES(1003, 0, 0, PUBLIC),
     DATABASE_EXISTS(1004, 0, 0, PUBLIC),
-    CREATE_TABLE(1005, 0, 0, PUBLIC),
+    CREATE_TABLE(1005, 0, 1, PUBLIC),
     DROP_TABLE(1006, 0, 0, PUBLIC),
     GET_TABLE_INFO(1007, 0, 0, PUBLIC),
     LIST_TABLES(1008, 0, 0, PUBLIC),
@@ -53,7 +53,7 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    PUT_KV(1016, 0, 3, PUBLIC),
+    PUT_KV(1016, 0, 4, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from

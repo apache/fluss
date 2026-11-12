@@ -208,6 +208,23 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
     }
 
     private void sanityCheck(TableInfo flussTableInfo) {
+        if (flussTableInfo.hasDeduplicationKey()
+                && Boolean.parseBoolean(flussConfig.toMap().get("sink.ignore-delete"))) {
+            throw new ValidationException(
+                    "Deduplicating log tables require insert-only input and reject sink.ignore-delete.");
+        }
+        String declared = flussConfig.toMap().get("deduplication.key");
+        if (declared != null) {
+            java.util.List<String> keys =
+                    java.util.Arrays.stream(declared.split(",", -1))
+                            .map(String::trim)
+                            .collect(java.util.stream.Collectors.toList());
+            if (!keys.equals(flussTableInfo.getDeduplicationKeys())) {
+                throw new ValidationException(
+                        "Deduplication key does not match the authoritative Fluss table.");
+            }
+        }
+
         // when it's UpsertSinkWriter, it means it has primary key got from Flink's metadata
         boolean hasPrimaryKey = this instanceof UpsertSinkWriter;
         if (flussTableInfo.hasPrimaryKey() != hasPrimaryKey) {

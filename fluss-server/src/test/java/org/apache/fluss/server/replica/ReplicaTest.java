@@ -78,6 +78,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -168,6 +169,43 @@ final class ReplicaTest extends ReplicaTestBase {
                                         new ListOffsetsParam(
                                                 -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
                 .isInstanceOf(NotLeaderOrFollowerException.class);
+    }
+
+    @Test
+    void testLimitLogScanSkipsEmptyBatchesAcrossSegments() throws Exception {
+        Replica replica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(replica);
+        LogAppendInfo first =
+                replica.appendRecordsToLeader(
+                        genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(0))), 0);
+        replica.getLogTablet().roll(Optional.empty());
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(Collections.emptyList()), 0);
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(Collections.emptyList()), 0);
+        LogAppendInfo second =
+                replica.appendRecordsToLeader(
+                        genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(1))), 0);
+        replica.getLogTablet().roll(Optional.empty());
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(Collections.emptyList()), 0);
+        replica.getLogTablet().updateHighWatermark(replica.getLocalLogEndOffset());
+        replica.getLogTablet()
+                .appendAsLeader(
+                        genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(2))));
+
+        List<Long> offsets = new ArrayList<>();
+        for (LogRecordBatch batch : replica.limitLogScan(1).batches()) {
+            if (batch.getRecordCount() > 0) {
+                offsets.add(batch.baseLogOffset());
+            }
+        }
+        assertThat(offsets).containsExactly(second.firstOffset());
+        offsets.clear();
+        for (LogRecordBatch batch : replica.limitLogScan(2).batches()) {
+            if (batch.getRecordCount() > 0) {
+                offsets.add(batch.baseLogOffset());
+            }
+        }
+        assertThat(offsets).containsExactly(first.firstOffset(), second.firstOffset());
     }
 
     @Test

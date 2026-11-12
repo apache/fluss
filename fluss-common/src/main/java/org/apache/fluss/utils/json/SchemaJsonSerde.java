@@ -36,6 +36,7 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
 
     private static final String COLUMNS_NAME = "columns";
     private static final String PRIMARY_KEY_NAME = "primary_key";
+    private static final String DEDUPLICATION_KEY_NAME = "deduplication_key";
     private static final String AUTO_INCREMENT_COLUMN_NAME = "auto_increment_column";
     private static final String VERSION_KEY = "version";
     private static final String HIGHEST_FIELD_ID = "highest_field_id";
@@ -59,6 +60,13 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
         if (primaryKey.isPresent()) {
             generator.writeArrayFieldStart(PRIMARY_KEY_NAME);
             for (String columnName : primaryKey.get().getColumnNames()) {
+                generator.writeString(columnName);
+            }
+            generator.writeEndArray();
+        }
+        if (schema.getDeduplicationKey().isPresent()) {
+            generator.writeArrayFieldStart(DEDUPLICATION_KEY_NAME);
+            for (String columnName : schema.getDeduplicationKeyColumnNames()) {
                 generator.writeString(columnName);
             }
             generator.writeEndArray();
@@ -93,6 +101,12 @@ public class SchemaJsonSerde implements JsonSerializer<Schema>, JsonDeserializer
                 primaryKeys.add(primaryKeyJsons.next().asText());
             }
             builder.primaryKey(primaryKeys);
+        }
+
+        if (node.has(DEDUPLICATION_KEY_NAME)) {
+            List<String> keyColumns = new ArrayList<>();
+            node.get(DEDUPLICATION_KEY_NAME).forEach(column -> keyColumns.add(column.asText()));
+            builder.deduplicationKey(keyColumns);
         }
 
         if (node.has(AUTO_INCREMENT_COLUMN_NAME)) {

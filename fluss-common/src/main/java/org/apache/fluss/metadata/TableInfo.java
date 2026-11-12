@@ -210,6 +210,18 @@ public final class TableInfo {
     }
 
     /**
+     * Returns whether this log table filters subsequent records with the same deduplication key.
+     */
+    public boolean hasDeduplicationKey() {
+        return schema.getDeduplicationKey().isPresent();
+    }
+
+    /** Returns the logical deduplication key columns, including partition columns. */
+    public List<String> getDeduplicationKeys() {
+        return schema.getDeduplicationKeyColumnNames();
+    }
+
+    /**
      * Returns the logical primary keys of the table. The logical primary keys are the defined
      * PRIMARY KEY clause when creating table.
      */
@@ -244,12 +256,18 @@ public final class TableInfo {
      *
      * <ul>
      *   <li>is the same with {@link #physicalPrimaryKeys} if the table is a primary key table.
-     *   <li>is empty if the table is a log table.
+     *   <li>is the deduplication key excluding partition columns for a log table with
+     *       deduplication.
+     *   <li>is empty for other log tables.
      * </ul>
      */
     public boolean isDefaultBucketKey() {
         if (hasPrimaryKey()) {
             return bucketKeys.equals(physicalPrimaryKeys);
+        } else if (hasDeduplicationKey()) {
+            List<String> physicalKeys = new ArrayList<>(getDeduplicationKeys());
+            physicalKeys.removeAll(partitionKeys);
+            return bucketKeys.equals(physicalKeys);
         } else {
             return bucketKeys.isEmpty();
         }

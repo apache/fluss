@@ -124,6 +124,7 @@ message CreateTableRequest {
   required PbTablePath table_path = 1;
   required bytes table_json = 2;
   required bool ignore_if_exists = 3;
+  optional bool deduplicating_append = 4;
 }
 
 message CreateTableResponse {
@@ -310,6 +311,7 @@ message PutKvRequest {
   // Aggregation mode for this request (see AGG_MODE_* constants above)
   // 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
   optional int32 agg_mode = 6;
+  optional bool deduplicating_append = 7;
 }
 
 message PutKvResponse {

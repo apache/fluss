@@ -26,11 +26,15 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,6 +55,50 @@ class FlussAdminTest {
 
     private static final ServerNode OLD_COORDINATOR =
             new ServerNode(0, "old-coordinator", 9123, ServerType.COORDINATOR);
+
+    @Test
+    void testDeduplicationCreationCarriesRequiredCapability() throws Exception {
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            throw new AssertionError("Unexpected RPC");
+                        }) {
+                    @Override
+                    public CompletableFuture<ApiMessage> sendRequest(
+                            ServerNode node, ApiKeys api, ApiMessage raw) {
+                        assertThat(api).isEqualTo(ApiKeys.CREATE_TABLE);
+                        org.apache.fluss.rpc.messages.CreateTableRequest request =
+                                (org.apache.fluss.rpc.messages.CreateTableRequest) raw;
+                        assertThat(request.isDeduplicatingAppend()).isTrue();
+                        assertThat(
+                                        TableDescriptor.fromJsonBytes(request.getTableJson())
+                                                .getSchema()
+                                                .getDeduplicationKeyColumnNames())
+                                .containsExactly("id");
+                        return CompletableFuture.completedFuture(
+                                new org.apache.fluss.rpc.messages.CreateTableResponse());
+                    }
+                };
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public ServerNode getCoordinatorServer() {
+                        return OLD_COORDINATOR;
+                    }
+                };
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .deduplicationKey("id")
+                                        .build())
+                        .build();
+        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+            admin.createTable(TablePath.of("db", "events"), descriptor, false)
+                    .get(10, TimeUnit.SECONDS);
+        }
+    }
 
     @ParameterizedTest
     @CsvSource({

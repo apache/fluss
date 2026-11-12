@@ -297,6 +297,37 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testDeduplicationRequiresSupportedCreateAndWriteVersions() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.CreateTableRequest create =
+                    new org.apache.fluss.rpc.messages.CreateTableRequest()
+                            .setDeduplicatingAppend(true);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.CREATE_TABLE, (short) 0, create))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.CREATE_TABLE, (short) 1, create);
+            PutKvRequest put = new PutKvRequest().setDeduplicatingAppend(true);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PUT_KV, (short) 3, put))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 4, put);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectBucketCountChangeForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(

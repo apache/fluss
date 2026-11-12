@@ -72,6 +72,15 @@ public class FlinkConnectorOptions {
                                     + "If the table has no primary key and the bucket key is not specified, "
                                     + "the data will be distributed to each bucket randomly.");
 
+    public static final ConfigOption<String> DEDUPLICATION_KEY =
+            ConfigOptions.key("deduplication.key")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Comma-separated physical columns identifying records for permanent "
+                                    + "first-write deduplication in a log table. Columns must be NOT NULL "
+                                    + "and include all partition columns. Mutually exclusive with a primary key.");
+
     public static final ConfigOption<String> BOOTSTRAP_SERVERS =
             ConfigOptions.key("bootstrap.servers")
                     .stringType()

@@ -123,6 +123,24 @@ public class TableDescriptorValidation {
             }
         }
 
+        if (schema.getDeduplicationKey().isPresent()) {
+            if (tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)
+                    || tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()
+                    || tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()
+                    || tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)
+                    || Boolean.TRUE.equals(
+                            tableConf.get(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED))) {
+                throw new InvalidTableException(
+                        "Deduplicating log tables do not support merge engines, KV TTL, lake storage, historical partitions or standby KV replicas.");
+            }
+            for (String key : schema.getDeduplicationKeyColumnNames()) {
+                if (KEY_UNSUPPORTED_TYPES.contains(
+                        schema.getColumn(key).getDataType().getTypeRoot())) {
+                    throw new InvalidTableException(
+                            "Unsupported deduplication key type for column " + key);
+                }
+            }
+        }
         KafkaTableSchema.validate(tableDescriptor);
 
         // check distribution
@@ -150,6 +168,19 @@ public class TableDescriptorValidation {
     /** Validates the schema after altering table columns. */
     @Internal
     public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (!table.getSchema().getDeduplicationKey().equals(newSchema.getDeduplicationKey())) {
+            throw new InvalidAlterTableException(
+                    "The deduplication key cannot be enabled, changed or removed.");
+        }
+        for (String key : table.getDeduplicationKeys()) {
+            Schema.Column before = table.getSchema().getColumn(key);
+            Schema.Column after = newSchema.getColumn(key);
+            if (before.getColumnId() != after.getColumnId()
+                    || !before.getDataType().equals(after.getDataType())) {
+                throw new InvalidAlterTableException(
+                        "Deduplication key column type and identity cannot change.");
+            }
+        }
         checkSystemColumns(newSchema.getRowType());
         if (table.getTableConfig()
                 .getMergeEngineType()
@@ -264,6 +295,11 @@ public class TableDescriptorValidation {
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
+        if (currentTable.hasDeduplicationKey()
+                && tableKeysToChange.stream().anyMatch(key -> key.startsWith("table.datalake."))) {
+            throw new InvalidAlterTableException(
+                    "Lake storage is not supported for deduplicating log tables.");
+        }
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =

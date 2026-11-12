@@ -26,6 +26,50 @@ WITH ('bucket.num' = '3');
 The `bucket.num` should be a positive integer. If this value is not provided, a default value from the cluster will be used as the bucket number for the table.
 :::
 
+## Deduplication
+
+A log table can retain only the first committed record for each deduplication key.
+Later records with the same key are filtered, even when their other values differ.
+
+```sql title="Flink SQL"
+CREATE TABLE events (
+  tenant_id STRING NOT NULL,
+  event_id STRING NOT NULL,
+  payload STRING
+) WITH (
+  'bucket.num' = '16',
+  'deduplication.key' = 'tenant_id,event_id'
+);
+```
+
+Deduplication keys must contain non-null physical columns. A table cannot define both
+a primary key and a deduplication key. The default bucket key consists of the
+deduplication columns excluding partition columns; an explicit bucket key must be
+a nonempty subset of those columns.
+
+For partitioned tables, include every partition column in the deduplication key.
+Deduplication applies within each partition instance. Deleting and recreating a
+partition resets its keys. For non-partitioned tables, it applies to the whole table.
+
+Keys remain present after the original records expire under log retention.
+Consequently, a duplicate may refer to a row that is no longer readable, and key
+state grows with the number of distinct keys. Dropping the table or partition
+removes that scope's keys.
+
+Java applications define the key with `Schema.Builder.deduplicationKey(...)`
+and write through the normal append API. A successful `AppendResult` means that
+the request succeeded, including when all rows were duplicates. Writer retries,
+acknowledgments, and recovery follow the primary-key table's existing behavior.
+Internally, the table uses first-row semantics with a presence marker per key;
+complete rows are stored only in the log.
+
+The Flink sink accepts insert-only input. Sources read the accepted INSERT
+records through normal log scans. Updates, deletes, keyed lookups, full-row KV
+snapshots, multi-table writes, lake tiering, and historical writes are unsupported.
+Exact row-count metadata is unavailable; count queries scan retained log records.
+The key definition cannot be changed after creation. All servers and clients
+accessing these tables must support deduplication.
+
 ## Bucket Assigning
 Bucketing is the fundamental unit of parallelism and scalability in Fluss.  A single table in Fluss is divided into multiple buckets. A bucket is the smallest storage unit for reads and writes. See more details about [Bucketing](table-design/data-distribution/bucketing.md).
 
