@@ -304,6 +304,7 @@ impl Lookuper {
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
+                let _enter = RUNTIME.enter();
                 let mut tasks = self.async_tasks.lock().unwrap();
                 while tasks.try_join_next().is_some() {}
                 tasks.spawn(async move {
@@ -394,6 +395,7 @@ impl PrefixLookuper {
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
+                let _enter = RUNTIME.enter();
                 let mut tasks = self.async_tasks.lock().unwrap();
                 while tasks.try_join_next().is_some() {}
                 tasks.spawn(async move {

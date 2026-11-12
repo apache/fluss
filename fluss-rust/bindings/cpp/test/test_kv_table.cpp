@@ -2225,15 +2225,32 @@ TEST_F(KvTableTest, PollsAsyncLookupsByRequestId) {
     ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
 
     constexpr int32_t kKeys = 8;
-    for (int32_t id = 0; id < kKeys; ++id) {
-        ASSERT_OK(lookuper.LookupAsync(Key(id, 0), static_cast<uint64_t>(id)));
-        ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(id), static_cast<uint64_t>(id)));
-    }
-
     std::vector<fluss::LookupCompletion> lookup_completions;
     std::vector<fluss::PrefixLookupCompletion> prefix_completions;
     std::vector<fluss::LookupCompletion> lookup_batch;
     std::vector<fluss::PrefixLookupCompletion> prefix_batch;
+
+    ASSERT_OK(lookuper.LookupAsync(Key(0, 0), 0));
+    ASSERT_OK(lookuper.Poll(5000, lookup_batch, 1));
+    ASSERT_EQ(lookup_batch.size(), 1u);
+    lookup_completions.insert(
+        lookup_completions.end(),
+        std::make_move_iterator(lookup_batch.begin()),
+        std::make_move_iterator(lookup_batch.end()));
+
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_batch, 1));
+    ASSERT_EQ(prefix_batch.size(), 1u);
+    prefix_completions.insert(
+        prefix_completions.end(),
+        std::make_move_iterator(prefix_batch.begin()),
+        std::make_move_iterator(prefix_batch.end()));
+
+    for (int32_t id = 1; id < kKeys; ++id) {
+        ASSERT_OK(lookuper.LookupAsync(Key(id, 0), static_cast<uint64_t>(id)));
+        ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(id), static_cast<uint64_t>(id)));
+    }
+
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (lookup_completions.size() < kKeys || prefix_completions.size() < kKeys) {
         ASSERT_LT(std::chrono::steady_clock::now(), deadline)
