@@ -386,6 +386,14 @@ impl<'a> TableScan<'a> {
             indices.push(idx);
         }
 
+        let mut seen = HashSet::with_capacity(column_names.len());
+        for &name in column_names {
+            if !seen.insert(name) {
+                return Err(Error::IllegalArgument {
+                    message: format!("Duplicate column name: '{name}'"),
+                });
+            }
+        }
         self.project(&indices)
     }
 
@@ -2877,11 +2885,13 @@ mod tests {
         for (names, message) in [
             (vec![], "Column names cannot be empty"),
             (vec!["missing"], "Column 'missing' not found"),
-            (vec!["id", "id"], "Duplicate column index: 0"),
-            (vec!["name", "id", "name"], "Duplicate column index: 1"),
+            (vec!["id", "id"], "Duplicate column name: 'id'"),
+            (vec!["name", "name"], "Duplicate column name: 'name'"),
+            (vec!["name", "id", "name"], "Duplicate column name: 'name'"),
+            (vec!["id", "id", "missing"], "Column 'missing' not found"),
         ] {
             assert!(
-                matches!(scan().project_by_name(&names), Err(Error::IllegalArgument { message: actual }) if actual.contains(message))
+                matches!(scan().project_by_name(&names), Err(Error::IllegalArgument { message: actual }) if actual == message)
             );
         }
         for projected in [
