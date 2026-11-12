@@ -2285,7 +2285,7 @@ TEST_F(KvTableTest, PollAsyncLookupCapacityAndBatchLimit) {
     CreateSequenceTable(admin(), connection(), path);
 
     fluss::Connection polling_connection;
-    ConnectPollingLookups(polling_connection, 1);
+    ConnectPollingLookups(polling_connection, 4);
     fluss::Table table;
     ASSERT_OK(polling_connection.GetTable(path, table));
 
@@ -2303,20 +2303,37 @@ TEST_F(KvTableTest, PollAsyncLookupCapacityAndBatchLimit) {
     EXPECT_LT(std::chrono::steady_clock::now() - idle_start, std::chrono::seconds(1));
 
     ASSERT_OK(lookuper.LookupAsync(Key(0, 0), 0));
-    auto queue_full = lookuper.LookupAsync(Key(1, 0), 1);
+    ASSERT_OK(lookuper.Poll(5000, completions, 1));
+    ASSERT_EQ(completions.size(), 1u);
+
+    // A completed result keeps its permit until the completion is destroyed.
+    ASSERT_OK(lookuper.LookupAsync(Key(1, 0), 1));
+    ASSERT_OK(lookuper.LookupAsync(Key(2, 0), 2));
+    ASSERT_OK(lookuper.LookupAsync(Key(3, 0), 3));
+    auto queue_full = lookuper.LookupAsync(Key(4, 0), 4);
     EXPECT_EQ(queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
     EXPECT_FALSE(queue_full.Ok());
     EXPECT_TRUE(queue_full.IsRetriable());
 
+    // Poll replaces the output and drains no more than max_results.
     ASSERT_OK(lookuper.Poll(5000, completions, 1));
     ASSERT_EQ(completions.size(), 1u);
-    EXPECT_EQ(completions[0].request_id, 0u);
+    completions.clear();
+    ASSERT_OK(lookuper.LookupAsync(Key(4, 0), 4));
 
-    // Consuming the completion releases the permit for the next submission.
-    ASSERT_OK(lookuper.LookupAsync(Key(1, 0), 1));
-    ASSERT_OK(lookuper.Poll(5000, completions, 1));
-    ASSERT_EQ(completions.size(), 1u);
-    EXPECT_EQ(completions[0].request_id, 1u);
+    // Invalid key values fail during submission rather than becoming async
+    // completions.
+    fluss::GenericRow invalid_key(3);
+    invalid_key.SetString(0, "not an integer");
+    auto invalid_result = lookuper.LookupAsync(invalid_key, 5);
+    EXPECT_FALSE(invalid_result.Ok());
+    EXPECT_EQ(invalid_result.error_code, fluss::ErrorCode::CLIENT_ERROR);
+
+    fluss::GenericRow null_key(3);
+    null_key.SetNull(0);
+    invalid_result = lookuper.LookupAsync(null_key, 6);
+    EXPECT_FALSE(invalid_result.Ok());
+    EXPECT_EQ(invalid_result.error_code, fluss::ErrorCode::CLIENT_ERROR);
 
     // Prefix lookups have the same independent capacity and polling semantics.
     ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));

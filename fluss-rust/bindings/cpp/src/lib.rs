@@ -1088,7 +1088,7 @@ pub struct Lookuper {
     completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<LookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
     completion_capacity: usize,
-    async_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    async_tasks: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 pub struct PrefixLookuper {
@@ -1101,22 +1101,18 @@ pub struct PrefixLookuper {
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PrefixLookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
     completion_capacity: usize,
-    async_tasks: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    async_tasks: Arc<Mutex<tokio::task::JoinSet<()>>>,
 }
 
 impl Drop for Lookuper {
     fn drop(&mut self) {
-        for task in self.async_tasks.lock().unwrap().drain(..) {
-            task.abort();
-        }
+        self.async_tasks.lock().unwrap().abort_all();
     }
 }
 
 impl Drop for PrefixLookuper {
     fn drop(&mut self) {
-        for task in self.async_tasks.lock().unwrap().drain(..) {
-            task.abort();
-        }
+        self.async_tasks.lock().unwrap().abort_all();
     }
 }
 
@@ -2252,7 +2248,7 @@ impl Table {
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
             completion_capacity,
-            async_tasks: Arc::new(Mutex::new(Vec::new())),
+            async_tasks: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2296,7 +2292,7 @@ impl Table {
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
             completion_capacity,
-            async_tasks: Arc::new(Mutex::new(Vec::new())),
+            async_tasks: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
         }));
         ok_ptr(ptr as usize)
     }

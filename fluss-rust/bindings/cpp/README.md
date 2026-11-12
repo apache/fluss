@@ -97,7 +97,16 @@ while (next < keys.size() || submitted != 0) {
         }
     }
     if (submitted != 0) {
-        lookuper.Poll(1000, completed, 128);
+        auto poll_result = lookuper.Poll(1000, completed, 128);
+        if (!poll_result.Ok()) {
+            throw std::runtime_error(poll_result.error_message);
+        }
+        // Poll replaces `completed`, so process this batch before polling again.
+        for (const auto& completion : completed) {
+            if (!completion.result.Ok()) {
+                throw std::runtime_error(completion.result.error_message);
+            }
+        }
         submitted -= completed.size();
     }
 }

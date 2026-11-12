@@ -254,7 +254,7 @@ impl Lookuper {
     fn key(&self, pk_row: &GenericRowInner) -> Result<GenericRow<'static>, String> {
         let schema = self.table_info.get_schema();
         let pk_indices = schema.primary_key_indexes();
-        types::resolve_dense_row_types(&pk_row.row, Some(schema), &pk_indices)
+        types::resolve_dense_lookup_key_types(&pk_row.row, schema, &pk_indices)
             .map(|row| row.into_owned().into_owned())
             .map_err(|e| e.to_string())
     }
@@ -304,7 +304,9 @@ impl Lookuper {
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
-                let task = RUNTIME.spawn(async move {
+                let mut tasks = self.async_tasks.lock().unwrap();
+                while tasks.try_join_next().is_some() {}
+                tasks.spawn(async move {
                     let result = to_lookup_result(inner.lookup(&key).await, &table_info);
                     let _ = sender.send(LookupCompletion {
                         request_id,
@@ -312,9 +314,6 @@ impl Lookuper {
                         _permit: Some(permit),
                     });
                 });
-                let mut tasks = self.async_tasks.lock().unwrap();
-                tasks.retain(|task| !task.is_finished());
-                tasks.push(task);
                 crate::ok_result()
             }
             Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
@@ -342,7 +341,7 @@ impl PrefixLookuper {
     /// C++ row.
     fn key(&self, prefix_row: &GenericRowInner) -> Result<GenericRow<'static>, String> {
         let schema = self.table_info.get_schema();
-        types::resolve_dense_row_types(&prefix_row.row, Some(schema), &self.lookup_column_indices)
+        types::resolve_dense_lookup_key_types(&prefix_row.row, schema, &self.lookup_column_indices)
             .map(|row| row.into_owned().into_owned())
             .map_err(|e| e.to_string())
     }
@@ -395,7 +394,9 @@ impl PrefixLookuper {
                 let sender = self.completion_sender.clone();
                 let inner = Arc::clone(&self.inner);
                 let table_info = Arc::clone(&self.table_info);
-                let task = RUNTIME.spawn(async move {
+                let mut tasks = self.async_tasks.lock().unwrap();
+                while tasks.try_join_next().is_some() {}
+                tasks.spawn(async move {
                     let result = to_prefix_lookup_result(inner.lookup(&key).await, &table_info);
                     let _ = sender.send(PrefixLookupCompletion {
                         request_id,
@@ -403,9 +404,6 @@ impl PrefixLookuper {
                         _permit: Some(permit),
                     });
                 });
-                let mut tasks = self.async_tasks.lock().unwrap();
-                tasks.retain(|task| !task.is_finished());
-                tasks.push(task);
                 crate::ok_result()
             }
             Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
