@@ -626,10 +626,14 @@ mod bucket_rescale_test {
             .expect("upsert")
             .create_writer()
             .expect("writer");
+        let mut acks = Vec::new();
         for a in 0..RECORDS_PER_PARTITION {
-            writer.upsert(&row(a, "v", "later")).expect("upsert");
+            acks.push(writer.upsert(&row(a, "v", "later")).expect("upsert"));
         }
         writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let table_id = stale_table.get_table_info().table_id;
         let partition_id = partition_id(
