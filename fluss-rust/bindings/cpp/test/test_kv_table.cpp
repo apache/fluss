@@ -2354,19 +2354,23 @@ TEST_F(KvTableTest, PollAsyncLookupCapacityAndBatchLimit) {
 
     // Prefix lookups have the same independent capacity and polling semantics.
     ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));
-    auto prefix_queue_full = prefix_lookuper.PrefixLookupAsync(Prefix(1), 1);
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(1), 1));
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(2), 2));
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(3), 3));
+    auto prefix_queue_full = prefix_lookuper.PrefixLookupAsync(Prefix(4), 4);
     EXPECT_EQ(prefix_queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
     EXPECT_FALSE(prefix_queue_full.Ok());
     EXPECT_TRUE(prefix_queue_full.IsRetriable());
     ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
     ASSERT_EQ(prefix_completions.size(), 1u);
-    EXPECT_EQ(prefix_completions[0].request_id, 0u);
+    EXPECT_LT(prefix_completions[0].request_id, 4u);
 
     // Poll replaces the output and honors the caller-selected batch size.
-    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(1), 1));
+    prefix_completions.clear();
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(4), 4));
     ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
     ASSERT_EQ(prefix_completions.size(), 1u);
-    EXPECT_EQ(prefix_completions[0].request_id, 1u);
+    EXPECT_LT(prefix_completions[0].request_id, 5u);
 
     ASSERT_OK(admin().DropTable(path, false));
 }

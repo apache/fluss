@@ -160,7 +160,9 @@ pub struct PendingLookup(Pending<Box<LookupResultInner>>);
 
 pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 
-pub struct LookupCompletionPermit(OwnedSemaphorePermit);
+pub struct LookupCompletionPermit {
+    _permit: OwnedSemaphorePermit,
+}
 
 pub struct LookupCompletion {
     request_id: u64,
@@ -338,7 +340,7 @@ impl Lookuper {
                     let _ = sender.send(LookupCompletion {
                         request_id,
                         result: Some(result),
-                        permit: Some(LookupCompletionPermit(permit)),
+                        permit: Some(LookupCompletionPermit { _permit: permit }),
                     });
                 });
                 crate::ok_result()
@@ -429,7 +431,7 @@ impl PrefixLookuper {
                     let _ = sender.send(PrefixLookupCompletion {
                         request_id,
                         result: Some(result),
-                        permit: Some(LookupCompletionPermit(permit)),
+                        permit: Some(LookupCompletionPermit { _permit: permit }),
                     });
                 });
                 crate::ok_result()
