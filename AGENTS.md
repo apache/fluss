@@ -118,6 +118,11 @@ assertThatThrownBy(() -> doSomething()).isInstanceOf(IllegalArgumentException.cl
 **Usage:** `@PublicStable` for core APIs (`Connection`, `Admin`); `@PublicEvolving` for new features; `@Internal` for RPC/internals
 **Reference:** `fluss-common/src/main/java/org/apache/fluss/annotation/`
 
+### Extending Methods and Constructors
+
+- **Internal interfaces/classes:** Prefer changing existing methods or constructors and updating usages directly. Backward compatibility is not required; avoid compatibility overloads unless migration would require exceptionally large changes. Java `public` visibility alone does not make an API public.
+- **Public APIs (`@PublicStable` / `@PublicEvolving`):** Preserve existing signatures and contracts, including compatibility with existing implementations; extend through compatible new methods or overloads.
+
 ### Builder Pattern
 
 ```java
