@@ -25,6 +25,7 @@ import org.apache.fluss.row.BinaryRow.BinaryRowFormat;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.array.CompactedArray;
 import org.apache.fluss.row.encode.RowEncoder;
@@ -64,7 +65,7 @@ public class LastNAggregationBenchmark {
     @Param({"10", "100", "1000"})
     public int size;
 
-    @Param({"BIGINT", "SHORT_STRING", "LONG_STRING", "BYTES"})
+    @Param({"BIGINT", "BIGINT_REPEATED_HALVES", "SHORT_STRING", "LONG_STRING", "BYTES", "MAP"})
     public String elementType;
 
     @Param({"NEW", "TAIL", "MIDDLE", "BATCH_UNIQUE", "BATCH_REPEATED"})
@@ -81,10 +82,20 @@ public class LastNAggregationBenchmark {
     /** Builds independent input arrays outside the measured operations. */
     @Setup
     public void setup() {
-        type =
-                elementType.equals("BIGINT")
-                        ? DataTypes.BIGINT()
-                        : elementType.equals("BYTES") ? DataTypes.BYTES() : DataTypes.STRING();
+        switch (elementType) {
+            case "BIGINT":
+            case "BIGINT_REPEATED_HALVES":
+                type = DataTypes.BIGINT();
+                break;
+            case "BYTES":
+                type = DataTypes.BYTES();
+                break;
+            case "MAP":
+                type = DataTypes.MAP(DataTypes.INT(), DataTypes.INT());
+                break;
+            default:
+                type = DataTypes.STRING();
+        }
         plain = new FieldLastNAgg(DataTypes.ARRAY(type), size);
         distinct = new FieldLastNAgg(DataTypes.ARRAY(type), size, true);
         getter = InternalArray.createElementGetter(type);
@@ -109,6 +120,12 @@ public class LastNAggregationBenchmark {
     }
 
     private Object value(int id) {
+        if (elementType.equals("BIGINT_REPEATED_HALVES")) {
+            return ((long) id << 32) | (id & 0xffffffffL);
+        }
+        if (elementType.equals("MAP")) {
+            return GenericMap.of(id, id);
+        }
         if (elementType.equals("BIGINT")) {
             return (long) id;
         }

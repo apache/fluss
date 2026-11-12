@@ -114,11 +114,17 @@ class FieldLastNDistinctAggTest {
 
     @Test
     void testHashCollisionsDoNotRemoveDifferentValues() {
-        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 3, true);
-        InternalArray result =
-                (InternalArray)
-                        agg.agg(null, new GenericArray(new long[] {1L, 1L << 32, 1L, 1L << 32}));
-        assertThat(result.toLongArray()).containsExactly(1L, 1L << 32);
+        // The second pair collides under the 64-bit finalizer followed by 32-bit folding.
+        for (long[] pair : new long[][] {{0L, 1L << 32}, {100097L, 101104L}}) {
+            FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 3, true);
+            InternalArray result =
+                    (InternalArray)
+                            agg.agg(
+                                    null,
+                                    new GenericArray(
+                                            new long[] {pair[0], pair[1], pair[0], pair[1]}));
+            assertThat(result.toLongArray()).containsExactly(pair[0], pair[1]);
+        }
     }
 
     @Test

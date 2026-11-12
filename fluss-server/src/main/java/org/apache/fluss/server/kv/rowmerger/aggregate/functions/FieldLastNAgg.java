@@ -110,12 +110,15 @@ public class FieldLastNAgg extends FieldAggregator {
 
     private Object distinct(@Nullable InternalArray older, InternalArray newer) {
         Selection selection = new Selection(older, newer);
+        boolean success = false;
         try {
             selection.scan(newer, false);
             selection.scan(older, true);
-            return selection.build();
+            Object result = selection.build();
+            success = true;
+            return result;
         } finally {
-            selection.release();
+            selection.release(success);
         }
     }
 
@@ -154,16 +157,19 @@ public class FieldLastNAgg extends FieldAggregator {
             table = workspace.table;
         }
 
-        private void release() {
+        private void release(boolean success) {
+            workspace.inUse = false;
+            // Failed growth may leave buffer capacities inconsistent. Do not cache partial state.
+            if (!success || positions.length > MAX_RETAINED_POSITIONS) {
+                if (WORKSPACE.get() == workspace) {
+                    WORKSPACE.remove();
+                }
+                return;
+            }
             Arrays.fill(table, 0);
             workspace.positions = positions;
             workspace.hashes = hashes;
             workspace.table = table;
-            workspace.inUse = false;
-            // Large arrays must not leave unbounded scratch space on long-lived threads.
-            if (positions.length > MAX_RETAINED_POSITIONS && WORKSPACE.get() == workspace) {
-                WORKSPACE.remove();
-            }
         }
 
         private void scan(@Nullable InternalArray source, boolean old) {
@@ -176,7 +182,9 @@ public class FieldLastNAgg extends FieldAggregator {
                 // Null has key zero but a nonzero hash, unlike the primitive zero value.
                 int hash =
                         primitiveDistinct
-                                ? (isNull ? 1 : Long.hashCode(key))
+                                ? (isNull
+                                        ? ArrayElementComparator.NULL_HASH
+                                        : ArrayElementComparator.hashLong(key))
                                 : comparator.hash(source, i);
                 int slot = slot(hash);
                 while (table[slot] != 0) {

@@ -44,6 +44,8 @@ final class ArrayElementComparator implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    static final int NULL_HASH = 1;
+
     private final DataType type;
     private final ArrayElementComparator[] children;
 
@@ -118,25 +120,19 @@ final class ArrayElementComparator implements Serializable {
 
     int hash(DataGetters array, int pos) {
         if (array.isNullAt(pos)) {
-            return 0;
+            return NULL_HASH;
         }
         switch (type.getTypeRoot()) {
             case BOOLEAN:
-                return Boolean.hashCode(array.getBoolean(pos));
             case TINYINT:
-                return array.getByte(pos);
             case SMALLINT:
-                return array.getShort(pos);
             case INTEGER:
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
-                return array.getInt(pos);
             case BIGINT:
-                return Long.hashCode(array.getLong(pos));
             case FLOAT:
-                return Float.floatToIntBits(array.getFloat(pos));
             case DOUBLE:
-                return Long.hashCode(Double.doubleToLongBits(array.getDouble(pos)));
+                return hashLong(longKey(array, pos));
             case CHAR:
             case STRING:
             case BINARY:
@@ -169,14 +165,30 @@ final class ArrayElementComparator implements Serializable {
                 InternalMap map = array.getMap(pos);
                 InternalArray keys = map.keyArray();
                 InternalArray values = map.valueArray();
-                int mapHash = 0;
+                int mapHash = map.size();
                 for (int i = 0; i < map.size(); i++) {
-                    mapHash += children[0].hash(keys, i) ^ children[1].hash(values, i);
+                    long entry =
+                            ((long) children[0].hash(keys, i) << 32)
+                                    | (children[1].hash(values, i) & 0xffffffffL);
+                    mapHash += hashLong(entry);
                 }
-                return mapHash;
+                return MurmurHashUtils.fmix(mapHash);
             default:
                 return value(array, pos).hashCode();
         }
+    }
+
+    /**
+     * Mixes both halves before folding, preserving hashLong(0) == 0 for primitive null handling.
+     */
+    static int hashLong(long value) {
+        // MurmurHash3's 64-bit finalizer.
+        value ^= value >>> 33;
+        value *= 0xff51afd7ed558ccdL;
+        value ^= value >>> 33;
+        value *= 0xc4ceb9fe1a85ec53L;
+        value ^= value >>> 33;
+        return (int) (value ^ (value >>> 32));
     }
 
     boolean equal(DataGetters left, int l, DataGetters right, int r) {
