@@ -31,6 +31,7 @@ import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -107,6 +108,7 @@ public final class ConsumerGroupManager {
     private final Executor ioExecutor;
     private final AtomicReference<CompletableFuture<TableInfo>> tableInitFuture =
             new AtomicReference<>();
+    @Nullable private volatile CachedValueDecoder cachedValueDecoder;
 
     /** Creates a manager for consumer groups on this tablet server. */
     public ConsumerGroupManager(
@@ -444,8 +446,7 @@ public final class ConsumerGroupManager {
             String groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
         Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
         try {
-            ValueDecoder decoder =
-                    ConsumerOffsetSchema.createValueDecoder(offsetsReplica.getSchemaGetter());
+            ValueDecoder decoder = getValueDecoder(offsetsReplica.getSchemaGetter());
             if (requestedBuckets == null) {
                 populateAllOffsets(
                         offsetsReplica.prefixLookup(offsetSchema.encodeOffsetCommitPrefix(groupId)),
@@ -473,6 +474,17 @@ public final class ConsumerGroupManager {
                             : Errors.forException(e).exception(e.getMessage());
             return FutureUtils.completedExceptionally(exception);
         }
+    }
+
+    @VisibleForTesting
+    ValueDecoder getValueDecoder(SchemaGetter schemaGetter) {
+        CachedValueDecoder cached = cachedValueDecoder;
+        if (cached == null || cached.schemaGetter != schemaGetter) {
+            // Concurrent misses may create two decoders. Each caller keeps its matching pair.
+            cached = new CachedValueDecoder(schemaGetter);
+            cachedValueDecoder = cached;
+        }
+        return cached.decoder;
     }
 
     @VisibleForTesting
@@ -599,6 +611,16 @@ public final class ConsumerGroupManager {
                 return Errors.NOT_CONSUMER_GROUP_OWNER;
             default:
                 return error;
+        }
+    }
+
+    private static final class CachedValueDecoder {
+        private final SchemaGetter schemaGetter;
+        private final ValueDecoder decoder;
+
+        private CachedValueDecoder(SchemaGetter schemaGetter) {
+            this.schemaGetter = schemaGetter;
+            this.decoder = ConsumerOffsetSchema.createValueDecoder(schemaGetter);
         }
     }
 }
