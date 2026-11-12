@@ -43,6 +43,19 @@ pub struct FlussConnection {
 }
 
 impl FlussConnection {
+    #[cfg(test)]
+    pub(crate) fn new_for_test(metadata: Arc<Metadata>) -> Self {
+        Self {
+            metadata,
+            network_connects: Arc::new(RpcClient::new()),
+            args: Config::default(),
+            writer_client: Default::default(),
+            admin_client: RwLock::new(None),
+            lookup_client: Default::default(),
+            rescaled_partitions: Default::default(),
+        }
+    }
+
     pub async fn new(arg: Config) -> Result<Self> {
         arg.validate_security()
             .map_err(|msg| Error::IllegalArgument { message: msg })?;

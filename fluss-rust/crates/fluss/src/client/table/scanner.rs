@@ -239,7 +239,7 @@ impl<'a> TableScan<'a> {
     /// * `column_indices` - Zero-based indices of columns to include in the scan
     ///
     /// # Errors
-    /// Returns an error if `column_indices` is empty or if any column index is out of range.
+    /// Returns an error if `column_indices` is empty, contains duplicates, or has an out-of-range index.
     ///
     /// # Example
     /// ```
@@ -294,6 +294,7 @@ impl<'a> TableScan<'a> {
             });
         }
         let field_count = self.table_info.row_type().fields().len();
+        let mut seen = HashSet::with_capacity(column_indices.len());
         for &idx in column_indices {
             if idx >= field_count {
                 return Err(Error::IllegalArgument {
@@ -302,6 +303,11 @@ impl<'a> TableScan<'a> {
                         idx,
                         field_count - 1
                     ),
+                });
+            }
+            if !seen.insert(idx) {
+                return Err(Error::IllegalArgument {
+                    message: format!("Duplicate column index: {idx}"),
                 });
             }
         }
@@ -315,7 +321,7 @@ impl<'a> TableScan<'a> {
     /// * `column_names` - Names of columns to include in the scan
     ///
     /// # Errors
-    /// Returns an error if `column_names` is empty or if any column name is not found in the table schema.
+    /// Returns an error if `column_names` is empty, contains duplicates, or includes unknown names.
     ///
     /// # Example
     /// ```
@@ -360,7 +366,7 @@ impl<'a> TableScan<'a> {
     ///     # Ok(())
     /// # }
     /// ```
-    pub fn project_by_name(mut self, column_names: &[&str]) -> Result<Self> {
+    pub fn project_by_name(self, column_names: &[&str]) -> Result<Self> {
         if column_names.is_empty() {
             return Err(Error::IllegalArgument {
                 message: "Column names cannot be empty".to_string(),
@@ -380,8 +386,15 @@ impl<'a> TableScan<'a> {
             indices.push(idx);
         }
 
-        self.projected_fields = Some(indices);
-        Ok(self)
+        let mut seen = HashSet::with_capacity(column_names.len());
+        for &name in column_names {
+            if !seen.insert(name) {
+                return Err(Error::IllegalArgument {
+                    message: format!("Duplicate column name: '{name}'"),
+                });
+            }
+        }
+        self.project(&indices)
     }
 
     /// Creates a record-mode log scanner, polled for individual [`ScanRecord`]s.
@@ -2841,6 +2854,107 @@ mod tests {
         builder.build()
     }
 
+    #[test]
+    fn table_scan_validates_projection_indices_and_names() -> Result<()> {
+        use crate::metadata::DataField;
+        use crate::test_utils::build_table_info_with_columns;
+
+        let path = TablePath::new("db", "projection");
+        let info = build_table_info_with_columns(
+            path.clone(),
+            1,
+            1,
+            vec![
+                DataField::new("id", DataTypes::int(), None),
+                DataField::new("name", DataTypes::string(), None),
+            ],
+        );
+        let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&path, 1, 1)));
+        let conn = FlussConnection::new_for_test(metadata.clone());
+        let scan = || TableScan::new(&conn, info.clone(), metadata.clone());
+        for (indices, message) in [
+            (vec![], "Column indices cannot be empty"),
+            (vec![2], "Column index 2 out of range"),
+            (vec![0, 0], "Duplicate column index: 0"),
+            (vec![1, 0, 1], "Duplicate column index: 1"),
+        ] {
+            assert!(
+                matches!(scan().project(&indices), Err(Error::IllegalArgument { message: actual }) if actual.contains(message))
+            );
+        }
+        for (names, message) in [
+            (vec![], "Column names cannot be empty"),
+            (vec!["missing"], "Column 'missing' not found"),
+            (vec!["id", "id"], "Duplicate column name: 'id'"),
+            (vec!["name", "name"], "Duplicate column name: 'name'"),
+            (vec!["name", "id", "name"], "Duplicate column name: 'name'"),
+            (vec!["id", "id", "missing"], "Column 'missing' not found"),
+        ] {
+            assert!(
+                matches!(scan().project_by_name(&names), Err(Error::IllegalArgument { message: actual }) if actual == message)
+            );
+        }
+        for projected in [
+            scan().project(&[1, 0])?,
+            scan().project_by_name(&["name", "id"])?,
+        ] {
+            assert_eq!(projected.projected_fields, Some(vec![1, 0]));
+            let projected = projected.project(&[0])?;
+            assert_eq!(projected.projected_fields, Some(vec![0]));
+            assert_eq!(
+                projected.project_by_name(&["name", "id"])?.projected_fields,
+                Some(vec![1, 0])
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn public_polls_deliver_invalid_projection_errors() -> Result<()> {
+        for batch_mode in [false, true] {
+            for preceding_data in [false, true] {
+                let (inner, _, data) = scanner_fixture(true)?;
+                let bucket = TableBucket::new(1, 0);
+                let error_bucket = TableBucket::new(1, 1);
+                let status = &inner.log_scanner_status;
+                status.assign_scan_bucket(bucket.clone(), 0);
+                status.assign_scan_bucket(error_bucket.clone(), 0);
+                if preceding_data {
+                    inner.log_fetcher.log_fetch_buffer.add(memory_fetch(
+                        &inner.log_fetcher,
+                        bucket,
+                        data,
+                        0,
+                    ));
+                }
+                let mut response = filtered_response(None, None);
+                let error = &mut response.tables_resp[0].buckets_resp[0];
+                error.bucket_id = 1;
+                error.error_code = Some(FlussError::InvalidColumnProjection.code());
+                error.error_message = Some(
+                    "The projection indexes should not contain duplicated fields, but is [0, 0]"
+                        .into(),
+                );
+                LogFetcher::handle_fetch_response(
+                    response,
+                    test_response_context(&inner.log_fetcher, &inner.metadata),
+                )
+                .await;
+                if preceding_data {
+                    assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+                }
+                let error = poll_test_offsets(&inner, batch_mode).await.unwrap_err();
+                assert!(
+                    error.to_string().contains("InvalidColumnProjection"),
+                    "{error}"
+                );
+                assert!(error.to_string().contains("duplicated fields"), "{error}");
+                assert_eq!(status.get_bucket_offset(&error_bucket), Some(0));
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn poll_remote_projection_records_in_both_schema_modes() -> Result<()> {
         check_poll_remote_projection(false).await
@@ -2855,13 +2969,11 @@ mod tests {
         for compression in ["NONE", "LZ4_FRAME", "ZSTD"] {
             for fields in [
                 vec![1, 0],
-                vec![1, 0, 1],
                 vec![0, 1],
                 vec![2, 1, 0],
                 vec![0],
                 vec![1],
                 vec![2],
-                vec![2, 0, 2],
                 vec![0, 1, 2],
             ] {
                 check_poll_remote_projection_case(batch_mode, &fields, compression).await?;
@@ -2925,19 +3037,27 @@ mod tests {
         let data = builder.build()?;
         for fixed_schema in [false, true] {
             let metadata = Arc::new(Metadata::new_for_test(build_cluster_arc(&table_path, 1, 1)));
-            let mut inner = LogScannerInner::new(
-                &target,
-                Arc::clone(&metadata),
-                Arc::new(RpcClient::new()),
-                &Config::default(),
-                Some(fields.to_vec()),
-                fixed_schema,
-                None,
-                test_admin(&metadata),
-            )?;
+            let conn = FlussConnection::new_for_test(metadata.clone());
+            let scan = TableScan::new(&conn, target.clone(), metadata.clone())
+                .with_fixed_schema(fixed_schema);
+            let scan = if fixed_schema {
+                scan.project(fields)?
+            } else {
+                let names: Vec<_> = fields
+                    .iter()
+                    .map(|&index| target.get_row_type().fields()[index].name())
+                    .collect();
+                scan.project_by_name(&names)?
+            };
+            let mut inner = if batch_mode {
+                scan.create_record_batch_log_scanner()?.inner
+            } else {
+                scan.create_log_scanner()?.inner
+            };
+            assert_eq!(inner.log_fetcher.resolver.projected_fields(), Some(fields));
             // Seed the historical schema cache so the real asynchronous schema-resolution path
             // runs without a coordinator RPC. The resolver starts with only the target context.
-            inner.log_fetcher = LogFetcher::new(
+            Arc::get_mut(&mut inner).unwrap().log_fetcher = LogFetcher::new(
                 target.clone(),
                 Arc::new(RpcClient::new()),
                 Arc::clone(&metadata),
@@ -2949,7 +3069,6 @@ mod tests {
                 test_scanner_metrics(&table_path),
                 test_schema_getter(&source, &metadata),
             )?;
-            let inner = Arc::new(inner);
             let fetcher = &inner.log_fetcher;
             assert!(fetcher.resolver.resolve(1, true).is_none());
             let bucket = TableBucket::new(1, 0);
