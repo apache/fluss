@@ -2572,24 +2572,32 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     private CommitRemoteLogManifestResponse tryProcessCommitRemoteLogManifest(
-            CommitRemoteLogManifestEvent event) {
+            CommitRemoteLogManifestEvent event) throws Exception {
         CommitRemoteLogManifestData manifestData = event.getCommitRemoteLogManifestData();
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         TableBucket tb = event.getTableBucket();
         try {
             validateFencedEvent(event);
-            // do commit remote log manifest snapshot path to zk.
-            zooKeeperClient.upsertRemoteLogManifestHandle(
-                    tb,
-                    new RemoteLogManifestHandle(
-                            manifestData.getRemoteLogManifestPath(),
-                            manifestData.getRemoteLogEndOffset()));
         } catch (Exception e) {
-            LOG.error(
-                    "Error when commit remote log manifest, the leader need to revert the commit.",
-                    e);
-            response.setCommitSuccess(false);
-            return response;
+            return response.setCommitSuccess(false);
+        }
+        RemoteLogManifestHandle handle =
+                new RemoteLogManifestHandle(
+                        manifestData.getRemoteLogManifestPath(),
+                        manifestData.getRemoteLogEndOffset());
+        if (manifestData.getExpectedManifestPath() != null) {
+            if (!zooKeeperClient.compareAndSetRemoteLogManifestHandle(
+                    tb, handle, manifestData.getExpectedManifestPath())) {
+                return response.setCommitSuccess(false);
+            }
+        } else {
+            // Preserve the existing v0 response contract for mainline peers.
+            try {
+                zooKeeperClient.upsertRemoteLogManifestHandle(tb, handle);
+            } catch (Exception e) {
+                LOG.error("Failed to commit remote log manifest for {}.", tb, e);
+                return response.setCommitSuccess(false);
+            }
         }
 
         response.setCommitSuccess(true);

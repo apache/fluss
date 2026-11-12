@@ -37,6 +37,7 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -294,6 +295,34 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testConditionalRemoteLogCommitCannotBeSilentlyDowngraded() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.validateVersionCompatibility(
+                    ApiKeys.COMMIT_REMOTE_LOG_MANIFEST,
+                    (short) 0,
+                    new CommitRemoteLogManifestRequest());
+            CommitRemoteLogManifestRequest request =
+                    new CommitRemoteLogManifestRequest().setExpectedManifestPath("");
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.COMMIT_REMOTE_LOG_MANIFEST, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(
+                    ApiKeys.COMMIT_REMOTE_LOG_MANIFEST, (short) 1, request);
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

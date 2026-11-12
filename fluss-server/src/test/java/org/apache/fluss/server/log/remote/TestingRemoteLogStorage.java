@@ -41,6 +41,10 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     public final AtomicBoolean writeManifestFail = new AtomicBoolean(false);
 
+    public final AtomicBoolean deleteSegmentFail = new AtomicBoolean(false);
+
+    public Runnable afterWriteManifest = () -> {};
+
     /**
      * When set to a non-negative value N, the first N calls to {@link #copyLogSegmentFiles} will
      * succeed and the (N+1)th call will throw a {@link RemoteStorageException}. A negative value
@@ -117,12 +121,23 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
     }
 
     @Override
+    public void deleteLogSegmentFiles(FsPath remoteLogDir, RemoteLogSegment segment)
+            throws RemoteStorageException {
+        if (deleteSegmentFail.get()) {
+            throw new RemoteStorageException("Simulated delete failure");
+        }
+        super.deleteLogSegmentFiles(remoteLogDir, segment);
+    }
+
+    @Override
     public FsPath writeRemoteLogManifestSnapshot(FsPath remoteLogDir, RemoteLogManifest manifest)
             throws RemoteStorageException {
         if (writeManifestFail.get()) {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
-        return super.writeRemoteLogManifestSnapshot(remoteLogDir, manifest);
+        FsPath path = super.writeRemoteLogManifestSnapshot(remoteLogDir, manifest);
+        afterWriteManifest.run();
+        return path;
     }
 
     @Override

@@ -77,6 +77,8 @@ public class RemoteLogTablet {
 
     private volatile RemoteLogManifest currentManifest;
 
+    private volatile String currentManifestPath = "";
+
     private volatile long remoteSizeInBytes;
 
     private volatile int numRemoteLogSegments;
@@ -314,7 +316,17 @@ public class RemoteLogTablet {
         return currentManifest;
     }
 
+    /** Returns the path paired with the current manifest, or empty before the first commit. */
+    public String currentManifestPath() {
+        return currentManifestPath;
+    }
+
     public void loadRemoteLogManifest(RemoteLogManifest manifestSnapshot) {
+        loadRemoteLogManifest(manifestSnapshot, "");
+    }
+
+    /** Loads a manifest together with the handle from which it was read or committed. */
+    public void loadRemoteLogManifest(RemoteLogManifest manifestSnapshot, String manifestPath) {
         inWriteLock(
                 lock,
                 () -> {
@@ -328,6 +340,7 @@ public class RemoteLogTablet {
                     numRemoteLogSegments = normalizedManifest.getRemoteLogSegmentList().size();
                     remoteLogStartOffset = normalizedManifest.getRemoteLogStartOffset();
                     remoteLogEndOffset = normalizedManifest.getRemoteLogEndOffset();
+                    currentManifestPath = manifestPath;
                     currentManifest = normalizedManifest;
                 });
     }

@@ -933,6 +933,9 @@ pub struct CommitRemoteLogManifestRequest {
     pub bucket_leader_epoch: i32,
     #[prost(int64, optional, tag = "9")]
     pub highest_copied_end_offset: ::core::option::Option<i64>,
+    /// v1: empty means no predecessor; absence retains the v0 unconditional contract.
+    #[prost(string, optional, tag = "10")]
+    pub expected_manifest_path: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitRemoteLogManifestResponse {

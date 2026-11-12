@@ -57,6 +57,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -146,6 +147,37 @@ class ZooKeeperClientTest {
     @AfterAll
     static void afterAll() {
         zookeeperClient.close();
+    }
+
+    @Test
+    void testConditionalManifestCommitRejectsLateRequests() throws Exception {
+        TableBucket bucket = new TableBucket(1234L, 0);
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(BucketIdZNode.path(bucket));
+        RemoteLogManifestHandle first =
+                new RemoteLogManifestHandle(new FsPath("file:///first"), 10);
+        RemoteLogManifestHandle second =
+                new RemoteLogManifestHandle(new FsPath("file:///second"), 20);
+        assertThat(zookeeperClient.compareAndSetRemoteLogManifestHandle(bucket, first, ""))
+                .isTrue();
+        assertThat(zookeeperClient.compareAndSetRemoteLogManifestHandle(bucket, first, ""))
+                .isTrue();
+        assertThat(
+                        zookeeperClient.compareAndSetRemoteLogManifestHandle(
+                                bucket, second, first.getRemoteLogManifestPath().toString()))
+                .isTrue();
+        // A timed-out first request can execute after its successor has committed.
+        assertThat(zookeeperClient.compareAndSetRemoteLogManifestHandle(bucket, first, ""))
+                .isFalse();
+        assertThat(zookeeperClient.getRemoteLogManifestHandle(bucket)).contains(second);
+        assertThat(
+                        zookeeperClient.compareAndSetRemoteLogManifestHandle(
+                                bucket, second, first.getRemoteLogManifestPath().toString()))
+                .isTrue();
+        assertThat(zookeeperClient.getRemoteLogManifestHandle(bucket)).contains(second);
     }
 
     @Test
