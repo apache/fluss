@@ -184,25 +184,26 @@ class EmbeddedFlussLakeTieringTest {
                         EmbeddedFlussLakeTiering.extractTieringParams(params),
                         EmbeddedFlussLakeTiering.extractFlinkConfig(params));
 
-        assertThat(tiering.flussConfig.getRawValue(ConfigOptions.BOOTSTRAP_SERVERS.key()))
+        assertThat(tiering.job.flussConfig.getRawValue(ConfigOptions.BOOTSTRAP_SERVERS.key()))
                 .isPresent()
                 .contains("localhost:9123");
-        assertThat(tiering.dataLake).isEqualTo("paimon");
-        assertThat(tiering.lakeConfig.toMap())
+        assertThat(tiering.job.dataLake).isEqualTo("paimon");
+        assertThat(tiering.job.lakeConfig.toMap())
                 .containsEntry("metastore", "filesystem")
                 .containsEntry("warehouse", "/tmp/paimon");
-        assertThat(tiering.lakeTieringConfig.toMap())
+        assertThat(tiering.job.lakeTieringConfig.toMap())
                 .containsEntry("lake.tiering.example.option", "5 s");
 
         // the embedded Flink runtime honors the unprefixed config file entries
-        assertThat(tiering.execEnv.getParallelism()).isEqualTo(4);
+        assertThat(tiering.job.execEnv.getParallelism()).isEqualTo(4);
         // and the tiering job keeps the failover and restart strategy of FlussLakeTiering
         assertThat(
-                        tiering.execEnv
+                        tiering.job
+                                .execEnv
                                 .getConfiguration()
                                 .get(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY))
                 .isEqualTo("full");
-        assertThat(tiering.execEnv.getConfiguration().get(RESTART_STRATEGY))
+        assertThat(tiering.job.execEnv.getConfiguration().get(RESTART_STRATEGY))
                 .isEqualTo("exponential-delay");
     }
 
@@ -222,9 +223,9 @@ class EmbeddedFlussLakeTieringTest {
         }
         EmbeddedFlussLakeTiering tiering = new EmbeddedFlussLakeTiering(tieringParams, flinkConfig);
 
-        assertThat(tiering.execEnv.getParallelism()).isEqualTo(parallelism);
-        tiering.execEnv.fromSequence(1, 3).sinkTo(new DiscardingSink<>()).name("end");
-        JobClient jobClient = tiering.execEnv.executeAsync("embedded-runtime-smoke");
+        assertThat(tiering.job.execEnv.getParallelism()).isEqualTo(parallelism);
+        tiering.job.execEnv.fromSequence(1, 3).sinkTo(new DiscardingSink<>()).name("end");
+        JobClient jobClient = tiering.job.execEnv.executeAsync("embedded-runtime-smoke");
         CompletableFuture<JobExecutionResult> result = jobClient.getJobExecutionResult();
         try {
             assertThat(result.get(60, TimeUnit.SECONDS)).isNotNull();
@@ -253,14 +254,15 @@ class EmbeddedFlussLakeTieringTest {
                     protected JobClient run() throws Exception {
                         // a bounded job that fails on its first element; with no
                         // restarts the failure is terminal
-                        execEnv.setRestartStrategy(RestartStrategies.noRestart());
-                        execEnv.fromElements(1, 2, 3)
+                        job.execEnv.setRestartStrategy(RestartStrategies.noRestart());
+                        job.execEnv
+                                .fromElements(1, 2, 3)
                                 .map(
                                         value -> {
                                             throw new IllegalStateException("expected job failure");
                                         })
                                 .sinkTo(new DiscardingSink<>());
-                        return execEnv.executeAsync("bounded-failing-job");
+                        return job.execEnv.executeAsync("bounded-failing-job");
                     }
                 };
 
@@ -303,8 +305,9 @@ class EmbeddedFlussLakeTieringTest {
                         runtime) {
                     @Override
                     protected JobClient run() throws Exception {
-                        execEnv.setRestartStrategy(RestartStrategies.noRestart());
-                        execEnv.fromElements(1)
+                        job.execEnv.setRestartStrategy(RestartStrategies.noRestart());
+                        job.execEnv
+                                .fromElements(1)
                                 .map(
                                         value -> {
                                             if (failJob) {
@@ -314,7 +317,7 @@ class EmbeddedFlussLakeTieringTest {
                                             return value;
                                         })
                                 .sinkTo(new DiscardingSink<>());
-                        return execEnv.executeAsync("termination-test");
+                        return job.execEnv.executeAsync("termination-test");
                     }
                 };
         CompletableFuture<Throwable> outcome = runInBackground(tiering);
@@ -625,11 +628,11 @@ class EmbeddedFlussLakeTieringTest {
                     env.configure(override, EmbeddedFlussLakeTieringTest.class.getClassLoader());
                 };
         decorator.decorate(
-                tiering.execEnv,
-                tiering.flussConfig,
-                tiering.lakeConfig,
-                tiering.lakeTieringConfig,
-                tiering.dataLake);
+                tiering.job.execEnv,
+                tiering.job.flussConfig,
+                tiering.job.lakeConfig,
+                tiering.job.lakeTieringConfig,
+                tiering.job.dataLake);
     }
 
     private static EmbeddedFlussLakeTiering boundedTiering(
@@ -640,8 +643,8 @@ class EmbeddedFlussLakeTieringTest {
                 runtime) {
             @Override
             protected JobClient run() throws Exception {
-                execEnv.fromElements(1).sinkTo(new DiscardingSink<>());
-                return execEnv.executeAsync("bounded-test-job");
+                job.execEnv.fromElements(1).sinkTo(new DiscardingSink<>());
+                return job.execEnv.executeAsync("bounded-test-job");
             }
         };
     }
@@ -870,11 +873,11 @@ class EmbeddedFlussLakeTieringTest {
                         EmbeddedFlussLakeTiering.extractTieringParams(params),
                         EmbeddedFlussLakeTiering.extractFlinkConfig(params));
 
-        assertThat(tiering.flussConfig.getRawValue(ConfigOptions.BOOTSTRAP_SERVERS.key()))
+        assertThat(tiering.job.flussConfig.getRawValue(ConfigOptions.BOOTSTRAP_SERVERS.key()))
                 .isPresent()
                 .contains("localhost:9123");
         // the provider keys configure the tiering service, not the embedded Flink runtime
-        assertThat(tiering.execEnv.getConfiguration().toMap())
+        assertThat(tiering.job.execEnv.getConfiguration().toMap())
                 .doesNotContainKey("config.providers");
     }
 
@@ -1011,12 +1014,13 @@ class EmbeddedFlussLakeTieringTest {
                                 Files.createFile(Paths.get(args[0], "before-submission"));
                                 new CompletableFuture<Void>().get(60, TimeUnit.SECONDS);
                             }
-                            execEnv.fromSource(
+                            job.execEnv
+                                    .fromSource(
                                             new ClosingSequenceSource(args[0]),
                                             WatermarkStrategy.noWatermarks(),
                                             "shutdown-source")
                                     .sinkTo(new DiscardingSink<>());
-                            return execEnv.executeAsync("embedded-shutdown");
+                            return job.execEnv.executeAsync("embedded-shutdown");
                         }
                     };
             tiering.runEmbedded();
