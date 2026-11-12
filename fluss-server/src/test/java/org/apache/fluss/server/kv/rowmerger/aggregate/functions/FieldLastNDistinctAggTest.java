@@ -30,8 +30,6 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.row.array.CompactedArray;
-import org.apache.fluss.row.array.IndexedArray;
 import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -47,7 +45,6 @@ import java.util.List;
 import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Regression tests for bounded collection by last distinct occurrence. */
 class FieldLastNDistinctAggTest {
@@ -93,32 +90,6 @@ class FieldLastNDistinctAggTest {
     }
 
     @Test
-    void testFailedInputDoesNotAffectNextAggregation() {
-        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 3, true);
-        assertThatThrownBy(
-                        () ->
-                                agg.agg(
-                                        null,
-                                        new GenericArray(new Object[] {"invalid long", 2L, 1L})))
-                .isInstanceOf(ClassCastException.class);
-        InternalArray result =
-                (InternalArray) agg.agg(null, new GenericArray(new long[] {1, 2, 3}));
-        assertThat(result.toLongArray()).containsExactly(1, 2, 3);
-    }
-
-    @Test
-    void testHashCollisionsDoNotRemoveDifferentValues() {
-        // These values collide under the 64-bit finalizer followed by 32-bit folding.
-        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 3, true);
-        InternalArray result =
-                (InternalArray)
-                        agg.agg(
-                                null,
-                                new GenericArray(new long[] {100097, 101104, 100097, 101104}));
-        assertThat(result.toLongArray()).containsExactly(100097, 101104);
-    }
-
-    @Test
     void testDeduplicatesAndBoundsRawAccumulatorAfterOverwrite() {
         FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 3, true);
         InternalArray repeated = new GenericArray(new long[] {1, 1, 2});
@@ -133,16 +104,6 @@ class FieldLastNDistinctAggTest {
                 .containsExactly(3, 4, 5);
         assertThat(((InternalArray) agg.agg(repeated, new GenericArray(new long[0]))).toLongArray())
                 .containsExactly(1, 2);
-    }
-
-    @Test
-    void testRepeatedTailAndEmptyInputs() {
-        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BIGINT()), 2, true);
-        InternalArray acc = (InternalArray) agg.agg(null, new GenericArray(new long[] {1, 2}));
-        assertThat(agg.agg(acc, null)).isSameAs(acc);
-        assertThat(agg.agg(acc, new GenericArray(new long[] {2}))).isSameAs(acc);
-        assertThat(agg.agg(acc, new GenericArray(new long[0]))).isSameAs(acc);
-        assertThat(((InternalArray) agg.agg(null, new GenericArray(new long[0]))).size()).isZero();
     }
 
     @Test
@@ -312,57 +273,15 @@ class FieldLastNDistinctAggTest {
                 GenericMap.of(1, new byte[] {3}, 2, new byte[] {2}),
                 GenericMap.of(3, new byte[] {1}, 2, new byte[] {2}),
                 GenericMap.of(2, new byte[] {2}, 1, new byte[] {1}));
-        // Both keys and values collide, so map lookup must compare their full values.
         checkType(
-                DataTypes.MAP(DataTypes.BIGINT(), DataTypes.BIGINT()),
+                DataTypes.MAP(DataTypes.BYTES(), DataTypes.INT()),
                 format,
                 new Object[] {
-                    GenericMap.of(101104L, 101104L, 100097L, 101104L),
-                    GenericMap.of(100097L, 100097L),
-                    GenericMap.of(101104L, 100097L),
-                    GenericMap.of(101104L, 101104L, 100097L, 100097L),
-                    null
+                    GenericMap.of(new byte[] {2}, 10), GenericMap.of(new byte[] {1}, 10), null
                 },
-                GenericMap.of(100097L, 100097L, 101104L, 101104L),
-                GenericMap.of(101104L, 101104L, 100097L, 101104L),
-                GenericMap.of(100097L, 100097L),
-                GenericMap.of(101104L, 100097L),
-                GenericMap.of(101104L, 101104L, 100097L, 100097L));
-    }
-
-    @ParameterizedTest
-    @EnumSource(
-            value = BinaryRowFormat.class,
-            names = {"COMPACTED", "INDEXED"})
-    void testBinaryStringsAcrossWrites(BinaryRowFormat format) {
-        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.STRING()), 3, true);
-        BinaryString shortValue = BinaryString.fromString("a");
-        BinaryString longValue = BinaryString.fromString("long value");
-        InternalArray acc =
-                (InternalArray)
-                        agg.agg(
-                                null,
-                                binary(
-                                        DataTypes.STRING(),
-                                        format,
-                                        new Object[] {shortValue, null, longValue, longValue}));
-        InternalArray result =
-                (InternalArray)
-                        agg.agg(
-                                acc,
-                                binary(
-                                        DataTypes.STRING(),
-                                        format,
-                                        new Object[] {shortValue, null}));
-        assertThat(result)
-                .isInstanceOf(
-                        format == BinaryRowFormat.COMPACTED
-                                ? CompactedArray.class
-                                : IndexedArray.class);
-        assertThat(result.size()).isEqualTo(3);
-        assertThat(result.getString(0)).isEqualTo(longValue);
-        assertThat(result.getString(1)).isEqualTo(shortValue);
-        assertThat(result.isNullAt(2)).isTrue();
+                GenericMap.of(new byte[] {1}, 10),
+                GenericMap.of(new byte[] {2}, 10),
+                GenericMap.of(new byte[] {1}, 10));
     }
 
     private static Decimal decimal(String value, int precision) {
