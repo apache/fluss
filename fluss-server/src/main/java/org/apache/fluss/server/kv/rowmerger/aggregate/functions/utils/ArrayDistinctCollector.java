@@ -16,8 +16,9 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
+package org.apache.fluss.server.kv.rowmerger.aggregate.functions.utils;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.types.DataType;
@@ -28,35 +29,44 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 
 /** Distinct collection using element equality, with byte arrays compared by content. */
-final class ArrayDistinctCollector implements Serializable {
+@Internal
+public final class ArrayDistinctCollector implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final InternalArray.ElementGetter valueGetter;
 
-    ArrayDistinctCollector(DataType elementType) {
+    /** Creates a collector for the given array element type. */
+    public ArrayDistinctCollector(DataType elementType) {
         valueGetter = InternalArray.createElementGetter(elementType);
     }
 
-    Accumulator newAccumulator() {
+    /** Creates an independent accumulator for one aggregation call. */
+    public Accumulator newAccumulator() {
         return new Accumulator();
     }
 
     /**
      * Owns the collection for one aggregation call; the collector retains only type configuration.
      */
-    final class Accumulator {
+    @Internal
+    public final class Accumulator {
         private final Set<Object> elements = new LinkedHashSet<>();
 
-        void add(InternalArray source, int position) {
+        private Accumulator() {}
+
+        /** Adds an element, retaining its first occurrence in this accumulator. */
+        public void add(InternalArray source, int position) {
             Object value = valueGetter.getElementOrNull(source, position);
             elements.add(value instanceof byte[] ? new ByteArrayWrapper((byte[]) value) : value);
         }
 
-        int size() {
+        /** Returns the number of distinct elements added. */
+        public int size() {
             return elements.size();
         }
 
-        InternalArray toArray() {
+        /** Returns the retained values in insertion order. */
+        public InternalArray toArray() {
             Object[] result = elements.toArray();
             for (int i = 0; i < result.length; i++) {
                 result[i] = unwrap(result[i]);
@@ -64,7 +74,8 @@ final class ArrayDistinctCollector implements Serializable {
             return new GenericArray(result);
         }
 
-        InternalArray toReversedArray() {
+        /** Returns the retained values in reverse insertion order. */
+        public InternalArray toReversedArray() {
             Object[] result = new Object[elements.size()];
             int position = result.length;
             for (Object value : elements) {

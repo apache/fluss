@@ -26,6 +26,7 @@ import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.array.BinaryArraySplicer;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.utils.ArrayDistinctCollector;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 
