@@ -19,29 +19,22 @@
 package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
 import org.apache.fluss.row.GenericArray;
-import org.apache.fluss.row.GenericMap;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.ByteArrayWrapper;
 
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
-/** Type-aware distinct collection, preserving the first element added for each logical value. */
+/** Distinct collection using element equality, with byte arrays compared by content. */
 final class ArrayDistinctCollector implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final InternalArray.ElementGetter valueGetter;
-    private final InternalArray.ElementGetter keyGetter;
 
     ArrayDistinctCollector(DataType elementType) {
         valueGetter = InternalArray.createElementGetter(elementType);
-        keyGetter = InternalArray.createDeepElementGetter(elementType, false);
     }
 
     Accumulator newAccumulator() {
@@ -52,13 +45,11 @@ final class ArrayDistinctCollector implements Serializable {
      * Owns the collection for one aggregation call; the collector retains only type configuration.
      */
     final class Accumulator {
-        private final Map<Object, Object> elements = new LinkedHashMap<>();
+        private final Set<Object> elements = new LinkedHashSet<>();
 
         void add(InternalArray source, int position) {
-            Object key = distinctKey(keyGetter.getElementOrNull(source, position));
-            if (!elements.containsKey(key)) {
-                elements.put(key, valueGetter.getElementOrNull(source, position));
-            }
+            Object value = valueGetter.getElementOrNull(source, position);
+            elements.add(value instanceof byte[] ? new ByteArrayWrapper((byte[]) value) : value);
         }
 
         int size() {
@@ -66,50 +57,24 @@ final class ArrayDistinctCollector implements Serializable {
         }
 
         InternalArray toArray() {
-            return new GenericArray(elements.values().toArray());
+            Object[] result = elements.toArray();
+            for (int i = 0; i < result.length; i++) {
+                result[i] = unwrap(result[i]);
+            }
+            return new GenericArray(result);
         }
 
         InternalArray toReversedArray() {
             Object[] result = new Object[elements.size()];
             int position = result.length;
-            for (Object value : elements.values()) {
-                result[--position] = value;
+            for (Object value : elements) {
+                result[--position] = unwrap(value);
             }
             return new GenericArray(result);
         }
     }
 
-    /** Canonical collection keys keep nested equality independent of the input encoding. */
-    private static Object distinctKey(Object value) {
-        if (value instanceof byte[]) {
-            return new ByteArrayWrapper((byte[]) value);
-        }
-        if (value instanceof GenericMap) {
-            GenericMap map = (GenericMap) value;
-            Object[] keys = ((GenericArray) map.keyArray()).toObjectArray();
-            Object[] values = ((GenericArray) map.valueArray()).toObjectArray();
-            Map<Object, Object> key = new HashMap<>();
-            for (int i = 0; i < keys.length; i++) {
-                key.put(distinctKey(keys[i]), distinctKey(values[i]));
-            }
-            return key;
-        }
-        Object[] fields;
-        if (value instanceof GenericArray) {
-            fields = ((GenericArray) value).toObjectArray();
-        } else if (value instanceof GenericRow) {
-            GenericRow row = (GenericRow) value;
-            fields = new Object[row.getFieldCount()];
-            for (int i = 0; i < fields.length; i++) {
-                fields[i] = row.getField(i);
-            }
-        } else {
-            return value;
-        }
-        List<Object> key = new ArrayList<>(fields.length);
-        for (Object field : fields) {
-            key.add(distinctKey(field));
-        }
-        return key;
+    private static Object unwrap(Object value) {
+        return value instanceof ByteArrayWrapper ? ((ByteArrayWrapper) value).getData() : value;
     }
 }

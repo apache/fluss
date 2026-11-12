@@ -44,6 +44,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Random;
 
+import static org.apache.fluss.types.DataTypeRoot.ARRAY;
+import static org.apache.fluss.types.DataTypeRoot.MAP;
+import static org.apache.fluss.types.DataTypeRoot.ROW;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Regression tests for bounded collection by last distinct occurrence. */
@@ -119,7 +122,7 @@ class FieldLastNDistinctAggTest {
 
     @ParameterizedTest
     @EnumSource(BinaryRowFormat.class)
-    void testElementTypesAndMixedRepresentations(BinaryRowFormat format) {
+    void testElementEquality(BinaryRowFormat format) {
         checkType(DataTypes.BOOLEAN(), format, new Object[] {false, true, null}, true, false, true);
         checkType(
                 DataTypes.TINYINT(),
@@ -264,6 +267,7 @@ class FieldLastNDistinctAggTest {
                 DataTypes.MAP(DataTypes.INT(), DataTypes.BYTES()),
                 format,
                 new Object[] {
+                    GenericMap.of(1, new byte[] {1}, 2, new byte[] {2}),
                     GenericMap.of(1, new byte[] {3}, 2, new byte[] {2}),
                     GenericMap.of(3, new byte[] {1}, 2, new byte[] {2}),
                     GenericMap.of(2, new byte[] {2}, 1, new byte[] {1}),
@@ -295,11 +299,12 @@ class FieldLastNDistinctAggTest {
         BinaryArray encoded = binary(type, format, input);
         FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(type), values.length + 2, true);
         InternalArray acc = (InternalArray) agg.agg(null, encoded);
-        // Rewriting the same sequence must not depend on binary vs generic representation.
-        InternalArray mixed = (InternalArray) agg.agg(acc, new GenericArray(input));
+        // Nested values use representation-sensitive element equality, as collect(distinct) does.
+        InternalArray replay = type.isAnyOf(ARRAY, MAP, ROW) ? encoded : new GenericArray(input);
+        InternalArray repeated = (InternalArray) agg.agg(acc, replay);
         ArraySerializer canonical = new ArraySerializer(type, BinaryRowFormat.ALIGNED);
         BinaryArray expectedArray = binary(type, BinaryRowFormat.ALIGNED, expected);
-        for (InternalArray result : new InternalArray[] {acc, mixed}) {
+        for (InternalArray result : new InternalArray[] {acc, repeated}) {
             assertThat(canonical.toBinaryArray(result))
                     .as("%s / %s", type, format)
                     .isEqualTo(expectedArray);
