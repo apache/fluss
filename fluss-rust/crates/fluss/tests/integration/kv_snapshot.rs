@@ -16,6 +16,7 @@
 // under the License.
 
 use arrow::array::{Array, Int32Array, StringArray};
+use fluss::ServerType;
 use fluss::client::{FlussAdmin, FlussConnection, KvSnapshotLeaseMode, KvSnapshotReaderOptions};
 use fluss::config::Config;
 use fluss::metadata::{
@@ -67,6 +68,27 @@ async fn snapshot_after(
     })
     .await
     .expect("persisted snapshot did not reach the acknowledged writes")
+}
+
+/// Waits until a tablet server has registered, because the coordinator rejects table creation
+/// before then.
+async fn wait_for_tablet_server(admin: &FlussAdmin) {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            match admin.get_server_nodes().await {
+                Ok(nodes)
+                    if nodes
+                        .iter()
+                        .any(|node| *node.server_type() == ServerType::TabletServer) =>
+                {
+                    return;
+                }
+                _ => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await
+    .expect("no tablet server registered with the coordinator")
 }
 
 async fn end_offset(admin: &FlussAdmin, path: &TablePath, partition: Option<&str>) -> i64 {
@@ -153,6 +175,7 @@ async fn persisted_snapshot_current_view_and_schema() {
     .await
     .unwrap();
     let admin = connection.get_admin().unwrap();
+    wait_for_tablet_server(&admin).await;
 
     for (format, tagged) in [
         ("COMPACTED", false),
