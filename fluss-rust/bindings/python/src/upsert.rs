@@ -23,7 +23,8 @@ use std::sync::Arc;
 /// Writer for upserting and deleting data in a Fluss primary key table.
 ///
 /// Each upsert/delete operation synchronously queues the write. Call `flush()`
-/// to ensure all queued writes are delivered to the server.
+/// to wait for all queued writes. It doesn't raise the error of a failed write,
+/// wait on the write's handle for that.
 ///
 /// # Example:
 ///     writer = table.new_upsert().create_writer()
@@ -93,7 +94,8 @@ impl UpsertWriter {
     /// Flush all pending upsert/delete operations to the server.
     ///
     /// This method sends all buffered operations and waits until they are
-    /// acknowledged according to the writer's ack configuration.
+    /// acknowledged according to the writer's ack configuration. It doesn't raise
+    /// the error of a failed write, wait on the write's handle for that.
     ///
     /// Returns:
     ///     None on success

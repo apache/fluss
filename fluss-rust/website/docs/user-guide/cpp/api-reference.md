@@ -203,7 +203,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) -> Result` | Append a batch (fire-and-forget) |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out) -> Result` | Append a batch with write acknowledgment |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteCallback callback) -> Result` | Append a batch with one completion notification |
-| `Flush() -> Result`                                         | Flush all pending writes               |
+| `Flush() -> Result`                                         | Flush all pending writes, without returning the errors of failed writes |
 
 ## `UpsertWriter`
 
@@ -215,7 +215,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `Delete(const GenericRow& row) -> Result`                   | Delete a row by primary key (fire-and-forget) |
 | `Delete(const GenericRow& row, WriteResult& out) -> Result` | Delete a row with write acknowledgment        |
 | `Delete(const GenericRow& row, WriteCallback callback) -> Result` | Delete a row with completion notification |
-| `Flush() -> Result`                                         | Flush all pending operations                  |
+| `Flush() -> Result`                                         | Flush all pending operations, without returning the errors of failed ones |
 
 ## `WriteResult`
 

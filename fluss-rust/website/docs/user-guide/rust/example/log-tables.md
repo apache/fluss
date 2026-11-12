@@ -41,7 +41,7 @@ append_writer.append(&row)?;
 append_writer.flush().await?;
 ```
 
-Write operations use a **fire-and-forget** pattern for efficient batching. Each call queues the write and returns a `WriteResultFuture` immediately. Call `flush()` to ensure all queued writes are sent to the server.
+Write operations use a **fire-and-forget** pattern for efficient batching. Each call queues the write and returns a `WriteResultFuture` immediately. Call `flush()` to wait until all queued writes complete. `flush()` doesn't return the error of a failed write, which goes only to that write's `WriteResultFuture`.
 
 For per-record acknowledgment:
 

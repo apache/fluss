@@ -2009,6 +2009,7 @@ class WriteResult {
 
     /// Wait for server acknowledgment of the write.
     /// For fire-and-forget, simply let the WriteResult go out of scope.
+    /// Flush() doesn't return the error of such a write.
     Result Wait();
 
    private:
@@ -2047,6 +2048,8 @@ class AppendWriter {
     /// Like the callback Append overload, but notifies once for the entire batch.
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
                             WriteCallback callback);
+    /// Waits for all queued writes. The error of a failed write goes only to its
+    /// WriteResult or callback.
     Result Flush();
 
    private:
@@ -2093,6 +2096,8 @@ class UpsertWriter {
     Result Delete(const GenericRow& row, WriteResult& out);
     /// Like the callback Upsert overload, but deletes a row by primary key.
     Result Delete(const GenericRow& row, WriteCallback callback);
+    /// Waits for all queued writes. The error of a failed write goes only to its
+    /// WriteResult or callback.
     Result Flush();
 
    private:

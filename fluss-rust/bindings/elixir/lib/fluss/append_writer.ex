@@ -23,6 +23,7 @@ defmodule Fluss.AppendWriter do
   `NOT NULL` column, where `nil` is rejected.
   `append/2` returns a `Fluss.WriteHandle` — drop it for fire-and-forget,
   or call `Fluss.WriteHandle.wait/1` for per-record acknowledgment.
+  `flush/1` waits for all queued writes but doesn't return the error of a failed one.
   When the write buffer is full, a write waits for room, up to the writer buffer wait
   timeout in `Fluss.Config` (no limit by default).
 

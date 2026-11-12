@@ -331,7 +331,7 @@ impl UpsertWriter {
     /// requests to server and blocks on the completion of the requests associated with these
     /// records. A request is considered completed when it is successfully acknowledged according to
     /// the CLIENT_WRITER_ACKS configuration option you have specified or else it
-    /// results in an error.
+    /// results in an error. The error of a failed write goes only to its [`WriteResultFuture`].
     pub async fn flush(&self) -> Result<()> {
         self.writer_client.flush().await
     }
@@ -346,7 +346,8 @@ impl UpsertWriter {
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
-    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    /// or dropped for fire-and-forget behavior. `flush()` waits for a dropped write but
+    /// doesn't return its error.
     pub fn upsert<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.upsert_with_deadline(row, None)
     }
@@ -400,7 +401,8 @@ impl UpsertWriter {
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
-    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    /// or dropped for fire-and-forget behavior. `flush()` waits for a dropped write but
+    /// doesn't return its error.
     pub fn delete<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.delete_with_deadline(row, None)
     }
