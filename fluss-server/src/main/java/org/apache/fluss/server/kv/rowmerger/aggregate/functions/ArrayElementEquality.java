@@ -262,31 +262,66 @@ final class ArrayElementEquality implements Serializable {
                 }
                 return true;
             case MAP:
-                InternalMap lm = left.getMap(l);
-                InternalMap rm = right.getMap(r);
-                if (lm.size() != rm.size()) {
-                    return false;
-                }
-                InternalArray lk = lm.keyArray();
-                InternalArray rk = rm.keyArray();
-                InternalArray lv = lm.valueArray();
-                InternalArray rv = rm.valueArray();
-                for (int i = 0; i < lm.size(); i++) {
-                    int j = i;
-                    if (!children[0].equal(lk, i, rk, j)) {
-                        j = 0;
-                        while (j < rm.size() && !children[0].equal(lk, i, rk, j)) {
-                            j++;
-                        }
-                    }
-                    if (j == rm.size() || !children[1].equal(lv, i, rv, j)) {
-                        return false;
-                    }
-                }
-                return true;
+                return mapsEqual(left.getMap(l), right.getMap(r));
             default:
                 return value(left, l).equals(value(right, r));
         }
+    }
+
+    private boolean mapsEqual(InternalMap left, InternalMap right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        InternalArray leftKeys = left.keyArray();
+        InternalArray rightKeys = right.keyArray();
+        InternalArray leftValues = left.valueArray();
+        InternalArray rightValues = right.valueArray();
+        int[] keyIndex = null;
+        for (int i = 0; i < left.size(); i++) {
+            int rightPosition = i;
+            if (!children[0].equal(leftKeys, i, rightKeys, i)) {
+                // Same-order maps need no index. Build it once when key order differs.
+                if (keyIndex == null) {
+                    keyIndex = buildKeyIndex(rightKeys);
+                }
+                rightPosition = findKey(leftKeys, i, rightKeys, keyIndex);
+            }
+            if (rightPosition < 0
+                    || !children[1].equal(leftValues, i, rightValues, rightPosition)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int[] buildKeyIndex(InternalArray keys) {
+        long capacity = 2;
+        while (capacity < 2L * keys.size()) {
+            capacity <<= 1;
+        }
+        // Keep the load at most one half. Zero marks empty; other slots store key position + 1.
+        int[] index = new int[Math.toIntExact(capacity)];
+        for (int i = 0; i < keys.size(); i++) {
+            int slot = MurmurHashUtils.fmix(children[0].hash(keys, i)) & (index.length - 1);
+            while (index[slot] != 0) {
+                slot = (slot + 1) & (index.length - 1);
+            }
+            index[slot] = i + 1;
+        }
+        return index;
+    }
+
+    private int findKey(
+            InternalArray leftKeys, int position, InternalArray rightKeys, int[] index) {
+        int slot = MurmurHashUtils.fmix(children[0].hash(leftKeys, position)) & (index.length - 1);
+        while (index[slot] != 0) {
+            int candidate = index[slot] - 1;
+            if (children[0].equal(leftKeys, position, rightKeys, candidate)) {
+                return candidate;
+            }
+            slot = (slot + 1) & (index.length - 1);
+        }
+        return -1;
     }
 
     private Object value(DataGetters array, int pos) {

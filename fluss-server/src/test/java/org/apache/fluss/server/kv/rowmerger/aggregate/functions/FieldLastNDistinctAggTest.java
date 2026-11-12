@@ -312,6 +312,22 @@ class FieldLastNDistinctAggTest {
                 GenericMap.of(1, new byte[] {3}, 2, new byte[] {2}),
                 GenericMap.of(3, new byte[] {1}, 2, new byte[] {2}),
                 GenericMap.of(2, new byte[] {2}, 1, new byte[] {1}));
+        // Both keys and values collide, so map lookup must compare their full values.
+        checkType(
+                DataTypes.MAP(DataTypes.BIGINT(), DataTypes.BIGINT()),
+                format,
+                new Object[] {
+                    GenericMap.of(101104L, 101104L, 100097L, 101104L),
+                    GenericMap.of(100097L, 100097L),
+                    GenericMap.of(101104L, 100097L),
+                    GenericMap.of(101104L, 101104L, 100097L, 100097L),
+                    null
+                },
+                GenericMap.of(100097L, 100097L, 101104L, 101104L),
+                GenericMap.of(101104L, 101104L, 100097L, 101104L),
+                GenericMap.of(100097L, 100097L),
+                GenericMap.of(101104L, 100097L),
+                GenericMap.of(101104L, 101104L, 100097L, 100097L));
     }
 
     @ParameterizedTest
