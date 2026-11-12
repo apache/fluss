@@ -135,7 +135,7 @@ public class LastNAggregationBenchmark {
     /** Measures object collection followed by the same row encoder as the binary paths. */
     @Benchmark
     public Object objectCollection() {
-        Set<Object> seen = new HashSet<>();
+        Set<Object> seen = new HashSet<>(size * 2);
         Object[] selected = new Object[size];
         int count = 0;
         for (InternalArray source : new InternalArray[] {newer, older}) {

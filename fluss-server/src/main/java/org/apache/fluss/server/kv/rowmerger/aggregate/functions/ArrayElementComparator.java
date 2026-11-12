@@ -76,6 +76,46 @@ final class ArrayElementComparator implements Serializable {
         }
     }
 
+    boolean supportsLongKey() {
+        switch (type.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    long longKey(DataGetters array, int pos) {
+        switch (type.getTypeRoot()) {
+            case BOOLEAN:
+                return array.getBoolean(pos) ? 1 : 0;
+            case TINYINT:
+                return array.getByte(pos);
+            case SMALLINT:
+                return array.getShort(pos);
+            case INTEGER:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+                return array.getInt(pos);
+            case BIGINT:
+                return array.getLong(pos);
+            case FLOAT:
+                return Float.floatToIntBits(array.getFloat(pos));
+            case DOUBLE:
+                return Double.doubleToLongBits(array.getDouble(pos));
+            default:
+                throw new IllegalArgumentException("Not a primitive key: " + type);
+        }
+    }
+
     int hash(DataGetters array, int pos) {
         if (array.isNullAt(pos)) {
             return 0;

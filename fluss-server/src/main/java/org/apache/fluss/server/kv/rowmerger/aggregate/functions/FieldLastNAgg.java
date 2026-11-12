@@ -45,6 +45,7 @@ public class FieldLastNAgg extends FieldAggregator {
     private final InternalArray.ElementGetter elementGetter;
     private final boolean distinct;
     private final ArrayElementComparator comparator;
+    private final boolean primitiveDistinct;
 
     /**
      * Creates a LAST_N aggregator.
@@ -72,6 +73,7 @@ public class FieldLastNAgg extends FieldAggregator {
         this.elementGetter = InternalArray.createElementGetter(elementType);
         this.distinct = distinct;
         this.comparator = distinct ? new ArrayElementComparator(elementType) : null;
+        this.primitiveDistinct = distinct && comparator.supportsLongKey();
     }
 
     @Override
@@ -122,6 +124,7 @@ public class FieldLastNAgg extends FieldAggregator {
         private int[] positions = new int[8];
         private int[] hashes = new int[8];
         private int[] table = new int[16];
+        private long[] keys = new long[8];
         private boolean inUse;
     }
 
@@ -168,17 +171,25 @@ public class FieldLastNAgg extends FieldAggregator {
                 return;
             }
             for (int i = source.size() - 1; i >= 0 && count < limit; i--) {
-                int hash = comparator.hash(source, i);
+                boolean isNull = primitiveDistinct && source.isNullAt(i);
+                long key = primitiveDistinct && !isNull ? comparator.longKey(source, i) : 0;
+                // Null has key zero but a nonzero hash, unlike the primitive zero value.
+                int hash =
+                        primitiveDistinct
+                                ? (isNull ? 1 : Long.hashCode(key))
+                                : comparator.hash(source, i);
                 int slot = slot(hash);
                 while (table[slot] != 0) {
                     int entry = table[slot] - 1;
                     int position = positions[entry];
                     if (hashes[entry] == hash
-                            && comparator.equal(
-                                    source,
-                                    i,
-                                    position < 0 ? older : newer,
-                                    position < 0 ? ~position : position)) {
+                            && (primitiveDistinct
+                                    ? workspace.keys[entry] == key
+                                    : comparator.equal(
+                                            source,
+                                            i,
+                                            position < 0 ? older : newer,
+                                            position < 0 ? ~position : position))) {
                         break;
                     }
                     slot = (slot + 1) & (table.length - 1);
@@ -193,6 +204,12 @@ public class FieldLastNAgg extends FieldAggregator {
                 }
                 positions[count] = old ? ~i : i;
                 hashes[count] = hash;
+                if (primitiveDistinct) {
+                    if (count == workspace.keys.length) {
+                        workspace.keys = Arrays.copyOf(workspace.keys, positions.length);
+                    }
+                    workspace.keys[count] = key;
+                }
                 table[slot] = ++count;
                 if (count == table.length / 2 && count < limit) {
                     table = new int[table.length * 2];
