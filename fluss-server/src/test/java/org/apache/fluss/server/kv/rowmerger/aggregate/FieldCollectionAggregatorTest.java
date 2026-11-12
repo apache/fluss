@@ -280,6 +280,22 @@ class FieldCollectionAggregatorTest {
 
     @ParameterizedTest
     @EnumSource(KvFormat.class)
+    void testDistinctCollectWithMixedNestedValues(KvFormat format) {
+        DataType elementType = DataTypes.ARRAY(DataTypes.INT());
+        Schema schema = schema(DataTypes.ARRAY(elementType), AggFunctions.COLLECT(true));
+        FieldCollectAgg aggregator = new FieldCollectAgg(DataTypes.ARRAY(elementType), true);
+        GenericArray first = GenericArray.of(1, 2);
+        GenericArray second = GenericArray.of(3, 4);
+        InternalArray binary = value(schema, format, GenericArray.of(first)).row.getArray(1);
+        assertCollectedValues(
+                (InternalArray) aggregator.agg(binary, GenericArray.of(first, second)),
+                elementType,
+                first,
+                second);
+    }
+
+    @ParameterizedTest
+    @EnumSource(KvFormat.class)
     void testMergeMap(KvFormat format) {
         MapType type = DataTypes.MAP(DataTypes.INT(), DataTypes.STRING());
         Schema schema = schema(type, AggFunctions.MERGE_MAP());

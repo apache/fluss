@@ -20,21 +20,12 @@ package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
 import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
-import org.apache.fluss.row.GenericMap;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.array.BinaryArraySplicer;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.utils.ByteArrayWrapper;
 
 import javax.annotation.Nullable;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -45,7 +36,7 @@ public class FieldLastNAgg extends FieldAggregator {
 
     private final int size;
     private final boolean distinct;
-    private final InternalArray.ElementGetter distinctElementGetter;
+    private final ArrayDistinctCollector distinctCollector;
     private final DataType elementType;
     private final boolean spliceable;
     private final InternalArray.ElementGetter elementGetter;
@@ -75,8 +66,7 @@ public class FieldLastNAgg extends FieldAggregator {
         this.spliceable = BinaryArraySplicer.supports(elementType);
         this.elementGetter = InternalArray.createElementGetter(elementType);
         this.distinct = distinct;
-        this.distinctElementGetter =
-                distinct ? InternalArray.createDeepElementGetter(elementType, false) : null;
+        this.distinctCollector = distinct ? new ArrayDistinctCollector(elementType) : null;
     }
 
     @Override
@@ -112,61 +102,20 @@ public class FieldLastNAgg extends FieldAggregator {
     }
 
     private InternalArray distinct(@Nullable InternalArray older, InternalArray newer) {
-        Map<Object, Object> selected = new LinkedHashMap<>();
-        collectDistinct(selected, newer);
-        collectDistinct(selected, older);
-        Object[] result = new Object[selected.size()];
-        int position = result.length;
-        for (Object value : selected.values()) {
-            result[--position] = value;
-        }
-        return new GenericArray(result);
+        ArrayDistinctCollector.Accumulator elements = distinctCollector.newAccumulator();
+        collectDistinct(elements, newer);
+        collectDistinct(elements, older);
+        return elements.toReversedArray();
     }
 
-    private void collectDistinct(Map<Object, Object> selected, @Nullable InternalArray source) {
+    private void collectDistinct(
+            ArrayDistinctCollector.Accumulator elements, @Nullable InternalArray source) {
         if (source == null) {
             return;
         }
-        for (int i = source.size() - 1; i >= 0 && selected.size() < size; i--) {
-            Object key = distinctKey(distinctElementGetter.getElementOrNull(source, i));
-            if (!selected.containsKey(key)) {
-                selected.put(key, elementGetter.getElementOrNull(source, i));
-            }
+        for (int i = source.size() - 1; i >= 0 && elements.size() < size; i--) {
+            elements.add(source, i);
         }
-    }
-
-    /** Canonical collection keys keep nested equality independent of the input encoding. */
-    private Object distinctKey(Object value) {
-        if (value instanceof byte[]) {
-            return new ByteArrayWrapper((byte[]) value);
-        }
-        if (value instanceof GenericMap) {
-            GenericMap map = (GenericMap) value;
-            Object[] keys = ((GenericArray) map.keyArray()).toObjectArray();
-            Object[] values = ((GenericArray) map.valueArray()).toObjectArray();
-            Map<Object, Object> key = new HashMap<>();
-            for (int i = 0; i < keys.length; i++) {
-                key.put(distinctKey(keys[i]), distinctKey(values[i]));
-            }
-            return key;
-        }
-        Object[] fields;
-        if (value instanceof GenericArray) {
-            fields = ((GenericArray) value).toObjectArray();
-        } else if (value instanceof GenericRow) {
-            GenericRow row = (GenericRow) value;
-            fields = new Object[row.getFieldCount()];
-            for (int i = 0; i < fields.length; i++) {
-                fields[i] = row.getField(i);
-            }
-        } else {
-            return value;
-        }
-        List<Object> key = new ArrayList<>(fields.length);
-        for (Object field : fields) {
-            key.add(distinctKey(field));
-        }
-        return key;
     }
 
     /** Copies the kept elements as bytes, without reading each one. */
