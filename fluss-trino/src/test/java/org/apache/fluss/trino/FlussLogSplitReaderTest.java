@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -56,16 +57,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Verifies real log boundaries and controlled scanner progress and failure contracts. */
 final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
     private static final Duration TIMEOUT = Duration.ofMillis(100);
+
+    private TablePath tablePath;
     private Table table;
     private FlussBucketHandle bucket;
 
     @BeforeEach
     void setUp() throws Exception {
         table = null;
-        TablePath path = TablePath.of("fluss", "log_reader");
+        tablePath =
+                TablePath.of(
+                        "Log_reader_" + UUID.randomUUID().toString().replace("-", ""),
+                        "log_reader");
+
         TableInfo info =
                 createTable(
-                        path,
+                        tablePath,
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
@@ -74,7 +81,7 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
                                 .distributedBy(1)
                                 .build());
         bucket = new FlussBucketHandle(info.getTableId(), Optional.empty(), 0);
-        table = catalogTable(path);
+        table = catalogTable(tablePath);
     }
 
     @AfterEach
@@ -181,7 +188,7 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
 
     @Test
     void testPartitionedSubscription() throws Exception {
-        TablePath path = TablePath.of("fluss", "partitioned_log_reader");
+        TablePath path = TablePath.of(tablePath.getDatabaseName(), "partitioned_log_reader");
         TableInfo info =
                 createTable(
                         path,
@@ -319,6 +326,6 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
         Table previous = table;
         table = null;
         previous.close();
-        table = dataConnection().getTable(TablePath.of("fluss", "log_reader"));
+        table = dataConnection().getTable(tablePath);
     }
 }
