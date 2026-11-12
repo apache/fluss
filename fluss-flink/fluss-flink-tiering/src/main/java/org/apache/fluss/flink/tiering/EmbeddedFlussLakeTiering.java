@@ -18,7 +18,6 @@
 
 package org.apache.fluss.flink.tiering;
 
-import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.GlobalConfiguration;
@@ -85,7 +84,6 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
  * See {@link #validateParallelismAgainstSlots} for the startup checks and {@link #runEmbedded} for
  * the job lifecycle.
  */
-@PublicEvolving
 public class EmbeddedFlussLakeTiering {
 
     private static final Logger LOG = LoggerFactory.getLogger(EmbeddedFlussLakeTiering.class);
