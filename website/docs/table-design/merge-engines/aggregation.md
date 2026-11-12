@@ -1009,6 +1009,72 @@ functions (`rb_build_agg`, `rb_or_agg`, `rb_cardinality`, etc.) provided by Flus
 See [SQL Functions](/engine-flink/sql-functions.md) for the full function reference.
 :::
 
+### hll_sketch
+
+Aggregates serialized Apache DataSketches HLL sketch values by union.
+
+- **Supported Data Types**: `BYTES`
+- **Behavior**: Merges incoming HLL sketches with the accumulator and stores compact serialized sketch bytes
+- **Null Handling**: Null values are ignored
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE daily_user_metrics (
+    metric_day STRING,
+    user_hll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.user_hll.agg' = 'hll_sketch'
+);
+```
+
+:::note
+`hll_sketch` expects serialized Apache DataSketches HLL sketches, not raw input values.
+The stored value is a serialized HLL sketch, not a distinct count. After reading the sketch
+bytes, use `HllSketch.heapify(bytes).getEstimate()` to obtain the approximate distinct count.
+:::
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("metric_day", DataTypes.STRING())
+    .column("user_hll", DataTypes.BYTES(), AggFunctions.HLL_SKETCH())
+    .primaryKey("metric_day")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize HLL sketches using the Apache DataSketches library
+// HllSketch sketch1 = new HllSketch(12);
+// sketch1.update(userId1);
+// byte[] bytes1 = sketch1.toCompactByteArray();
+
+// Input: (2026-05-16, hll{user_a,user_b}), (2026-05-16, hll{user_b,user_c})
+// Result: (2026-05-16, hll{user_a,user_b,user_c}) -- union of the two sketches
+```
+
+Read the stored sketch bytes and extract the approximate distinct count using the Apache
+DataSketches client library:
+
+```java
+import org.apache.datasketches.hll.HllSketch;
+
+// bytes is the serialized sketch read from the user_hll column.
+double estimatedDistinctCount = HllSketch.heapify(bytes).getEstimate();
+```
+
+</TabItem>
+</Tabs>
+
 ### bool_and
 
 Evaluates whether all boolean values in a set are true (logical AND).

@@ -67,6 +67,9 @@ public enum AggFunctionType {
     RBM32,
     RBM64,
 
+    // Apache DataSketches aggregation
+    HLL_SKETCH,
+
     // Array aggregation
     LAST_N;
 
@@ -153,6 +156,7 @@ public enum AggFunctionType {
                 return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};
             case RBM32:
             case RBM64:
+            case HLL_SKETCH:
                 return new DataTypeRoot[] {DataTypeRoot.BYTES};
             case LAST_N:
             case COLLECT:

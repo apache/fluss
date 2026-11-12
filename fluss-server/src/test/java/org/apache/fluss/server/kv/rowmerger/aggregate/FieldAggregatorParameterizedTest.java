@@ -29,11 +29,13 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldHllSketchAgg;
 import org.apache.fluss.server.utils.RoaringBitmapUtils;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.datasketches.hll.HllSketch;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -52,6 +54,8 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /** Parameterized tests for all aggregation functions with different data types. */
 class FieldAggregatorParameterizedTest {
@@ -784,6 +788,72 @@ class FieldAggregatorParameterizedTest {
         byte[] expectedBytes = RoaringBitmapUtils.serializeRoaringBitmap64(expected);
 
         assertThat(merged.row.getBinary(1, expectedBytes.length)).isEqualTo(expectedBytes);
+    }
+
+    @Test
+    void testHllSketchAggregation() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.HLL_SKETCH())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        HllSketch sketch1 = new HllSketch(12);
+        sketch1.update(1L);
+        sketch1.update(2L);
+        HllSketch sketch2 = new HllSketch(12);
+        sketch2.update(2L);
+        sketch2.update(3L);
+
+        BinaryRow row1 =
+                compactedRow(schema.getRowType(), new Object[] {1, sketch1.toCompactByteArray()});
+        BinaryRow row2 =
+                compactedRow(schema.getRowType(), new Object[] {1, sketch2.toCompactByteArray()});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        HllSketch mergedSketch = HllSketch.heapify(merged.row.getBytes(1));
+        assertThat(mergedSketch.getEstimate()).isCloseTo(3.0, within(0.01));
+    }
+
+    @Test
+    void testHllSketchAggregationWithNull() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.HLL_SKETCH())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        HllSketch sketch = new HllSketch(12);
+        sketch.update(42L);
+        byte[] sketchBytes = sketch.toCompactByteArray();
+
+        BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, sketchBytes});
+        BinaryRow row2 = compactedRow(schema.getRowType(), new Object[] {1, null});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        assertThat(merged.row.getBytes(1)).isEqualTo(sketchBytes);
+    }
+
+    @Test
+    void testHllSketchAggregationWithInvalidPayload() {
+        FieldHllSketchAgg aggregator = new FieldHllSketchAgg(DataTypes.BYTES());
+
+        HllSketch sketch = new HllSketch(12);
+        sketch.update(1L);
+
+        assertThatThrownBy(() -> aggregator.agg(sketch.toCompactByteArray(), new byte[] {1, 2, 3}))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Unable to deserialize or merge HLL sketch bytes");
     }
 
     // ===================================================================================
