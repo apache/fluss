@@ -1015,6 +1015,31 @@ class AggregateRowMergerTest {
     }
 
     @Test
+    void testDistinctLastNOnFirstWriteAndPartialUpdates() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "events",
+                                DataTypes.ARRAY(DataTypes.BIGINT()),
+                                AggFunctions.LAST_N(3, true))
+                        .primaryKey("id")
+                        .build();
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
+        RowMerger partial = merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+        BinaryValue first =
+                partial.merge(
+                        null,
+                        toBinaryValue(compactedRow(rowType, new Object[] {1, longs(1, 2, 3, 3)})));
+        assertThat(first.row.getArray(1).toLongArray()).containsExactly(1L, 2L, 3L);
+        BinaryValue next =
+                partial.merge(
+                        first, toBinaryValue(compactedRow(rowType, new Object[] {1, longs(2)})));
+        assertThat(next.row.getArray(1).toLongArray()).containsExactly(1L, 3L, 2L);
+    }
+
+    @Test
     void testLastNTrimsFirstWrite() {
         TableConfig tableConfig = new TableConfig(new Configuration());
         AggregateRowMerger merger = createMerger(SCHEMA_LAST_N, tableConfig);

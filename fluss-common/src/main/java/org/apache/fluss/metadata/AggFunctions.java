@@ -357,6 +357,23 @@ public final class AggFunctions {
         return new AggFunction(AggFunctionType.LAST_N, params);
     }
 
+    /**
+     * Creates a LAST_N aggregation, optionally retaining only distinct elements.
+     *
+     * <p>With distinct enabled, elements are ordered by their last occurrence before retaining the
+     * last {@code size} elements.
+     *
+     * @param size the number of elements to keep, must be positive
+     * @param distinct whether to remove duplicates
+     * @return a LAST_N aggregation function
+     */
+    public static AggFunction LAST_N(int size, boolean distinct) {
+        Map<String, String> params = new HashMap<>();
+        params.put(PARAM_SIZE, String.valueOf(size));
+        params.put(AggFunctionType.PARAM_DISTINCT, String.valueOf(distinct));
+        return new AggFunction(AggFunctionType.LAST_N, params);
+    }
+
     // ===================================================================================
     // Collection Aggregation Functions
     // ===================================================================================

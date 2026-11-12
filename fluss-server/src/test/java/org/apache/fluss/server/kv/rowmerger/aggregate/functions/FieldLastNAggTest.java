@@ -37,7 +37,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -47,6 +49,55 @@ class FieldLastNAggTest {
 
     private static final ArrayType BIGINTS = DataTypes.ARRAY(DataTypes.BIGINT());
     private static final ArrayType STRINGS = DataTypes.ARRAY(DataTypes.STRING());
+
+    @Test
+    void testDistinctKeepsLastOccurrencesBeforeTrimming() {
+        FieldLastNAgg agg = distinctAgg(BIGINTS, 3);
+        Object acc = agg.agg(null, longs(1, 2, 3, 3));
+        assertThat(toList(acc)).containsExactly(1L, 2L, 3L);
+        acc = agg.agg(acc, longs(2));
+        assertThat(toList(acc)).containsExactly(1L, 3L, 2L);
+        assertThat(toList(agg.agg(acc, longs(4, 4)))).containsExactly(3L, 2L, 4L);
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = BinaryRowFormat.class,
+            names = {"COMPACTED", "INDEXED"})
+    void testDistinctBinaryStringsAcrossWrites(BinaryRowFormat format) {
+        FieldLastNAgg agg = distinctAgg(STRINGS, 3);
+        Object acc =
+                agg.agg(
+                        null,
+                        binaryStrings(
+                                format,
+                                new Object[] {
+                                    BinaryString.fromString("a"),
+                                    null,
+                                    BinaryString.fromString("long value"),
+                                    BinaryString.fromString("long value")
+                                }));
+        assertThat(toStrings(acc)).containsExactly("a", null, "long value");
+        acc =
+                agg.agg(
+                        acc,
+                        binaryStrings(format, new Object[] {BinaryString.fromString("a"), null}));
+        assertThat(toStrings(acc)).containsExactly("long value", "a", null);
+        assertThat(acc)
+                .isInstanceOf(
+                        format == BinaryRowFormat.COMPACTED
+                                ? CompactedArray.class
+                                : IndexedArray.class);
+    }
+
+    private static FieldLastNAgg distinctAgg(ArrayType type, int size) {
+        Map<String, String> params = new HashMap<>();
+        params.put("size", Integer.toString(size));
+        params.put("distinct", "true");
+        return (FieldLastNAgg)
+                FieldAggregatorFactory.getFactory(AggFunctionType.LAST_N)
+                        .create(type, AggFunctions.of(AggFunctionType.LAST_N, params));
+    }
 
     @Test
     void testKeepsTheLastN() {
