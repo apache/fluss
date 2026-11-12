@@ -576,6 +576,8 @@ abstract class FlinkTableFactoryTest {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> properties = getBasicOptionsWithBucketKey();
         properties.put(BUCKET_NUMBER.key(), "100");
+        properties.put(FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS.key(), "2");
+        properties.put(FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES.key(), "3");
         FlinkTableSink tableSink = (FlinkTableSink) createTableSink(schema, properties);
         List<String> bucketKeys = tableSink.getBucketKeys();
         assertThat(bucketKeys)

@@ -244,6 +244,22 @@ public class FlinkConnectorOptions {
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
 
+    public static final ConfigOption<Integer> SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS =
+            ConfigOptions.key("sink.undo-recovery.max-concurrent-buckets")
+                    .intType()
+                    .defaultValue(32)
+                    .withDescription(
+                            "Maximum number of buckets undergoing undo recovery concurrently per sink subtask. "
+                                    + "Must be greater than zero.");
+
+    public static final ConfigOption<Integer> SINK_UNDO_RECOVERY_MAX_PENDING_WRITES =
+            ConfigOptions.key("sink.undo-recovery.max-pending-writes")
+                    .intType()
+                    .defaultValue(1024)
+                    .withDescription(
+                            "Maximum number of undo writes tracked before flushing and waiting for completion "
+                                    + "per sink subtask, shared by all recovering buckets. Must be greater than zero.");
+
     public static final ConfigOption<String> SINK_PRODUCER_ID =
             ConfigOptions.key("sink.producer-id")
                     .stringType()

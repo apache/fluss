@@ -38,6 +38,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SINK_UNDO_RECOVERY_MAX_PENDING_WRITES;
+
 /**
  * Manages undo recovery operations during Flink sink writer initialization.
  *
@@ -75,6 +78,8 @@ public class UndoRecoveryManager {
     private static final Logger LOG = LoggerFactory.getLogger(UndoRecoveryManager.class);
 
     private final Table table;
+    private final int maxConcurrentBuckets;
+    private final int maxPendingWrites;
     @Nullable private final int[] targetColumnIndexes;
 
     /**
@@ -84,6 +89,28 @@ public class UndoRecoveryManager {
      * @param targetColumnIndexes optional target columns for partial update (null for full row)
      */
     public UndoRecoveryManager(Table table, @Nullable int[] targetColumnIndexes) {
+        this(
+                table,
+                targetColumnIndexes,
+                SINK_UNDO_RECOVERY_MAX_CONCURRENT_BUCKETS.defaultValue(),
+                SINK_UNDO_RECOVERY_MAX_PENDING_WRITES.defaultValue());
+    }
+
+    /**
+     * Creates a recovery manager with per-subtask resource limits.
+     *
+     * @param table the Fluss table
+     * @param targetColumnIndexes optional partial update columns
+     * @param maxConcurrentBuckets maximum number of active recovery buckets
+     * @param maxPendingWrites maximum number of tracked undo writes
+     */
+    public UndoRecoveryManager(
+            Table table,
+            @Nullable int[] targetColumnIndexes,
+            int maxConcurrentBuckets,
+            int maxPendingWrites) {
+        this.maxConcurrentBuckets = maxConcurrentBuckets;
+        this.maxPendingWrites = maxPendingWrites;
         this.table = table;
         this.targetColumnIndexes = targetColumnIndexes;
 
@@ -147,7 +174,9 @@ public class UndoRecoveryManager {
                             schema.getRowType(), schema.getPrimaryKey().get().getColumnNames());
             UndoComputer undoComputer = new UndoComputer(keyEncoder, writer);
 
-            UndoRecoveryExecutor executor = new UndoRecoveryExecutor(scanner, writer, undoComputer);
+            UndoRecoveryExecutor executor =
+                    new UndoRecoveryExecutor(
+                            scanner, writer, undoComputer, maxConcurrentBuckets, maxPendingWrites);
             // This is a blocking operation that reads changelog and executes undo operations.
             // It may take a significant amount of time depending on the volume of records to
             // process.
@@ -155,9 +184,9 @@ public class UndoRecoveryManager {
         }
 
         // Calculate total undo operations for summary
-        int totalUndoOps = 0;
+        long totalUndoOps = 0;
         for (BucketRecoveryContext ctx : contexts) {
-            totalUndoOps += ctx.getProcessedKeys().size();
+            totalUndoOps += ctx.getTotalUndoOperations();
         }
 
         LOG.info(

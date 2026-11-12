@@ -20,6 +20,7 @@ package org.apache.fluss.flink.sink.undo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.ByteArrayWrapper;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -42,7 +43,8 @@ public class BucketRecoveryContext {
     private final long checkpointOffset;
     private final long logEndOffset;
 
-    private final Set<ByteArrayWrapper> processedKeys;
+    private Set<ByteArrayWrapper> processedKeys;
+    private long totalUndoOperations;
     private long scanPosition;
     private int totalRecordsProcessed;
 
@@ -69,6 +71,19 @@ public class BucketRecoveryContext {
 
     public Set<ByteArrayWrapper> getProcessedKeys() {
         return processedKeys;
+    }
+
+    public void recordUndoOperation() {
+        totalUndoOperations++;
+    }
+
+    public long getTotalUndoOperations() {
+        return totalUndoOperations;
+    }
+
+    /** Releases both the keys and the backing hash table after scanning completes. */
+    public void releaseProcessedKeys() {
+        processedKeys = Collections.emptySet();
     }
 
     /**
