@@ -160,16 +160,18 @@ pub struct PendingLookup(Pending<Box<LookupResultInner>>);
 
 pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 
+pub struct LookupCompletionPermit(OwnedSemaphorePermit);
+
 pub struct LookupCompletion {
     request_id: u64,
     result: Option<Box<LookupResultInner>>,
-    _permit: Option<OwnedSemaphorePermit>,
+    permit: Option<LookupCompletionPermit>,
 }
 
 pub struct PrefixLookupCompletion {
     request_id: u64,
     result: Option<Box<PrefixLookupResultInner>>,
-    _permit: Option<OwnedSemaphorePermit>,
+    permit: Option<LookupCompletionPermit>,
 }
 
 impl LookupCompletion {
@@ -182,6 +184,14 @@ impl LookupCompletion {
             .take()
             .expect("lookup completion result already taken")
     }
+
+    pub(crate) fn lookup_completion_take_permit(&mut self) -> Box<LookupCompletionPermit> {
+        Box::new(
+            self.permit
+                .take()
+                .expect("lookup completion permit already taken"),
+        )
+    }
 }
 
 impl PrefixLookupCompletion {
@@ -193,6 +203,14 @@ impl PrefixLookupCompletion {
         self.result
             .take()
             .expect("prefix lookup completion result already taken")
+    }
+
+    pub(crate) fn prefix_lookup_completion_take_permit(&mut self) -> Box<LookupCompletionPermit> {
+        Box::new(
+            self.permit
+                .take()
+                .expect("prefix lookup completion permit already taken"),
+        )
     }
 }
 
@@ -236,6 +254,14 @@ pub(crate) unsafe fn delete_lookup_completion(completion: *mut LookupCompletion)
     if !completion.is_null() {
         unsafe {
             drop(Box::from_raw(completion));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_lookup_completion_permit(permit: *mut LookupCompletionPermit) {
+    if !permit.is_null() {
+        unsafe {
+            drop(Box::from_raw(permit));
         }
     }
 }
@@ -312,7 +338,7 @@ impl Lookuper {
                     let _ = sender.send(LookupCompletion {
                         request_id,
                         result: Some(result),
-                        _permit: Some(permit),
+                        permit: Some(LookupCompletionPermit(permit)),
                     });
                 });
                 crate::ok_result()
@@ -403,7 +429,7 @@ impl PrefixLookuper {
                     let _ = sender.send(PrefixLookupCompletion {
                         request_id,
                         result: Some(result),
-                        _permit: Some(permit),
+                        permit: Some(LookupCompletionPermit(permit)),
                     });
                 });
                 crate::ok_result()

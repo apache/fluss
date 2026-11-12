@@ -19,9 +19,9 @@ mod lookup;
 mod types;
 mod write_callback;
 use lookup::{
-    LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
-    delete_lookup_completion, delete_pending_lookup, delete_pending_prefix_lookup,
-    delete_prefix_lookup_completion,
+    LookupCompletion, LookupCompletionPermit, PendingLookup, PendingPrefixLookup,
+    PrefixLookupCompletion, delete_lookup_completion, delete_lookup_completion_permit,
+    delete_pending_lookup, delete_pending_prefix_lookup, delete_prefix_lookup_completion,
 };
 use write_callback::ensure_callback_executor;
 
@@ -441,6 +441,7 @@ mod ffi {
         type PendingPrefixLookup;
         type LookupCompletion;
         type PrefixLookupCompletion;
+        type LookupCompletionPermit;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
@@ -734,8 +735,12 @@ mod ffi {
         fn lookup_wait(self: &mut PendingLookup, timeout_ms: i64) -> Box<LookupResultInner>;
         fn lookup_is_pending(self: &PendingLookup) -> bool;
         unsafe fn delete_lookup_completion(completion: *mut LookupCompletion);
+        unsafe fn delete_lookup_completion_permit(permit: *mut LookupCompletionPermit);
         fn lookup_completion_request_id(self: &LookupCompletion) -> u64;
         fn lookup_completion_take_result(self: &mut LookupCompletion) -> Box<LookupResultInner>;
+        fn lookup_completion_take_permit(
+            self: &mut LookupCompletion,
+        ) -> Box<LookupCompletionPermit>;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -817,6 +822,9 @@ mod ffi {
         fn prefix_lookup_completion_take_result(
             self: &mut PrefixLookupCompletion,
         ) -> Box<PrefixLookupResultInner>;
+        fn prefix_lookup_completion_take_permit(
+            self: &mut PrefixLookupCompletion,
+        ) -> Box<LookupCompletionPermit>;
 
         // PrefixLookupResultInner accessors — like LookupResultInner but indexed
         // by record, since a prefix lookup returns zero-or-more rows.

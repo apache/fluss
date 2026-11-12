@@ -37,6 +37,37 @@
 
 namespace fluss {
 
+namespace {
+
+std::shared_ptr<ffi::LookupCompletionPermit> TakeLookupCompletionPermit(
+    ffi::LookupCompletion* completion) {
+    auto permit = completion->lookup_completion_take_permit();
+    return std::shared_ptr<ffi::LookupCompletionPermit>(
+        permit.into_raw(), [](ffi::LookupCompletionPermit* permit) {
+            ffi::delete_lookup_completion_permit(permit);
+        });
+}
+
+std::shared_ptr<ffi::LookupCompletionPermit> TakePrefixLookupCompletionPermit(
+    ffi::PrefixLookupCompletion* completion) {
+    auto permit = completion->prefix_lookup_completion_take_permit();
+    return std::shared_ptr<ffi::LookupCompletionPermit>(
+        permit.into_raw(), [](ffi::LookupCompletionPermit* permit) {
+            ffi::delete_lookup_completion_permit(permit);
+        });
+}
+
+}  // namespace
+
+LookupCompletion::~LookupCompletion() = default;
+LookupCompletion::LookupCompletion(LookupCompletion&&) noexcept = default;
+LookupCompletion& LookupCompletion::operator=(LookupCompletion&&) noexcept = default;
+
+PrefixLookupCompletion::~PrefixLookupCompletion() = default;
+PrefixLookupCompletion::PrefixLookupCompletion(PrefixLookupCompletion&&) noexcept = default;
+PrefixLookupCompletion& PrefixLookupCompletion::operator=(PrefixLookupCompletion&&) noexcept =
+    default;
+
 static constexpr int kSecondsPerDay = 24 * 60 * 60;
 
 static std::time_t timegm_utc(std::tm* tm) {
@@ -2150,6 +2181,7 @@ Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out,
         LookupCompletion item;
         item.request_id = completion->lookup_completion_request_id();
         item.result = item.lookup.Adopt(completion->lookup_completion_take_result().into_raw());
+        item.permit_ = TakeLookupCompletionPermit(completion);
         ffi::delete_lookup_completion(completion);
         out.push_back(std::move(item));
     }
@@ -2300,6 +2332,7 @@ Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompleti
         item.request_id = completion->prefix_lookup_completion_request_id();
         item.result =
             item.lookup.Adopt(completion->prefix_lookup_completion_take_result().into_raw());
+        item.permit_ = TakePrefixLookupCompletionPermit(completion);
         ffi::delete_prefix_lookup_completion(completion);
         out.push_back(std::move(item));
     }

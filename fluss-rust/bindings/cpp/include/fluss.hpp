@@ -60,6 +60,7 @@ struct PendingLookup;
 struct PendingPrefixLookup;
 struct LookupCompletion;
 struct PrefixLookupCompletion;
+struct LookupCompletionPermit;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -2183,15 +2184,37 @@ class PendingPrefixLookup {
 };
 
 struct LookupCompletion {
+    LookupCompletion() = default;
+    ~LookupCompletion();
+    LookupCompletion(LookupCompletion&&) noexcept;
+    LookupCompletion& operator=(LookupCompletion&&) noexcept;
+    LookupCompletion(const LookupCompletion&) = delete;
+    LookupCompletion& operator=(const LookupCompletion&) = delete;
+
     uint64_t request_id{0};
     Result result;
     LookupResult lookup;
+
+   private:
+    friend class Lookuper;
+    std::shared_ptr<ffi::LookupCompletionPermit> permit_;
 };
 
 struct PrefixLookupCompletion {
+    PrefixLookupCompletion() = default;
+    ~PrefixLookupCompletion();
+    PrefixLookupCompletion(PrefixLookupCompletion&&) noexcept;
+    PrefixLookupCompletion& operator=(PrefixLookupCompletion&&) noexcept;
+    PrefixLookupCompletion(const PrefixLookupCompletion&) = delete;
+    PrefixLookupCompletion& operator=(const PrefixLookupCompletion&) = delete;
+
     uint64_t request_id{0};
     Result result;
     PrefixLookupResult lookup;
+
+   private:
+    friend class PrefixLookuper;
+    std::shared_ptr<ffi::LookupCompletionPermit> permit_;
 };
 
 class Lookuper {
