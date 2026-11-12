@@ -26,6 +26,7 @@ import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -83,7 +84,7 @@ class ConsumerOffsetTableITCase {
 
     @Test
     void testInternalCreationIgnoresKvRestrictionAndClusterDataLakeFormat() throws Exception {
-        String groupId = "group-with-cluster-lake-format";
+        GroupId groupId = GroupId.of("group-with-cluster-lake-format");
         ensureConsumerOffsetTable(groupId);
 
         TableRegistration tableRegistration =
@@ -121,12 +122,12 @@ class ConsumerOffsetTableITCase {
                 tableDescriptor,
                 false);
 
-        ensureConsumerOffsetTable("group-before-external-idempotent-create");
+        ensureConsumerOffsetTable(GroupId.of("group-before-external-idempotent-create"));
         assertSystemTableCreationRejected(
                 externalGateway, SystemTables.CONSUMER_OFFSETS, tableDescriptor, true);
     }
 
-    private void ensureConsumerOffsetTable(String groupId) throws Exception {
+    private void ensureConsumerOffsetTable(GroupId groupId) throws Exception {
         ServerNode tabletServer = cluster.getTabletServerNodes().iterator().next();
         TabletServerGateway gateway = cluster.newTabletServerClientForNode(tabletServer.id());
 
@@ -137,7 +138,7 @@ class ConsumerOffsetTableITCase {
                         FindConsumerGroupOwnerResponse response =
                                 gateway.findConsumerGroupOwner(
                                                 new FindConsumerGroupOwnerRequest()
-                                                        .setGroupId(groupId))
+                                                        .setGroupId(groupId.getGroupId()))
                                         .get();
                         assertThat(response.getOwner().getNodeId()).isEqualTo(tabletServer.id());
                         assertThat(

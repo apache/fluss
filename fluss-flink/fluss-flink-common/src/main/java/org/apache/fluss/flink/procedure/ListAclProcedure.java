@@ -26,7 +26,6 @@ import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceFilter;
-import org.apache.fluss.security.acl.ResourceType;
 
 import org.apache.flink.table.annotation.ArgumentHint;
 import org.apache.flink.table.annotation.DataTypeHint;
@@ -36,8 +35,6 @@ import org.apache.flink.table.procedure.ProcedureContext;
 import javax.annotation.Nullable;
 
 import java.util.Collection;
-
-import static org.apache.fluss.security.acl.Resource.FLUSS_CLUSTER;
 
 /** Procedure to list acl. */
 public class ListAclProcedure extends AbstractAclProcedure {
@@ -110,13 +107,22 @@ public class ListAclProcedure extends AbstractAclProcedure {
                         ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
                         : null;
         String resourceName;
-        if (resource.getType() == ResourceType.GROUP) {
-            resourceName = "group." + resource.getName();
-        } else {
-            resourceName =
-                    FLUSS_CLUSTER.equals(resource.getName())
-                            ? "cluster"
-                            : "cluster." + resource.getName();
+        switch (resource.getType()) {
+            case CLUSTER:
+                resourceName = "cluster";
+                break;
+            case DATABASE:
+                resourceName = "database:" + resource.getName();
+                break;
+            case TABLE:
+                resourceName = "table:" + resource.getName();
+                break;
+            case GROUP:
+                resourceName = "group:" + resource.getName();
+                break;
+            default:
+                resourceName = resource.getName();
+                break;
         }
 
         return String.join(

@@ -22,15 +22,9 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
-import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
-import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
-import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -48,13 +42,11 @@ import org.apache.fluss.security.acl.ResourceFilter;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
-import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Collections;
@@ -64,9 +56,6 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilt
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfos;
 import static org.apache.fluss.security.acl.OperationType.ALL;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
-import static org.apache.fluss.security.acl.OperationType.READ;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -82,7 +71,7 @@ class ConsumerGroupAuthorizationITCase {
     private TabletServerGateway clientGateway;
     private ServerNode clientNode;
 
-    private void startCluster(boolean bypassGroupAcls) throws Exception {
+    private void startCluster() throws Exception {
         cluster =
                 FlussClusterExtension.builder()
                         .setNumOfTabletServers(1)
@@ -91,9 +80,6 @@ class ConsumerGroupAuthorizationITCase {
                         .setClusterConf(
                                 new Configuration()
                                         .set(ConfigOptions.AUTHORIZER_ENABLED, true)
-                                        .set(
-                                                ConfigOptions.AUTHORIZER_GROUP_ACL_BYPASS_ENABLED,
-                                                bypassGroupAcls)
                                         .set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 1)
                                         .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 1))
                         .build();
@@ -121,9 +107,8 @@ class ConsumerGroupAuthorizationITCase {
 
     @Test
     void testFindOwnerRequiresGroupDescribeBeforeInitializingSystemTable() throws Exception {
-        startCluster(false);
+        startCluster();
         assertOwnerDiscoveryDenied(GROUP_ID);
-        grant(ALL, Resource.cluster());
         grant(ALL, Resource.table("default", "consumer"));
         grant(DESCRIBE, Resource.group("other-group"));
 
@@ -137,7 +122,7 @@ class ConsumerGroupAuthorizationITCase {
             value = OperationType.class,
             names = {"DESCRIBE", "READ", "WRITE"})
     void testFindOwnerWithGroupPermission(OperationType operation) throws Exception {
-        startCluster(false);
+        startCluster();
         List<AclBinding> bindings = grant(operation, Resource.group(GROUP_ID));
         assertThat(cluster.getZooKeeperClient().tableExist(SystemTables.CONSUMER_OFFSETS))
                 .isFalse();
@@ -159,108 +144,34 @@ class ConsumerGroupAuthorizationITCase {
         assertOwnerDiscoveryDenied(GROUP_ID);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testBlankGroupIdsAreRejectedBeforeAuthorization(boolean bypassGroupAcls) throws Exception {
-        startCluster(bypassGroupAcls);
-        grant(DESCRIBE, Resource.group("*"));
-        for (String groupId : Collections.singletonList("")) {
-            assertThatThrownBy(
-                            () ->
-                                    clientGateway
-                                            .findConsumerGroupOwner(
-                                                    new FindConsumerGroupOwnerRequest()
-                                                            .setGroupId(groupId))
-                                            .get())
-                    .rootCause()
-                    .isInstanceOf(InvalidConsumerGroupIdException.class);
-        }
-        assertThat(cluster.getZooKeeperClient().tableExist(SystemTables.CONSUMER_OFFSETS))
-                .isFalse();
+    @Test
+    void testClusterPermissionImpliesGroupPermission() throws Exception {
+        startCluster();
+        grant(DESCRIBE, Resource.cluster());
+        assertOwnerDiscoveryAllowed();
     }
 
     @Test
-    void testCommitOffsetsBypassesGroupAclButRequiresSourceRead() throws Exception {
-        startCluster(true);
-        assertOwnerDiscoveryAllowed();
-
-        TablePath sourceTable = TablePath.of("auth_db", "commit_source");
-        long tableId =
-                createTable(
-                        cluster,
-                        sourceTable,
-                        TableDescriptor.builder()
-                                .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
-                                .distributedBy(1)
-                                .build());
-        TableBucket sourceBucket = new TableBucket(tableId, 0);
-        cluster.waitUntilAllReplicaReady(sourceBucket);
-
-        CommitConsumerOffsetsRequest request =
-                new CommitConsumerOffsetsRequest().setGroupId(GROUP_ID);
-        request.addTable().setTableId(tableId).addBucket().setBucketId(0).setOffset(10L);
-        assertThatThrownBy(() -> clientGateway.commitConsumerOffsets(request).get())
-                .rootCause()
-                .isInstanceOf(AuthorizationException.class)
-                .hasMessageContaining("READ")
-                .hasMessageContaining(sourceTable.toString());
-
-        grant(READ, Resource.table(sourceTable));
-        CommitConsumerOffsetsResponse response = clientGateway.commitConsumerOffsets(request).get();
-        assertThat(response.getTablesList()).hasSize(1);
-        assertThat(response.getTablesList().get(0).getBucketsList())
-                .singleElement()
-                .satisfies(bucket -> assertThat(bucket.hasErrorCode()).isFalse());
-    }
-
-    @Test
-    void testGroupAclBypassPreservesTableAndAclAdministrationChecks() throws Exception {
-        startCluster(true);
-        assertOwnerDiscoveryAllowed();
-        List<AclBinding> bindings =
-                grant(new FlussPrincipal("other-user", "USER"), READ, Resource.group(GROUP_ID));
-        assertOwnerDiscoveryAllowed();
-
+    void testBlankGroupIdsAreRejectedBeforeAuthorization() throws Exception {
+        startCluster();
         assertThatThrownBy(
                         () ->
                                 clientGateway
-                                        .getTableInfo(
-                                                newGetTableInfoRequest(
-                                                        SystemTables.CONSUMER_OFFSETS))
+                                        .findConsumerGroupOwner(
+                                                new FindConsumerGroupOwnerRequest().setGroupId(""))
                                         .get())
                 .rootCause()
-                .isInstanceOf(AuthorizationException.class);
-
-        CoordinatorGateway externalCoordinator =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> cluster.getCoordinatorServerNode("CLIENT"),
-                        client,
-                        CoordinatorGateway.class);
+                .isInstanceOf(InvalidConsumerGroupIdException.class);
         assertThatThrownBy(
                         () ->
-                                externalCoordinator
-                                        .createAcls(
-                                                new CreateAclsRequest()
-                                                        .addAllAcls(toPbAclInfos(bindings)))
+                                clientGateway
+                                        .commitConsumerOffsets(
+                                                new CommitConsumerOffsetsRequest().setGroupId(""))
                                         .get())
                 .rootCause()
-                .isInstanceOf(AuthorizationException.class);
-        AclBindingFilter groupFilter =
-                new AclBindingFilter(
-                        new ResourceFilter(ResourceType.GROUP, GROUP_ID),
-                        AccessControlEntryFilter.ANY);
-        assertThatThrownBy(
-                        () ->
-                                externalCoordinator
-                                        .dropAcls(
-                                                new DropAclsRequest()
-                                                        .addAllAclFilters(
-                                                                toPbAclBindingFilters(
-                                                                        Collections.singletonList(
-                                                                                groupFilter))))
-                                        .get())
-                .rootCause()
-                .isInstanceOf(AuthorizationException.class);
+                .isInstanceOf(InvalidConsumerGroupIdException.class);
+        assertThat(cluster.getZooKeeperClient().tableExist(SystemTables.CONSUMER_OFFSETS))
+                .isFalse();
     }
 
     private void assertOwnerDiscoveryAllowed() throws Exception {

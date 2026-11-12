@@ -28,6 +28,7 @@ import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -815,24 +816,29 @@ public final class TabletService extends RpcServiceBase
             FindConsumerGroupOwnerRequest request) {
         // Copy request/session values before returning: the request buffer is released after this
         // method and the current session is bound to the RPC worker thread.
-        final String groupId = request.getGroupId();
-        final String listenerName = currentListenerName();
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
-        }
+        try {
+            final GroupId groupId = GroupId.of(request.getGroupId());
+            final String listenerName = currentListenerName();
+            if (authorizer != null) {
+                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+            }
 
-        return groupManager
-                .findOwner(groupId, listenerName)
-                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
+            return groupManager
+                    .findOwner(groupId, listenerName)
+                    .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
+        } catch (ApiException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        String groupId = request.getGroupId();
+        final GroupId groupId;
         final Replica offsetsReplica;
         final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
         try {
+            groupId = GroupId.of(request.getGroupId());
             if (authorizer != null) {
                 authorizer.authorize(currentSession(), READ, Resource.group(groupId));
             }
@@ -862,10 +868,14 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        final String groupId = request.getGroupId();
+        final GroupId groupId;
         final Replica offsetsReplica;
         final List<TableBucket> requestedBuckets;
         try {
+            groupId = GroupId.of(request.getGroupId());
+            if (authorizer != null) {
+                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+            }
             offsetsReplica = groupManager.validateGroupId(groupId);
             requestedBuckets = decodeGetConsumerOffsetsRequest(request);
         } catch (ApiException e) {
@@ -884,8 +894,6 @@ public final class TabletService extends RpcServiceBase
                     .forEach(tableId -> authorizeTable(DESCRIBE, tableId));
         }
 
-        // TODO: Once consumer-group ACLs are merged, authorize DESCRIBE on the group before
-        // reading offsets.
         return groupManager
                 .handleGetConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
                 .thenApply(ServerRpcMessageUtils::makeGetConsumerOffsetsResponse);

@@ -25,10 +25,10 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
-import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -134,8 +134,7 @@ public final class ConsumerGroupManager {
     }
 
     /** Finds the owner of a group, initializing the offsets table on first discovery. */
-    public CompletableFuture<ServerNode> findOwner(String groupId, String listenerName) {
-        checkGroupId(groupId);
+    public CompletableFuture<ServerNode> findOwner(GroupId groupId, String listenerName) {
         return ensureTableAsync()
                 .thenCompose(
                         info ->
@@ -167,8 +166,7 @@ public final class ConsumerGroupManager {
     }
 
     /** Returns the local leader replica or throws a request-level group error. */
-    public Replica validateGroupId(String groupId) {
-        checkGroupId(groupId);
+    public Replica validateGroupId(GroupId groupId) {
         TableInfo info = getInitializedTable(tableInitFuture.get());
         if (info == null) {
             throw new ConsumerGroupOwnerNotAvailableException(
@@ -186,13 +184,6 @@ public final class ConsumerGroupManager {
         return current != null && current.isDone() && !current.isCompletedExceptionally()
                 ? current.getNow(null)
                 : null;
-    }
-
-    private static void checkGroupId(String groupId) {
-        if (groupId == null || groupId.isEmpty()) {
-            throw new InvalidConsumerGroupIdException(
-                    "Consumer group id must not be null or empty.");
-        }
     }
 
     /**
@@ -398,7 +389,7 @@ public final class ConsumerGroupManager {
 
     /** Appends on the calling worker and completes the result when the write is acknowledged. */
     public CompletableFuture<Map<TableBucket, Errors>> handleCommitConsumerOffsets(
-            String groupId,
+            GroupId groupId,
             Replica offsetsReplica,
             Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
         long maxMetadataBytes = offsetsConfig.getMaxMetadataSize().getBytes();
@@ -443,7 +434,7 @@ public final class ConsumerGroupManager {
      * Reads all or selected committed offsets from the local leader replica on the calling thread.
      */
     public CompletableFuture<Map<TableBucket, ConsumerOffsetAndMetadata>> handleGetConsumerOffsets(
-            String groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
+            GroupId groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
         Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
         try {
             ValueDecoder decoder = getValueDecoder(offsetsReplica.getSchemaGetter());
@@ -519,7 +510,7 @@ public final class ConsumerGroupManager {
 
     @VisibleForTesting
     static Map<TableBucket, Errors> handleWriteCompletion(
-            String groupId,
+            GroupId groupId,
             Map<TableBucket, Errors> results,
             List<PutKvResultForBucket> writeResults) {
         try {
@@ -536,13 +527,13 @@ public final class ConsumerGroupManager {
     }
 
     private static Map<TableBucket, Errors> handleCommitFailure(
-            String groupId, Map<TableBucket, Errors> results, Exception exception) {
+            GroupId groupId, Map<TableBucket, Errors> results, Exception exception) {
         LOG.error("Failed to commit offsets for group {}.", groupId, exception);
         return applyWriteError(results, mapCommitError(Errors.forException(exception)));
     }
 
     private KvRecordBatch buildUpsertBatch(
-            String groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets, int schemaId)
+            GroupId groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets, int schemaId)
             throws Exception {
         KvRecordBatchBuilder builder =
                 KvRecordBatchBuilder.builder(

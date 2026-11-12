@@ -192,6 +192,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -2352,8 +2353,16 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListAclsResponse makeListAclsResponse(Collection<AclBinding> aclBindings) {
+        return makeListAclsResponse(aclBindings, true);
+    }
+
+    public static ListAclsResponse makeListAclsResponse(
+            Collection<AclBinding> aclBindings, boolean includeGroupAcls) {
         ListAclsResponse listAclsResponse = new ListAclsResponse();
         for (AclBinding aclBinding : aclBindings) {
+            if (!includeGroupAcls && aclBinding.getResource().getType() == ResourceType.GROUP) {
+                continue;
+            }
             PbAclInfo aclInfo = listAclsResponse.addAcl();
             aclInfo.setResourceName(aclBinding.getResource().getName())
                     .setResourceType(aclBinding.getResource().getType().getCode())
@@ -2389,6 +2398,11 @@ public class ServerRpcMessageUtils {
     }
 
     public static DropAclsResponse makeDropAclsResponse(List<AclDeleteResult> aclDeleteResults) {
+        return makeDropAclsResponse(aclDeleteResults, true);
+    }
+
+    public static DropAclsResponse makeDropAclsResponse(
+            List<AclDeleteResult> aclDeleteResults, boolean includeGroupAcls) {
         List<PbDropAclsFilterResult> dropAclsFilterResults = new ArrayList<>();
 
         for (AclDeleteResult result : aclDeleteResults) {
@@ -2406,6 +2420,11 @@ public class ServerRpcMessageUtils {
             List<PbDropAclsMatchingAcl> dropAclsMatchingAcls = new ArrayList<>();
             for (AclDeleteResult.AclBindingDeleteResult aclBindingDeleteResult :
                     aclBindingDeleteResults) {
+                if (!includeGroupAcls
+                        && aclBindingDeleteResult.aclBinding().getResource().getType()
+                                == ResourceType.GROUP) {
+                    continue;
+                }
                 PbDropAclsMatchingAcl dropAclsMatchingAcl = new PbDropAclsMatchingAcl();
                 dropAclsMatchingAcl.setAcl(toPbAclInfo(aclBindingDeleteResult.aclBinding()));
                 if (aclBindingDeleteResult.error().isPresent()) {

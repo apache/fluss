@@ -420,7 +420,8 @@ public class DefaultAuthorizerTest {
     @Test
     void testAclInheritanceOnResourceType() throws Exception {
         testResourceTypeImplicationsOfAllow(
-                ResourceType.CLUSTER, Arrays.asList(DATABASE, ResourceType.TABLE));
+                ResourceType.CLUSTER,
+                Arrays.asList(DATABASE, ResourceType.TABLE, ResourceType.GROUP));
         testResourceTypeImplicationsOfAllow(DATABASE, Collections.singleton(ResourceType.TABLE));
         testResourceTypeImplicationsOfAllow(ResourceType.GROUP, Collections.emptyList());
     }
@@ -466,7 +467,7 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
-    void testGroupPermissionsAreIndependentOfTablesAndOtherGroups() throws Exception {
+    void testGroupPermissionsAreScopedToGroupsAndOtherHierarchies() throws Exception {
         Session session = createSession("user1", "192.168.1.1");
         Resource group = Resource.group("database1-group1");
         authorizer.addAcls(
@@ -489,7 +490,7 @@ public class DefaultAuthorizerTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"Default_consumer-1", "*"})
+    @ValueSource(strings = {"Default_consumer-1"})
     void testGroupAclPersistsAndSynchronizes(String name) throws Exception {
         Session session = createSession("user1", "192.168.1.1");
         Resource group = Resource.group(name);
@@ -522,7 +523,7 @@ public class DefaultAuthorizerTest {
         Session session = createSession("user1", "192.168.1.1");
         addAcls(
                 authorizer,
-                Resource.group(Resource.WILDCARD_RESOURCE),
+                Resource.groupWildcard(),
                 Collections.singleton(createAclEntry("user1", "*", WRITE)));
         assertThat(authorizer.isAuthorized(session, WRITE, Resource.group("group1"))).isTrue();
         assertThat(authorizer.isAuthorized(session, WRITE, Resource.group("group2"))).isTrue();
@@ -532,38 +533,7 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
-    void testGroupAclBypassOnlyAllowsGroupOperations() throws Exception {
-        Session session = createSession("user1", "192.168.1.1");
-        Resource group = Resource.group("group1");
-        Resource table = Resource.table("database1", "table1");
-        assertThat(configuration.get(ConfigOptions.AUTHORIZER_GROUP_ACL_BYPASS_ENABLED)).isFalse();
-        assertThat(authorizer.isAuthorized(session, READ, group)).isFalse();
-
-        configureGroupAclBypass(true);
-        assertThat(authorizer.isAuthorized(session, READ, group)).isTrue();
-        addAcls(authorizer, group, Collections.singleton(createAclEntry("other-user", "*", READ)));
-        for (OperationType operation : Arrays.asList(READ, WRITE, DESCRIBE, DROP)) {
-            authorizer.authorize(session, operation, group);
-            assertThat(authorizer.isAuthorized(session, operation, table)).isFalse();
-        }
-        assertThatThrownBy(() -> authorizer.authorize(session, READ, table))
-                .isInstanceOf(AuthorizationException.class);
-        assertThat(authorizer.isAuthorized(session, READ, Resource.database("database1")))
-                .isFalse();
-        assertThat(authorizer.isAuthorized(session, ALTER, Resource.cluster())).isFalse();
-        assertThat(
-                        authorizer.authorizeActions(
-                                session,
-                                Arrays.asList(new Action(group, READ), new Action(table, READ))))
-                .containsExactly(true, false);
-        assertThat(authorizer.filterByAuthorized(session, READ, Arrays.asList(group, table)))
-                .containsExactly(group);
-        assertThat(authorizer2.isAuthorized(session, READ, group)).isFalse();
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testGroupAclManagementRequiresClusterPermissions(boolean bypass) throws Exception {
+    void testGroupAclManagementUsesGroupPermissions() throws Exception {
         Session owner = createSession("group-owner", "192.168.1.1");
         Resource group = Resource.group("group1");
         AclBinding ownerAcl = createAclBinding(group, "group-owner", "*", OperationType.ALL);
@@ -573,34 +543,8 @@ public class DefaultAuthorizerTest {
                         new ResourceFilter(ResourceType.GROUP, group.getName()),
                         AccessControlEntryFilter.ANY);
 
-        configureGroupAclBypass(bypass);
-        assertThatThrownBy(() -> authorizer.dropAcls(owner, Collections.singletonList(groupFilter)))
-                .isInstanceOf(AuthorizationException.class)
-                .hasMessageContaining("ALTER")
-                .hasMessageContaining("CLUSTER");
-        assertThatThrownBy(() -> authorizer.listAcls(owner, groupFilter))
-                .isInstanceOf(AuthorizationException.class);
         addAcls(authorizer, group, Collections.singleton(ownerAcl.getAccessControlEntry()));
-        assertThatThrownBy(() -> authorizer.addAcls(owner, Collections.singletonList(targetAcl)))
-                .isInstanceOf(AuthorizationException.class)
-                .hasMessageContaining("ALTER")
-                .hasMessageContaining("CLUSTER");
-        assertThatThrownBy(() -> authorizer.dropAcls(owner, Collections.singletonList(groupFilter)))
-                .isInstanceOf(AuthorizationException.class);
-        assertThatThrownBy(() -> authorizer.listAcls(owner, groupFilter))
-                .isInstanceOf(AuthorizationException.class);
-
-        addAcls(
-                authorizer,
-                Resource.cluster(),
-                Collections.singleton(createAclEntry("group-owner", "*", DESCRIBE)));
         assertThat(authorizer.listAcls(owner, groupFilter)).containsExactly(ownerAcl);
-        assertThatThrownBy(() -> authorizer.addAcls(owner, Collections.singletonList(targetAcl)))
-                .isInstanceOf(AuthorizationException.class);
-        addAcls(
-                authorizer,
-                Resource.cluster(),
-                Collections.singleton(createAclEntry("group-owner", "*", ALTER)));
         assertThat(authorizer.addAcls(owner, Collections.singletonList(targetAcl)))
                 .singleElement()
                 .satisfies(result -> assertThat(result.exception()).isNotPresent());
@@ -616,65 +560,41 @@ public class DefaultAuthorizerTest {
         assertThat(authorizer.listAcls(owner, groupFilter)).isEmpty();
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testMixedAclRequestsPreserveTablePermissions(boolean bypass) throws Exception {
+    @Test
+    void testMixedAclRequestsUseResourceHierarchy() throws Exception {
         Session session = createSession("table-owner", "192.168.1.1");
         Resource table = Resource.table("database1", "table1");
-        AclBinding groupAcl = createAclBinding(Resource.group("group1"), "consumer", "*", READ);
+        Resource group = Resource.group("group1");
+        AclBinding groupAcl = createAclBinding(group, "consumer", "*", READ);
+        AclBinding newGroupAcl = createAclBinding(group, "consumer2", "*", READ);
         AclBinding tableAcl = createAclBinding(table, "table-owner", "*", READ);
         AclBinding newTableAcl = createAclBinding(table, "consumer", "*", READ);
         AclBindingFilter tableFilter =
                 new AclBindingFilter(
                         new ResourceFilter(ResourceType.TABLE, table.getName()),
                         AccessControlEntryFilter.ANY);
+        AclBindingFilter groupFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, group.getName()),
+                        AccessControlEntryFilter.ANY);
 
-        configureGroupAclBypass(bypass);
         addAcls(
                 authorizer,
                 Resource.database("database1"),
                 Collections.singleton(createAclEntry("table-owner", "*", OperationType.ALL)));
         addAcls(authorizer, table, Collections.singleton(tableAcl.getAccessControlEntry()));
-        for (String groupName : Arrays.asList("group1", "missing-group")) {
-            if (groupName.equals("group1")) {
-                addAcls(
-                        authorizer,
-                        groupAcl.getResource(),
-                        Collections.singleton(groupAcl.getAccessControlEntry()));
-            }
-            AclBindingFilter groupFilter =
-                    new AclBindingFilter(
-                            new ResourceFilter(ResourceType.GROUP, groupName),
-                            AccessControlEntryFilter.ANY);
-            assertThatThrownBy(
-                            () ->
-                                    authorizer.dropAcls(
-                                            session, Arrays.asList(tableFilter, groupFilter)))
-                    .isInstanceOf(AuthorizationException.class);
-            assertThat(listAcls(authorizer, table))
-                    .containsExactly(tableAcl.getAccessControlEntry());
-        }
-        assertThatThrownBy(() -> authorizer.addAcls(session, Arrays.asList(newTableAcl, groupAcl)))
-                .isInstanceOf(AuthorizationException.class);
-        assertThat(listAcls(authorizer, table)).containsExactly(tableAcl.getAccessControlEntry());
-        assertThat(authorizer.listAcls(session, AclBindingFilter.ANY))
-                .contains(tableAcl)
-                .doesNotContain(groupAcl);
-        assertThatThrownBy(
-                        () ->
-                                authorizer.dropAcls(
-                                        session, Collections.singletonList(AclBindingFilter.ANY)))
-                .isInstanceOf(AuthorizationException.class);
-        assertThat(listAcls(authorizer, table)).containsExactly(tableAcl.getAccessControlEntry());
-    }
+        addAcls(authorizer, group, Collections.singleton(groupAcl.getAccessControlEntry()));
 
-    private void configureGroupAclBypass(boolean enabled) throws Exception {
-        authorizer.close();
-        configuration.set(ConfigOptions.AUTHORIZER_GROUP_ACL_BYPASS_ENABLED, enabled);
-        authorizer =
-                (DefaultAuthorizer)
-                        AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, null);
-        authorizer.startup();
+        assertThat(authorizer.listAcls(session, tableFilter)).containsExactly(tableAcl);
+        assertThat(authorizer.listAcls(session, groupFilter)).isEmpty();
+        assertThatThrownBy(
+                        () -> authorizer.addAcls(session, Arrays.asList(newTableAcl, newGroupAcl)))
+                .isInstanceOf(AuthorizationException.class);
+        assertThat(authorizer.listAcls(session, tableFilter)).containsExactly(tableAcl);
+        assertThatThrownBy(
+                        () -> authorizer.dropAcls(session, Arrays.asList(tableFilter, groupFilter)))
+                .isInstanceOf(AuthorizationException.class);
+        assertThat(authorizer.listAcls(session, tableFilter)).containsExactly(tableAcl);
     }
 
     @Test

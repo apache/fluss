@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.procedure;
 
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
@@ -30,7 +31,9 @@ import java.util.concurrent.ExecutionException;
 /** {@link org.apache.flink.table.procedures.Procedure} to operate acl. */
 public abstract class AbstractAclProcedure extends ProcedureBase {
 
-    private static final String GROUP_RESOURCE_PREFIX = "group.";
+    private static final String DATABASE_RESOURCE_PREFIX = "database:";
+    private static final String TABLE_RESOURCE_PREFIX = "table:";
+    private static final String GROUP_RESOURCE_PREFIX = "group:";
 
     /**
      * Invokes the ACL operation as a Flink table procedure.
@@ -41,9 +44,13 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
      * @param resource Resource on which the ACL operation applies. The format must be one of:
      *     <ul>
      *       <li>{@code cluster} - cluster level
-     *       <li>{@code cluster.db_name} - database level
-     *       <li>{@code cluster.db_name.table_name} - table level
-     *       <li>{@code group.group_id} - consumer-group level
+     *       <li>{@code database:db_name} - database level, or {@code database:*} for all databases
+     *       <li>{@code table:db_name.table_name} - table level, or {@code table:*} for all tables
+     *       <li>{@code group:group_id} - consumer-group level, or {@code group:*} for all consumer
+     *           groups. A concrete group ID uses the same naming rules as a table name: 1 to 200
+     *           ASCII letters, digits, underscores, or hyphens, and must not start with {@code __}.
+     *       <li>{@code cluster.db_name} - legacy database syntax
+     *       <li>{@code cluster.db_name.table_name} - legacy table syntax
      *     </ul>
      *
      * @param permission Permission type to grant or revoke. Common values include in {@link
@@ -118,32 +125,69 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             return Resource.any();
         }
 
-        if (resourceStr.regionMatches(
-                true, 0, GROUP_RESOURCE_PREFIX, 0, GROUP_RESOURCE_PREFIX.length())) {
-            String groupId = resourceStr.substring(GROUP_RESOURCE_PREFIX.length());
-            if (groupId.isEmpty()) {
-                throw new InvalidConsumerGroupIdException(
-                        "Consumer group id must not be null or empty.");
+        if (startsWithIgnoreCase(resourceStr, DATABASE_RESOURCE_PREFIX)) {
+            String databaseName = resourceStr.substring(DATABASE_RESOURCE_PREFIX.length());
+            if (databaseName.isEmpty()) {
+                throw new IllegalArgumentException("Database name must not be null or empty.");
             }
-            return Resource.group(groupId);
+            if (Resource.WILDCARD_RESOURCE.equals(databaseName)) {
+                return Resource.databaseWildcard();
+            }
+            return Resource.database(databaseName);
         }
 
-        Resource resource;
+        if (startsWithIgnoreCase(resourceStr, TABLE_RESOURCE_PREFIX)) {
+            String tablePath = resourceStr.substring(TABLE_RESOURCE_PREFIX.length());
+            if (tablePath.isEmpty()) {
+                throw new IllegalArgumentException("Table path must not be null or empty.");
+            }
+            if (Resource.WILDCARD_RESOURCE.equals(tablePath)) {
+                return Resource.tableWildcard();
+            }
+            String[] databaseAndTable = tablePath.split(Resource.TABLE_SPLITTER);
+            if (databaseAndTable.length != 2
+                    || databaseAndTable[0].isEmpty()
+                    || databaseAndTable[1].isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Table resource must be in format table:${database}.${table}");
+            }
+            return Resource.table(databaseAndTable[0], databaseAndTable[1]);
+        }
+
+        if (startsWithIgnoreCase(resourceStr, GROUP_RESOURCE_PREFIX)) {
+            return groupResource(resourceStr.substring(GROUP_RESOURCE_PREFIX.length()));
+        }
+
         String[] resourcePath = resourceStr.split(Resource.TABLE_SPLITTER);
         if (resourcePath.length == 0
                 || resourcePath.length > 3
                 || !"cluster".equalsIgnoreCase(resourcePath[0])) {
             throw new IllegalArgumentException(
                     "resource must be in format cluster, cluster.${database}, "
-                            + "cluster.${database}.${table}, or group.${group_id}");
+                            + "cluster.${database}.${table}, database:${database}, "
+                            + "table:${database}.${table}, or group:${group_id}");
         } else if (resourcePath.length == 1) {
-            resource = Resource.cluster();
+            return Resource.cluster();
         } else if (resourcePath.length == 2) {
-            resource = Resource.database(resourcePath[1]);
+            return Resource.database(resourcePath[1]);
         } else {
-            resource = Resource.table(resourcePath[1], resourcePath[2]);
+            return Resource.table(resourcePath[1], resourcePath[2]);
         }
-        return resource;
+    }
+
+    private static Resource groupResource(String groupId) {
+        if (groupId.isEmpty()) {
+            throw new InvalidConsumerGroupIdException(
+                    "Consumer group id must not be null or empty.");
+        }
+        if (Resource.WILDCARD_RESOURCE.equals(groupId)) {
+            return Resource.groupWildcard();
+        }
+        return Resource.group(GroupId.of(groupId));
+    }
+
+    private static boolean startsWithIgnoreCase(String value, String prefix) {
+        return value.regionMatches(true, 0, prefix, 0, prefix.length());
     }
 
     private @Nullable String parseHost(@Nullable String hostStr) {

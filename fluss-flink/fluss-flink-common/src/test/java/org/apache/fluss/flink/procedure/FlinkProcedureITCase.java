@@ -304,20 +304,12 @@ public abstract class FlinkProcedureITCase {
     }
 
     @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "default-consumer",
-                "Default_consumer-1",
-                "default.consumer",
-                "消费组",
-                "*",
-                "fluss-cluster"
-            })
+    @ValueSource(strings = {"default-consumer", "Default_consumer-1", "group1", "fluss-cluster"})
     void testConsumerGroupAcls(String groupId) throws Exception {
-        String sqlResource = "group." + groupId;
+        String sqlResource = "group:" + groupId;
         tEnv.executeSql(
                         String.format(
-                                "CALL %s.sys.add_acl('GROUP.%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                "CALL %s.sys.add_acl('group:%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
                                 CATALOG_NAME, groupId))
                 .await();
         AclBindingFilter filter =
@@ -354,12 +346,66 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    void testGroupWildcardAclRevocationLeavesNamedGroupAcls() throws Exception {
+        String wildcardResource = "group:*";
+        String namedResource = "group:named-group";
+        String principal = "User:group-consumer";
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, wildcardResource, principal))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, namedResource, principal))
+                .await();
+
+        AclBindingFilter wildcardFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, Resource.WILDCARD_RESOURCE),
+                        AccessControlEntryFilter.ANY);
+        AclBindingFilter namedFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, "named-group"),
+                        AccessControlEntryFilter.ANY);
+        assertThat(admin.listAcls(wildcardFilter).get()).hasSize(1);
+        assertThat(admin.listAcls(namedFilter).get()).hasSize(1);
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, wildcardResource, principal))
+                .await();
+
+        assertThat(admin.listAcls(wildcardFilter).get()).isEmpty();
+        assertThat(admin.listAcls(namedFilter).get()).hasSize(1);
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, namedResource, principal))
+                .await();
+        assertThat(admin.listAcls(namedFilter).get()).isEmpty();
+    }
+
+    @Test
     void testInvalidConsumerGroupAclNames() {
-        for (String groupId : Collections.singletonList("")) {
+        for (String groupId :
+                Arrays.asList(
+                        "",
+                        "__internal",
+                        "default-*",
+                        "a*b",
+                        "default.consumer",
+                        "default/consumer",
+                        "default:consumer",
+                        "消费组")) {
             for (String procedure : Arrays.asList("add_acl", "drop_acl", "list_acl")) {
                 String sql =
                         String.format(
-                                "CALL %s.sys.%s('group.%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                "CALL %s.sys.%s('group:%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
                                 CATALOG_NAME, procedure, groupId);
                 assertThatThrownBy(() -> tEnv.executeSql(sql).await())
                         .rootCause()

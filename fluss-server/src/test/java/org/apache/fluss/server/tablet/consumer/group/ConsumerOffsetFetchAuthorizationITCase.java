@@ -148,6 +148,7 @@ class ConsumerOffsetFetchAuthorizationITCase {
 
     @Test
     void testSelectedFetchRequiresSourceDescribePermission() throws Exception {
+        grant(DESCRIBE, Resource.group(GROUP_ID));
         grant(DESCRIBE, Resource.table(FIRST_TABLE));
         commitOffset(internalGateway, firstBucket, 10L);
         commitOffset(internalGateway, secondBucket, 20L);

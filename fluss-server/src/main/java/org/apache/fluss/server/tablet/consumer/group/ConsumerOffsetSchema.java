@@ -19,6 +19,7 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.bucketing.FlussBucketingFunction;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -109,11 +110,11 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the complete primary key of an offset row. */
-    public byte[] encodeOffsetKey(String groupId, long tableId, Long partitionId, int bucketId) {
+    public byte[] encodeOffsetKey(GroupId groupId, long tableId, Long partitionId, int bucketId) {
         return encodeOffsetKey(
                 GenericRow.of(
                         OFFSET_COMMIT_RECORD_TYPE,
-                        BinaryString.fromString(groupId),
+                        BinaryString.fromString(groupId.getGroupId()),
                         tableId,
                         partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId,
                         bucketId));
@@ -137,23 +138,27 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the bucket key used to route a group to its offsets-table bucket. */
-    public byte[] encodeGroupBucketKey(String groupId) {
+    public byte[] encodeGroupBucketKey(GroupId groupId) {
         // The bucket-key encoder reads group_id from column 1; record_type is only a placeholder.
         return groupBucketKeyEncoder
                 .get()
                 .encodeKey(
-                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
+                        GenericRow.of(
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId())));
     }
 
     /**
      * Encodes the {@code record_type} and {@code group_id} prefix used to enumerate a group's
      * committed offsets.
      */
-    public byte[] encodeOffsetCommitPrefix(String groupId) {
+    public byte[] encodeOffsetCommitPrefix(GroupId groupId) {
         return groupLookupPrefixEncoder
                 .get()
                 .encodeKey(
-                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
+                        GenericRow.of(
+                                OFFSET_COMMIT_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId())));
     }
 
     /** Encodes the complete primary key of an already materialized offset row. */
@@ -161,13 +166,13 @@ public final class ConsumerOffsetSchema {
         return primaryKeyEncoder.get().encodeKey(row);
     }
 
-    int bucketFor(String groupId, int bucketCount) {
+    int bucketFor(GroupId groupId, int bucketCount) {
         return FlussBucketingFunction.bucketForRowKey(encodeGroupBucketKey(groupId), bucketCount);
     }
 
     /** The returned row uses this thread's buffer until its next call to this method. */
     CompactedRow encodeOffsetRow(
-            String groupId,
+            GroupId groupId,
             int recordType,
             long tableId,
             Long partitionId,
@@ -176,7 +181,7 @@ public final class ConsumerOffsetSchema {
         CompactedRowEncoder encoder = rowEncoder.get();
         encoder.startNewRow();
         encoder.encodeField(0, recordType);
-        encoder.encodeField(1, BinaryString.fromString(groupId));
+        encoder.encodeField(1, BinaryString.fromString(groupId.getGroupId()));
         encoder.encodeField(2, tableId);
         encoder.encodeField(3, partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId);
         encoder.encodeField(4, bucketId);

@@ -1449,7 +1449,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
         List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
         List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(currentSession(), filters);
-        return CompletableFuture.completedFuture(makeDropAclsResponse(aclDeleteResults));
+        boolean includeGroupAcls = currentApiVersion() >= 1;
+        return CompletableFuture.completedFuture(
+                makeDropAclsResponse(aclDeleteResults, includeGroupAcls));
     }
 
     @Override

@@ -41,16 +41,17 @@ class AbstractAclProcedureTest {
         "CLUSTER.defaultdb, DATABASE, defaultdb",
         "cluster.defaultdb.table1, TABLE, defaultdb.table1",
         "cluster.group.default, TABLE, group.default",
-        "group.default-consumer, GROUP, default-consumer",
-        "GROUP.Default_consumer-1, GROUP, Default_consumer-1",
-        "group.default.consumer, GROUP, default.consumer",
-        "group.default/consumer, GROUP, default/consumer",
-        "group.default:consumer, GROUP, default:consumer",
-        "group.消费组, GROUP, 消费组",
-        "group.default-*, GROUP, default-*",
-        "group.__internal, GROUP, __internal",
-        "group.*, GROUP, *",
-        "group.fluss-cluster, GROUP, fluss-cluster"
+        "database:defaultdb, DATABASE, defaultdb",
+        "DATABASE:DefaultDB, DATABASE, DefaultDB",
+        "database:*, DATABASE, *",
+        "table:defaultdb.table1, TABLE, defaultdb.table1",
+        "TABLE:DefaultDB.DefaultTable, TABLE, DefaultDB.DefaultTable",
+        "table:*, TABLE, *",
+        "group:default-consumer, GROUP, default-consumer",
+        "GROUP:Default_consumer-1, GROUP, Default_consumer-1",
+        "group:group1, GROUP, group1",
+        "group:*, GROUP, *",
+        "group:fluss-cluster, GROUP, fluss-cluster",
     })
     void testResourceNames(String input, ResourceType type, String name) throws Exception {
         TestingAclProcedure procedure = new TestingAclProcedure();
@@ -68,7 +69,18 @@ class AbstractAclProcedureTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"group.", "GROUP."})
+    @ValueSource(
+            strings = {
+                "group:",
+                "GROUP:",
+                "group:default-*",
+                "group:a*b",
+                "group:default.consumer",
+                "group:default/consumer",
+                "group:default:consumer",
+                "group:消费组",
+                "group:__internal"
+            })
     void testInvalidGroupId(String input) {
         TestingAclProcedure procedure = new TestingAclProcedure();
         assertThatThrownBy(
@@ -77,6 +89,27 @@ class AbstractAclProcedureTest {
                                         input, "ALLOW", "User:consumer", "DESCRIBE", "*"))
                 .isInstanceOf(InvalidConsumerGroupIdException.class)
                 .hasMessageContaining("Consumer group id");
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "database:",
+                "DATABASE:",
+                "table:",
+                "TABLE:",
+                "table:foo",
+                "table:foo.bar.baz",
+                "group.default-consumer",
+                "group.*"
+            })
+    void testInvalidDatabaseOrTableResource(String input) {
+        TestingAclProcedure procedure = new TestingAclProcedure();
+        assertThatThrownBy(
+                        () ->
+                                procedure.internalCall(
+                                        input, "ALLOW", "User:consumer", "DESCRIBE", "*"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static class TestingAclProcedure extends AbstractAclProcedure {

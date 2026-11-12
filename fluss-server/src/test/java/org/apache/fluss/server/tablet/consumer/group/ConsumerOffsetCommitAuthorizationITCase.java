@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -172,6 +173,14 @@ class ConsumerOffsetCommitAuthorizationITCase {
     }
 
     @Test
+    void testClusterReadImpliesGroupRead() throws Exception {
+        grant(READ, Resource.cluster());
+        grant(READ, Resource.table(FIRST_TABLE));
+        assertSuccessfulCommit(clientGateway, 10L, firstBucket);
+        assertStoredOffset(firstBucket, 10L);
+    }
+
+    @Test
     void testGroupReadAndSourceReadPermissionsAllowCommit() throws Exception {
         grant(READ, Resource.group(GROUP_ID));
         grant(READ, Resource.table(FIRST_TABLE));
@@ -287,7 +296,7 @@ class ConsumerOffsetCommitAuthorizationITCase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                GROUP_ID,
+                                GroupId.of(GROUP_ID),
                                 sourceBucket.getTableId(),
                                 sourceBucket.getPartitionId(),
                                 sourceBucket.getBucket());

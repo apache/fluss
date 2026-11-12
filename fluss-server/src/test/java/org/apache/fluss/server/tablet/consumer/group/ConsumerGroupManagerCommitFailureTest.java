@@ -19,6 +19,7 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -56,7 +57,9 @@ class ConsumerGroupManagerCommitFailureTest extends ReplicaTestBase {
 
         assertThat(
                         ConsumerGroupManager.handleWriteCompletion(
-                                "group", results, Collections.singletonList(writeResult)))
+                                GroupId.of("group"),
+                                results,
+                                Collections.singletonList(writeResult)))
                 .containsEntry(bucket, Errors.NOT_CONSUMER_GROUP_OWNER);
     }
 
@@ -87,7 +90,7 @@ class ConsumerGroupManagerCommitFailureTest extends ReplicaTestBase {
                                     zkClient, metadataManager, serverMetadataCache),
                             testCoordinatorGateway,
                             Runnable::run);
-            String groupId = "group-with-locked-disk";
+            GroupId groupId = GroupId.of("group-with-locked-disk");
             int bucketId = new ConsumerOffsetSchema().bucketFor(groupId, TEST_ROUTING_BUCKET_COUNT);
             makeKvTableAsLeader(offsetsTableId, SystemTables.CONSUMER_OFFSETS, bucketId);
 
