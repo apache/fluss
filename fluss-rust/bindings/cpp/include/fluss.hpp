@@ -242,6 +242,7 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
+               code == NOT_COORDINATOR_LEADER_EXCEPTION ||
                code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
                code == HISTORICAL_PARTITION_THROTTLED;
     }

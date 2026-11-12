@@ -510,11 +510,7 @@ impl Sender {
             Ok(()) => {
                 info!("Partition {path} was created, or already existed, for pending writes")
             }
-            Err(e)
-                if coordinator.is_none()
-                    || e.is_retriable()
-                    || e.api_error() == Some(FlussError::NotCoordinatorLeaderException) =>
-            {
+            Err(e) if coordinator.is_none() || e.is_retriable() => {
                 // The next attempt refreshes the table, which finds a coordinator that moved.
                 warn!(
                     "Failed to create partition {path} of table_id={table_id:?} on coordinator {}, retrying: {e}",
@@ -1178,7 +1174,7 @@ impl Sender {
         {
             return false;
         }
-        if Self::is_retriable_error(error) {
+        if error.is_retriable() {
             return true;
         }
         // Idempotent-specific retry logic
@@ -1337,27 +1333,6 @@ impl Sender {
                 | FlussError::LeaderNotAvailableException
                 | FlussError::NetworkException
                 | FlussError::InvalidBucketRouting
-        )
-    }
-
-    fn is_retriable_error(error: FlussError) -> bool {
-        matches!(
-            error,
-            FlussError::NetworkException
-                | FlussError::NotLeaderOrFollower
-                | FlussError::UnknownTableOrBucketException
-                | FlussError::LeaderNotAvailableException
-                | FlussError::LogStorageException
-                | FlussError::KvStorageException
-                | FlussError::StorageException
-                | FlussError::StorageBackpressureException
-                | FlussError::RequestTimeOut
-                | FlussError::NotEnoughReplicasAfterAppendException
-                | FlussError::NotEnoughReplicasException
-                | FlussError::CorruptMessage
-                | FlussError::CorruptRecordException
-                | FlussError::DiskWriteLocked
-                | FlussError::HistoricalPartitionThrottled
         )
     }
 
@@ -1708,10 +1683,37 @@ mod tests {
 
     #[tokio::test]
     async fn handle_write_batch_error_retries() -> Result<()> {
+        let batch = retried_batch(FlussError::RequestTimeOut, disabled_idempotence()).await?;
+        assert_eq!(batch.write_batch.attempts(), 1);
+        Ok(())
+    }
+
+    /// The tablet server answers `SchemaNotExist` until it gets a new schema, like right
+    /// after `ADD COLUMN`. It rejects the batch before recording it, so an idempotent
+    /// retry keeps the batch's writer id and sequence.
+    #[tokio::test]
+    async fn handle_write_batch_error_retries_schema_not_exist() -> Result<()> {
+        let batch = retried_batch(FlussError::SchemaNotExist, disabled_idempotence()).await?;
+        assert_eq!(batch.write_batch.attempts(), 1);
+
+        let idempotence = enabled_idempotence();
+        idempotence.set_writer_id(42);
+        let batch = retried_batch(FlussError::SchemaNotExist, Arc::clone(&idempotence)).await?;
+        assert_eq!(batch.write_batch.attempts(), 1);
+        assert_eq!(batch.write_batch.batch_sequence(), 0);
+        assert_eq!(batch.write_batch.writer_id(), 42);
+        assert!(idempotence.has_writer_id());
+        Ok(())
+    }
+
+    /// Fails a sent batch with `error` and returns it as drained again for the retry.
+    async fn retried_batch(
+        error: FlussError,
+        idempotence: Arc<IdempotenceManager>,
+    ) -> Result<ReadyWriteBatch> {
         let table_path = Arc::new(TablePath::new("db".to_string(), "tbl".to_string()));
         let cluster = build_cluster_arc(table_path.as_ref(), 1, 1);
         let metadata = Arc::new(Metadata::new_for_test(cluster.clone()));
-        let idempotence = disabled_idempotence();
         let accumulator = Arc::new(RecordAccumulator::new(
             Config::default(),
             Arc::clone(&idempotence),
@@ -1738,8 +1740,8 @@ mod tests {
 
         sender.handle_write_batch_error(
             batch,
-            FlussError::RequestTimeOut,
-            "timeout".to_string(),
+            error,
+            error.message().to_string(),
             &mut Vec::new(),
         )?;
 
@@ -1748,10 +1750,10 @@ mod tests {
         let server = cluster.get_tablet_server(1).expect("server");
         let nodes = HashSet::from([server.clone()]);
         let mut batches = accumulator.drain(cluster, &nodes, 1024 * 1024)?;
-        let mut drained = batches.remove(&1).expect("drained batches");
-        let batch = drained.pop().expect("batch");
-        assert_eq!(batch.write_batch.attempts(), 1);
-        Ok(())
+        let mut drained = batches
+            .remove(&1)
+            .expect("batch was not re-enqueued for a retry");
+        Ok(drained.pop().expect("batch"))
     }
 
     /// A retriable error must not put the batch straight back on the wire: the
