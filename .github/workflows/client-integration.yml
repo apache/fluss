@@ -378,6 +378,8 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build build --parallel
           sccache --show-stats
+      - name: Run fluss-cpp Rust unit tests
+        run: cargo test -p fluss-cpp --lib
       - name: Run C++ integration tests (parallel)
         working-directory: fluss-rust/bindings/cpp
         run: cd build && ctest -j$(nproc) --output-on-failure --timeout 300
