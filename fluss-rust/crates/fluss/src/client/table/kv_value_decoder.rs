@@ -108,7 +108,8 @@ impl KvValueDecoder {
         })
     }
 
-    fn contains(&self, schema_id: i16) -> bool {
+    /// Returns whether `schema_id` can be decoded without fetching its schema.
+    pub(crate) fn contains(&self, schema_id: i16) -> bool {
         schema_id == self.target_id || self.others.read().contains_key(&schema_id)
     }
 
@@ -146,6 +147,27 @@ impl KvValueDecoder {
                 missing.push(schema_id);
             }
         }
+        self.fetch_decoders(schema_getter, missing).await
+    }
+
+    /// Make sure a decoder exists for `schema_id`, fetching its source schema if missing.
+    #[cfg(feature = "kv-snapshot")]
+    pub(crate) async fn ensure_decoder(
+        &self,
+        schema_getter: &ClientSchemaGetter,
+        schema_id: i16,
+    ) -> Result<()> {
+        if self.contains(schema_id) {
+            return Ok(());
+        }
+        self.fetch_decoders(schema_getter, vec![schema_id]).await
+    }
+
+    async fn fetch_decoders(
+        &self,
+        schema_getter: &ClientSchemaGetter,
+        missing: Vec<i16>,
+    ) -> Result<()> {
         if missing.is_empty() {
             return Ok(());
         }

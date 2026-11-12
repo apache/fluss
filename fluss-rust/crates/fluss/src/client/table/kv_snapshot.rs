@@ -16,7 +16,7 @@
 // under the License.
 
 use super::FlussTable;
-use super::batch_scanner::{build_kv_decoders, read_schema_id};
+use super::kv_value_decoder::{KvValueDecoder, read_schema_id};
 use super::remote_log::RemoteLogDownloader;
 use crate::SnapshotId;
 use crate::client::{ClientSchemaGetter, CredentialsReceiver, FlussAdmin, SecurityTokenManager};
@@ -26,11 +26,10 @@ use crate::metadata::{
     Schema, SchemaInfo, TableBucket, TableInfo,
 };
 use crate::record::RowAppendRecordBatchBuilder;
-use crate::row::FixedSchemaDecoder;
 use arrow::array::RecordBatch;
 use futures::Stream;
 use rocksdb::{DB, Options, ReadOptions};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::{Component, Path};
 use std::sync::Arc;
@@ -110,7 +109,7 @@ struct ReadState {
     schema_getter: Arc<ClientSchemaGetter>,
     admin: Arc<FlussAdmin>,
     projected_fields: Option<Vec<usize>>,
-    decoders: HashMap<i16, FixedSchemaDecoder>,
+    decoder: KvValueDecoder,
     value_offset: usize,
     last_key: Option<Vec<u8>>,
 }
@@ -252,6 +251,11 @@ impl FlussTable<'_> {
                             }
                         }
                     }
+                    let decoder = KvValueDecoder::new(
+                        table_info.table_config.get_kv_format()?,
+                        Arc::clone(&target_schema),
+                        target_id,
+                    )?;
                     let metadata = admin
                         .get_kv_snapshot_metadata(
                             bucket.table_id(),
@@ -320,7 +324,7 @@ impl FlussTable<'_> {
                             schema_getter,
                             admin: admin.clone(),
                             projected_fields: options.projected_fields,
-                            decoders: HashMap::new(),
+                            decoder,
                             value_offset,
                             last_key: None,
                         }),
@@ -435,7 +439,7 @@ impl ReadState {
         while iter.valid() && count < max_rows {
             let payload = value_body(iter.value().unwrap(), self.value_offset)?;
             let id = read_schema_id(payload)?;
-            let Some(decoder) = self.decoders.get(&id) else {
+            if !self.decoder.contains(id) {
                 missing_schema = Some(id);
                 // Resume at this unconsumed row after resolving its schema asynchronously.
                 // Only the cursor key is copied, not the values of the whole batch.
@@ -450,8 +454,8 @@ impl ReadState {
                     );
                 }
                 break;
-            };
-            builder.append(&decoder.decode(payload)?)?;
+            }
+            builder.append(&self.decoder.decode(payload)?)?;
             count += 1;
             if count == max_rows {
                 self.last_key = Some(iter.key().unwrap().to_vec());
@@ -477,16 +481,10 @@ impl ReadState {
         })
     }
 
-    async fn resolve_decoder(&mut self, id: i16) -> Result<()> {
-        let decoders = build_kv_decoders(
-            &self.schema_getter,
-            &self.target_schema,
-            self.target_schema_id,
-            self.table_info.table_config.get_kv_format()?,
-            &[id],
-        )
-        .await?;
-        // Schema lookup is by table path. Reject a replacement table's schema before decoding.
+    async fn resolve_decoder(&self, id: i16) -> Result<()> {
+        self.decoder.ensure_decoder(&self.schema_getter, id).await?;
+        // Schema lookup is by table path. Reject a replacement table's schema before decoding;
+        // the failed read closes the reader, so its cached decoder is never used.
         if id != self.target_schema_id
             && self
                 .admin
@@ -499,7 +497,6 @@ impl ReadState {
                 "Table was replaced while resolving snapshot schemas",
             ));
         }
-        self.decoders.extend(decoders);
         Ok(())
     }
 }
@@ -757,11 +754,12 @@ mod tests {
     use super::*;
     use crate::client::Metadata;
     use crate::cluster::Cluster;
-    use crate::metadata::{DataField, DataTypes, RemotePathAndLocalFile, TablePath};
+    use crate::metadata::{DataField, DataTypes, KvFormat, RemotePathAndLocalFile, TablePath};
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use crate::rpc::RpcClient;
     use crate::test_utils::build_table_info_with_columns;
+    use std::collections::HashMap;
 
     fn transient_lease_error() -> Error {
         crate::rpc::RpcError::ConnectionError("temporary disconnect".into()).into()
@@ -1063,8 +1061,13 @@ mod tests {
                     schema_getter,
                     admin,
                     projected_fields: None,
+                    decoder: KvValueDecoder::new(
+                        KvFormat::COMPACTED,
+                        Arc::new(info.get_schema().clone()),
+                        1,
+                    )
+                    .unwrap(),
                     table_info: info,
-                    decoders: HashMap::new(),
                     value_offset: 0,
                     last_key: None,
                 }),

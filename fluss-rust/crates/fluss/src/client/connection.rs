@@ -55,6 +55,10 @@ impl FlussConnection {
             admin_client: RwLock::new(None),
             lookup_client: Default::default(),
             rescaled_partitions: Default::default(),
+            #[cfg(feature = "kv-snapshot")]
+            snapshot_download_slots: Arc::new(tokio::sync::Semaphore::new(
+                Config::default().remote_file_download_thread_num,
+            )),
         }
     }
 
