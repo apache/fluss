@@ -17,107 +17,78 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorMetadata;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorPageSourceProvider;
 import io.trino.plugin.base.classloader.ClassLoaderSafeConnectorSplitManager;
+import io.trino.spi.TrinoException;
 import io.trino.spi.connector.Connector;
 import io.trino.spi.connector.ConnectorContext;
 import io.trino.spi.connector.ConnectorMetadata;
-import io.trino.spi.connector.ConnectorSession;
+import io.trino.testing.TestingConnectorContext;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 
 import java.util.Collections;
 import java.util.Map;
 
 import static io.trino.spi.transaction.IsolationLevel.READ_COMMITTED;
-import static java.util.concurrent.CompletableFuture.completedFuture;
+import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.RETURNS_MOCKS;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
-/** Tests the real connector bootstrap and lifecycle with a mocked external connection. */
-final class FlussConnectorFactoryTest {
+/** Tests connector bootstrap and lifecycle against a real Fluss catalog. */
+final class FlussConnectorFactoryTest extends FlussTrinoTestBase {
+
     @Test
     void testBootstrapMetadataAndShutdown() throws Exception {
-        ConnectorContext context = mock(ConnectorContext.class, RETURNS_MOCKS);
-        when(context.getSpiVersion()).thenReturn(new ConnectorContext() {}.getSpiVersion());
-        Connection connection = mock(Connection.class);
-        Admin admin = mock(Admin.class);
-        when(connection.getAdmin()).thenReturn(admin);
-        when(admin.listDatabases()).thenReturn(completedFuture(Collections.singletonList("Sales")));
+        createDatabase("Sales");
 
-        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
-            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
-                    .thenReturn(connection);
-            Connector connector =
-                    new FlussConnectorFactory()
-                            .create(
-                                    "fluss",
-                                    Collections.singletonMap("bootstrap.servers", "localhost:9123"),
-                                    context);
-            try {
-                ConnectorMetadata metadata =
-                        connector.getMetadata(
-                                mock(ConnectorSession.class),
-                                connector.beginTransaction(READ_COMMITTED, true, true));
-                assertThat(metadata).isInstanceOf(ClassLoaderSafeConnectorMetadata.class);
-                factory.verifyNoInteractions();
-                assertThat(metadata.listSchemaNames(mock(ConnectorSession.class)))
-                        .containsExactly("sales");
-                assertThat(connector.getTableProperties()).isNotEmpty();
-                assertThat(connector.getPageSourceProvider())
-                        .isInstanceOf(ClassLoaderSafeConnectorPageSourceProvider.class);
-                assertThat(connector.getSplitManager())
-                        .isInstanceOf(ClassLoaderSafeConnectorSplitManager.class);
-            } finally {
-                connector.shutdown();
-            }
-            verify(admin).close();
-            verify(connection).close();
+        Connector connector =
+                new FlussConnectorFactory()
+                        .create(
+                                "fluss",
+                                Collections.singletonMap(
+                                        "bootstrap.servers", CLUSTER.getBootstrapServers()),
+                                new TestingConnectorContext());
+
+        ConnectorMetadata metadata;
+        try {
+            metadata =
+                    connector.getMetadata(
+                            SESSION, connector.beginTransaction(READ_COMMITTED, true, true));
+
+            assertThat(metadata).isInstanceOf(ClassLoaderSafeConnectorMetadata.class);
+            assertThat(metadata.listSchemaNames(SESSION)).contains("sales");
+            assertThat(connector.getTableProperties()).isNotEmpty();
+
+            assertThat(connector.getPageSourceProvider())
+                    .isInstanceOf(ClassLoaderSafeConnectorPageSourceProvider.class);
+            assertThat(connector.getSplitManager())
+                    .isInstanceOf(ClassLoaderSafeConnectorSplitManager.class);
+        } finally {
+            connector.shutdown();
         }
+
+        assertThatThrownBy(() -> metadata.listSchemaNames(SESSION))
+                .isInstanceOf(TrinoException.class)
+                .hasCauseInstanceOf(IllegalStateException.class)
+                .hasRootCauseMessage("Fluss client manager is closed");
     }
 
     @Test
     void testBootstrapAndShutdownWithoutFlussConnection() {
-        ConnectorContext context = mock(ConnectorContext.class, RETURNS_MOCKS);
-        when(context.getSpiVersion()).thenReturn(new ConnectorContext() {}.getSpiVersion());
-
-        try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
-            factory.when(() -> ConnectionFactory.createConnection(any(Configuration.class)))
-                    .thenThrow(new IllegalStateException("Fluss is unavailable"));
-
-            Connector connector =
-                    new FlussConnectorFactory()
-                            .create(
-                                    "fluss",
-                                    Collections.singletonMap("bootstrap.servers", "localhost:9123"),
-                                    context);
-            try {
-                factory.verifyNoInteractions();
-            } finally {
-                connector.shutdown();
-            }
-            factory.verifyNoInteractions();
-        }
+        Connector connector =
+                new FlussConnectorFactory()
+                        .create(
+                                "fluss",
+                                Collections.singletonMap("bootstrap.servers", "127.0.0.1:1"),
+                                new TestingConnectorContext());
+        connector.shutdown();
     }
 
     @Test
     void testRejectAuthenticationAtCatalogCreation() {
-        ConnectorContext context = mock(ConnectorContext.class, RETURNS_MOCKS);
-        when(context.getSpiVersion()).thenReturn(new ConnectorContext() {}.getSpiVersion());
-
         for (Map.Entry<String, String> property :
                 ImmutableMap.of(
                                 "client.security.protocol", "SASL",
@@ -128,23 +99,26 @@ final class FlussConnectorFactoryTest {
             Map<String, String> config =
                     ImmutableMap.of(
                             "bootstrap.servers",
-                            "localhost:9123",
+                            "127.0.0.1:1",
                             property.getKey(),
                             property.getValue());
-
-            try (MockedStatic<ConnectionFactory> factory = mockStatic(ConnectionFactory.class)) {
-                assertThatThrownBy(
-                                () -> new FlussConnectorFactory().create("fluss", config, context))
-                        .hasMessageContaining("only PLAINTEXT connections are currently supported");
-                factory.verifyNoInteractions();
-            }
+            assertThatThrownBy(
+                            () ->
+                                    new FlussConnectorFactory()
+                                            .create("fluss", config, new TestingConnectorContext()))
+                    .hasMessageContaining("only PLAINTEXT connections are currently supported");
         }
     }
 
     @Test
     void testRejectMismatchedSpiVersion() {
-        ConnectorContext context = mock(ConnectorContext.class);
-        when(context.getSpiVersion()).thenReturn("incompatible-version");
+        ConnectorContext context =
+                new ConnectorContext() {
+                    @Override
+                    public String getSpiVersion() {
+                        return "incompatible-version";
+                    }
+                };
         assertThatThrownBy(
                         () ->
                                 new FlussConnectorFactory()

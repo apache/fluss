@@ -17,14 +17,11 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.ColumnHandle;
@@ -35,6 +32,7 @@ import io.trino.spi.connector.ConnectorTableMetadata;
 import io.trino.spi.connector.ConnectorTableVersion;
 import io.trino.spi.connector.Constraint;
 import io.trino.spi.connector.ConstraintApplicationResult;
+import io.trino.spi.connector.PointerType;
 import io.trino.spi.connector.RelationColumnsMetadata;
 import io.trino.spi.connector.RelationCommentMetadata;
 import io.trino.spi.connector.SchemaTableName;
@@ -46,6 +44,7 @@ import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.Range;
 import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.predicate.ValueSet;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -53,31 +52,29 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.VarcharType.VARCHAR;
-import static java.util.concurrent.CompletableFuture.completedFuture;
-import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
-import static org.apache.fluss.trino.TestingFlussMetadata.tableInfo;
+import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.apache.fluss.trino.TestingFlussMetadata.usersTable;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
 
-/** Tests Trino metadata contracts using real metadata access and a mocked Fluss Admin. */
-final class FlussMetadataTest {
+/** Tests Trino metadata contracts against an embedded Fluss cluster. */
+final class FlussMetadataTest extends FlussTrinoTestBase {
     private static final SchemaTableName USERS = new SchemaTableName("sales", "users");
     private static final TablePath PHYSICAL_USERS = TablePath.of("Sales", "Users");
 
-    private final Admin admin = mock(Admin.class);
-    private final FlussMetadata metadata = new FlussMetadata(metadataAccess(admin));
-    private final ConnectorSession session = mock(ConnectorSession.class);
+    private FlussMetadata metadata;
+    private final ConnectorSession session = SESSION;
+
+    @BeforeEach
+    void setUpMetadata() {
+        metadata = new FlussMetadata(access);
+    }
 
     @Test
     void testApplyFilterPreservesSummaryAndExpressionAsResiduals() {
@@ -102,7 +99,6 @@ final class FlussMetadataTest {
         assertThat(result.getRemainingFilter()).isEqualTo(summary);
         assertThat(result.getRemainingExpression()).contains(expression);
         assertThat(result.isPrecalculateStatistics()).isFalse();
-        verifyNoInteractions(admin);
     }
 
     @Test
@@ -204,20 +200,16 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testTableHandlePreservesPhysicalIdentity() {
+    void testTableHandlePreservesPhysicalIdentity() throws Exception {
         givenTables("Users");
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         ConnectorTableHandle handle =
                 metadata.getTableHandle(session, USERS, Optional.empty(), Optional.empty());
-        assertThat(handle)
-                .isEqualTo(
-                        new FlussTableHandle(
-                                "sales", "users", "Sales", "Users", 42, 3, TupleDomain.all()));
+        assertThat(handle).isEqualTo(tableHandle(admin.getTableInfo(PHYSICAL_USERS).get()));
         assertThat(metadata.getTableName(session, handle)).isEqualTo(USERS);
     }
 
     @Test
-    void testMissingTableHasNoHandle() {
+    void testMissingTableHasNoHandle() throws Exception {
         givenTables("Users");
         assertThat(
                         metadata.getTableHandle(
@@ -226,16 +218,15 @@ final class FlussMetadataTest {
                                 Optional.empty(),
                                 Optional.empty()))
                 .isNull();
-        when(admin.getTableInfo(PHYSICAL_USERS))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")));
+        admin.dropTable(PHYSICAL_USERS, false).get();
         assertThat(metadata.getTableHandle(session, USERS, Optional.empty(), Optional.empty()))
                 .isNull();
     }
 
     @Test
     void testRejectTableVersioning() {
-        ConnectorTableVersion version = mock(ConnectorTableVersion.class);
+        ConnectorTableVersion version =
+                new ConnectorTableVersion(PointerType.TARGET_ID, BIGINT, 1L);
         assertThatThrownBy(
                         () ->
                                 metadata.getTableHandle(
@@ -255,7 +246,7 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testTableHandleRejectsAmbiguousPhysicalNames() {
+    void testTableHandleRejectsAmbiguousPhysicalNames() throws Exception {
         givenTables("Users", "users");
         assertThatThrownBy(
                         () ->
@@ -267,14 +258,12 @@ final class FlussMetadataTest {
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(NOT_SUPPORTED.toErrorCode()))
                 .hasMessageContaining("Ambiguous Fluss table");
-        verify(admin, never()).getTableInfo(PHYSICAL_USERS);
     }
 
     @Test
-    void testTableMetadataAndColumnHandles() {
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
+    void testTableMetadataAndColumnHandles() throws Exception {
         FlussTableHandle handle =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+                tableHandle(createTable(PHYSICAL_USERS, usersTable().toTableDescriptor()));
         ConnectorTableMetadata table = metadata.getTableMetadata(session, handle);
         assertThat(table.getTable()).isEqualTo(USERS);
         assertThat(table.getComment()).contains("Registered users");
@@ -299,10 +288,9 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testRejectInvalidColumnHandle() {
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
+    void testRejectInvalidColumnHandle() throws Exception {
         FlussTableHandle table =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+                tableHandle(createTable(PHYSICAL_USERS, usersTable().toTableDescriptor()));
         assertThatThrownBy(
                         () ->
                                 metadata.getColumnMetadata(
@@ -318,9 +306,10 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testRejectAmbiguousColumnNames() {
+    void testRejectAmbiguousColumnNames() throws Exception {
         TableInfo info =
-                tableInfo(
+                createTable(
+                        PHYSICAL_USERS,
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
@@ -329,9 +318,7 @@ final class FlussMetadataTest {
                                                 .build())
                                 .distributedBy(1)
                                 .build());
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(info));
-        FlussTableHandle table =
-                new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+        FlussTableHandle table = tableHandle(info);
         assertThatThrownBy(() -> metadata.getTableMetadata(session, table))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss columns");
@@ -341,16 +328,15 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testListTablesIncludesAmbiguousLogicalNamesOnce() {
+    void testListTablesIncludesAmbiguousLogicalNamesOnce() throws Exception {
         givenTables("Users", "Order", "oRder");
         assertThat(metadata.listTables(session, Optional.of("sales")))
-                .containsExactly(USERS, new SchemaTableName("sales", "order"));
+                .containsExactlyInAnyOrder(USERS, new SchemaTableName("sales", "order"));
     }
 
     @Test
-    void testRelationFilterRunsBeforeResolvingAmbiguousNames() {
+    void testRelationFilterRunsBeforeResolvingAmbiguousNames() throws Exception {
         givenTables("Users", "Order", "oRder");
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         Iterator<RelationColumnsMetadata> columns =
                 metadata.streamRelationColumns(
                         session,
@@ -376,11 +362,10 @@ final class FlussMetadataTest {
                                                                     "region", "id", "name"));
                             assertThat(relation.redirected()).isFalse();
                         });
-        verify(admin, never()).getTableInfo(TablePath.of("Sales", "Order"));
     }
 
     @Test
-    void testSelectedAmbiguousRelationFails() {
+    void testSelectedAmbiguousRelationFails() throws Exception {
         givenTables("Order", "oRder");
         assertThatThrownBy(
                         () ->
@@ -391,8 +376,16 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testEmptyRelationFilterDoesNotLoadTableMetadata() {
-        givenTables("Users");
+    void testEmptyRelationFilterSkipsAmbiguousTables() throws Exception {
+        givenTables("Users", "users");
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public CompletableFuture<TableInfo> getTableInfo(TablePath path) {
+                        throw new AssertionError("Filtered relations must not load table metadata");
+                    }
+                });
+        metadata = new FlussMetadata(access);
         assertThat(
                         metadata.streamRelationColumns(
                                 session, Optional.of("sales"), names -> Collections.emptySet()))
@@ -401,30 +394,44 @@ final class FlussMetadataTest {
                         metadata.streamRelationComments(
                                 session, Optional.of("sales"), names -> Collections.emptySet()))
                 .isExhausted();
-        verify(admin, never()).getTableInfo(PHYSICAL_USERS);
     }
 
     @Test
-    void testRelationDiscoverySkipsDroppedTables() {
+    void testRelationDiscoverySkipsDroppedTables() throws Exception {
         givenTables("Dropped", "Users");
-        when(admin.getTableInfo(TablePath.of("Sales", "Dropped")))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")));
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
-        assertThat(metadata.streamRelationColumns(session, Optional.of("sales"), names -> names))
+        TablePath dropped = TablePath.of("Sales", "Dropped");
+        assertThat(
+                        metadata.streamRelationColumns(
+                                session,
+                                Optional.of("sales"),
+                                names -> {
+                                    assertThat(names)
+                                            .contains(new SchemaTableName("sales", "dropped"));
+                                    admin.dropTable(dropped, false).join();
+                                    return names;
+                                }))
                 .toIterable()
                 .extracting(RelationColumnsMetadata::name)
                 .containsExactly(USERS);
-        assertThat(metadata.streamRelationComments(session, Optional.of("sales"), names -> names))
+        createTable(dropped, usersTable().toTableDescriptor());
+        assertThat(
+                        metadata.streamRelationComments(
+                                session,
+                                Optional.of("sales"),
+                                names -> {
+                                    assertThat(names)
+                                            .contains(new SchemaTableName("sales", "dropped"));
+                                    admin.dropTable(dropped, false).join();
+                                    return names;
+                                }))
                 .toIterable()
                 .extracting(RelationCommentMetadata::name)
                 .containsExactly(USERS);
     }
 
     @Test
-    void testRelationCommentsApplyFilter() {
+    void testRelationCommentsApplyFilter() throws Exception {
         givenTables("Users", "Order", "oRder");
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         assertThat(
                         metadata.streamRelationComments(
                                 session,
@@ -437,29 +444,22 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testEmptyCommentsAreAbsent() {
-        givenTables("Users");
-        when(admin.getTableInfo(PHYSICAL_USERS))
-                .thenReturn(
-                        completedFuture(
-                                tableInfo(
-                                        TableDescriptor.builder()
-                                                .schema(
-                                                        Schema.newBuilder()
-                                                                .column("id", DataTypes.INT())
-                                                                .build())
-                                                .distributedBy(1)
-                                                .comment("")
-                                                .build())));
+    void testEmptyCommentsAreAbsent() throws Exception {
+        createTable(
+                PHYSICAL_USERS,
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .comment("")
+                        .build());
         assertThat(metadata.streamRelationComments(session, Optional.of("sales"), names -> names))
                 .toIterable()
                 .containsExactly(RelationCommentMetadata.forRelation(USERS, Optional.empty()));
     }
 
     @Test
-    void testColumnsSystemTableDiscovery() {
+    void testColumnsSystemTableDiscovery() throws Exception {
         givenTables("Users");
-        when(admin.getTableInfo(PHYSICAL_USERS)).thenReturn(completedFuture(usersTable()));
         SchemaTableName name = new SchemaTableName("sales", "users$columns");
         assertThat(metadata.getSystemTable(session, name))
                 .hasValueSatisfying(
@@ -474,26 +474,24 @@ final class FlussMetadataTest {
     }
 
     @Test
-    void testSystemTableAbsentWhenBaseTableDropped() {
+    void testSystemTableAbsentWhenBaseTableDropped() throws Exception {
         givenTables("Users");
-        when(admin.getTableInfo(PHYSICAL_USERS))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")));
+        admin.dropTable(PHYSICAL_USERS, false).get();
         assertThat(metadata.getSystemTable(session, new SchemaTableName("sales", "users$columns")))
                 .isEmpty();
     }
 
     @Test
     void testMissingSchemaHasNoSystemTable() {
-        when(admin.listDatabases()).thenReturn(completedFuture(Collections.emptyList()));
         assertThat(
                         metadata.getSystemTable(
                                 session, new SchemaTableName("missing", "users$columns")))
                 .isEmpty();
     }
 
-    private void givenTables(String... names) {
-        when(admin.listDatabases()).thenReturn(completedFuture(Collections.singletonList("Sales")));
-        when(admin.listTables("Sales")).thenReturn(completedFuture(Arrays.asList(names)));
+    private void givenTables(String... names) throws Exception {
+        for (String name : names) {
+            createTable(TablePath.of("Sales", name), usersTable().toTableDescriptor());
+        }
     }
 }

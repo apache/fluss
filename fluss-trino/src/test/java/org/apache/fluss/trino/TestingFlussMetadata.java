@@ -17,25 +17,15 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-/** Shared factories for real Fluss table metadata and the mocked client boundary. */
+/** Shared factories for Fluss table metadata. */
 final class TestingFlussMetadata {
     private TestingFlussMetadata() {}
-
-    static FlussMetadataAccess metadataAccess(Admin admin) {
-        FlussClientManager manager = mock(FlussClientManager.class);
-        when(manager.getAdmin()).thenReturn(admin);
-        return new FlussMetadataAccess(manager);
-    }
 
     static TableInfo tableInfo(TableDescriptor descriptor) {
         return TableInfo.of(TablePath.of("Sales", "Users"), 42L, 3, descriptor, null, 0L, 0L);
