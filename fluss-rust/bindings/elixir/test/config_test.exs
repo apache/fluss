@@ -121,6 +121,14 @@ defmodule Fluss.ConfigTest do
     end
   end
 
+  test "set_scanner_log_check_crc/2 sets whether batch CRCs are checked" do
+    config =
+      Fluss.Config.new("localhost:9123")
+      |> Fluss.Config.set_scanner_log_check_crc(false)
+
+    assert config.scanner_log_check_crc == false
+  end
+
   test "set_scanner_log_fetch_max_bytes/2 sets the fetch max bytes" do
     config =
       Fluss.Config.new("localhost:9123")
