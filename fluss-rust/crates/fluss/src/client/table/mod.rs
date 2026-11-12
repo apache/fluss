@@ -26,7 +26,9 @@ pub const EARLIEST_OFFSET: i64 = -2;
 
 mod append;
 mod batch_scanner;
+mod current_view;
 mod lookup;
+mod memory;
 
 mod log_fetch_buffer;
 mod partition_getter;
@@ -38,7 +40,9 @@ mod upsert;
 
 pub use append::{AppendWriter, TableAppend};
 pub use batch_scanner::LimitBatchScanner;
+pub use current_view::DeduplicateCurrentView;
 pub use lookup::{LookupResult, Lookuper, PrefixKeyLookuper, TableLookup, TablePrefixLookup};
+pub use memory::{LimitedReadMemoryBudget, ReadMemoryBudget};
 pub use reader::{
     BoundedCollectOutcome, BoundedLogReadRange, RecordBatchLogReader, RecordBatchReadOutcome,
     SyncRecordBatchLogReader,
