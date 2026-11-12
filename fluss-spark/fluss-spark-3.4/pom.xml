@@ -117,8 +117,19 @@
                                 <includes combine.children="append">
                                     <include>org.apache.fluss:fluss-spark-common_${scala.binary.version}</include>
                                     <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.apache.datasketches:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations combine.children="append">
+                                <relocation>
+                                    <pattern>META-INF.versions.11.org.apache.datasketches</pattern>
+                                    <shadedPattern>META-INF.versions.11.org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.datasketches</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
