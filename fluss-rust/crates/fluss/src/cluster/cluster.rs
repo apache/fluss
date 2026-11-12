@@ -132,6 +132,56 @@ impl Cluster {
         )
     }
 
+    /// Returns a copy that has no leader for those of `table_buckets` that `server_id` leads, or
+    /// `None` if it leads none of them, e.g. because another failed lookup already dropped them.
+    /// The buckets stay listed for their table or partition, like other buckets without a leader.
+    pub fn invalidate_bucket_leaders(
+        &self,
+        table_buckets: &HashSet<TableBucket>,
+        server_id: i32,
+    ) -> Option<Self> {
+        let led_by_server: HashMap<&TableBucket, &Arc<PhysicalTablePath>> = table_buckets
+            .iter()
+            .filter_map(|table_bucket| {
+                let location = self.available_locations_by_bucket.get(table_bucket)?;
+                let leader_id = location.leader().as_ref().map(ServerNode::id);
+                (leader_id == Some(server_id))
+                    .then_some((table_bucket, &location.physical_table_path))
+            })
+            .collect();
+        if led_by_server.is_empty() {
+            return None;
+        }
+
+        let mut available_locations_by_path = self.available_locations_by_path.clone();
+        let paths: HashSet<&Arc<PhysicalTablePath>> = led_by_server.values().copied().collect();
+        for path in paths {
+            let Some(locations) = available_locations_by_path.get_mut(path) else {
+                continue;
+            };
+            for location in locations
+                .iter_mut()
+                .filter(|location| led_by_server.contains_key(&location.table_bucket))
+            {
+                *location = BucketLocation::new(
+                    location.table_bucket.clone(),
+                    None,
+                    Arc::clone(&location.physical_table_path),
+                );
+            }
+        }
+
+        Some(Cluster::new(
+            self.coordinator_server.clone(),
+            self.alive_tablet_servers_by_id.clone(),
+            available_locations_by_path,
+            self.table_id_by_path.clone(),
+            self.table_info_by_path.clone(),
+            self.partitions_id_by_path.clone(),
+            self.bucket_count_by_table_or_partition.clone(),
+        ))
+    }
+
     /// Returns a copy without `table_path`'s id, info, partitions and bucket
     /// locations. Used once the table is known to be dropped or recreated.
     pub fn evict_table(&self, table_path: &TablePath) -> Self {
@@ -745,6 +795,78 @@ mod tests {
                 .get_available_buckets_for_table_path(partition_2.as_ref())
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn invalidate_bucket_leaders_only_drops_the_given_buckets_led_by_the_server() {
+        let table_path = Arc::new(PhysicalTablePath::of(Arc::new(TablePath::new("db", "t"))));
+        let servers = make_tablet_servers();
+        let location = |bucket_id, leader_id| {
+            BucketLocation::new(
+                TableBucket::new(1, bucket_id),
+                Some(servers[&leader_id].clone()),
+                Arc::clone(&table_path),
+            )
+        };
+        let locations = vec![location(0, 2), location(1, 1), location(2, 2)];
+        let cluster = Cluster::new(
+            None,
+            servers.clone(),
+            HashMap::from([(Arc::clone(&table_path), locations)]),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([(TableOrPartition::Table(1), 3)]),
+        );
+
+        let updated_cluster = cluster
+            .invalidate_bucket_leaders(
+                &HashSet::from([TableBucket::new(1, 0), TableBucket::new(1, 1)]),
+                2,
+            )
+            .expect("server 2 leads bucket 0");
+
+        assert!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 0))
+                .is_none()
+        );
+        assert_eq!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 1))
+                .map(ServerNode::id),
+            Some(1)
+        );
+        assert_eq!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 2))
+                .map(ServerNode::id),
+            Some(2)
+        );
+        let listed: Vec<(i32, Option<i32>)> = updated_cluster
+            .get_available_buckets_for_table_path(&table_path)
+            .iter()
+            .map(|location| {
+                (
+                    location.table_bucket.bucket_id(),
+                    location.leader().as_ref().map(ServerNode::id),
+                )
+            })
+            .collect();
+        assert_eq!(listed, [(0, None), (1, Some(1)), (2, Some(2))]);
+        assert_eq!(
+            updated_cluster.bucket_count(TableOrPartition::Table(1)),
+            Some(3)
+        );
+
+        assert!(
+            updated_cluster
+                .invalidate_bucket_leaders(
+                    &HashSet::from([TableBucket::new(1, 0), TableBucket::new(1, 1)]),
+                    2,
+                )
+                .is_none()
         );
     }
 

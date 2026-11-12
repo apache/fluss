@@ -554,13 +554,15 @@ impl Config {
         self.inner.writer_retry_max_backoff_ms = backoff;
     }
 
-    /// Get the connect timeout in milliseconds
+    /// Get the connection establishment timeout in milliseconds, including TCP connect,
+    /// API negotiation and SASL authentication
     #[getter]
     fn connect_timeout_ms(&self) -> u64 {
         self.inner.connect_timeout_ms
     }
 
-    /// Set the connect timeout in milliseconds
+    /// Set the connection establishment timeout in milliseconds, including TCP connect,
+    /// API negotiation and SASL authentication
     #[setter]
     fn set_connect_timeout_ms(&mut self, timeout: u64) {
         self.inner.connect_timeout_ms = timeout;
@@ -675,13 +677,17 @@ impl Config {
         self.inner.scanner_log_fetch_max_bytes_for_bucket = bytes;
     }
 
-    /// Get the maximum number of pending lookups
+    /// Get the send queue capacity; new lookups wait when it is full.
+    /// Each bucket also holds up to this many lookups while waiting for a leader.
+    /// Additional lookups for that bucket fail immediately with a buffer exhaustion error
     #[getter]
     fn lookup_queue_size(&self) -> usize {
         self.inner.lookup_queue_size
     }
 
-    /// Set the maximum number of pending lookups
+    /// Set the send queue capacity; new lookups wait when it is full.
+    /// Each bucket also holds up to this many lookups while waiting for a leader.
+    /// Additional lookups for that bucket fail immediately with a buffer exhaustion error
     #[setter]
     fn set_lookup_queue_size(&mut self, value: usize) {
         self.inner.lookup_queue_size = value;
@@ -723,37 +729,43 @@ impl Config {
         self.inner.lookup_max_inflight_requests = value;
     }
 
-    /// Get the maximum number of lookup retries
+    /// Get the maximum number of lookup retries. Waiting for a bucket's leader is not a retry, so
+    /// this is not a lookup timeout
     #[getter]
     fn lookup_max_retries(&self) -> i32 {
         self.inner.lookup_max_retries
     }
 
-    /// Set the maximum number of lookup retries
+    /// Set the maximum number of lookup retries. Waiting for a bucket's leader is not a retry, so
+    /// this is not a lookup timeout
     #[setter]
     fn set_lookup_max_retries(&mut self, value: i32) {
         self.inner.lookup_max_retries = value;
     }
 
-    /// Get the base lookup retry backoff in milliseconds
+    /// Get the base lookup retry backoff in milliseconds, which also spaces out the metadata
+    /// refreshes of a bucket without a known leader
     #[getter]
     fn lookup_retry_backoff_ms(&self) -> u64 {
         self.inner.lookup_retry_backoff_ms
     }
 
-    /// Set the base lookup retry backoff in milliseconds
+    /// Set the base lookup retry backoff in milliseconds, which also spaces out the metadata
+    /// refreshes of a bucket without a known leader
     #[setter]
     fn set_lookup_retry_backoff_ms(&mut self, backoff: u64) {
         self.inner.lookup_retry_backoff_ms = backoff;
     }
 
-    /// Get the maximum lookup retry backoff in milliseconds, before jitter
+    /// Get the maximum lookup retry backoff in milliseconds, before jitter, which also caps the
+    /// spacing of the metadata refreshes of a bucket without a known leader
     #[getter]
     fn lookup_retry_max_backoff_ms(&self) -> u64 {
         self.inner.lookup_retry_max_backoff_ms
     }
 
-    /// Set the maximum lookup retry backoff in milliseconds, before jitter
+    /// Set the maximum lookup retry backoff in milliseconds, before jitter, which also caps the
+    /// spacing of the metadata refreshes of a bucket without a known leader
     #[setter]
     fn set_lookup_retry_max_backoff_ms(&mut self, backoff: u64) {
         self.inner.lookup_retry_max_backoff_ms = backoff;
