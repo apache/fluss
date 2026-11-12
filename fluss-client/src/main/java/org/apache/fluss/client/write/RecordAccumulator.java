@@ -1086,7 +1086,17 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
-            batch.tryAppend(writeRecord, callback);
+            if (!batch.tryAppend(writeRecord, callback)) {
+                batch.abortRecordAppends();
+                throw new FlussRuntimeException(
+                        String.format(
+                                "Newly created write batch rejected its first record for bucket %s of table %s; "
+                                        + "pre-allocated capacity (%d bytes) is smaller than the record (%d bytes).",
+                                bucketId,
+                                physicalTablePath,
+                                outputView.getPreAllocatedSize(),
+                                writeRecord.getEstimatedSizeInBytes()));
+            }
             deque.addLast(batch);
             incomplete.add(batch);
             return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true);
