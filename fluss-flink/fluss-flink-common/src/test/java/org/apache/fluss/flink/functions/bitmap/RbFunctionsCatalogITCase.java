@@ -117,6 +117,27 @@ class RbFunctionsCatalogITCase {
     }
 
     @Test
+    void testSketchFunctionsResolvedFromCatalog() throws Exception {
+        Table source =
+                tEnv.fromValues(
+                        DataTypes.ROW(DataTypes.FIELD("v", DataTypes.BIGINT())),
+                        Row.of(1L),
+                        Row.of(2L),
+                        Row.of(2L));
+        tEnv.createTemporaryView("sketch_events", source);
+        List<Row> rows =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql(
+                                        "SELECT fluss_hll_estimate(fluss_hll_build_agg(v)), "
+                                                + "fluss_kll_double_quantile(fluss_kll_double_build_agg(CAST(v AS DOUBLE)), 0.5) "
+                                                + "FROM sketch_events")
+                                .collect());
+        assertThat(rows).hasSize(1);
+        assertThat((Double) rows.get(0).getField(0)).isBetween(1.99, 2.01);
+        assertThat((Double) rows.get(0).getField(1)).isEqualTo(2.0);
+    }
+
+    @Test
     void testRbOrAggResolvedFromCatalog() throws Exception {
         byte[] bitmap1 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2, 3));
         byte[] bitmap2 = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(3, 4, 5));

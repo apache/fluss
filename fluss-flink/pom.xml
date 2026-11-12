@@ -63,6 +63,12 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <configuration>
+                    <relocations combine.children="append">
+                        <relocation>
+                            <pattern>org.apache.datasketches</pattern>
+                            <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                        </relocation>
+                    </relocations>
                     <filters combine.children="append">
                         <filter>
                             <artifact>org.apache.fluss:fluss-client</artifact>
