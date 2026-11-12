@@ -146,6 +146,12 @@ impl FlussTestingClusterBuilder {
         self
     }
 
+    pub fn with_tablet_servers(mut self, number_of_tablet_servers: u16) -> Self {
+        assert!(number_of_tablet_servers > 0);
+        self.number_of_tablet_servers = number_of_tablet_servers;
+        self
+    }
+
     pub fn with_sasl(mut self, users: Vec<(String, String)>) -> Self {
         self.sasl_enabled = true;
         self.sasl_users = users;
@@ -510,6 +516,38 @@ pub struct FlussTestingCluster {
 }
 
 impl FlussTestingCluster {
+    /// Kills a tablet server, as if it crashed, preserving its container and data for restart.
+    pub async fn kill_tablet_server(&self, server_id: u16) {
+        self.tablet_server(server_id)
+            .stop_with_timeout(Some(0))
+            .await
+            .expect("failed to kill tablet server");
+    }
+
+    /// Shuts a tablet server down gracefully, preserving its container and data for restart.
+    /// The server then checkpoints its high watermarks; after a kill, the only replica of a bucket
+    /// truncates its log to the last periodic checkpoint on restart and loses the rows above it.
+    pub async fn stop_tablet_server(&self, server_id: u16) {
+        self.tablet_server(server_id)
+            .stop_with_timeout(Some(60))
+            .await
+            .expect("failed to stop tablet server");
+    }
+
+    /// Restarts a tablet server previously killed or stopped.
+    pub async fn start_tablet_server(&self, server_id: u16) {
+        self.tablet_server(server_id)
+            .start()
+            .await
+            .expect("failed to start tablet server");
+    }
+
+    fn tablet_server(&self, server_id: u16) -> &ContainerAsync<GenericImage> {
+        self.tablet_servers
+            .get(&server_id)
+            .expect("unknown tablet server")
+    }
+
     pub fn stop(&self) {
         let names = self.container_names.clone();
         run_blocking(async move {

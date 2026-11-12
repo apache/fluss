@@ -1684,7 +1684,8 @@ struct Configuration {
     uint64_t writer_retry_backoff_ms{100};
     // Maximum writer retry backoff (ms) after exponential growth
     uint64_t writer_retry_max_backoff_ms{1000};
-    // Connect timeout in milliseconds for TCP transport connect
+    // Connection establishment timeout in milliseconds, including TCP connect,
+    // API negotiation and SASL authentication
     uint64_t connect_timeout_ms{15000};
     // Close cached connections without reads or writes for this long (ms), failing the requests
     // still waiting on them with a retriable error. 0 disables closing idle connections
@@ -1697,7 +1698,9 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
-    // Maximum number of pending lookup operations
+    // Capacity of the send queue; new lookups wait when it is full.
+    // Each bucket also holds up to this many lookups while waiting for a leader.
+    // Additional lookups for that bucket fail immediately with a buffer exhaustion error
     size_t lookup_queue_size{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
@@ -1705,12 +1708,15 @@ struct Configuration {
     uint64_t lookup_batch_timeout_ms{100};
     // Maximum number of unacknowledged lookup requests
     size_t lookup_max_inflight_requests{128};
-    // Maximum number of lookup retries
+    // Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's
+    // leader is not a retry, so this does not bound how long a lookup waits for one
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
-    // Base delay (ms) before resending a lookup that failed with a retriable error
+    // Base delay (ms) before resending a lookup that failed with a retriable error, growing per
+    // retry of that lookup, and before refreshing a bucket without a known leader again, growing
+    // per refresh of that bucket and shared by its lookups
     uint64_t lookup_retry_backoff_ms{100};
-    // Maximum lookup retry backoff (ms) after exponential growth, before +/-20% jitter;
-    // must be >= lookup_retry_backoff_ms
+    // Cap (ms) for the delays of lookup_retry_backoff_ms after exponential growth, before +/-20%
+    // jitter; must be >= lookup_retry_backoff_ms
     uint64_t lookup_retry_max_backoff_ms{1000};
 };
 

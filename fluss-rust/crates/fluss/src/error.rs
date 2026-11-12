@@ -107,6 +107,13 @@ pub enum Error {
     #[snafu(visibility(pub(crate)), display("Fluss writer closed: {}.", message))]
     WriterClosed { message: String },
 
+    /// A lookup cannot continue because its client is closing or has closed.
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss lookup client closed: {}.", message)
+    )]
+    LookupClosed { message: String },
+
     #[snafu(
         visibility(pub(crate)),
         display("Fluss buffer exhausted: {}.", message)

@@ -199,6 +199,12 @@ jobs:
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
+      # Needs crate-private APIs, so it lives in the library rather than in test_fluss.
+      - name: Lookup failover integration test
+        run: cargo test --features integration_tests --lib -p fluss-rs client::lookup::lookup_sender::tests::integration
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
 
   gateway-integration:
     needs: [detect-changes, build-server-image]

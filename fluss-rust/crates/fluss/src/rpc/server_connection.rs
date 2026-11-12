@@ -38,7 +38,7 @@ use log::warn;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt;
-use std::io::Cursor;
+use std::io::{self, Cursor};
 use std::marker::PhantomData;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -303,6 +303,7 @@ impl RpcClient {
         }
     }
 
+    /// Bounds establishing a connection, including TCP connect, API negotiation and SASL.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
@@ -427,25 +428,39 @@ impl RpcClient {
 
     async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
         let url = server_node.url();
-        let transport = Transport::connect(&url, self.timeout)
-            .await
-            .map_err(|error| ConnectionError(error.to_string()))?;
+        let connecting = async {
+            let transport = Transport::connect(&url, None)
+                .await
+                .map_err(|error| ConnectionError(error.to_string()))?;
 
-        let messenger = ServerConnectionInner::new(
-            BufStream::new(transport),
-            self.max_message_size,
-            self.client_id.clone(),
-        );
-        let connection = ServerConnection::new(messenger);
+            let messenger = ServerConnectionInner::new(
+                BufStream::new(transport),
+                self.max_message_size,
+                self.client_id.clone(),
+            );
+            let connection = ServerConnection::new(messenger);
 
-        // Negotiate API versions (must happen before authentication).
-        Self::check_api_versions(&connection, server_node.server_type()).await?;
+            // Negotiate API versions (must happen before authentication).
+            Self::check_api_versions(&connection, server_node.server_type()).await?;
 
-        if let Some(ref sasl) = self.sasl_config {
-            Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+            if let Some(ref sasl) = self.sasl_config {
+                Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+            }
+
+            Ok(connection)
+        };
+        match self.timeout {
+            Some(timeout) => tokio::time::timeout(timeout, connecting)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(RpcError::IO(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("Connection to {url} did not complete within {timeout:?}"),
+                    ))
+                    .into())
+                }),
+            None => connecting.await,
         }
-
-        Ok(connection)
     }
 
     /// Send an `ApiVersionsRequest`, validate the advertised `server_type`, and
@@ -464,8 +479,8 @@ impl RpcClient {
 
     /// Perform SASL/PLAIN authentication handshake.
     ///
-    /// Retries on `RetriableAuthenticateException` with exponential backoff
-    /// (matching Java's unbounded retry behaviour). Non-retriable errors
+    /// Retries on `RetriableAuthenticateException` with exponential backoff until the configured
+    /// connection establishment deadline. Non-retriable errors
     /// (wrong password, unknown user) propagate immediately as
     /// `Error::FlussAPIError` with the original error code.
     async fn authenticate(
@@ -704,7 +719,7 @@ pub struct ServerConnectionInner<RW> {
 
     last_activity: Arc<LastActivity>,
 
-    /// Notified once the connection is closed for being idle, to abandon a write in progress.
+    /// Notified when the connection is closed or dropped, to abandon a write in progress.
     closed: Arc<Notify>,
 
     join_handle: JoinHandle<()>,
@@ -915,8 +930,7 @@ where
                 // A write that completes at once does not register for the close.
                 biased;
                 result = write => result,
-                // Abandons a write that the server has not read for the max idle time. The close
-                // poisoned the connection first, so `poison` below keeps the idle error.
+                // Closing poisons the connection first, so `poison` below keeps its original error.
                 () = closed => Err(ConnectionError("closed while writing".to_string())),
             };
             // This must live inside the cancellation-safe future: if the caller is
@@ -988,7 +1002,12 @@ impl<T: ReadType<Cursor<Vec<u8>>>> PendingResponse<T> {
 
 impl<RW> Drop for ServerConnectionInner<RW> {
     fn drop(&mut self) {
-        // todo: should remove from server_connections map?
+        // A cancelled handshake may leave a write running on an uncached connection. No caller
+        // can reuse the connection now, so release its transport instead of finishing the frame.
+        self.state
+            .lock()
+            .poison(ConnectionError("connection dropped".to_string()));
+        self.closed.notify_waiters();
         self.join_handle.abort();
     }
 }
@@ -1419,6 +1438,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropping_connection_abandons_cancelled_partial_dispatch() {
+        let (conn, mut server) = duplex_conn(8);
+        let write_half = Arc::downgrade(&conn.stream_write);
+        assert!(
+            conn.dispatch_request(TestProduceRequest)
+                .now_or_never()
+                .is_none()
+        );
+        drop(conn);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while write_half.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the cancelled write must release the dropped connection's transport");
+
+        let mut received = Vec::new();
+        server.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received.len(), 8);
+    }
+
+    #[tokio::test]
     async fn cancelled_partial_dispatch_finishes_before_next_frame() {
         tokio::time::timeout(Duration::from_secs(5), async {
             let (conn, mut server) = duplex_conn(8);
@@ -1845,6 +1888,73 @@ mod tests {
     }
 
     // -- Connection cache ------------------------------------------------
+
+    #[tokio::test]
+    async fn connect_timeout_bounds_api_negotiation_and_authentication() {
+        use prost::Message;
+
+        for stalled_api in [ApiKey::ApiVersion, ApiKey::Authenticate] {
+            let connect_timeout = Duration::from_secs(60);
+            let negotiation_time = Duration::from_secs(40);
+            let listener = bind().await;
+            let client = Arc::new(
+                RpcClient::new()
+                    .with_timeout(connect_timeout)
+                    .with_sasl("user".to_string(), "password".to_string()),
+            );
+            let server = node(1, port(&listener), ServerType::TabletServer);
+            let connecting = {
+                let client = Arc::clone(&client);
+                tokio::spawn(async move { client.get_connection(&server).await })
+            };
+            let (mut stream, _) = listener.accept().await.unwrap();
+            loop {
+                let len = stream.read_i32().await.unwrap();
+                let mut request = vec![0; len as usize];
+                stream.read_exact(&mut request).await.unwrap();
+                let api = ApiKey::from(i16::from_be_bytes([request[0], request[1]]));
+                if api == stalled_api {
+                    break;
+                }
+                assert_eq!(api, ApiKey::ApiVersion);
+                tokio::time::pause();
+                tokio::time::advance(negotiation_time).await;
+                tokio::time::resume();
+                let mut response = vec![0];
+                response.extend_from_slice(&request[4..8]);
+                crate::proto::ApiVersionsResponse {
+                    api_versions: vec![PbApiVersion {
+                        api_key: i32::from(i16::from(ApiKey::Authenticate)),
+                        min_version: 0,
+                        max_version: 0,
+                    }],
+                    server_type: Some(ServerType::TabletServer.to_type_id()),
+                }
+                .encode(&mut response)
+                .unwrap();
+                stream.write_i32(response.len() as i32).await.unwrap();
+                stream.write_all(&response).await.unwrap();
+            }
+
+            tokio::time::pause();
+            tokio::time::advance(if stalled_api == ApiKey::ApiVersion {
+                connect_timeout
+            } else {
+                connect_timeout - negotiation_time
+            })
+            .await;
+            tokio::time::resume();
+
+            let error = tokio::time::timeout(Duration::from_secs(2), connecting)
+                .await
+                .expect("the configured connect timeout also bounds the handshake")
+                .unwrap()
+                .unwrap_err();
+            assert!(error.is_retriable(), "{stalled_api:?}: {error}");
+            assert!(client.cached_endpoints().is_empty());
+            assert_closed(&mut stream).await;
+        }
+    }
 
     async fn bind() -> TcpListener {
         TcpListener::bind("127.0.0.1:0").await.unwrap()
