@@ -19,7 +19,7 @@ defmodule Fluss.Admin do
   @moduledoc """
   Admin client: databases, tables, partitions and bucket offsets.
 
-  `create_*` and `drop_*` take keyword options, listed on each function.
+  `create_*`, `drop_*` and `alter_*` take keyword options, listed on each function.
 
   A partition spec maps partition columns (atoms or strings) to string values, e.g.
   `%{region: "EU"}`. A write to a partition that doesn't exist creates it, unless
@@ -52,6 +52,8 @@ defmodule Fluss.Admin do
 
   """
 
+  import Fluss.ArgumentValidation
+
   alias Fluss.Native
 
   @type t :: reference()
@@ -61,11 +63,29 @@ defmodule Fluss.Admin do
 
   @type create_database_opts :: [ignore_if_exists: boolean()]
   @type drop_database_opts :: [ignore_if_not_exists: boolean(), cascade: boolean()]
+  @type alter_database_opts :: [ignore_if_not_exists: boolean()]
   @type create_table_opts :: [ignore_if_exists: boolean()]
   @type drop_table_opts :: [ignore_if_not_exists: boolean()]
+  @type alter_table_opts :: [ignore_if_not_exists: boolean()]
   @type create_partition_opts :: [ignore_if_exists: boolean()]
   @type drop_partition_opts :: [ignore_if_not_exists: boolean()]
   @type offset_spec :: :earliest | :latest | {:timestamp, integer()}
+
+  @type database_change ::
+          {:set_property, String.t(), String.t()}
+          | {:reset_property, String.t()}
+          | {:set_comment, String.t() | nil}
+
+  @type table_change ::
+          {:add_column, String.t(), Fluss.Schema.data_type()}
+          | {:add_column, String.t(), Fluss.Schema.data_type(), [comment: String.t() | nil]}
+          | {:drop_column, String.t()}
+          | {:rename_column, String.t(), String.t()}
+          | {:modify_column, String.t(),
+             [type: Fluss.Schema.data_type(), comment: String.t() | nil]}
+          | {:set_property, String.t(), String.t()}
+          | {:reset_property, String.t()}
+          | {:set_bucket_count, pos_integer()}
 
   @spec new(Fluss.Connection.t()) :: {:ok, t()} | {:error, Fluss.Error.t()}
   def new(conn) do
@@ -158,6 +178,30 @@ defmodule Fluss.Admin do
     |> Native.await_nif()
   end
 
+  @doc """
+  Alters a database. An empty list of changes is a no-op.
+
+  ## Changes
+
+    * `{:set_property, key, value}`, `{:reset_property, key}`.
+    * `{:set_comment, comment}` - `nil` removes it. At most one.
+
+  ## Options
+
+    * `:ignore_if_not_exists` - `:ok` if it doesn't exist. Default `false`.
+  """
+  @spec alter_database(t(), String.t(), [database_change()], alter_database_opts()) ::
+          :ok | {:error, Fluss.Error.t()}
+  def alter_database(admin, name, changes, opts \\ []) do
+    name = validate_name!(name, "database")
+    changes = validate_database_changes!(changes)
+    opts = validate_opts!(opts, ignore_if_not_exists: false)
+
+    admin
+    |> Native.admin_alter_database(name, changes, Map.new(opts))
+    |> Native.await_nif()
+  end
+
   @spec list_databases(t()) :: {:ok, [String.t()]} | {:error, Fluss.Error.t()}
   def list_databases(admin) do
     admin
@@ -231,6 +275,42 @@ defmodule Fluss.Admin do
 
     admin
     |> Native.admin_drop_table(database, table, Map.new(opts))
+    |> Native.await_nif()
+  end
+
+  @doc """
+  Alters a table. The changes apply all together or not at all; an empty list is a no-op.
+
+  ## Changes
+
+    * `{:add_column, name, type}`, `{:add_column, name, type, comment: comment}` - appends a
+      column. The type must be nullable (no top-level `{:not_null, _}`).
+    * `{:drop_column, name}`, `{:rename_column, from, to}`.
+    * `{:modify_column, name, type: type, comment: comment}` - both options are optional; a
+      missing one is left unchanged, `comment: nil` sends an empty comment.
+    * `{:set_property, key, value}`, `{:reset_property, key}` - a reset property falls back to
+      its default.
+    * `{:set_bucket_count, count}` - the bucket count for new partitions of a partitioned
+      table; existing partitions keep theirs. At most one.
+
+  The server only supports adding columns for now. It applies column changes in the order add,
+  drop, rename, modify, and rejects a request that mixes properties, column changes and the
+  bucket count (`:invalid_alter_table_exception`).
+
+  ## Options
+
+    * `:ignore_if_not_exists` - `:ok` if it doesn't exist. Default `false`.
+  """
+  @spec alter_table(t(), String.t(), String.t(), [table_change()], alter_table_opts()) ::
+          :ok | {:error, Fluss.Error.t()}
+  def alter_table(admin, database, table, changes, opts \\ []) do
+    database = validate_name!(database, "database")
+    table = validate_name!(table, "table")
+    changes = validate_table_changes!(changes)
+    opts = validate_opts!(opts, ignore_if_not_exists: false)
+
+    admin
+    |> Native.admin_alter_table(database, table, changes, Map.new(opts))
     |> Native.await_nif()
   end
 
@@ -427,19 +507,9 @@ defmodule Fluss.Admin do
     end
   end
 
-  defp validate_name!(name, _what) when is_binary(name), do: name
-
-  defp validate_name!(name, what) do
-    raise ArgumentError, "expected the #{what} name to be a string, got: #{inspect(name)}"
-  end
-
   # Every option is a boolean. Returns the options with defaults filled in.
-  defp validate_opts!(opts, defaults) when is_list(opts) do
-    opts |> Keyword.validate!(defaults) |> Enum.map(&validate_boolean!/1)
-  end
-
-  defp validate_opts!(opts, _defaults) do
-    raise ArgumentError, "expected options to be a keyword list, got: #{inspect(opts)}"
+  defp validate_opts!(opts, defaults) do
+    opts |> validate_keyword!(defaults) |> Enum.map(&validate_boolean!/1)
   end
 
   defp validate_database_descriptor!(%Fluss.DatabaseDescriptor{} = descriptor), do: descriptor
@@ -513,5 +583,116 @@ defmodule Fluss.Admin do
   defp validate_offset_spec!(spec) do
     raise ArgumentError,
           "expected :earliest, :latest or {:timestamp, milliseconds}, got: #{inspect(spec)}"
+  end
+
+  defp validate_table_changes!(changes) do
+    changes
+    |> validate_items!("changes", &validate_table_change!/1)
+    |> validate_at_most_one!(:set_bucket_count)
+  end
+
+  defp validate_table_change!({:add_column, name, type}),
+    do: validate_table_change!({:add_column, name, type, []})
+
+  defp validate_table_change!({:add_column, name, type, opts}) do
+    name = validate_name!(name, "column")
+    type = Fluss.Schema.validate_data_type!(type, name)
+    opts = validate_keyword!(opts, comment: nil)
+
+    comment =
+      unless is_nil(opts[:comment]), do: validate_string!(opts[:comment], "column comment")
+
+    # The server always rejects it, with an unregistered error code and a Java stack trace.
+    if match?({:not_null, _}, type) do
+      raise ArgumentError, "an added column must be nullable, got: #{inspect(type)} for `#{name}`"
+    end
+
+    {:add_column, name, type, comment}
+  end
+
+  defp validate_table_change!({:drop_column, name}),
+    do: {:drop_column, validate_name!(name, "column")}
+
+  defp validate_table_change!({:rename_column, from, to}),
+    do: {:rename_column, validate_name!(from, "column"), validate_name!(to, "new column")}
+
+  defp validate_table_change!({:modify_column, name, opts}) do
+    name = validate_name!(name, "column")
+    opts = validate_keyword!(opts, [:type, :comment])
+
+    type =
+      if Keyword.has_key?(opts, :type), do: Fluss.Schema.validate_data_type!(opts[:type], name)
+
+    # The wire has no "remove the comment"; `""` is the closest.
+    comment =
+      case Keyword.fetch(opts, :comment) do
+        :error -> nil
+        {:ok, nil} -> ""
+        {:ok, comment} -> validate_string!(comment, "column comment")
+      end
+
+    {:modify_column, name, type, comment}
+  end
+
+  defp validate_table_change!({:set_bucket_count, count} = change) do
+    unless is_integer(count) and count in 1..0x7FFFFFFF do
+      raise ArgumentError,
+            "expected the bucket count to be an integer in 1..2147483647, got: #{inspect(count)}"
+    end
+
+    change
+  end
+
+  defp validate_table_change!(change) do
+    case validate_property_change!(change) do
+      nil ->
+        raise ArgumentError,
+              "expected a table change (see Fluss.Admin.alter_table/5), got: #{inspect(change)}"
+
+      # As a property the server would store it and keep the bucket count.
+      property_change when elem(property_change, 1) == "bucket.num" ->
+        raise ArgumentError, ~s("bucket.num" is not a property, use {:set_bucket_count, count})
+
+      property_change ->
+        property_change
+    end
+  end
+
+  defp validate_database_changes!(changes) do
+    changes
+    |> validate_items!("changes", &validate_database_change!/1)
+    |> validate_at_most_one!(:set_comment)
+  end
+
+  # The server resets a `""` comment to none.
+  defp validate_database_change!({:set_comment, nil}), do: {:set_comment, ""}
+
+  defp validate_database_change!({:set_comment, comment}),
+    do: {:set_comment, validate_string!(comment, "database comment")}
+
+  defp validate_database_change!(change) do
+    validate_property_change!(change) ||
+      raise ArgumentError,
+            "expected a database change (see Fluss.Admin.alter_database/4), got: #{inspect(change)}"
+  end
+
+  # Returns `nil` for a change that isn't a property change.
+  defp validate_property_change!({:set_property, key, value}),
+    do:
+      {:set_property, validate_string!(key, "property key"),
+       validate_string!(value, "property value")}
+
+  defp validate_property_change!({:reset_property, key}),
+    do: {:reset_property, validate_string!(key, "property key")}
+
+  defp validate_property_change!(_change), do: nil
+
+  # Core holds at most one of these.
+  defp validate_at_most_one!(changes, tag) do
+    if Enum.count(changes, &(elem(&1, 0) == tag)) > 1 do
+      raise ArgumentError, "expected at most one #{inspect(tag)} change"
+    end
+
+    changes
   end
 end

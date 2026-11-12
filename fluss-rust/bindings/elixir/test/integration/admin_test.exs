@@ -142,6 +142,24 @@ defmodule Fluss.Integration.AdminTest do
                Fluss.Admin.drop_table(admin, @database, table)
 
       assert :ok = Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true)
+
+      changes = [{:set_property, "owner", "team-a"}]
+
+      assert {:error, %Fluss.Error{code: :table_not_exist}} =
+               Fluss.Admin.alter_table(admin, @database, table, changes)
+
+      assert :ok =
+               Fluss.Admin.alter_table(admin, @database, table, changes,
+                 ignore_if_not_exists: true
+               )
+    end
+
+    # Un-skip once fixed: the server skips the existence check when there are no changes
+    # (https://github.com/apache/fluss/issues/5098).
+    @tag :skip
+    test "an empty alter_table on a missing table is an error", %{admin: admin} do
+      assert {:error, %Fluss.Error{code: :table_not_exist}} =
+               Fluss.Admin.alter_table(admin, @database, "missing_table", [])
     end
 
     test "a missing database is an error unless ignored", %{admin: admin} do
@@ -149,6 +167,14 @@ defmodule Fluss.Integration.AdminTest do
 
       assert {:error, %Fluss.Error{}} = Fluss.Admin.drop_database(admin, db)
       assert :ok = Fluss.Admin.drop_database(admin, db, ignore_if_not_exists: true)
+
+      assert {:error, %Fluss.Error{code: :database_not_exist}} =
+               Fluss.Admin.alter_database(admin, db, [{:set_comment, "x"}])
+
+      assert :ok =
+               Fluss.Admin.alter_database(admin, db, [{:set_comment, "x"}],
+                 ignore_if_not_exists: true
+               )
     end
 
     test "drop_database cascades by default", %{admin: admin} do
@@ -558,14 +584,14 @@ defmodule Fluss.Integration.AdminTest do
         Fluss.Admin.drop_table(admin, @database, table, ignore_if_not_exists: true)
       end)
 
-      # Without alter_table there's only one version, so requesting its id
-      # explicitly must return the same SchemaInfo as the latest (nil) lookup.
-      {:ok, current} = Fluss.Admin.get_table_schema(admin, @database, table)
+      {:ok, original} = Fluss.Admin.get_table_schema(admin, @database, table)
+      :ok = Fluss.Admin.alter_table(admin, @database, table, [{:add_column, "note", :string}])
+      {:ok, latest} = Fluss.Admin.get_table_schema(admin, @database, table)
 
-      assert {:ok, by_id} =
-               Fluss.Admin.get_table_schema(admin, @database, table, current.schema_id)
+      assert latest.schema_id == original.schema_id + 1
 
-      assert by_id == current
+      assert {:ok, ^original} =
+               Fluss.Admin.get_table_schema(admin, @database, table, original.schema_id)
     end
 
     test "returns {:error, %Fluss.Error{}} for a non-existent table", %{admin: admin} do
@@ -961,6 +987,135 @@ defmodule Fluss.Integration.AdminTest do
 
       assert {:error, %Fluss.Error{}} =
                Fluss.Admin.list_offsets(admin, @database, table, [0], :latest)
+    end
+  end
+
+  describe "alter_table/5" do
+    test "adds columns, with an optional comment", %{admin: admin} do
+      table = log_table(admin)
+
+      assert :ok =
+               Fluss.Admin.alter_table(admin, @database, table, [
+                 {:add_column, "note", :string, comment: "Free text"},
+                 {:add_column, "tags", {:array, {:not_null, :string}}}
+               ])
+
+      assert {:ok, %Fluss.SchemaInfo{schema: schema}} =
+               Fluss.Admin.get_table_schema(admin, @database, table)
+
+      assert schema.columns == [
+               %Fluss.Column{name: "id", data_type: :int, comment: nil},
+               %Fluss.Column{name: "note", data_type: :string, comment: "Free text"},
+               %Fluss.Column{
+                 name: "tags",
+                 data_type: {:array, {:not_null, :string}},
+                 comment: nil
+               }
+             ]
+    end
+
+    test "sets and resets properties", %{admin: admin} do
+      table = log_table(admin)
+
+      :ok = Fluss.Admin.alter_table(admin, @database, table, [{:set_property, "owner", "team-a"}])
+      info = Fluss.Admin.get_table_info!(admin, @database, table)
+      assert info.custom_properties["owner"] == "team-a"
+
+      :ok = Fluss.Admin.alter_table(admin, @database, table, [{:reset_property, "owner"}])
+      info = Fluss.Admin.get_table_info!(admin, @database, table)
+      refute Map.has_key?(info.custom_properties, "owner")
+    end
+
+    test "sets the bucket count of new partitions", %{admin: admin} do
+      table = partitioned_table(admin, ["region"])
+
+      :ok = Fluss.Admin.create_partition(admin, @database, table, %{region: "EU"})
+      :ok = Fluss.Admin.alter_table(admin, @database, table, [{:set_bucket_count, 3}])
+      :ok = Fluss.Admin.create_partition(admin, @database, table, %{region: "US"})
+
+      counts =
+        admin
+        |> Fluss.Admin.list_partition_infos!(@database, table)
+        |> Map.new(&{&1.partition_name, &1.bucket_count})
+
+      assert counts == %{"EU" => 2, "US" => 3}
+    end
+
+    # The server only supports adding columns: these check that the changes reach it.
+    test "returns the server's error for drop, rename and modify", %{admin: admin} do
+      table = log_table(admin)
+
+      for change <- [
+            {:drop_column, "id"},
+            {:rename_column, "id", "key"},
+            {:modify_column, "id", type: :bigint, comment: "The id"}
+          ] do
+        assert {:error, %Fluss.Error{code: :unknown_server_error}} =
+                 Fluss.Admin.alter_table(admin, @database, table, [change])
+      end
+    end
+
+    test "raises on malformed changes", %{admin: admin} do
+      for {changes, message} <- [
+            {[{:add_column, "c", :int} | :tail], "expected changes to be a proper list"},
+            {[{:drop_column, :c}], "expected the column name to be a string"},
+            {[{:add_column, "c", :bogus}], "invalid data type for column `c`"},
+            {[{:add_column, "c", {:not_null, :int}}], "an added column must be nullable"},
+            {[{:add_column, "c", :int, comment: false}],
+             "expected the column comment to be a string"},
+            {[{:modify_column, "c", type: :bogus}], "invalid data type for column `c`"},
+            {[{:set_property, "owner", 1}], "expected the property value to be a string"},
+            {[{:set_property, "bucket.num", "3"}], ~s("bucket.num" is not a property)},
+            {[{:set_bucket_count, 0}], "expected the bucket count to be an integer"},
+            {[{:set_bucket_count, 2}, {:set_bucket_count, 3}],
+             "expected at most one :set_bucket_count change"},
+            {[{:set_comment, "x"}], "expected a table change"}
+          ] do
+        assert_raise ArgumentError, ~r/#{Regex.escape(message)}/, fn ->
+          Fluss.Admin.alter_table(admin, @database, "t", changes)
+        end
+      end
+    end
+  end
+
+  describe "alter_database/4" do
+    test "sets and resets properties and the comment", %{admin: admin} do
+      database = "fluss_db_#{:rand.uniform(100_000)}"
+      :ok = Fluss.Admin.create_database(admin, database, Fluss.DatabaseDescriptor.new())
+      on_exit(fn -> Fluss.Admin.drop_database(admin, database, ignore_if_not_exists: true) end)
+
+      :ok =
+        Fluss.Admin.alter_database(admin, database, [
+          {:set_property, "owner", "team-a"},
+          {:set_comment, "App data"}
+        ])
+
+      descriptor = Fluss.Admin.get_database_info!(admin, database).descriptor
+      assert descriptor.comment == "App data"
+      assert descriptor.custom_properties == %{"owner" => "team-a"}
+
+      :ok =
+        Fluss.Admin.alter_database(admin, database, [
+          {:reset_property, "owner"},
+          {:set_comment, nil}
+        ])
+
+      descriptor = Fluss.Admin.get_database_info!(admin, database).descriptor
+      assert descriptor.comment == nil
+      assert descriptor.custom_properties == %{}
+    end
+
+    test "raises on malformed changes", %{admin: admin} do
+      for {changes, message} <- [
+            {[{:set_comment, 1}], "expected the database comment to be a string"},
+            {[{:set_comment, "a"}, {:set_comment, "b"}],
+             "expected at most one :set_comment change"},
+            {[{:set_bucket_count, 3}], "expected a database change"}
+          ] do
+        assert_raise ArgumentError, ~r/#{Regex.escape(message)}/, fn ->
+          Fluss.Admin.alter_database(admin, "db", changes)
+        end
+      end
     end
   end
 
