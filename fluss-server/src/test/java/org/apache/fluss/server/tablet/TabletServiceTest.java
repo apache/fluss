@@ -22,6 +22,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -214,6 +215,31 @@ class TabletServiceTest extends ReplicaTestBase {
 
         assertThat(response).isCompleted();
         assertThat(zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)).isTrue();
+    }
+
+    @Test
+    void testGetConsumerOffsetsRejectsInvalidRequestCombination() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createService();
+
+        CompletableFuture<?> find =
+                service.findConsumerGroupOwner(
+                        new FindConsumerGroupOwnerRequest().setGroupId(GROUP_ID));
+        assertThat(find).isNotDone();
+        executor.triggerAll();
+        assertThat(find).isCompleted();
+
+        GetConsumerOffsetsRequest request =
+                new GetConsumerOffsetsRequest().setGroupId(GROUP_ID).setAllOffsets(true);
+        request.addTable().setTableId(1L).addBucket().setBucketId(0);
+        CompletableFuture<GetConsumerOffsetsResponse> response =
+                service.getConsumerOffsets(request);
+
+        assertThat(response).isCompletedExceptionally();
+        assertThatThrownBy(response::join)
+                .cause()
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("all_offsets");
     }
 
     @Test

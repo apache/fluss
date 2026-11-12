@@ -30,6 +30,7 @@ import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -1269,7 +1270,7 @@ public class ServerRpcMessageUtils {
             GetConsumerOffsetsRequest request) {
         boolean allOffsets = request.hasAllOffsets() && request.isAllOffsets();
         if (allOffsets && !request.getTablesList().isEmpty()) {
-            throw new IllegalArgumentException(
+            throw new InvalidRequestException(
                     "GetConsumerOffsets request cannot specify both all_offsets and buckets");
         }
         if (allOffsets) {
@@ -1284,7 +1285,7 @@ public class ServerRpcMessageUtils {
                 TableBucket tableBucket =
                         new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
                 if (!seenBuckets.add(tableBucket)) {
-                    throw new IllegalArgumentException(
+                    throw new InvalidRequestException(
                             "Duplicate table bucket in GetConsumerOffsets request: " + tableBucket);
                 }
                 requestedBuckets.add(tableBucket);

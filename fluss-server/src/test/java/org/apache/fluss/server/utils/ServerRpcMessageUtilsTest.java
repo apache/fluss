@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -193,7 +194,7 @@ class ServerRpcMessageUtilsTest {
                         () ->
                                 ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
                                         allOffsetsWithBuckets))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("all_offsets");
 
         GetConsumerOffsetsRequest duplicateBuckets =
@@ -205,7 +206,7 @@ class ServerRpcMessageUtilsTest {
                         () ->
                                 ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
                                         duplicateBuckets))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("Duplicate table bucket");
     }
 

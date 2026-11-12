@@ -857,7 +857,7 @@ public final class TabletService extends RpcServiceBase
         try {
             offsetsReplica = groupManager.validateGroupId(groupId);
             requestedBuckets = decodeGetConsumerOffsetsRequest(request);
-        } catch (ApiException | IllegalArgumentException e) {
+        } catch (ApiException e) {
             return FutureUtils.completedExceptionally(e);
         }
 

@@ -57,8 +57,8 @@ class ConsumerOffsetSchemaTest {
         // Value: (offset, metadata) — FIP-53 has no commit_timestamp.
         assertThat(ConsumerOffsetSchema.getTableSchema().getColumnNames())
                 .containsExactly(
-                        "group_id",
                         "record_type",
+                        "group_id",
                         "table_id",
                         "partition_id",
                         "bucket_id",
@@ -78,8 +78,8 @@ class ConsumerOffsetSchemaTest {
                         new ConsumerOffsetAndMetadata(100L, "wm=5"));
 
         InternalRow decoded = decode(row);
-        assertThat(decoded.getString(0).toString()).isEqualTo("my-group");
-        assertThat(decoded.getInt(1)).isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        assertThat(decoded.getInt(0)).isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        assertThat(decoded.getString(1).toString()).isEqualTo("my-group");
         assertThat(decoded.getLong(2)).isEqualTo(42L);
         assertThat(decoded.getLong(3)).isEqualTo(7L);
         assertThat(decoded.getInt(4)).isEqualTo(3);

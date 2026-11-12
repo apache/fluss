@@ -139,8 +139,8 @@ class ConsumerGroupManagerFetchTest {
         DataType[] fieldTypes = schema.getRowType().getChildren().toArray(new DataType[0]);
         CompactedRowEncoder encoder = new CompactedRowEncoder(fieldTypes);
         encoder.startNewRow();
-        encoder.encodeField(0, BinaryString.fromString(groupId));
-        encoder.encodeField(1, ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        encoder.encodeField(0, ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        encoder.encodeField(1, BinaryString.fromString(groupId));
         encoder.encodeField(2, tableBucket.getTableId());
         encoder.encodeField(
                 3,
