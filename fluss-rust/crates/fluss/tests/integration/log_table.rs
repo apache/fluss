@@ -23,8 +23,8 @@ mod table_test {
         create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
-        server_predates_1_0, wait_for_partitions_ready, wait_for_table_buckets_ready,
-        wait_for_table_ready,
+        server_predates_1_0, wait_for_partition_buckets_ready, wait_for_partitions_ready,
+        wait_for_table_buckets_ready, wait_for_table_ready,
     };
     use arrow::array::{
         Array, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
@@ -34,7 +34,7 @@ mod table_test {
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use fluss::client::{
         AppendWriter, EARLIEST_OFFSET, FlussAdmin, FlussConnection, FlussTable,
-        RecordBatchLogScanner, TableScan,
+        RecordBatchLogReader, RecordBatchLogScanner, TableScan,
     };
     use fluss::config::Config;
     use fluss::error::FlussError;
@@ -1941,6 +1941,80 @@ mod table_test {
         collected
     }
 
+    #[tokio::test]
+    async fn append_mixed_partition_arrow_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().unwrap();
+        for (table_name, bucket_keys) in [
+            ("test_arrow_mixed_partition_keyless", vec![]),
+            ("test_arrow_mixed_partition_keyed", vec!["id".to_string()]),
+        ] {
+            let path = TablePath::new("fluss", table_name);
+            let descriptor = TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("region", DataTypes::string())
+                        .build()
+                        .unwrap(),
+                )
+                .partitioned_by(vec!["region"])
+                .distributed_by(Some(2), bucket_keys)
+                .build()
+                .unwrap();
+            create_table(&admin, &path, &descriptor).await;
+            create_partitions(&admin, &path, "region", &["US", "EU"]).await;
+            for partition in ["US", "EU"] {
+                wait_for_partition_buckets_ready(&admin, &path, partition, &[0, 1]).await;
+            }
+
+            let table = connection.get_table(&path).await.unwrap();
+            let writer = table.new_append().unwrap().create_writer().unwrap();
+            let batch = record_batch!(
+                ("id", Int32, [1, 2, 3, 4, 5, 6]),
+                ("region", Utf8, ["US", "EU", "US", "EU", "US", "EU"])
+            )
+            .unwrap();
+            tokio::time::timeout(
+                DEFAULT_POLL_TIMEOUT,
+                writer.append_arrow_batch(batch).unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+            let partitions = admin.list_partition_infos(&path).await.unwrap();
+            assert_eq!(partitions.len(), 2);
+            for partition in partitions {
+                let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+                for bucket in [0, 1] {
+                    scanner
+                        .subscribe_partition(partition.get_partition_id(), bucket, EARLIEST_OFFSET)
+                        .await
+                        .unwrap();
+                }
+                let mut reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+                    .await
+                    .unwrap();
+                let batches =
+                    tokio::time::timeout(DEFAULT_POLL_TIMEOUT, reader.collect_all_batches())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut ids = extract_ids_from_batches(&batches);
+                ids.sort_unstable();
+                let name = partition.get_partition_name();
+                let expected = match name.as_str() {
+                    "US" => [1, 3, 5],
+                    "EU" => [2, 4, 6],
+                    _ => panic!("Unexpected partition {name}"),
+                };
+                assert_eq!(ids, expected, "{table_name}: partition {name}");
+            }
+        }
+    }
+
     async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
         let table_descriptor = TableDescriptor::builder()
             .schema(
@@ -2004,7 +2078,6 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         // Test append_arrow_batch for partitioned tables
-        // Each batch must contain rows from the same partition
         let us_batch = record_batch!(
             ("id", Int32, [5, 6]),
             ("region", Utf8, ["US", "US"]),
