@@ -77,6 +77,24 @@ public final class PlainSaslProxyAuthorization {
         return DISABLED;
     }
 
+    /**
+     * Loads the policy of the accepting listener, or a deny-all policy when no grants are
+     * configured. Cross-listener validation happens in {@link #loadForListeners}.
+     */
+    public static PlainSaslProxyAuthorization loadForListener(
+            Configuration configuration, String listenerName) {
+        ConfigOption<Map<String, String>> option = proxyUsersOption(listenerName);
+        Map<String, String> configuredGrants = readProxyGrants(configuration, option);
+        if (configuredGrants.isEmpty()) {
+            return disabled();
+        }
+        return new PlainSaslProxyAuthorization(
+                listenerName,
+                parseProxyGrants(configuredGrants, option.key()),
+                superUsers(configuration),
+                configuration.get(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE));
+    }
+
     /** Loads and validates the configured policies, keyed by the bound Fluss listener name. */
     public static Map<String, PlainSaslProxyAuthorization> loadForListeners(
             Configuration configuration, Collection<String> listeners) {
@@ -92,12 +110,7 @@ public final class PlainSaslProxyAuthorization {
             }
         }
 
-        Set<FlussPrincipal> superUsers =
-                configuration
-                        .getOptional(ConfigOptions.SUPER_USERS)
-                        .map(FlussPrincipal::parsePrincipals)
-                        .map(Collections::unmodifiableSet)
-                        .orElse(Collections.emptySet());
+        Set<FlussPrincipal> superUsers = superUsers(configuration);
         boolean principalIgnoreCase =
                 configuration.get(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE);
         Map<String, PlainSaslProxyAuthorization> policies = new HashMap<>();
@@ -140,7 +153,7 @@ public final class PlainSaslProxyAuthorization {
                                     + " because it is a super user");
                 }
             }
-            if (grants.contains("*") || grants.contains(requestedUser)) {
+            if (grants.contains("*") || matchesAnyTarget(grants, targetPrincipal)) {
                 LOG.info(
                         "User '{}' authenticated on listener '{}' and is acting as '{}'",
                         escapeForLog(authenticatedUser),
@@ -150,6 +163,24 @@ public final class PlainSaslProxyAuthorization {
             }
         }
         throw new AuthenticationException(denialMessage(authenticatedUser, requestedUser));
+    }
+
+    /** Reuses the ACL principal matcher so case folding cannot widen the grant scope. */
+    private boolean matchesAnyTarget(Set<String> grants, FlussPrincipal target) {
+        for (String allowed : grants) {
+            if (new FlussPrincipal(allowed, "User").matches(target, principalIgnoreCase)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Set<FlussPrincipal> superUsers(Configuration configuration) {
+        return configuration
+                .getOptional(ConfigOptions.SUPER_USERS)
+                .map(FlussPrincipal::parsePrincipals)
+                .map(Collections::unmodifiableSet)
+                .orElse(Collections.emptySet());
     }
 
     private static Map<String, String> readProxyGrants(

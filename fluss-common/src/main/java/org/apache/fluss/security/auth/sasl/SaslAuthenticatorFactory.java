@@ -25,14 +25,12 @@ import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.PlainSaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.authenticator.SaslClientAuthenticator;
-import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /** Factory for creating connection-local SASL authenticators. */
@@ -66,16 +64,14 @@ public final class SaslAuthenticatorFactory {
 
     /** Creates a server authenticator for the requested mechanism. */
     public static ServerAuthenticator createServerAuthenticator(
-            String mechanism,
-            Configuration configuration,
-            PlainSaslProxyAuthorization proxyAuthorization) {
+            String mechanism, Configuration configuration) {
         String normalizedMechanism = mechanism.toUpperCase(Locale.ROOT);
         AuthenticatorCreators creators = AUTHENTICATOR_CREATORS.get(normalizedMechanism);
         if (creators == null) {
             throw new AuthenticationException(
                     "Unable to find a matching SASL mechanism for " + normalizedMechanism);
         }
-        return creators.serverCreator.apply(configuration, proxyAuthorization);
+        return creators.serverCreator.apply(configuration);
     }
 
     /** Returns whether the client supports the requested mechanism. */
@@ -90,13 +86,11 @@ public final class SaslAuthenticatorFactory {
 
     private static final class AuthenticatorCreators {
         private final Function<Configuration, ClientAuthenticator> clientCreator;
-        private final BiFunction<Configuration, PlainSaslProxyAuthorization, ServerAuthenticator>
-                serverCreator;
+        private final Function<Configuration, ServerAuthenticator> serverCreator;
 
         private AuthenticatorCreators(
                 Function<Configuration, ClientAuthenticator> clientCreator,
-                BiFunction<Configuration, PlainSaslProxyAuthorization, ServerAuthenticator>
-                        serverCreator) {
+                Function<Configuration, ServerAuthenticator> serverCreator) {
             this.clientCreator = clientCreator;
             this.serverCreator = serverCreator;
         }

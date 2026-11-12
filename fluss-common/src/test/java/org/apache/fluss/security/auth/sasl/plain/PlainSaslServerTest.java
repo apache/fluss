@@ -268,18 +268,35 @@ public class PlainSaslServerTest {
         }
     }
 
+    @Test
+    void testNoProxyGrantsRejectsImpersonation() throws Exception {
+        Configuration configuration = serverConfiguration();
+        configuration.set(proxyUsersOption("CLIENT"), Collections.emptyMap());
+        try (ServerAuthenticator server = createServer(configuration)) {
+            assertThatThrownBy(
+                            () ->
+                                    server.evaluateResponse(
+                                            saslMessage("alice", PROXY, PROXY_PASSWORD)))
+                    .isInstanceOf(AuthenticationException.class)
+                    .hasMessageContaining("is not allowed to act as 'alice'");
+            assertThat(server.isCompleted()).isFalse();
+        }
+    }
+
     @ParameterizedTest
     @CsvSource({
-        "proxy, proxyPassword, alice.smith,",
-        "proxy, proxyPassword, aliceXsmith, is not allowed to act as",
-        "proxy, proxyPassword, Alice.smith, is not allowed to act as",
-        "alice, alicePassword, bob, is not allowed to act as",
-        "proxy, alicePassword, bob, Invalid username or password"
+        "proxy, proxyPassword, alice.smith, true,",
+        "proxy, proxyPassword, aliceXsmith, true, is not allowed to act as",
+        "proxy, proxyPassword, Alice.smith, true,",
+        "proxy, proxyPassword, Alice.smith, false, is not allowed to act as",
+        "alice, alicePassword, bob, true, is not allowed to act as",
+        "proxy, alicePassword, bob, true, Invalid username or password"
     })
-    void testProxyGrant(String username, String password, String target, String denial)
+    void testProxyGrant(
+            String username, String password, String target, boolean ignoreCase, String denial)
             throws Exception {
         Configuration configuration = serverConfiguration();
-        configuration.set(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, true);
+        configuration.set(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, ignoreCase);
         try (ServerAuthenticator server = createServer(configuration)) {
             byte[] token = saslMessage(target, username, password);
             if (denial == null) {
@@ -294,14 +311,23 @@ public class PlainSaslServerTest {
         }
     }
 
+    // The U+0130 rows guard against case folding that diverges from equalsIgnoreCase:
+    // U+0130 lowercases to "i" + combining dot above, which is a different ACL principal.
     @ParameterizedTest
     @CsvSource({
-        "root, root, User:root, false, false",
-        "*, ROOT, USER:root, true, false",
-        "alice, alice, Group:alice, true, true"
+        "root, root, User:root, false, false, because it is a super user",
+        "*, ROOT, USER:root, true, false, because it is a super user",
+        "alice, alice, Group:alice, true, true,",
+        "\u0130, i\u0307, User:root, true, false, is not allowed to act as",
+        "\u0130, \u0130, User:root, true, true,"
     })
     void testProxyTargetUsesAclPrincipalMatching(
-            String grant, String target, String superUser, boolean ignoreCase, boolean allowed)
+            String grant,
+            String target,
+            String superUser,
+            boolean ignoreCase,
+            boolean allowed,
+            String denial)
             throws Exception {
         Configuration configuration = serverConfiguration();
         configuration.set(ConfigOptions.SUPER_USERS, superUser);
@@ -315,7 +341,7 @@ public class PlainSaslServerTest {
             } else {
                 assertThatThrownBy(() -> server.evaluateResponse(token))
                         .isInstanceOf(AuthenticationException.class)
-                        .hasMessageContaining("because it is a super user");
+                        .hasMessageContaining(denial);
                 assertThatThrownBy(server::createPrincipal)
                         .isInstanceOf(IllegalStateException.class);
             }
@@ -364,11 +390,7 @@ public class PlainSaslServerTest {
     }
 
     private ServerAuthenticator createServer(Configuration configuration) {
-        PlainSaslProxyAuthorization policy =
-                PlainSaslProxyAuthorization.loadForListeners(
-                                configuration, Collections.singletonList("CLIENT"))
-                        .get("CLIENT");
-        ServerAuthenticator authenticator = new SaslServerAuthenticator(configuration, policy);
+        ServerAuthenticator authenticator = new SaslServerAuthenticator(configuration);
         authenticator.initialize(new TestingAuthenticateContext());
         return authenticator;
     }

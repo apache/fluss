@@ -32,7 +32,6 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.security.auth.ServerAuthenticator;
-import org.apache.fluss.security.auth.sasl.authenticator.SaslServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
@@ -70,16 +69,13 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public void setup(Configuration conf) {
-        Map<String, PlainSaslProxyAuthorization> proxyPolicies =
-                PlainSaslProxyAuthorization.loadForListeners(conf, listeners);
+        // Fail fast on invalid proxy grants before accepting connections. Authenticators resolve
+        // the per-listener policy from the configuration when initialized, like the JAAS config.
+        PlainSaslProxyAuthorization.loadForListeners(conf, listeners);
         this.plainSaslServerConfigManager = new PlainSaslServerConfigManager(conf);
         this.conf = plainSaslServerConfigManager.getConfiguration();
         this.authenticatorSuppliers =
                 AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
-        proxyPolicies.forEach(
-                (listener, policy) ->
-                        authenticatorSuppliers.put(
-                                listener, () -> new SaslServerAuthenticator(this.conf, policy)));
         // Built once here so that invalid TLS settings fail the server at startup rather than
         // every accepted connection later.
         this.sslConfig = SslConfig.fromServerConfig(conf).orElse(null);

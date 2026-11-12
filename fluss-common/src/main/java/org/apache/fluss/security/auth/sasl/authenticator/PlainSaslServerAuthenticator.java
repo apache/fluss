@@ -46,15 +46,12 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
 
     private final Configuration configuration;
-    private final PlainSaslProxyAuthorization proxyAuthorization;
     private SaslServer saslServer;
     private LoginManager loginManager;
 
-    /** Creates an authenticator that reads the effective credentials when initialized. */
-    public PlainSaslServerAuthenticator(
-            Configuration configuration, PlainSaslProxyAuthorization proxyAuthorization) {
+    /** Creates an authenticator that reads credentials and proxy grants when initialized. */
+    public PlainSaslServerAuthenticator(Configuration configuration) {
         this.configuration = configuration;
-        this.proxyAuthorization = proxyAuthorization;
     }
 
     @Override
@@ -75,7 +72,8 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
                     SaslServerFactory.createSaslServer(
                             PlainSaslServer.PLAIN_MECHANISM,
                             contextConfig.configurationEntries(),
-                            proxyAuthorization);
+                            PlainSaslProxyAuthorization.loadForListener(
+                                    configuration, context.listenerName()));
             loginManager = acquiredLoginManager;
             saslServer = newSaslServer;
         } catch (Exception e) {

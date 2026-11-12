@@ -138,9 +138,9 @@ client.security.sasl.authorization-id=alice
 
 Fluss verifies the service account's password and the grant during the handshake. ACL checks use the target user for the lifetime of that connection. An unset or empty authorization identity uses the authenticated account. The target only needs a principal in Fluss ACLs.
 
-Separate target usernames with semicolons and service accounts with commas. Names match exactly, including case. An explicit wildcard grant (`gateway:*`) permits any target other than a user in `super.users`. Grant it only to a service that authenticates its callers and derives the authorization ID from the authenticated identity. Fluss uses the ACL principal case setting when checking super users.
+Separate target usernames with semicolons and service accounts with commas. The service account must match the authenticated username exactly. Target names and `super.users` entries follow the ACL principal case setting (`security.acl.principal.ignore-case`): exact by default, case-insensitive when enabled. An explicit wildcard grant (`gateway:*`) permits any target other than a super user. Grant it only to a service that authenticates its callers and derives the authorization ID from the authenticated identity.
 
-Grants apply only to the configured listener and are loaded at server startup. Dynamic updates to `security.sasl.plain.credentials` affect authentication on new connections. Use TLS to protect the service account password in transit.
+Grants apply only to the configured listener and are validated at server startup. Dynamic updates to `security.sasl.plain.credentials` affect authentication on new connections. Use TLS to protect the service account password in transit.
 
 ## Extending Authentication Methods (For Developers)
 
