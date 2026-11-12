@@ -39,42 +39,48 @@ import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
 
-/** Value comparison independent of array and nested row encoding. */
-final class ArrayElementComparator implements Serializable {
+/**
+ * Hashing and equality for array elements of a fixed data type, independent of their encoding.
+ *
+ * <p>Equal values have equal hashes across binary and generic representations. Arrays and rows are
+ * compared by position; map entry order is ignored. Null elements compare equal. Floating-point
+ * NaNs are canonicalized, while positive and negative zero remain distinct.
+ */
+final class ArrayElementEquality implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     static final int NULL_HASH = 1;
 
     private final DataType type;
-    private final ArrayElementComparator[] children;
+    private final ArrayElementEquality[] children;
 
-    ArrayElementComparator(DataType type) {
+    ArrayElementEquality(DataType type) {
         this.type = type;
         switch (type.getTypeRoot()) {
             case ARRAY:
                 children =
-                        new ArrayElementComparator[] {
-                            new ArrayElementComparator(((ArrayType) type).getElementType())
+                        new ArrayElementEquality[] {
+                            new ArrayElementEquality(((ArrayType) type).getElementType())
                         };
                 break;
             case MAP:
                 MapType map = (MapType) type;
                 children =
-                        new ArrayElementComparator[] {
-                            new ArrayElementComparator(map.getKeyType()),
-                            new ArrayElementComparator(map.getValueType())
+                        new ArrayElementEquality[] {
+                            new ArrayElementEquality(map.getKeyType()),
+                            new ArrayElementEquality(map.getValueType())
                         };
                 break;
             case ROW:
                 RowType row = (RowType) type;
-                children = new ArrayElementComparator[row.getFieldCount()];
+                children = new ArrayElementEquality[row.getFieldCount()];
                 for (int i = 0; i < children.length; i++) {
-                    children[i] = new ArrayElementComparator(row.getFieldTypes().get(i));
+                    children[i] = new ArrayElementEquality(row.getFieldTypes().get(i));
                 }
                 break;
             default:
-                children = new ArrayElementComparator[0];
+                children = new ArrayElementEquality[0];
         }
     }
 

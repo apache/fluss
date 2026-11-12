@@ -31,20 +31,24 @@ import java.util.Arrays;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
-/** Appends input arrays to the accumulator and keeps the last {@code size} elements. */
+/**
+ * Appends input arrays and keeps the last {@code size} elements, optionally deduplicating by last
+ * occurrence.
+ */
 public class FieldLastNAgg extends FieldAggregator {
 
     private static final long serialVersionUID = 1L;
 
     private static final int MAX_RETAINED_POSITIONS = 1024;
-    private static final ThreadLocal<Workspace> WORKSPACE = ThreadLocal.withInitial(Workspace::new);
+    private static final ThreadLocal<DistinctBuffers> DISTINCT_BUFFER_CACHE =
+            ThreadLocal.withInitial(DistinctBuffers::new);
 
     private final int size;
     private final DataType elementType;
     private final boolean spliceable;
     private final InternalArray.ElementGetter elementGetter;
     private final boolean distinct;
-    private final ArrayElementComparator comparator;
+    private final ArrayElementEquality elementEquality;
     private final boolean primitiveDistinct;
 
     /**
@@ -72,8 +76,8 @@ public class FieldLastNAgg extends FieldAggregator {
         this.spliceable = BinaryArraySplicer.supports(elementType);
         this.elementGetter = InternalArray.createElementGetter(elementType);
         this.distinct = distinct;
-        this.comparator = distinct ? new ArrayElementComparator(elementType) : null;
-        this.primitiveDistinct = distinct && comparator.supportsLongKey();
+        this.elementEquality = distinct ? new ArrayElementEquality(elementType) : null;
+        this.primitiveDistinct = distinct && elementEquality.supportsLongKey();
     }
 
     @Override
@@ -109,7 +113,7 @@ public class FieldLastNAgg extends FieldAggregator {
     }
 
     private Object distinct(@Nullable InternalArray older, InternalArray newer) {
-        Selection selection = new Selection(older, newer);
+        DistinctSelection selection = new DistinctSelection(older, newer);
         boolean success = false;
         try {
             selection.scan(newer, false);
@@ -122,119 +126,123 @@ public class FieldLastNAgg extends FieldAggregator {
         }
     }
 
-    /** Reuses only primitive scratch space, shared across buckets on the same write thread. */
-    private static final class Workspace {
-        private int[] positions = new int[8];
-        private int[] hashes = new int[8];
-        private int[] table = new int[16];
-        private long[] keys = new long[8];
+    /** Primitive scratch arrays reused across distinct aggregations on the same write thread. */
+    private static final class DistinctBuffers {
+        // Negative positions encode ~ordinal in older; non-negative positions index newer.
+        private int[] selectedPositions = new int[8];
+        private int[] elementHashes = new int[8];
+        // Zero marks an empty slot; other values are indices in selectedPositions plus one.
+        private int[] hashTable = new int[16];
+        private long[] primitiveKeys = new long[8];
+        // A reentrant call on the same thread must use separate buffers.
         private boolean inUse;
     }
 
-    /** Stores source positions rather than materialized values, in reverse occurrence order. */
-    private final class Selection {
+    /**
+     * Selects source positions from newest to oldest, then builds the result in occurrence order.
+     * The first encounter of each value is its last occurrence across the two inputs.
+     */
+    private final class DistinctSelection {
 
         private final InternalArray older;
         private final InternalArray newer;
         private final int limit;
-        private final Workspace workspace;
-        // Negative positions encode ~ordinal in older; non-negative positions index newer.
-        private int[] positions;
-        private int[] hashes;
-        private int[] table;
+        private final DistinctBuffers buffers;
         private int count;
 
-        private Selection(@Nullable InternalArray older, InternalArray newer) {
+        private DistinctSelection(@Nullable InternalArray older, InternalArray newer) {
             this.older = older;
             this.newer = newer;
             this.limit =
                     (int) Math.min((long) size, (older == null ? 0L : older.size()) + newer.size());
-            Workspace cached = WORKSPACE.get();
-            workspace = cached.inUse ? new Workspace() : cached;
-            workspace.inUse = true;
-            positions = workspace.positions;
-            hashes = workspace.hashes;
-            table = workspace.table;
+            DistinctBuffers cached = DISTINCT_BUFFER_CACHE.get();
+            buffers = cached.inUse ? new DistinctBuffers() : cached;
+            buffers.inUse = true;
         }
 
         private void release(boolean success) {
-            workspace.inUse = false;
-            // Failed growth may leave buffer capacities inconsistent. Do not cache partial state.
-            if (!success || positions.length > MAX_RETAINED_POSITIONS) {
-                if (WORKSPACE.get() == workspace) {
-                    WORKSPACE.remove();
+            buffers.inUse = false;
+            // Failure may leave partial growth or occupied slots. Discard only this call's cache;
+            // a reentrant call must not remove buffers still owned by its caller.
+            if (!success || buffers.selectedPositions.length > MAX_RETAINED_POSITIONS) {
+                if (DISTINCT_BUFFER_CACHE.get() == buffers) {
+                    DISTINCT_BUFFER_CACHE.remove();
                 }
                 return;
             }
-            Arrays.fill(table, 0);
-            workspace.positions = positions;
-            workspace.hashes = hashes;
-            workspace.table = table;
+            Arrays.fill(buffers.hashTable, 0);
         }
 
-        private void scan(@Nullable InternalArray source, boolean old) {
+        private void scan(@Nullable InternalArray source, boolean fromOlder) {
             if (source == null) {
                 return;
             }
             for (int i = source.size() - 1; i >= 0 && count < limit; i--) {
                 boolean isNull = primitiveDistinct && source.isNullAt(i);
-                long key = primitiveDistinct && !isNull ? comparator.longKey(source, i) : 0;
+                long key = primitiveDistinct && !isNull ? elementEquality.longKey(source, i) : 0;
                 // Null has key zero but a nonzero hash, unlike the primitive zero value.
                 int hash =
                         primitiveDistinct
                                 ? (isNull
-                                        ? ArrayElementComparator.NULL_HASH
-                                        : ArrayElementComparator.hashLong(key))
-                                : comparator.hash(source, i);
-                int slot = slot(hash);
-                while (table[slot] != 0) {
-                    int entry = table[slot] - 1;
-                    int position = positions[entry];
-                    if (hashes[entry] == hash
+                                        ? ArrayElementEquality.NULL_HASH
+                                        : ArrayElementEquality.hashLong(key))
+                                : elementEquality.hash(source, i);
+                int slot = bucketForHash(hash);
+                while (buffers.hashTable[slot] != 0) {
+                    int entry = buffers.hashTable[slot] - 1;
+                    int position = buffers.selectedPositions[entry];
+                    if (buffers.elementHashes[entry] == hash
                             && (primitiveDistinct
-                                    ? workspace.keys[entry] == key
-                                    : comparator.equal(
+                                    ? buffers.primitiveKeys[entry] == key
+                                    : elementEquality.equal(
                                             source,
                                             i,
                                             position < 0 ? older : newer,
                                             position < 0 ? ~position : position))) {
                         break;
                     }
-                    slot = (slot + 1) & (table.length - 1);
+                    slot = (slot + 1) & (buffers.hashTable.length - 1);
                 }
-                if (table[slot] != 0) {
+                if (buffers.hashTable[slot] != 0) {
                     continue;
                 }
-                if (count == positions.length) {
-                    int capacity = (int) Math.min((long) limit, 2L * positions.length);
-                    positions = Arrays.copyOf(positions, capacity);
-                    hashes = Arrays.copyOf(hashes, capacity);
+                if (count == buffers.selectedPositions.length) {
+                    int capacity =
+                            (int) Math.min((long) limit, 2L * buffers.selectedPositions.length);
+                    buffers.selectedPositions = Arrays.copyOf(buffers.selectedPositions, capacity);
+                    buffers.elementHashes = Arrays.copyOf(buffers.elementHashes, capacity);
                 }
-                positions[count] = old ? ~i : i;
-                hashes[count] = hash;
+                buffers.selectedPositions[count] = fromOlder ? ~i : i;
+                buffers.elementHashes[count] = hash;
                 if (primitiveDistinct) {
-                    if (count == workspace.keys.length) {
-                        workspace.keys = Arrays.copyOf(workspace.keys, positions.length);
+                    if (count == buffers.primitiveKeys.length) {
+                        buffers.primitiveKeys =
+                                Arrays.copyOf(
+                                        buffers.primitiveKeys, buffers.selectedPositions.length);
                     }
-                    workspace.keys[count] = key;
+                    buffers.primitiveKeys[count] = key;
                 }
-                table[slot] = ++count;
-                if (count == table.length / 2 && count < limit) {
-                    table = new int[table.length * 2];
-                    for (int j = 0; j < count; j++) {
-                        int target = slot(hashes[j]);
-                        while (table[target] != 0) {
-                            target = (target + 1) & (table.length - 1);
-                        }
-                        table[target] = j + 1;
-                    }
+                buffers.hashTable[slot] = ++count;
+                if (count == buffers.hashTable.length / 2 && count < limit) {
+                    growHashTable();
                 }
             }
         }
 
-        private int slot(int hash) {
+        private void growHashTable() {
+            buffers.hashTable = new int[buffers.hashTable.length * 2];
+            for (int i = 0; i < count; i++) {
+                int target = bucketForHash(buffers.elementHashes[i]);
+                while (buffers.hashTable[target] != 0) {
+                    target = (target + 1) & (buffers.hashTable.length - 1);
+                }
+                buffers.hashTable[target] = i + 1;
+            }
+        }
+
+        private int bucketForHash(int hash) {
             int mixed = hash * 0x9e3779b9;
-            return (mixed ^ (mixed >>> 16)) & (table.length - 1);
+            return (mixed ^ (mixed >>> 16)) & (buffers.hashTable.length - 1);
         }
 
         private Object build() {
@@ -247,34 +255,20 @@ public class FieldLastNAgg extends FieldAggregator {
             if (isWhole(older, true)) {
                 return older;
             }
-            // Check uniqueness before reusing a repeated tail: OVERWRITE may store raw arrays.
+            // The new value equals the old tail, so count == older.size() proves older is unique.
+            // OVERWRITE may leave raw arrays; tail equality alone does not justify reuse.
             if (older != null
                     && count == older.size()
                     && newer.size() == 1
-                    && comparator.equal(older, count - 1, newer, 0)) {
+                    && elementEquality.equal(older, count - 1, newer, 0)) {
                 return older;
             }
             if (spliceable && BinaryArraySplicer.canSplice(older, newer)) {
-                BinaryArraySplicer splicer = new BinaryArraySplicer(elementType);
-                int i = count - 1;
-                while (i >= 0) {
-                    int position = positions[i];
-                    boolean old = position < 0;
-                    int start = old ? ~position : position;
-                    int run = 1;
-                    while (i - run >= 0
-                            && (positions[i - run] < 0) == old
-                            && (old ? ~positions[i - run] : positions[i - run]) == start + run) {
-                        run++;
-                    }
-                    splicer.append((BinaryArray) (old ? older : newer), start, run);
-                    i -= run;
-                }
-                return splicer.build();
+                return buildBinaryResult();
             }
             Object[] result = new Object[count];
             for (int i = 0; i < count; i++) {
-                int position = positions[count - i - 1];
+                int position = buffers.selectedPositions[count - i - 1];
                 result[i] =
                         elementGetter.getElementOrNull(
                                 position < 0 ? older : newer, position < 0 ? ~position : position);
@@ -282,12 +276,34 @@ public class FieldLastNAgg extends FieldAggregator {
             return new GenericArray(result);
         }
 
-        private boolean isWhole(@Nullable InternalArray source, boolean old) {
+        private BinaryArray buildBinaryResult() {
+            BinaryArraySplicer splicer = new BinaryArraySplicer(elementType);
+            int i = count - 1;
+            while (i >= 0) {
+                int position = buffers.selectedPositions[i];
+                boolean fromOlder = position < 0;
+                int start = fromOlder ? ~position : position;
+                int run = 1;
+                while (i - run >= 0
+                        && (buffers.selectedPositions[i - run] < 0) == fromOlder
+                        && (fromOlder
+                                        ? ~buffers.selectedPositions[i - run]
+                                        : buffers.selectedPositions[i - run])
+                                == start + run) {
+                    run++;
+                }
+                splicer.append((BinaryArray) (fromOlder ? older : newer), start, run);
+                i -= run;
+            }
+            return splicer.build();
+        }
+
+        private boolean isWhole(@Nullable InternalArray source, boolean fromOlder) {
             if (source == null || source.size() != count) {
                 return false;
             }
             for (int i = 0; i < count; i++) {
-                if (positions[count - i - 1] != (old ? ~i : i)) {
+                if (buffers.selectedPositions[count - i - 1] != (fromOlder ? ~i : i)) {
                     return false;
                 }
             }
