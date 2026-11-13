@@ -196,6 +196,29 @@ class FlinkAggFunctionParserTest {
     }
 
     @Test
+    void testLastNDistinctRoundTrip() {
+        Map<String, String> options = new HashMap<>();
+        FlinkAggFunctionParser.formatAggFunctionToOptions(
+                "events", AggFunctions.LAST_N(3, true), options);
+        assertThat(options).containsEntry("fields.events.last_n.distinct", "true");
+        assertThat(
+                        FlinkAggFunctionParser.parseAggFunction(
+                                "events",
+                                DataTypes.ARRAY(DataTypes.STRING()),
+                                Configuration.fromMap(options)))
+                .contains(AggFunctions.LAST_N(3, true));
+        options.put("fields.events.last_n.distinct", "yes");
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "events",
+                                        DataTypes.ARRAY(DataTypes.STRING()),
+                                        Configuration.fromMap(options)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("distinct");
+    }
+
+    @Test
     void testRejectInvalidCollectDistinctParameter() {
         Configuration options = new Configuration();
         options.setString("fields.tags.agg", "collect");

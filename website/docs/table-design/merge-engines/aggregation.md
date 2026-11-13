@@ -1198,6 +1198,11 @@ Appends input arrays to the stored array and keeps the last `size` elements.
 - **Ordering**: Elements are kept in the order writes reach the server. With the default `'sink.distribution-mode'`, Flink writes for the same key go through a single sink task, so the order follows the input. Independent clients writing to the same key may interleave
 - **Null Handling**: A null input leaves the column unchanged
 - **Size**: Required, a positive integer. Creating a table without it fails
+- **Distinct**: Optional `distinct` parameter, default `false`. When `true`, removes duplicates before keeping the last `size` distinct elements. Elements are ordered by their last occurrence, including duplicates within an input array. Null elements count as one distinct value
+
+For example, with `size=3` and `distinct=true`, inputs `['a', 'b', 'c', 'c']` produce `['a', 'b', 'c']`. Appending `['b']` then produces `['a', 'c', 'b']`.
+
+Enable deduplication with `'fields.recent_events.last_n.distinct' = 'true'`, or `AggFunctions.LAST_N(3, true)` in the Java API. Upgrade the CoordinatorServer and all TabletServers before enabling this parameter. Older servers do not support this option and must not serve tables using it, including after a rollback.
 
 :::note
 Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. Keep `size` small.
