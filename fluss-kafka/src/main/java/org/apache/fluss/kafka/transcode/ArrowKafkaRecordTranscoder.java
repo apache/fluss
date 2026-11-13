@@ -27,6 +27,7 @@ import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.metadata.KafkaTableSchema;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
@@ -107,11 +108,11 @@ public final class ArrowKafkaRecordTranscoder implements KafkaRecordTranscoder {
                             tableInfo.getTableConfig().getArrowCompressionInfo());
             epoch = writer.getEpoch();
             builder = new ArrowWalBuilder(tableInfo.getSchemaId(), writer, memorySegmentPool, true);
+            // The writer consumes each row in append(), so the batch can reuse one container.
+            GenericRow row = new GenericRow(tableInfo.getRowType().getFieldCount());
             for (Record record : records) {
-                builder.append(
-                        ChangeType.APPEND_ONLY,
-                        assembler.assemble(
-                                valueDecoder.decode(record.value()), record, partitionId));
+                assembler.fillRow(row, valueDecoder.decode(record.value()), record, partitionId);
+                builder.append(ChangeType.APPEND_ONLY, row);
             }
             EncodedRecords result = new EncodedRecords(builder.build(), builder);
             ownershipTransferred = true;

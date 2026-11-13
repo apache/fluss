@@ -256,8 +256,8 @@ class ArrowKafkaRecordTranscoderTest {
         TableInfo table = envelope(string, true);
         List<Record> records =
                 Arrays.asList(
-                        record(Record.NO_TIMESTAMP, null, null, Collections.emptyList()),
-                        record(0L, new byte[0], new byte[0], Collections.emptyList()));
+                        record(0L, new byte[0], new byte[0], Collections.emptyList()),
+                        record(Record.NO_TIMESTAMP, null, null, Collections.emptyList()));
         AtomicInteger next = new AtomicInteger();
         read(
                 transcoder.transcode(0, records, table),
@@ -267,11 +267,11 @@ class ArrowKafkaRecordTranscoderTest {
                     int value = table.getRowType().getFieldIndex("_kafka_value");
                     int key = table.getRowType().getFieldIndex("_kafka_key");
                     if (next.getAndIncrement() == 0) {
-                        assertThat(row.isNullAt(value)).isTrue();
-                        assertThat(row.isNullAt(key)).isTrue();
-                    } else {
                         assertValue(row, value, string, new byte[0]);
                         assertThat(row.getBytes(key)).isEmpty();
+                    } else {
+                        assertThat(row.isNullAt(value)).isTrue();
+                        assertThat(row.isNullAt(key)).isTrue();
                     }
                     assertThat(
                                     row.getMap(table.getRowType().getFieldIndex("_kafka_headers"))
