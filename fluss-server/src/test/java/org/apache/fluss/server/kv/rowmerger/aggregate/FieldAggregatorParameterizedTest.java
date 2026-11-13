@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.roaringbitmap.RoaringBitmap;
 import org.roaringbitmap.longlong.Roaring64Bitmap;
 
@@ -925,6 +926,31 @@ class FieldAggregatorParameterizedTest {
         assertThatThrownBy(() -> aggregator.agg(sketch.toByteArray(), new byte[] {1, 2, 3}))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Unable to deserialize or merge KLL double sketch bytes");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 10000})
+    void testKllDoubleSketchReadOnlyInput(int inputSize) {
+        FieldKllDoubleSketchAgg aggregator = new FieldKllDoubleSketchAgg(DataTypes.BYTES());
+        KllDoublesSketch accumulator = KllDoublesSketch.newHeapInstance(200);
+        accumulator.update(-1.0);
+        KllDoublesSketch input = KllDoublesSketch.newHeapInstance(100);
+        for (int i = 0; i < inputSize; i++) {
+            input.update((double) i);
+        }
+        byte[] accumulatorBytes = accumulator.toByteArray();
+        byte[] inputBytes = input.toByteArray();
+        byte[] originalAccumulator = accumulatorBytes.clone();
+        byte[] originalInput = inputBytes.clone();
+
+        byte[] resultBytes = (byte[]) aggregator.agg(accumulatorBytes, inputBytes);
+        KllDoublesSketch result = KllDoublesSketch.heapify(Memory.wrap(resultBytes));
+
+        assertThat(result.getN()).isEqualTo(inputSize + 1L);
+        assertThat(result.getMinItem()).isEqualTo(-1.0);
+        assertThat(result.getMaxItem()).isEqualTo(inputSize == 0 ? -1.0 : inputSize - 1.0);
+        assertThat(accumulatorBytes).isEqualTo(originalAccumulator);
+        assertThat(inputBytes).isEqualTo(originalInput);
     }
 
     // ===================================================================================

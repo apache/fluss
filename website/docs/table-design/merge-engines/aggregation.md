@@ -1039,30 +1039,6 @@ bytes, use `HllSketch.heapify(bytes).getEstimate()` to obtain the approximate di
 :::
 
 </TabItem>
-<TabItem value="spark-sql" label="Spark SQL">
-
-```sql
--- Spark 3.5 and later can build HLL sketch bytes with built-in SQL functions.
-INSERT INTO daily_user_metrics
-SELECT
-    metric_day,
-    hll_sketch_agg(user_id) AS user_hll
-FROM raw_user_events
-GROUP BY metric_day;
-
-SELECT
-    metric_day,
-    hll_sketch_estimate(user_hll) AS approx_distinct_users
-FROM daily_user_metrics;
-
-```
-
-:::note
-The Spark 3.5 `hll_sketch_agg` function returns serialized HLL sketch bytes that can be inserted
-into a `hll_sketch` Fluss aggregation column. Spark 3.4 does not provide these HLL sketch built-ins.
-:::
-
-</TabItem>
 <TabItem value="java-client" label="Java Client">
 
 ```java

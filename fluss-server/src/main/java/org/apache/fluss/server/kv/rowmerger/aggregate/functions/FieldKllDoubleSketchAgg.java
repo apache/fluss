@@ -40,8 +40,7 @@ public class FieldKllDoubleSketchAgg extends FieldAggregator {
         try {
             KllDoublesSketch accumulatorSketch =
                     KllDoublesSketch.heapify(Memory.wrap((byte[]) accumulator));
-            KllDoublesSketch inputSketch =
-                    KllDoublesSketch.heapify(Memory.wrap((byte[]) inputField));
+            KllDoublesSketch inputSketch = KllDoublesSketch.wrap(Memory.wrap((byte[]) inputField));
             accumulatorSketch.merge(inputSketch);
             return accumulatorSketch.toByteArray();
         } catch (RuntimeException e) {
