@@ -61,6 +61,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -82,12 +83,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests physical split planning with real catalog metadata and log offsets. */
 final class FlussSplitManagerTest extends FlussTrinoTestBase {
-    private static final TablePath PATH = TablePath.of("Sales", "Users");
+    private TablePath tablePath;
     private TableInfo info;
     private FlussTableHandle handle;
 
     @BeforeEach
     void resetState() {
+        // Deletion notifications can outlive a test; do not reuse its physical table path.
+        tablePath =
+                TablePath.of(
+                        "Sales_split_" + UUID.randomUUID().toString().replace("-", ""), "Users");
         info = null;
         handle = null;
     }
@@ -279,10 +284,10 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
     }
 
     @Test
-    void testRejectsChangedIdentityBeforeOffsets() throws Exception {
+    void testRejectsChangedSchemaBeforeOffsets() throws Exception {
         create(logTable(42, 1, 3, 0));
         admin.alterTable(
-                        PATH,
+                        tablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "extra",
@@ -291,10 +296,47 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                                         TableChange.ColumnPosition.last())),
                         false)
                 .get(30, TimeUnit.SECONDS);
-        assertTableChanged("changed");
-        admin.dropTable(PATH, false).get(30, TimeUnit.SECONDS);
-        createTable(PATH, info.toTableDescriptor());
-        assertTableChanged("changed");
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public ListOffsetsResult listOffsets(
+                            TablePath path, Collection<Integer> buckets, OffsetSpec spec) {
+                        throw new AssertionError("Changed schema must be rejected before offsets");
+                    }
+                });
+        assertTableChanged("schema changed");
+    }
+
+    @Test
+    void testRejectsChangedTableIdBeforeOffsets() throws Exception {
+        create(logTable(42, 1, 3, 0));
+        TableInfo recreated =
+                TableInfo.of(
+                        tablePath,
+                        info.getTableId() + 1,
+                        info.getSchemaId(),
+                        info.toTableDescriptor(),
+                        info.getRemoteDataDir(),
+                        info.getCreatedTime(),
+                        info.getModifiedTime(),
+                        info.getBucketCountEpoch());
+        // Exercise the connector's identity check without racing server-side DROP/recreate.
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public CompletableFuture<TableInfo> getTableInfo(TablePath path) {
+                        assertThat(path).isEqualTo(tablePath);
+                        return completedFuture(recreated);
+                    }
+
+                    @Override
+                    public ListOffsetsResult listOffsets(
+                            TablePath path, Collection<Integer> buckets, OffsetSpec spec) {
+                        throw new AssertionError(
+                                "Changed table ID must be rejected before offsets");
+                    }
+                });
+        assertTableChanged("table changed");
     }
 
     @Test
@@ -306,7 +348,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         assertThat(splits)
                 .extracting(split -> ((FlussSplit) split).getBucket().getPartitionId().get())
                 .containsExactlyInAnyOrderElementsOf(
-                        CLUSTER.waitUntilPartitionsCreated(PATH, 2).values());
+                        CLUSTER.waitUntilPartitionsCreated(tablePath, 2).values());
     }
 
     @ParameterizedTest
@@ -338,7 +380,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         assertThat(splits).hasSize(1);
         assertRange(splits.get(0), bucketForId(info, 7, 2), 0, 1);
         assertThat(((FlussSplit) splits.get(0)).getBucket().getPartitionId())
-                .contains(CLUSTER.waitUntilPartitionsCreated(PATH, 1).get("10"));
+                .contains(CLUSTER.waitUntilPartitionsCreated(tablePath, 1).get("10"));
     }
 
     @ParameterizedTest
@@ -408,7 +450,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                 });
 
         assertThat(plan()).hasSize(2);
-        assertThat(admin.listPartitionInfos(PATH).get(30, TimeUnit.SECONDS)).hasSize(3);
+        assertThat(admin.listPartitionInfos(tablePath).get(30, TimeUnit.SECONDS)).hasSize(3);
     }
 
     @Test
@@ -469,7 +511,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         assertThat(splits).hasSize(1);
         assertRange(splits.get(0), bucketForId(info, 7, 2), 0, 1);
         assertThat(((FlussSplit) splits.get(0)).getBucket().getPartitionId())
-                .contains(CLUSTER.waitUntilPartitionsCreated(PATH, 2).get("east"));
+                .contains(CLUSTER.waitUntilPartitionsCreated(tablePath, 2).get("east"));
     }
 
     @Test
@@ -492,7 +534,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                 Map<String, String> values = new LinkedHashMap<>();
                 values.put("region", region);
                 values.put("category", category);
-                admin.createPartition(PATH, new PartitionSpec(values), false)
+                admin.createPartition(tablePath, new PartitionSpec(values), false)
                         .get(30, TimeUnit.SECONDS);
             }
         }
@@ -504,7 +546,7 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                 Domain.multipleValues(VARCHAR, Arrays.asList(utf8Slice("A"), utf8Slice("B"))));
         List<ConnectorSplit> splits =
                 planWithHandle(handle.withConstraint(TupleDomain.withColumnDomains(domains)));
-        Map<String, Long> partitions = CLUSTER.waitUntilPartitionsCreated(PATH, 4);
+        Map<String, Long> partitions = CLUSTER.waitUntilPartitionsCreated(tablePath, 4);
         assertThat(splits)
                 .extracting(split -> ((FlussSplit) split).getBucket().getPartitionId().get())
                 .containsExactlyInAnyOrder(partitions.get("east$A"), partitions.get("east$B"));
@@ -663,7 +705,10 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
             throws Exception {
         create(stringPartitionedTable(primaryKey));
         createPartition("region", "west");
-        admin.alterTable(PATH, Collections.singletonList(TableChange.modifyBucketCount(4)), false)
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.modifyBucketCount(4)),
+                        false)
                 .get(30, TimeUnit.SECONDS);
         createPartition("region", "east");
         if (!primaryKey) {
@@ -680,7 +725,8 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         }
         List<ConnectorSplit> splits =
                 planWithHandle(handle.withConstraint(TupleDomain.withColumnDomains(domains)));
-        List<PartitionInfo> partitions = admin.listPartitionInfos(PATH).get(30, TimeUnit.SECONDS);
+        List<PartitionInfo> partitions =
+                admin.listPartitionInfos(tablePath).get(30, TimeUnit.SECONDS);
         assertThat(splits).hasSize(restrictPartition ? 1 : 2);
         for (ConnectorSplit split : splits) {
             FlussSplit flussSplit = (FlussSplit) split;
@@ -735,26 +781,27 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
     }
 
     private void create(TableInfo template) throws Exception {
-        info = createTable(PATH, template.toTableDescriptor());
+        info = createTable(tablePath, template.toTableDescriptor());
         handle = tableHandle(info);
     }
 
     private void createPartition(String key, String value) throws Exception {
-        admin.createPartition(PATH, new PartitionSpec(Collections.singletonMap(key, value)), false)
+        admin.createPartition(
+                        tablePath, new PartitionSpec(Collections.singletonMap(key, value)), false)
                 .get(30, TimeUnit.SECONDS);
     }
 
     private void append(InternalRow... rows) throws Exception {
         if (info.isPartitioned()) {
             for (PartitionInfo partition :
-                    admin.listPartitionInfos(PATH).get(30, TimeUnit.SECONDS)) {
+                    admin.listPartitionInfos(tablePath).get(30, TimeUnit.SECONDS)) {
                 for (int bucket = 0; bucket < partition.getBucketCount(); bucket++) {
                     CLUSTER.waitAndGetLeader(
                             new TableBucket(info.getTableId(), partition.getPartitionId(), bucket));
                 }
             }
         }
-        try (Table table = dataConnection().getTable(PATH)) {
+        try (Table table = dataConnection().getTable(tablePath)) {
             AppendWriter writer = table.newAppend().createWriter();
             for (InternalRow row : rows) {
                 writer.append(row).get(30, TimeUnit.SECONDS);
@@ -884,9 +931,9 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                         .build());
     }
 
-    private static TableInfo logTable(long tableId, int schemaId, int buckets, long epoch) {
+    private TableInfo logTable(long tableId, int schemaId, int buckets, long epoch) {
         return TableInfo.of(
-                PATH,
+                tablePath,
                 tableId,
                 schemaId,
                 TableDescriptor.builder()

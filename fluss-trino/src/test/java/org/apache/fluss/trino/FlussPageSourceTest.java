@@ -48,7 +48,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static io.trino.spi.type.BigintType.BIGINT;
@@ -59,7 +61,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Verifies real page reads and controlled failures at scanner and resource boundaries. */
 final class FlussPageSourceTest extends FlussTrinoTestBase {
-    private static final TablePath PATH = TablePath.of("Sales", "Users");
+    private TablePath tablePath;
     private TableInfo info;
     private FlussTableHandle handle;
     private FlussBucketHandle bucket;
@@ -70,10 +72,15 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     void setUp() throws Exception {
         source = null;
         table = null;
-        info = createTable(PATH, descriptor(true));
+        tablePath =
+                TablePath.of(
+                        "Sales_page_source_" + UUID.randomUUID().toString().replace("-", ""),
+                        "Users");
+
+        info = createTable(tablePath, descriptor(true));
         handle = tableHandle(info);
         bucket = new FlussBucketHandle(info.getTableId(), Optional.empty(), 0);
-        useTable(new TrackedTable(catalogTable(PATH)));
+        useTable(new TrackedTable(catalogTable(tablePath)));
     }
 
     @AfterEach
@@ -146,7 +153,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
 
     @Test
     void testRealLogPagesCompleteAtStop() throws Exception {
-        TablePath path = TablePath.of("Sales", "Logs");
+        TablePath path = TablePath.of(tablePath.getDatabaseName(), "Logs");
         info = createTable(path, descriptor(false));
         handle = tableHandle(info);
         bucket = new FlussBucketHandle(info.getTableId(), Optional.empty(), 0);
@@ -235,13 +242,13 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     @Test
     void testIdentityAndScanTypeCheckedBeforeScannerCreation() throws Exception {
         for (int mismatch = 0; mismatch < 3; mismatch++) {
-            useTable(new TrackedTable(catalogTable(PATH)));
+            useTable(new TrackedTable(catalogTable(tablePath)));
             handle =
                     new FlussTableHandle(
-                            "sales",
-                            "users",
-                            "Sales",
-                            "Users",
+                            tablePath.getDatabaseName().toLowerCase(Locale.ENGLISH),
+                            tablePath.getTableName().toLowerCase(Locale.ENGLISH),
+                            tablePath.getDatabaseName(),
+                            tablePath.getTableName(),
                             info.getTableId() + (mismatch == 0 ? 1 : 0),
                             info.getSchemaId() + (mismatch == 1 ? 1 : 0),
                             TupleDomain.all());
@@ -275,7 +282,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     void testMetadataFailureClosesTable() throws Exception {
         RuntimeException failure = new IllegalStateException("metadata failed");
         useTable(
-                new TrackedTable(catalogTable(PATH)) {
+                new TrackedTable(catalogTable(tablePath)) {
                     @Override
                     public TableInfo getTableInfo() {
                         throw failure;
@@ -290,7 +297,9 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     @Test
     void testWorkerRejectsUnsupportedCapabilitiesBeforeScannerCreation() throws Exception {
         for (boolean partitioned : new boolean[] {true, false}) {
-            TablePath path = TablePath.of("Sales", partitioned ? "Partitioned" : "Tiered");
+            TablePath path =
+                    TablePath.of(
+                            tablePath.getDatabaseName(), partitioned ? "Partitioned" : "Tiered");
             TableDescriptor.Builder descriptor =
                     TableDescriptor.builder()
                             .schema(
@@ -320,7 +329,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     void testInitializationFailureClosesAcquiredTable() throws Exception {
         RuntimeException failure = new IllegalStateException("create failed");
         useTable(
-                new TrackedTable(catalogTable(PATH)) {
+                new TrackedTable(catalogTable(tablePath)) {
                     @Override
                     BatchScanner createBatchScanner(Scan scan, TableBucket requested) {
                         throw failure;
@@ -507,7 +516,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
                     }
                 };
         useTable(
-                new TrackedTable(catalogTable(PATH)) {
+                new TrackedTable(catalogTable(tablePath)) {
                     @Override
                     BatchScanner createBatchScanner(Scan scan, TableBucket requested) {
                         return scanner;
@@ -601,7 +610,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
                     reservations.add(bytes);
                 };
         useTable(
-                new TrackedTable(dataConnection().getTable(PATH)) {
+                new TrackedTable(dataConnection().getTable(tablePath)) {
                     @Override
                     BatchScanner createBatchScanner(Scan scan, TableBucket requested) {
                         BatchScanner delegate = super.createBatchScanner(scan, requested);
@@ -635,7 +644,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     void testReadAndCloseUsePluginClassLoader() throws Exception {
         writeRows(GenericRow.of(1L, 1L));
         useTable(
-                new TrackedTable(dataConnection().getTable(PATH)) {
+                new TrackedTable(dataConnection().getTable(tablePath)) {
                     @Override
                     public TableInfo getTableInfo() {
                         assertPluginClassLoader();
@@ -686,7 +695,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
 
     private void useScanner(BatchScanner scanner) throws Exception {
         useTable(
-                new TrackedTable(catalogTable(PATH)) {
+                new TrackedTable(catalogTable(tablePath)) {
                     @Override
                     BatchScanner createBatchScanner(Scan scan, TableBucket requested) {
                         assertThat(requested).isEqualTo(bucket.toTableBucket());
@@ -728,7 +737,7 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     }
 
     private void writeRows(InternalRow... rows) throws Exception {
-        useTable(new TrackedTable(dataConnection().getTable(PATH)));
+        useTable(new TrackedTable(dataConnection().getTable(tablePath)));
         UpsertWriter writer = table.newUpsert().createWriter();
         for (InternalRow row : rows) {
             writer.upsert(row).get(30, TimeUnit.SECONDS);
