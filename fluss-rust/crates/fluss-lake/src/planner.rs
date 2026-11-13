@@ -349,16 +349,21 @@ fn plan_bucket_splits(
     primary_key_indexes: &[usize],
     lake_only: bool,
 ) -> Result<Vec<FlussLakeReadSplit>> {
+    // A lake file is not a usable PK baseline without its matching log seam.
+    // Keep the frozen KV/log fallback, even if lake planning finds files here.
+    let lake_bucket = if !primary_key_indexes.is_empty()
+        && !lake_only
+        && bucket_range.baseline() != crate::FlussLakeBaseline::Lake
+    {
+        PlannedLakeBucket::default()
+    } else {
+        lake_bucket
+    };
     let include_log_tail = !lake_only && !bucket_range.is_empty();
     let kv_snapshot = matches!(
         bucket_range.baseline(),
         crate::FlussLakeBaseline::KvSnapshot { .. }
     ) && !lake_only;
-    if kv_snapshot && !lake_bucket.splits.is_empty() {
-        return Err(FlussLakeError::PlanningFailed(
-            "a PK bucket cannot read both lake and KV baselines".into(),
-        ));
-    }
     if lake_bucket.splits.is_empty() && !include_log_tail && !kv_snapshot {
         return Ok(Vec::new());
     }
@@ -816,11 +821,17 @@ mod tests {
             let scope =
                 crate::partition::PartitionScope::bind(None, info.row_type(), &info.partition_keys)
                     .unwrap();
-            descriptor.validate(&context, Some(range), &scope).unwrap();
+            descriptor
+                .validate(&context, Some(range), &scope, false)
+                .unwrap();
             for wrong in [None, Some(13)] {
                 let mut altered = descriptor.clone();
                 altered.kv_snapshot_id = wrong;
-                assert!(altered.validate(&context, Some(range), &scope).is_err());
+                assert!(
+                    altered
+                        .validate(&context, Some(range), &scope, false)
+                        .is_err()
+                );
             }
             assert!(
                 plan_bucket_splits(
@@ -834,11 +845,96 @@ mod tests {
                 .unwrap()
                 .is_empty()
             );
-            assert!(
+            let fallback =
                 plan_bucket_splits(&info, range, Some(42), lake_bucket(range), &[0, 1], false)
-                    .is_err()
-            );
+                    .unwrap();
+            assert!(fallback[0].descriptor().lake_splits().is_empty());
+            assert_eq!(fallback[0].descriptor().kv_snapshot_id(), Some(12));
         }
+    }
+
+    #[test]
+    fn imported_tasks_preserve_required_logs() {
+        for primary_key in [false, true] {
+            let info = table_info(primary_key, vec![], HashMap::new());
+            let keys = physical_primary_key_indexes(&info).unwrap();
+            let range = FlussLakeLogRange::new(
+                TableBucket::new(info.table_id, 0),
+                FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+                4,
+                Some(6),
+                10,
+                0,
+            );
+            let context =
+                FlussLakeReadContext::from_bucket_boundary(&info, Some(42), range.clone()).unwrap();
+            let scope =
+                crate::partition::PartitionScope::bind(None, info.row_type(), &info.partition_keys)
+                    .unwrap();
+            let splits =
+                plan_bucket_splits(&info, &range, Some(42), lake_bucket(&range), &keys, false)
+                    .unwrap();
+            let validate = |task: &FlussLakeSplitDescriptor, lake_only| {
+                task.validate(&context, Some(&range), &scope, lake_only)
+            };
+            for split in &splits {
+                validate(split.descriptor(), false).unwrap();
+            }
+            let mut altered = splits.last().unwrap().descriptor().clone();
+            altered.stop_offset = altered.start_offset;
+            assert!(validate(&altered, false).is_err());
+            if primary_key {
+                validate(&altered, true).unwrap();
+                altered.lake_splits.clear();
+                assert!(validate(&altered, false).is_err());
+            } else {
+                let mut lake = splits[0].descriptor().clone();
+                lake.start_offset = 0;
+                lake.stop_offset = 0;
+                validate(&lake, false).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn pk_lake_files_without_a_seam_do_not_replace_complete_logs() {
+        let info = pk_table_info(vec![], HashMap::new());
+        let range = FlussLakeLogRange::new(
+            TableBucket::new(info.table_id, 0),
+            FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+            4,
+            None,
+            10,
+            0,
+        );
+        let splits =
+            plan_bucket_splits(&info, &range, Some(42), lake_bucket(&range), &[0, 1], false)
+                .unwrap();
+        assert_eq!(splits.len(), 1);
+        let descriptor = splits[0].descriptor();
+        assert!(descriptor.lake_splits().is_empty());
+        assert_eq!(
+            (descriptor.start_offset(), descriptor.stop_offset()),
+            (0, 10)
+        );
+        let lake_only =
+            plan_bucket_splits(&info, &range, Some(42), lake_bucket(&range), &[0, 1], true)
+                .unwrap();
+        assert_eq!(lake_only[0].descriptor().lake_splits().len(), 2);
+        let context =
+            FlussLakeReadContext::from_bucket_boundary(&info, Some(42), range.clone()).unwrap();
+        let scope =
+            crate::partition::PartitionScope::bind(None, info.row_type(), &info.partition_keys)
+                .unwrap();
+        descriptor
+            .validate(&context, Some(&range), &scope, false)
+            .unwrap();
+        assert!(
+            lake_only[0]
+                .descriptor()
+                .validate(&context, Some(&range), &scope, false)
+                .is_err()
+        );
     }
 
     #[test]

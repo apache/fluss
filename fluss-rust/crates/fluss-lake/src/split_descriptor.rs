@@ -100,6 +100,7 @@ impl FlussLakeSplitDescriptor {
         context: &FlussLakeReadContext,
         range: Option<&crate::FlussLakeLogRange>,
         scope: &PartitionScope,
+        lake_only: bool,
     ) -> Result<()> {
         if self.split_id.is_empty()
             || self.table_bucket.table_id() != context.table_id()
@@ -136,6 +137,31 @@ impl FlussLakeSplitDescriptor {
                 "task partition layout mismatch".into(),
             ));
         }
+        let pk_union = context.table_schema().primary_key().is_some() && !lake_only;
+        if let Some(range) = range {
+            if range.partition() != &crate::FlussLakeLogPartition::Ordinary(self.partition.clone())
+            {
+                return Err(FlussLakeError::InvalidReadContext(
+                    "task partition differs from frozen boundary".into(),
+                ));
+            }
+            if pk_union
+                && !self.lake_splits.is_empty()
+                && range.baseline() != crate::FlussLakeBaseline::Lake
+            {
+                return Err(FlussLakeError::InvalidReadContext(
+                    "PK lake tasks require a frozen lake seam".into(),
+                ));
+            }
+        }
+        if self.start_offset == self.stop_offset
+            && self.lake_splits.is_empty()
+            && self.kv_snapshot_id.is_none()
+        {
+            return Err(FlussLakeError::InvalidReadContext(
+                "task has neither a baseline nor a log range".into(),
+            ));
+        }
         let expected_kv = range.and_then(|range| match range.baseline() {
             crate::FlussLakeBaseline::KvSnapshot { snapshot_id } => Some(snapshot_id),
             _ => None,
@@ -147,14 +173,20 @@ impl FlussLakeSplitDescriptor {
                 "task KV snapshot does not match the frozen context".into(),
             ));
         }
-        if self.start_offset != self.stop_offset || self.kv_snapshot_id.is_some() {
+        // Append lake tasks have no log ownership. PK union tasks may omit the
+        // tail only for lake-only partitions with no live Fluss partition ID.
+        let independent_lake = !self.lake_splits.is_empty()
+            && self.kv_snapshot_id.is_none()
+            && self.start_offset == self.stop_offset
+            && (!pk_union
+                || (range.is_none()
+                    && self.table_bucket.partition_id().is_none()
+                    && !context.partition_keys().is_empty()));
+        if !independent_lake {
             let range = range.ok_or_else(|| {
                 FlussLakeError::InvalidReadContext("task log range absent from boundary".into())
             })?;
-            if self.start_offset != range.start_offset()
-                || self.stop_offset != range.stop_offset()
-                || range.partition()
-                    != &crate::FlussLakeLogPartition::Ordinary(self.partition.clone())
+            if self.start_offset != range.start_offset() || self.stop_offset != range.stop_offset()
             {
                 return Err(FlussLakeError::InvalidReadContext(
                     "task log range differs from frozen boundary".into(),
