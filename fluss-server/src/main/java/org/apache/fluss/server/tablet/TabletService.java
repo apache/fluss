@@ -896,7 +896,33 @@ public final class TabletService extends RpcServiceBase
 
         return groupManager
                 .handleGetConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(
+                        offsets ->
+                                requestedBuckets == null
+                                        ? filterOffsetsByAuthorizedTables(offsets)
+                                        : offsets)
                 .thenApply(ServerRpcMessageUtils::makeGetConsumerOffsetsResponse);
+    }
+
+    /**
+     * Filters all-offset results to source tables the current caller can describe. Unauthorized
+     * tables are omitted rather than causing the whole request to fail, so callers with partial
+     * table visibility still receive their authorized offsets.
+     */
+    private Map<TableBucket, ConsumerOffsetAndMetadata> filterOffsetsByAuthorizedTables(
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        if (authorizer == null) {
+            return offsets;
+        }
+
+        Set<Long> authorizedTableIds = filterAuthorizedTables(offsets.keySet(), DESCRIBE);
+        Map<TableBucket, ConsumerOffsetAndMetadata> visibleOffsets = new HashMap<>();
+        for (Map.Entry<TableBucket, ConsumerOffsetAndMetadata> entry : offsets.entrySet()) {
+            if (authorizedTableIds.contains(entry.getKey().getTableId())) {
+                visibleOffsets.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return visibleOffsets;
     }
 
     @Override
