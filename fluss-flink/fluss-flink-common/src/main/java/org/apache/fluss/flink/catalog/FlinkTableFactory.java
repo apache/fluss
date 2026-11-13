@@ -154,8 +154,26 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE);
 
         LeaseContext leaseContext = LeaseContext.fromConf(tableOptions);
+        boolean streamTable = FlinkCatalog.isStreamTableName(tableName);
+        boolean lakeUnionReadEnabled =
+                !streamTable
+                        && tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED));
+        TablePath sourceTablePath = toFlussTablePath(tableIdentifier);
+        if (streamTable) {
+            sourceTablePath =
+                    TablePath.of(
+                            tableIdentifier.getDatabaseName(),
+                            tableName.substring(
+                                    0,
+                                    tableName.length()
+                                            - FlinkCatalog.STREAM_TABLE_SUFFIX.length()));
+            if (tableOptions.get(FlinkConnectorOptions.LOOKUP_INSERT_IF_NOT_EXISTS)) {
+                throw new UnsupportedOperationException(
+                        "lookup.insert-if-not-exists is not supported for read-only $stream tables.");
+            }
+        }
         return new FlinkTableSource(
-                toFlussTablePath(context.getObjectIdentifier()),
+                sourceTablePath,
                 toFlussClientConfig(
                         context.getCatalogTable().getOptions(), context.getConfiguration()),
                 toFlussTableConfig(tableOptions),
@@ -172,7 +190,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 lookupCacheType,
                 partitionDiscoveryIntervalMs,
                 splitAssignmentBatchSize,
-                tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
+                lakeUnionReadEnabled,
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 context.getCatalogTable().getOptions(),
                 leaseContext);
@@ -181,6 +199,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
         String tableName = context.getObjectIdentifier().getObjectName();
+        if (FlinkCatalog.isStreamTableName(tableName)) {
+            throw new UnsupportedOperationException(
+                    String.format("Cannot write to read-only $stream table %s.", tableName));
+        }
         if (FlinkCatalog.isVirtualTableName(tableName)) {
             throw new UnsupportedOperationException(
                     String.format("Cannot write to read-only virtual table %s.", tableName));

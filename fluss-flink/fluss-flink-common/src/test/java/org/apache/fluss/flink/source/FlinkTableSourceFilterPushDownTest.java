@@ -29,6 +29,7 @@ import org.apache.fluss.row.GenericRow;
 
 import org.apache.flink.shaded.guava31.com.google.common.collect.Maps;
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.connector.source.lookup.LookupOptions;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.FieldReferenceExpression;
@@ -92,12 +93,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             true, // streaming
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
                             FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
-                            false, // is data lake enabled
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -200,11 +203,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             true, // streaming
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -397,11 +403,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {3}, // partition key indexes (region)
                             true, // streaming
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -495,11 +504,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {3}, // partition key indexes (region)
                             true, // streaming
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -693,11 +705,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             true, // streaming
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -870,11 +885,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             true, // streaming
                             new FlinkConnectorOptionsUtils.StartupOptions(),
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -938,11 +956,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             false, // batch mode
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
@@ -1032,11 +1053,14 @@ public class FlinkTableSourceFilterPushDownTest {
                             new int[] {}, // partition key indexes
                             false, // batch mode
                             startupOptions,
+                            FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
                             false, // lookup async
                             false, // insert if not exists
                             null, // cache
+                            LookupOptions.LookupCacheType.NONE,
                             1000L, // scan partition discovery interval
-                            false, // is data lake enabled
+                            FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                            false,
                             null, // merge engine type
                             Maps.newHashMap(),
                             null); // lease context
