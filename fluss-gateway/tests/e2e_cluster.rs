@@ -162,6 +162,12 @@ fn write_gateway_config(
     let mut file = std::fs::File::create(&path).expect("create gateway config");
     writeln!(file, "gateway.rest.listen: 127.0.0.1:{port}").expect("write REST listener");
     writeln!(file, "gateway.metrics.enabled: false").expect("disable metrics listener");
+    writeln!(file, "gateway.security.authentication: password").unwrap();
+    writeln!(
+        file,
+        "gateway.security.users: alice:alice-secret,bob:bob-secret"
+    )
+    .unwrap();
     writeln!(
         file,
         "gateway.cluster.default.bootstrap.servers: {bootstrap_servers}"
@@ -212,13 +218,20 @@ async fn assert_metadata_apis(
         "Gateway becomes ready"
     );
 
-    let api = Api::new(base);
+    assert_eq!(Api::new(&base).get("/v1/clusters").await.status(), 401);
+    let api = Api::with_basic_auth(&base, "alice", "alice-secret");
     assert_eq!(
         api.get_ok("/v1/clusters").await,
         serde_json::json!({"clusters": ["default"]})
     );
 
     let databases = api.get_ok("/v1/clusters/default/databases").await;
+    let bob = Api::with_basic_auth(&base, "bob", "bob-secret");
+    assert_eq!(
+        bob.get_ok("/v1/clusters/default/databases").await,
+        databases,
+        "both HTTP identities use the configured Fluss service account"
+    );
     assert!(
         databases["databases"]
             .as_array()
@@ -435,7 +448,8 @@ async fn assert_write_apis(
         await_http_ok(&format!("{base}/ready"), Duration::from_secs(15)).await,
         "Gateway becomes ready"
     );
-    let api = Api::new(base);
+    assert_eq!(Api::new(&base).get("/v1/clusters").await.status(), 401);
+    let api = Api::with_basic_auth(&base, "alice", "alice-secret");
 
     let appended = api
         .post_json_text_ok(

@@ -23,11 +23,11 @@
 //!
 //! # Statelessness contract
 //!
-//! The gateway keeps **no** request-spanning state. There is no session store, no cursor store, and no replay
-//! cache — deliberately, there is not even a `store` module for one to be added to. Every response is derivable
-//! from the request plus current cluster state, so any instance can serve any request and instances can be added
-//! or removed freely behind a plain load balancer.
+//! The gateway has no client session store, cursor store, or replay cache. Immutable credential stores,
+//! connection pools, and schema caches are process services, not per-client sessions. Requests carry their
+//! own credentials and operation context, so instances can be added or removed behind a load balancer.
 
+pub mod auth;
 pub mod backend;
 pub mod config;
 pub mod error;
