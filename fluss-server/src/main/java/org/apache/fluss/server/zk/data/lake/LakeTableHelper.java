@@ -100,11 +100,16 @@ public class LakeTableHelper {
                         .map(LakeTable::getLakeSnapshotMetadatas)
                         .orElse(Collections.emptyList());
 
+        // Stamp with strictly monotonic commit timestamp to handle out-of-order RPCs.
+        // Uses max(now, prevMax + 1) to ensure correct ordering even with clock jumps.
+        LakeTable.LakeSnapshotMetadata stampedMetadata =
+                stampCommitTimestamp(lakeSnapshotMetadata, previousMetadatas);
+
         // Determine which snapshots to keep and which to discard (but don't discard yet)
 
         Tuple2<List<LakeTable.LakeSnapshotMetadata>, List<LakeTable.LakeSnapshotMetadata>> result =
                 determineSnapshotsToKeepAndDiscard(
-                        previousMetadatas, lakeSnapshotMetadata, earliestSnapshotIDToKeep);
+                        previousMetadatas, stampedMetadata, earliestSnapshotIDToKeep);
 
         List<LakeTable.LakeSnapshotMetadata> keptSnapshots = result.f0;
         List<LakeTable.LakeSnapshotMetadata> snapshotsToDiscard = result.f1;
@@ -122,6 +127,24 @@ public class LakeTableHelper {
         for (LakeTable.LakeSnapshotMetadata metadata : snapshotsToDiscard) {
             metadata.discard();
         }
+    }
+
+    /** Adds strictly monotonic commit timestamp to snapshot metadata. */
+    private LakeTable.LakeSnapshotMetadata stampCommitTimestamp(
+            LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata,
+            List<LakeTable.LakeSnapshotMetadata> previousMetadatas) {
+        long maxExistingTs = LakeTable.LakeSnapshotMetadata.UNKNOWN_COMMIT_TIMESTAMP;
+        for (LakeTable.LakeSnapshotMetadata md : previousMetadatas) {
+            if (md.getCommitTimestamp() > maxExistingTs) {
+                maxExistingTs = md.getCommitTimestamp();
+            }
+        }
+        long now = Math.max(System.currentTimeMillis(), maxExistingTs + 1);
+        return new LakeTable.LakeSnapshotMetadata(
+                lakeSnapshotMetadata.getSnapshotId(),
+                lakeSnapshotMetadata.getTieredOffsetsFilePath(),
+                lakeSnapshotMetadata.getReadableOffsetsFilePath(),
+                now);
     }
 
     /**
