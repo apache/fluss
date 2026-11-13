@@ -25,6 +25,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.exception.UnknownScannerIdException;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -72,6 +73,7 @@ class KvBatchScannerTest {
     private static final TableBucket BUCKET_0 = new TableBucket(DATA1_TABLE_ID_PK, 0);
     private static final byte[] SCANNER_ID = new byte[] {1, 2, 3, 4};
     private static final Duration POLL_TIMEOUT = Duration.ofSeconds(5);
+    private static final int UNRECOGNIZED_ERROR_CODE = 9999;
     private static final SchemaGetter SCHEMA_GETTER =
             new TestingSchemaGetter((short) 1, DATA1_SCHEMA_PK);
 
@@ -638,6 +640,22 @@ class KvBatchScannerTest {
             // open + post-error refresh
             assertThat(meta.metadataRefreshes.get()).isEqualTo(2);
             assertThat(scanner.isClosed()).isTrue();
+        }
+    }
+
+    @Test
+    void unknownErrorCodeIsKeptInExceptionMessage() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        // a code this client does not know, e.g. an error added in a newer server version
+        gateway.enqueue(
+                new ScanKvResponse().setErrorCode(UNRECOGNIZED_ERROR_CODE).setErrorMessage("boom"));
+
+        try (KvBatchScanner scanner = newScanner(gateway)) {
+            assertThatThrownBy(() -> scanner.pollBatch(POLL_TIMEOUT))
+                    .isInstanceOf(IOException.class)
+                    .cause()
+                    .isInstanceOf(UnknownServerException.class)
+                    .hasMessage("Unknown error code 9999 from server: boom");
         }
     }
 
