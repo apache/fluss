@@ -68,11 +68,40 @@ class ConsumerOffsetSchemaTest {
     }
 
     @Test
+    void testGroupMetadataPrefixAndKeyUseRecordTypeAndGroupId() {
+        GroupId groupId = GroupId.of("my-group");
+        KeyEncoder prefixEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        ConsumerOffsetSchema.getTableSchema().getRowType(),
+                        Arrays.asList("record_type", "group_id"),
+                        null);
+        KeyEncoder keyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        ConsumerOffsetSchema.getTableSchema().getRowType(),
+                        ConsumerOffsetSchema.getPrimaryKeys(),
+                        null);
+
+        CompactedRow row =
+                offsetSchema.encodeOffsetRow(
+                        ConsumerOffsetSchema.GROUP_METADATA_RECORD_TYPE,
+                        groupId,
+                        -1L,
+                        null,
+                        -1,
+                        new ConsumerOffsetAndMetadata(-1L, ""));
+
+        assertThat(offsetSchema.encodeGroupMetadataPrefix(groupId))
+                .isEqualTo(prefixEncoder.encodeKey(row));
+        assertThat(offsetSchema.encodeGroupMetadataKey(groupId, -1L, null, -1))
+                .isEqualTo(keyEncoder.encodeKey(row));
+    }
+
+    @Test
     void testOffsetCommitValueRoundTrip() {
         CompactedRow row =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("my-group"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("my-group"),
                         42L,
                         7L,
                         3,
@@ -92,8 +121,8 @@ class ConsumerOffsetSchemaTest {
     void testOmittedAndEmptyMetadataHaveDistinctEncodings() {
         CompactedRow absent =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("g"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("g"),
                         1L,
                         null,
                         0,
@@ -103,8 +132,8 @@ class ConsumerOffsetSchemaTest {
 
         CompactedRow empty =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("g"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("g"),
                         1L,
                         null,
                         0,
@@ -118,8 +147,8 @@ class ConsumerOffsetSchemaTest {
         // Non-partitioned table: partitionId == null materializes as -1 (PK is NOT NULL).
         CompactedRow row =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("g"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("g"),
                         1L,
                         null,
                         0,
@@ -129,8 +158,8 @@ class ConsumerOffsetSchemaTest {
         // Partition id 0 is a valid partition id and must survive the round-trip unchanged.
         CompactedRow zeroPartition =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("g"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("g"),
                         1L,
                         0L,
                         0,
@@ -142,8 +171,8 @@ class ConsumerOffsetSchemaTest {
     void testEncodeOffsetKeyMatchesRowKeyEncoding() {
         CompactedRow row =
                 offsetSchema.encodeOffsetRow(
-                        GroupId.of("my-group"),
                         ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                        GroupId.of("my-group"),
                         42L,
                         7L,
                         3,
@@ -209,8 +238,8 @@ class ConsumerOffsetSchemaTest {
                 }) {
             CompactedRow row =
                     offsetSchema.encodeOffsetRow(
-                            GroupId.of(group),
                             ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                            GroupId.of(group),
                             -1L,
                             -1L,
                             -1,
@@ -237,8 +266,8 @@ class ConsumerOffsetSchemaTest {
         for (String group : new String[] {"a", "my-group", "group-with-unicode", "x"}) {
             CompactedRow row =
                     offsetSchema.encodeOffsetRow(
-                            GroupId.of(group),
                             ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                            GroupId.of(group),
                             -1L,
                             -1L,
                             -1,
@@ -284,9 +313,9 @@ class ConsumerOffsetSchemaTest {
                                     for (int j = 0; j < iterations; j++) {
                                         CompactedRow row =
                                                 offsetSchema.encodeOffsetRow(
-                                                        GroupId.of(groupId),
                                                         ConsumerOffsetSchema
                                                                 .OFFSET_COMMIT_RECORD_TYPE,
+                                                        GroupId.of(groupId),
                                                         42L,
                                                         7L,
                                                         3,

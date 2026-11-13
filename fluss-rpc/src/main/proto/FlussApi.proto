@@ -528,7 +528,7 @@ message ListConsumerGroupsResponse {
   repeated PbListedGroup groups = 1;
 }
 
-// Delete consumer groups request and response.
+// Delete consumer-group metadata. Committed offsets are not removed by this request.
 message DeleteConsumerGroupsRequest {
   // An empty list is a valid no-op and produces an empty successful response.
   repeated string groups = 1;

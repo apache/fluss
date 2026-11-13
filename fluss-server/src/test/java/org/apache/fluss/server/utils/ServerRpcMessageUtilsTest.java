@@ -36,11 +36,15 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListAclsResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
@@ -48,10 +52,14 @@ import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbDeletedGroup;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -81,6 +89,8 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
+import org.apache.fluss.server.tablet.consumer.group.result.DeleteConsumerOffsetsResult;
+import org.apache.fluss.server.tablet.consumer.group.result.ListConsumerGroupsResult;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
@@ -242,6 +252,86 @@ class ServerRpcMessageUtilsTest {
         assertThat(buckets.get(0).getMetadata()).isEqualTo("metadata");
         assertThat(buckets.get(1).hasOffset()).isFalse();
         assertThat(buckets.get(1).hasMetadata()).isFalse();
+    }
+
+    @Test
+    void testMakeListConsumerGroupsResponsePreservesOrder() {
+        ListConsumerGroupsResponse response =
+                ServerRpcMessageUtils.makeListConsumerGroupsResponse(
+                        ListConsumerGroupsResult.success(Arrays.asList("group-b", "group-a")));
+        assertThat(response.getGroupsList())
+                .extracting(PbListedGroup::getGroupId)
+                .containsExactly("group-b", "group-a");
+    }
+
+    @Test
+    void testDecodeDeleteConsumerOffsetsRequestRejectsDuplicateBucket() {
+        PbDeleteConsumerOffsetsRequestBucket bucket =
+                new PbDeleteConsumerOffsetsRequestBucket().setBucketId(2);
+        PbDeleteConsumerOffsetsRequestTable table =
+                new PbDeleteConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Arrays.asList(bucket, bucket));
+        DeleteConsumerOffsetsRequest request =
+                new DeleteConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .addAllTables(Collections.singletonList(table));
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("Duplicate table bucket");
+    }
+
+    @Test
+    void testMakeDeleteConsumerGroupsResponseReturnsAllResults() {
+        Map<String, Errors> results = new HashMap<>();
+        results.put("group-b", Errors.NONE);
+        results.put("group-a", Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+
+        DeleteConsumerGroupsResponse response =
+                ServerRpcMessageUtils.makeDeleteConsumerGroupsResponse(results);
+        List<PbDeletedGroup> groups = response.getGroupsList();
+        assertThat(groups)
+                .extracting(PbDeletedGroup::getGroupId)
+                .containsExactlyInAnyOrder("group-a", "group-b");
+        assertThat(groups)
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo("group-b");
+                            assertThat(group.hasErrorCode()).isFalse();
+                        });
+        assertThat(groups)
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo("group-a");
+                            assertThat(group.getErrorCode())
+                                    .isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+                        });
+    }
+
+    @Test
+    void testMakeDeleteConsumerOffsetsResponseReportsEveryRequestedBucket() {
+        TableBucket successful = new TableBucket(2L, 3);
+        TableBucket missing = new TableBucket(2L, 1);
+        TableBucket failed = new TableBucket(2L, 5);
+        Map<TableBucket, Errors> bucketErrors = new LinkedHashMap<>();
+        bucketErrors.put(successful, Errors.NONE);
+        bucketErrors.put(missing, Errors.NONE);
+        bucketErrors.put(failed, Errors.NOT_CONSUMER_GROUP_OWNER);
+
+        DeleteConsumerOffsetsResponse response =
+                ServerRpcMessageUtils.makeDeleteConsumerOffsetsResponse(
+                        DeleteConsumerOffsetsResult.success(bucketErrors));
+
+        assertThat(response.getTablesList().get(0).getBucketsList())
+                .extracting(bucket -> bucket.getBucketId())
+                .containsExactly(3, 1, 5);
+        assertThat(response.getTablesList().get(0).getBucketsList().get(0).hasErrorCode())
+                .isFalse();
+        assertThat(response.getTablesList().get(0).getBucketsList().get(1).hasErrorCode())
+                .isFalse();
+        assertThat(response.getTablesList().get(0).getBucketsList().get(2).getErrorCode())
+                .isEqualTo(Errors.NOT_CONSUMER_GROUP_OWNER.code());
     }
 
     @ParameterizedTest
