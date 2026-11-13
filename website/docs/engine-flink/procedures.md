@@ -697,6 +697,18 @@ Fluss provides procedures to inspect partition-level metadata of partitioned tab
 
 List the partition id, partition name and bucket count of every partition of a partitioned table.
 
+:::warning Deprecated
+Use the [`$partitions`](../table-design/virtual-tables.md#partitions-table) virtual table instead:
+
+```sql title="Flink SQL"
+SELECT partition_id, partition_name, bucket_count
+FROM my_db.orders$partitions;
+```
+
+This procedure remains available for backward compatibility and will be removed in a future
+release.
+:::
+
 For a partitioned table, `ALTER TABLE ... SET ('bucket.num' = N)` only changes the bucket count for newly created partitions; existing partitions keep their original bucket counts. The table-level `'bucket.num'` shown by `SHOW CREATE TABLE` is only the default for new partitions, so use this procedure to see the actual bucket count of each partition.
 
 **Syntax:**

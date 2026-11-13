@@ -98,10 +98,12 @@ class BucketsFlinkTableSourceTest {
                             return Arrays.asList(GenericRowData.of(1), GenericRowData.of(2));
                         },
                         TypeInformation.of(RowData.class));
-        List<BucketsSource.BucketsSplit> checkpoint;
+        List<SingleSplitMetadataSource.MetadataSplit> checkpoint;
 
-        try (SourceReader<RowData, BucketsSource.BucketsSplit> reader = source.createReader(null)) {
-            reader.addSplits(Collections.singletonList(new BucketsSource.BucketsSplit(0)));
+        try (SourceReader<RowData, SingleSplitMetadataSource.MetadataSplit> reader =
+                source.createReader(null)) {
+            reader.addSplits(
+                    Collections.singletonList(new SingleSplitMetadataSource.MetadataSplit(0)));
             reader.notifyNoMoreSplits();
             TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
 
@@ -110,7 +112,7 @@ class BucketsFlinkTableSourceTest {
             checkpoint = reader.snapshotState(1L);
         }
 
-        try (SourceReader<RowData, BucketsSource.BucketsSplit> restoredReader =
+        try (SourceReader<RowData, SingleSplitMetadataSource.MetadataSplit> restoredReader =
                 source.createReader(null)) {
             restoredReader.addSplits(checkpoint);
             restoredReader.notifyNoMoreSplits();
@@ -125,9 +127,11 @@ class BucketsFlinkTableSourceTest {
     }
 
     private int readSingleValue(BucketsSource source) throws Exception {
-        try (SourceReader<RowData, BucketsSource.BucketsSplit> reader = source.createReader(null)) {
+        try (SourceReader<RowData, SingleSplitMetadataSource.MetadataSplit> reader =
+                source.createReader(null)) {
             assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
-            reader.addSplits(Collections.singletonList(new BucketsSource.BucketsSplit(0)));
+            reader.addSplits(
+                    Collections.singletonList(new SingleSplitMetadataSource.MetadataSplit(0)));
             reader.notifyNoMoreSplits();
             TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
 
