@@ -32,6 +32,9 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
@@ -58,6 +61,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 /** The implement of {@link ServerMetadataCache} for {@link TabletServer}. */
 public class TabletServerMetadataCache implements ServerMetadataCache {
 
+    private static final Logger LOG = LoggerFactory.getLogger(TabletServerMetadataCache.class);
+
     private final Lock metadataLock = new ReentrantLock();
 
     /**
@@ -71,6 +76,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     private final MetadataManager metadataManager;
 
     private final ServerSchemaCache serverSchemaCache;
+
+    @GuardedBy("metadataLock")
+    private long reproApplySequence;
 
     @GuardedBy("metadataLock")
     private ServerTablePropertyCache tablePropertyCache;
@@ -300,6 +308,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     ServerMetadataSnapshot currentSnapshot = serverMetadataSnapshot;
                     Set<Long> deletedTableIds = new HashSet<>();
 
+                    // Diagnostic sequence: actual application order on this cache.
+                    long applySeq = ++reproApplySequence;
+
                     // 1. update coordinator server.
                     ServerInfo coordinatorServer = clusterMetadata.getCoordinatorServer();
 
@@ -321,13 +332,47 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                     ServerTablePropertyCache.Builder tableProperties =
                             tablePropertyCache.toBuilder();
+                    int eventIndex = 0;
                     for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
                         long tableId = tableInfo.getTableId();
 
+                        int currentEvent = eventIndex++;
+
+                        String operation =
+                                tableId == DELETED_TABLE_ID
+                                        ? "DELETE_BY_PATH"
+                                        : tablePath == DELETED_TABLE_PATH
+                                                ? "DELETE_BY_ID"
+                                                : "UPDATE";
+
+                        LOG.warn(
+                                "[REPRO][TS-BEFORE] seq={}, event={}, thread={}, "
+                                        + "operation={}, incomingId={}, incomingPath={}, "
+                                        + "currentIdForPath={}, previousPathForId={}, "
+                                        + "mappings={}",
+                                applySeq,
+                                currentEvent,
+                                Thread.currentThread().getName(),
+                                operation,
+                                tableId,
+                                tablePath,
+                                tableIdByPath.get(tablePath),
+                                currentSnapshot.getTablePath(tableId).orElse(null),
+                                new HashMap<>(tableIdByPath));
+
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
+
+                            LOG.warn(
+                                    "[REPRO][TS-DELETE-BY-PATH] seq={}, event={}, "
+                                            + "path={}, removedTableId={}",
+                                    applySeq,
+                                    currentEvent,
+                                    tablePath,
+                                    removedTableId);
+
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
                                 deletedTableIds.add(removedTableId);
@@ -348,6 +393,16 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             long newEpoch = tableInfo.getBucketCountEpoch();
                             long currentEpoch = bucketCountEpochByTableId.getOrDefault(tableId, 0L);
                             if (newEpoch < currentEpoch) {
+                                LOG.warn(
+                                        "[REPRO][TS-SKIP] seq={}, event={}, "
+                                                + "tableId={}, path={}, "
+                                                + "newEpoch={}, currentEpoch={}",
+                                        applySeq,
+                                        currentEvent,
+                                        tableId,
+                                        tablePath,
+                                        newEpoch,
+                                        currentEpoch);
                                 continue;
                             }
                             bucketCountEpochByTableId.put(tableId, newEpoch);
@@ -360,6 +415,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                             Long previousId = tableIdByPath.put(tablePath, tableId);
                             if (previousId != null && previousId != tableId) {
+                                LOG.warn(
+                                        "[REPRO][TS-REPLACE] seq={}, event={}, "
+                                                + "path={}, oldId={}, newId={}",
+                                        applySeq,
+                                        currentEvent,
+                                        tablePath,
+                                        previousId,
+                                        tableId);
+
                                 tableProperties.remove(previousId);
                                 bucketMetadataMapForTables.remove(previousId);
                                 bucketCountEpochByTableId.remove(previousId);
@@ -376,6 +440,18 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             bucketMetadataMapForTables.put(
                                     tableId, Collections.unmodifiableMap(tableBuckets));
                         }
+
+                        LOG.warn(
+                                "[REPRO][TS-AFTER] seq={}, event={}, "
+                                        + "operation={}, incomingId={}, incomingPath={}, "
+                                        + "currentIdForPath={}, mappings={}",
+                                applySeq,
+                                currentEvent,
+                                operation,
+                                tableId,
+                                tablePath,
+                                tableIdByPath.get(tablePath),
+                                new HashMap<>(tableIdByPath));
                     }
 
                     Map<Long, TablePath> newPathByTableId = new HashMap<>();
@@ -444,6 +520,21 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketCountEpochByTableId);
                     tablePropertyCache = tableProperties.build();
                     serverMetadataSnapshot = newSnapshot;
+
+                    if (!clusterMetadata.getTableMetadataList().isEmpty()) {
+                        LOG.warn(
+                                "[REPRO][TS-PUBLISH] seq={}, "
+                                        + "tableUpdates={}, deletedTableIds={}, "
+                                        + "beforeMappings={}, afterMappings={}, "
+                                        + "afterReverseMappings={}",
+                                applySeq,
+                                clusterMetadata.getTableMetadataList().size(),
+                                deletedTableIds,
+                                currentSnapshot.getTableIdByPath(),
+                                newSnapshot.getTableIdByPath(),
+                                newPathByTableId);
+                    }
+
                     return deletedTableIds;
                 });
     }

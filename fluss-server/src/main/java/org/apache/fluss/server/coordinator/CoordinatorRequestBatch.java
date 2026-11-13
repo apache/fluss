@@ -632,15 +632,36 @@ public class CoordinatorRequestBatch {
     public void sendUpdateMetadataRequest() {
         // Build updateMetadataRequest.
         UpdateMetadataRequest updateMetadataRequest = buildUpdateMetadataRequest();
+
+        List<String> tableUpdates =
+                updateMetadataRequest.getTableMetadatasList().stream()
+                        .map(
+                                metadata ->
+                                        metadata.getTableId()
+                                                + "@"
+                                                + metadata.getTablePath().getDatabaseName()
+                                                + "."
+                                                + metadata.getTablePath().getTableName())
+                        .collect(Collectors.toList());
+
         for (Integer serverId : updateMetadataRequestTabletServerSet) {
+            LOG.warn("[REPRO][COORD-SEND] targetTs={}, tableUpdates={}", serverId, tableUpdates);
+
             coordinatorChannelManager.sendUpdateMetadataRequest(
                     serverId,
                     updateMetadataRequest,
                     (response, throwable) -> {
                         if (throwable != null) {
-                            LOG.debug("Failed to send update metadata request.", throwable);
+                            LOG.warn(
+                                    "[REPRO][COORD-FAILED] targetTs={}, " + "tableUpdates={}",
+                                    serverId,
+                                    tableUpdates,
+                                    throwable);
                         } else {
-                            LOG.debug("Update metadata for server {} success.", serverId);
+                            LOG.warn(
+                                    "[REPRO][COORD-ACK] targetTs={}, " + "tableUpdates={}",
+                                    serverId,
+                                    tableUpdates);
                         }
                     });
         }
