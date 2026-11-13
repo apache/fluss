@@ -56,8 +56,9 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
         RecordBatch::try_from_iter(vec![("id", Arc::new(Int32Array::from(values)) as ArrayRef)])
             .unwrap()
     };
-    writer.append_arrow_batch(batch(vec![1, 2, 3])).unwrap();
+    let ack = writer.append_arrow_batch(batch(vec![1, 2, 3])).unwrap();
     writer.flush().await.unwrap();
+    ack.await.expect("append ack");
 
     let plain = table.capture_read_context().await.unwrap();
     assert_eq!(plain.lake_snapshot_id(), None);
@@ -67,8 +68,9 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
     assert_eq!(plain.log_ranges()[0].start_offset(), 0);
     assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
     plain.log_ranges()[0].validate_available().unwrap();
-    writer.append_arrow_batch(batch(vec![4, 5])).unwrap();
+    let ack = writer.append_arrow_batch(batch(vec![4, 5])).unwrap();
     writer.flush().await.unwrap();
+    ack.await.expect("append ack");
     assert_eq!(plain.log_ranges()[0].stop_offset(), 3);
     assert_eq!(
         table.capture_read_context().await.unwrap().log_ranges()[0].stop_offset(),
