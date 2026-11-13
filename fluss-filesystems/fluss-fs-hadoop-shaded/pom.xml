@@ -250,12 +250,77 @@
                                 </includes>
                             </artifactSet>
                             <relocations>
-                                <!-- we shade only the parts that are internal to Hadoop and not used / exposed downstream -->
+                                <!-- Shade the third-party packages Hadoop drags in, so they cannot
+                                     shadow a downstream application's own copies. org.apache.hadoop
+                                     itself is deliberately left alone: the FileSystem SPI resolves
+                                     implementations by class name from configuration. -->
+                                <!-- These patterns name individual packages rather than the
+                                     com.google / org.apache.commons prefixes on purpose. The shade
+                                     plugin rewrites every reference matching a pattern, including
+                                     references to classes this jar does not bundle, which would
+                                     leave dangling links. Hadoop here references but does not
+                                     bundle com.google.protobuf, com.google.gson, commons-cli,
+                                     commons-codec, commons-math3 and commons-net; relocating those
+                                     prefixes wholesale breaks the NameNode at runtime. Only
+                                     packages actually present below. -->
+                                <relocation>
+                                    <pattern>com.google.common</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.hadoop3.com.google.common
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.j2objc</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.hadoop3.com.google.j2objc
+                                    </shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.thirdparty</pattern>
+                                    <shadedPattern>
+                                        org.apache.fluss.fs.shaded.hadoop3.com.google.thirdparty
+                                    </shadedPattern>
+                                </relocation>
                                 <relocation>
                                     <pattern>com.google.re2j</pattern>
                                     <shadedPattern>
                                         org.apache.fluss.fs.shaded.hadoop3.com.google.re2j
                                     </shadedPattern>
+                                </relocation>
+                                <!-- commons packages that are bundled here. The shaded target
+                                     matches what the filesystem plugins already use, so a plugin
+                                     bundling this jar ends up with one copy rather than two. -->
+                                <relocation>
+                                    <pattern>org.apache.commons.beanutils</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.beanutils</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.collections</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.collections</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.compress</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.compress</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.configuration2</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.configuration2</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.io</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.io</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.lang3</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.lang3</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.logging</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.logging</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.commons.text</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.commons.text</shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>org.apache.htrace</pattern>
