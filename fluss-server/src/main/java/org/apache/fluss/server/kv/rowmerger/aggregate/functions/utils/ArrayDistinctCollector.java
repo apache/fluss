@@ -42,7 +42,12 @@ public final class ArrayDistinctCollector implements Serializable {
 
     /** Creates an independent accumulator for one aggregation call. */
     public Accumulator newAccumulator() {
-        return new Accumulator();
+        return new Accumulator(new LinkedHashSet<>());
+    }
+
+    /** Creates an accumulator with the given initial collection capacity. */
+    public Accumulator newAccumulator(int initialCapacity) {
+        return new Accumulator(new LinkedHashSet<>(initialCapacity));
     }
 
     /**
@@ -50,9 +55,11 @@ public final class ArrayDistinctCollector implements Serializable {
      */
     @Internal
     public final class Accumulator {
-        private final Set<Object> elements = new LinkedHashSet<>();
+        private final Set<Object> elements;
 
-        private Accumulator() {}
+        private Accumulator(Set<Object> elements) {
+            this.elements = elements;
+        }
 
         /** Adds an element, retaining its first occurrence in this accumulator. */
         public void add(InternalArray source, int position) {

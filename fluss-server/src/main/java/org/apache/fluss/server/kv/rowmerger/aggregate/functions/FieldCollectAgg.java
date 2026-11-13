@@ -93,7 +93,8 @@ public class FieldCollectAgg extends FieldAggregator {
             return new GenericArray(result);
         }
 
-        ArrayDistinctCollector.Accumulator elements = distinctCollector.newAccumulator();
+        ArrayDistinctCollector.Accumulator elements =
+                distinctCollector.newAccumulator(expectedSize);
         collectDistinct(elements, accumulatorArray);
         int accumulatorDistinctSize = elements.size();
         collectDistinct(elements, inputArray);
