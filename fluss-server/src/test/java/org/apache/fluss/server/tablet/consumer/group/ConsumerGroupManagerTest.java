@@ -18,6 +18,7 @@
 package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -99,7 +100,8 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         offsetsTableBucket =
                 new TableBucket(
                         OFFSETS_TABLE_ID,
-                        new ConsumerOffsetSchema().bucketFor(GROUP_ID, TEST_ROUTING_BUCKET_COUNT));
+                        new ConsumerOffsetSchema()
+                                .bucketFor(GroupId.of(GROUP_ID), TEST_ROUTING_BUCKET_COUNT));
         // Keep ZooKeeper independent of the cache to detect synchronous owner lookups.
         zkClient.registerLeaderAndIsr(
                 offsetsTableBucket,
@@ -127,11 +129,21 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         assertThat(groupManager.getValueDecoder(second)).isSameAs(secondDecoder);
     }
 
-    @Test
-    void testInvalidGroupId() {
-        assertThatThrownBy(() -> groupManager.validateGroupId(null))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> groupManager.validateGroupId(""))
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(
+            strings = {
+                "",
+                "__internal",
+                "default.consumer",
+                "default/consumer",
+                "default:consumer",
+                "消费组",
+                "default-*",
+                "a*b"
+            })
+    void testInvalidGroupId(String groupId) {
+        assertThatThrownBy(() -> GroupId.of(groupId))
                 .isInstanceOf(InvalidConsumerGroupIdException.class);
     }
 
@@ -228,14 +240,14 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
 
     private void assertCommitResult(Errors expectedError) throws Exception {
         if (expectedError != Errors.NONE) {
-            assertThatThrownBy(() -> groupManager.validateGroupId(GROUP_ID))
+            assertThatThrownBy(() -> groupManager.validateGroupId(GroupId.of(GROUP_ID)))
                     .isInstanceOf(expectedError.exception().getClass());
             return;
         }
         CompletableFuture<Map<TableBucket, Errors>> result =
                 groupManager.handleCommitConsumerOffsets(
-                        GROUP_ID,
-                        groupManager.validateGroupId(GROUP_ID),
+                        GroupId.of(GROUP_ID),
+                        groupManager.validateGroupId(GroupId.of(GROUP_ID)),
                         Collections.singletonMap(
                                 SOURCE_BUCKET, new ConsumerOffsetAndMetadata(10L, "")));
         assertThat(result)

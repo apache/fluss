@@ -519,7 +519,7 @@ As the `admin` user, create two databases and assign appropriate ACLs:
 ```sql title="Flink SQL"
 CREATE DATABASE `admin_catalog`.`marketing_db`;
 CALL admin_catalog.sys.add_acl(
-    resource => 'cluster.marketing_db', 
+    resource => 'database:marketing_db',
     permission => 'ALLOW',
     principal => 'User:marketing', 
     operation => 'ALL'
@@ -528,7 +528,7 @@ CALL admin_catalog.sys.add_acl(
 
 CREATE DATABASE `admin_catalog`.`finance_db`;
 CALL admin_catalog.sys.add_acl(
-    resource => 'cluster.finance_db', 
+    resource => 'database:finance_db',
     permission => 'ALLOW',
     principal => 'User:finance', 
     operation => 'ALL'
@@ -546,8 +546,8 @@ Output will show like:
 +--------------------------------------------------------------------------------------------------------+
 |                                                                                                 result |
 +--------------------------------------------------------------------------------------------------------+
-| resource="cluster.marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
-|     resource="cluster.finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
+| resource="database:marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
+|     resource="database:finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
 +--------------------------------------------------------------------------------------------------------+
 2 rows in set
 ```

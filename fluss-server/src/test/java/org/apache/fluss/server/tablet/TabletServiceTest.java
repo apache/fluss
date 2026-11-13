@@ -24,6 +24,7 @@ import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
@@ -399,7 +400,7 @@ class TabletServiceTest extends ReplicaTestBase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                groupId,
+                                GroupId.of(groupId),
                                 SOURCE_BUCKET.getTableId(),
                                 SOURCE_BUCKET.getPartitionId(),
                                 SOURCE_BUCKET.getBucket());

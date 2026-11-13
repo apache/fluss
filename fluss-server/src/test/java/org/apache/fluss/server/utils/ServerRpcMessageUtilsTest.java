@@ -36,10 +36,13 @@ import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
@@ -60,8 +63,17 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -578,6 +590,76 @@ class ServerRpcMessageUtilsTest {
                         .get(0);
         assertThat(decoded).isEqualTo(legacy);
         assertThat(decoded.getBucketEpoch()).isNull();
+    }
+
+    @Test
+    void testListAclsResponseFiltersGroupAclsForVersionZero() {
+        AclBinding databaseAcl = aclBinding(Resource.database("db1"));
+        AclBinding groupAcl = aclBinding(Resource.group("group1"));
+
+        ListAclsResponse versionZero =
+                ServerRpcMessageUtils.makeListAclsResponse(
+                        Arrays.asList(databaseAcl, groupAcl), false);
+        assertThat(versionZero.getAclsList())
+                .extracting(PbAclInfo::getResourceType)
+                .containsExactly((int) ResourceType.DATABASE.getCode());
+
+        ListAclsResponse versionOne =
+                ServerRpcMessageUtils.makeListAclsResponse(
+                        Arrays.asList(databaseAcl, groupAcl), true);
+        assertThat(versionOne.getAclsList())
+                .extracting(PbAclInfo::getResourceType)
+                .containsExactlyInAnyOrder(
+                        (int) ResourceType.DATABASE.getCode(), (int) ResourceType.GROUP.getCode());
+    }
+
+    @Test
+    void testDropAclsResponseFiltersGroupAclsForVersionZero() {
+        assertThat(ApiKeys.DROP_ACLS.highestSupportedVersion).isEqualTo((short) 1);
+        AclDeleteResult result =
+                new AclDeleteResult(
+                        Arrays.asList(
+                                new AclDeleteResult.AclBindingDeleteResult(
+                                        aclBinding(Resource.database("db1")), null),
+                                new AclDeleteResult.AclBindingDeleteResult(
+                                        aclBinding(Resource.group("group1")), null)));
+
+        DropAclsResponse versionZero =
+                ServerRpcMessageUtils.makeDropAclsResponse(
+                        Collections.singletonList(result), false);
+        assertThat(versionZero.getFilterResultsList())
+                .singleElement()
+                .satisfies(
+                        filterResult ->
+                                assertThat(filterResult.getMatchingAclsList())
+                                        .extracting(
+                                                matchingAcl ->
+                                                        matchingAcl.getAcl().getResourceType())
+                                        .containsExactly((int) ResourceType.DATABASE.getCode()));
+
+        DropAclsResponse versionOne =
+                ServerRpcMessageUtils.makeDropAclsResponse(Collections.singletonList(result), true);
+        assertThat(versionOne.getFilterResultsList())
+                .singleElement()
+                .satisfies(
+                        filterResult ->
+                                assertThat(filterResult.getMatchingAclsList())
+                                        .extracting(
+                                                matchingAcl ->
+                                                        matchingAcl.getAcl().getResourceType())
+                                        .containsExactlyInAnyOrder(
+                                                (int) ResourceType.DATABASE.getCode(),
+                                                (int) ResourceType.GROUP.getCode()));
+    }
+
+    private static AclBinding aclBinding(Resource resource) {
+        return new AclBinding(
+                resource,
+                new AccessControlEntry(
+                        new FlussPrincipal("consumer", "User"),
+                        "*",
+                        OperationType.DESCRIBE,
+                        PermissionType.ALLOW));
     }
 
     private static void assertAuthoritativeWireMetadata(List<PbBucketMetadata> bucketMetadata) {
