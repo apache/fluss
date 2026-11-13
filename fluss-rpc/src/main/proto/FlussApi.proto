@@ -1782,11 +1782,14 @@ message PbUnionReadLogRange {
   repeated string partition_values = 2;
   optional int32 bucket_id = 3;
   optional int32 bucket_count = 4;
-  // 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+  // 0: no baseline; 1: lake snapshot; 2: persisted KV snapshot.
+  // For either snapshot kind, start_offset is its matching log seam.
   optional int32 baseline = 5;
   // Concrete half-open range; no EARLIEST/LATEST sentinels.
   optional int64 start_offset = 6;
   optional int64 stop_offset = 7;
   // Observed retention lower bound, not a lease.
   optional int64 earliest_offset = 8;
+  // Required for baseline kind 2; absent for other kinds. Scoped to this bucket.
+  optional int64 kv_snapshot_id = 9;
 }

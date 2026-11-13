@@ -28,8 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Baseline represented by a bucket's frozen log start.
 ///
-/// KV snapshots are not supported yet. Unknown baseline kinds are rejected
-/// by consumers rather than interpreted as an empty baseline.
+/// Unknown baseline kinds are rejected rather than interpreted as an empty baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FlussLakeBaseline {
@@ -39,6 +38,8 @@ pub enum FlussLakeBaseline {
     /// The context's pinned lake snapshot, with `start_offset` as its seam.
     /// A seam of zero is valid and does not mean the baseline is absent.
     Lake,
+    /// A persisted snapshot of this bucket, with `start_offset` as its log seam.
+    KvSnapshot { snapshot_id: i64 },
 }
 
 /// One frozen, half-open Fluss log range, not an engine scheduling unit.
@@ -58,6 +59,39 @@ pub struct FlussLakeLogRange {
 }
 
 impl FlussLakeLogRange {
+    /// Creates a range backed by a specified persisted KV snapshot.
+    ///
+    /// Capture `stop_offset` after selecting the snapshot and its matching `log_offset`.
+    /// This reference does not hold a lease. Execution must open exactly this snapshot
+    /// or fail if it has expired; it must not substitute a newer snapshot.
+    pub fn from_kv_snapshot(
+        table_bucket: TableBucket,
+        partition: FlussLakeLogPartition,
+        bucket_count: i32,
+        snapshot: &fluss::metadata::KvSnapshot,
+        stop_offset: i64,
+        earliest_offset: i64,
+    ) -> Result<Self> {
+        if snapshot.bucket_id != table_bucket.bucket_id() {
+            return Err(invalid_context("KV snapshot belongs to a different bucket"));
+        }
+        Ok(Self {
+            table_bucket,
+            partition,
+            bucket_count,
+            baseline: FlussLakeBaseline::KvSnapshot {
+                snapshot_id: snapshot
+                    .snapshot_id
+                    .ok_or_else(|| invalid_context("missing KV snapshot ID"))?,
+            },
+            start_offset: snapshot
+                .log_offset
+                .ok_or_else(|| invalid_context("missing KV snapshot log seam"))?,
+            stop_offset,
+            earliest_offset,
+        })
+    }
+
     /// Creates an externally captured log range without querying Fluss.
     ///
     /// `snapshot_offset` is the readable lake snapshot's seam for this bucket,
@@ -137,7 +171,7 @@ impl FlussLakeLogRange {
         self.baseline
     }
 
-    /// Inclusive seam offset, or the captured earliest offset without a baseline.
+    /// Inclusive lake/KV seam offset, or the captured earliest offset without a baseline.
     pub fn start_offset(&self) -> i64 {
         self.start_offset
     }
@@ -177,7 +211,7 @@ impl FlussLakeLogRange {
 
 /// Immutable source state for one table, independent of physical execution.
 ///
-/// A context fixes the readable lake snapshot and live Fluss bucket boundaries
+/// A context fixes lake and KV baseline references and live Fluss bucket boundaries
 /// within its partition scope. It is not a global transactional
 /// snapshot, a retention lease, or a file/split plan. It carries neither
 /// credentials nor projection or row-filter configuration. Scans can share
@@ -598,6 +632,9 @@ impl FlussLakeReadContext {
                         .and_then(|lake| lake.snapshot_id)
                         .is_none(),
                     FlussLakeBaseline::None => range.start_offset != range.earliest_offset,
+                    FlussLakeBaseline::KvSnapshot { snapshot_id } => {
+                        snapshot_id < 0 || schema.primary_key().is_none()
+                    }
                 }
             {
                 return Err(invalid_context("invalid bucket identity or log boundary"));
@@ -607,7 +644,7 @@ impl FlussLakeReadContext {
                 && range.earliest_offset > 0
             {
                 return Err(FlussLakeError::DataUnavailable(format!(
-                    "PK bucket {bucket} has no baseline and its log begins at {}; KV snapshot fallback is required",
+                    "PK bucket {bucket} has no lake or KV baseline and its log begins at {}; complete log history is required",
                     range.earliest_offset
                 )));
             }
@@ -763,7 +800,7 @@ mod tests {
             assert_eq!(imported.table_schema(), schema.schema());
             assert_eq!(imported.schema_id(), schema.schema_id());
             let mut unknown = wire.clone();
-            unknown.log_ranges[0].baseline = Some(2);
+            unknown.log_ranges[0].baseline = Some(99);
             assert!(FlussLakeReadContext::from_protobuf(&unknown, &live, &schema).is_err());
             let mut version = wire.clone();
             version.version = Some(2);

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Freezes the lake snapshot and server-issued log ranges within a partition scope.
+//! Freezes baseline references and server-issued log ranges within a partition scope.
 //!
 //! This module does not open a lake catalog, generate splits or schedule reads.
 
@@ -25,7 +25,10 @@ use crate::{
     FlussLakeError, FlussLakeLogRange, FlussLakePartitionIdentity, FlussLakeReadContext, Result,
 };
 use fluss::client::FlussAdmin;
-use fluss::metadata::{LakeSnapshotInfo, PartitionInfo, TableBucket, TableInfo, TablePath};
+use fluss::metadata::{
+    KvSnapshot, LakeSnapshotInfo, LatestKvSnapshots, PartitionInfo, TableBucket, TableInfo,
+    TablePath,
+};
 use fluss::predicate::Predicate;
 use fluss::rpc::message::OffsetSpec;
 use futures::StreamExt;
@@ -94,6 +97,27 @@ pub(crate) async fn freeze_read_context(
             async move {
                 let result = async {
                     let bucket_ids: Vec<i32> = (0..count).collect();
+                    let needs_kv = table_info.has_primary_key()
+                        && bucket_ids.iter().any(|bucket_id| {
+                            !snapshot_offsets.contains_key(&TableBucket::new_with_partition(
+                                table_info.table_id,
+                                id,
+                                *bucket_id,
+                            ))
+                        });
+                    // Select the snapshot and its seam before querying stop offsets. Looking
+                    // up a newer snapshot afterward could put the baseline beyond the stop.
+                    let kv_snapshots = if needs_kv {
+                        let snapshots = admin
+                            .get_latest_kv_snapshots(table_path, name.as_deref())
+                            .await
+                            .map_err(|error| {
+                                planning_client_error("get latest KV snapshots", error)
+                            })?;
+                        collect_kv_snapshots(snapshots, table_info.table_id, id, count)?
+                    } else {
+                        HashMap::new()
+                    };
                     let (earliest_offsets, latest_offsets) =
                         load_server_offsets(admin, table_path, name.as_deref(), &bucket_ids)
                             .await?;
@@ -104,6 +128,18 @@ pub(crate) async fn freeze_read_context(
                             let earliest = required_offset(&earliest_offsets, &bucket, "earliest")?;
                             let stop = required_offset(&latest_offsets, &bucket, "latest")?;
                             let seam = snapshot_offsets.get(&bucket).copied();
+                            if seam.is_none()
+                                && let Some(snapshot) = kv_snapshots.get(&bucket_id)
+                            {
+                                return FlussLakeLogRange::from_kv_snapshot(
+                                    bucket,
+                                    crate::FlussLakeLogPartition::Ordinary(identity.clone()),
+                                    count,
+                                    snapshot,
+                                    stop,
+                                    earliest,
+                                );
+                            }
                             freeze_bucket_range(
                                 bucket,
                                 identity.clone(),
@@ -318,6 +354,41 @@ fn collect_snapshot_offsets(
     Ok(offsets)
 }
 
+fn collect_kv_snapshots(
+    snapshots: LatestKvSnapshots,
+    table_id: i64,
+    partition_id: Option<i64>,
+    bucket_count: i32,
+) -> Result<HashMap<i32, KvSnapshot>> {
+    if snapshots.table_id != table_id || snapshots.partition_id != partition_id {
+        return Err(FlussLakeError::DataUnavailable(
+            "table or partition was replaced while selecting KV snapshots".into(),
+        ));
+    }
+    let mut selected = HashMap::new();
+    for snapshot in snapshots.latest_snapshots {
+        match (snapshot.snapshot_id, snapshot.log_offset) {
+            (None, None) => continue,
+            (Some(id), Some(offset)) if id >= 0 && offset >= 0 => {}
+            _ => {
+                return Err(FlussLakeError::PlanningFailed(
+                    "KV snapshot has no valid ID and matching log seam".into(),
+                ));
+            }
+        }
+        let bucket_id = snapshot.bucket_id;
+        if bucket_id < 0
+            || bucket_id >= bucket_count
+            || selected.insert(bucket_id, snapshot).is_some()
+        {
+            return Err(FlussLakeError::PlanningFailed(
+                "KV snapshots contain an invalid or duplicate bucket".into(),
+            ));
+        }
+    }
+    Ok(selected)
+}
+
 async fn load_server_offsets(
     admin: &FlussAdmin,
     table_path: &TablePath,
@@ -426,6 +497,33 @@ fn freeze_bucket_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kv_selection_requires_matching_identity_and_seam() {
+        let snapshots = LatestKvSnapshots {
+            table_id: 5,
+            partition_id: Some(9),
+            latest_snapshots: vec![
+                KvSnapshot {
+                    bucket_id: 0,
+                    snapshot_id: Some(3),
+                    log_offset: Some(12),
+                },
+                KvSnapshot {
+                    bucket_id: 1,
+                    snapshot_id: None,
+                    log_offset: None,
+                },
+            ],
+        };
+        let selected = collect_kv_snapshots(snapshots.clone(), 5, Some(9), 2).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[&0].log_offset, Some(12));
+        assert!(collect_kv_snapshots(snapshots.clone(), 5, Some(10), 2).is_err());
+        let mut incomplete = snapshots;
+        incomplete.latest_snapshots[0].log_offset = None;
+        assert!(collect_kv_snapshots(incomplete, 5, Some(9), 2).is_err());
+    }
 
     #[test]
     fn partition_recheck_discards_only_confirmed_deleted_ids() {

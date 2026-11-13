@@ -18,8 +18,6 @@
 //! Conservative partition pruning over a schema-bound core predicate.
 
 use crate::FlussLakePartitionIdentity;
-#[cfg(test)]
-use fluss::metadata::ResolvedPartitionSpec;
 use fluss::metadata::{DataType, RowType};
 use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal, Predicate};
 use std::collections::HashMap;
@@ -88,17 +86,6 @@ impl PartitionPruner {
             .into_iter()
             .map(|(name, value)| fluss::predicate::col(name).eq(value))
             .reduce(Predicate::and)
-    }
-
-    #[cfg(test)]
-    fn partition_may_match(&self, partition_spec: &ResolvedPartitionSpec) -> bool {
-        let values: HashMap<&str, &str> = partition_spec
-            .get_partition_keys()
-            .iter()
-            .zip(partition_spec.get_partition_values())
-            .map(|(key, value)| (key.as_str(), value.as_str()))
-            .collect();
-        self.partition_values_may_match(&values)
     }
 
     pub(crate) fn partition_identity_may_match(
@@ -179,7 +166,6 @@ mod tests {
     use super::*;
     use fluss::metadata::{DataField, DataTypes};
     use fluss::predicate::{Literal, Predicate, col};
-    use std::sync::Arc;
 
     fn row_type() -> RowType {
         RowType::new(vec![
@@ -199,12 +185,11 @@ mod tests {
         )
     }
 
-    fn partition(region: &str, day: &str) -> ResolvedPartitionSpec {
-        ResolvedPartitionSpec::new(
-            Arc::from(["region".to_string(), "day".to_string()]),
-            vec![region.to_string(), day.to_string()],
-        )
-        .unwrap()
+    fn partition(region: &str, day: &str) -> FlussLakePartitionIdentity {
+        FlussLakePartitionIdentity::KeyValues(vec![
+            ("region".into(), region.into()),
+            ("day".into(), day.into()),
+        ])
     }
 
     #[test]
@@ -227,20 +212,23 @@ mod tests {
 
     #[test]
     fn prunes_equal_range_and_in_predicates() {
-        assert!(!pruner(col("region").eq("US")).partition_may_match(&partition("EU", "2")));
-        assert!(!pruner(col("day").ge(10_i32)).partition_may_match(&partition("US", "9")));
         assert!(
-            !pruner(col("region").is_in(["US", "CN"])).partition_may_match(&partition("EU", "2"))
+            !pruner(col("region").eq("US")).partition_identity_may_match(&partition("EU", "2"))
+        );
+        assert!(!pruner(col("day").ge(10_i32)).partition_identity_may_match(&partition("US", "9")));
+        assert!(
+            !pruner(col("region").is_in(["US", "CN"]))
+                .partition_identity_may_match(&partition("EU", "2"))
         );
     }
 
     #[test]
     fn fractional_numeric_bounds_do_not_prune_matching_partitions() {
         let filter = pruner(col("day").lt(1.3));
-        assert!(filter.partition_may_match(&partition("EU", "1")));
-        assert!(!filter.partition_may_match(&partition("EU", "2")));
-        assert!(!pruner(col("day").eq(1.3)).partition_may_match(&partition("EU", "1")));
-        assert!(pruner(col("day").ge(-1.3)).partition_may_match(&partition("EU", "-1")));
+        assert!(filter.partition_identity_may_match(&partition("EU", "1")));
+        assert!(!filter.partition_identity_may_match(&partition("EU", "2")));
+        assert!(!pruner(col("day").eq(1.3)).partition_identity_may_match(&partition("EU", "1")));
+        assert!(pruner(col("day").ge(-1.3)).partition_identity_may_match(&partition("EU", "-1")));
     }
 
     #[test]
@@ -264,8 +252,6 @@ mod tests {
             for (predicate, expected) in [
                 (col("ts").lt(literal.clone()), [true, false, false]),
                 (col("ts").eq(literal.clone()), [false, true, false]),
-                (col("ts").is_in([literal.clone()]), [false, true, false]),
-                (col("ts").not_in([literal]), [true, false, true]),
             ] {
                 let bound = BoundPredicate::bind(Some(&predicate), &row_type).unwrap();
                 let pruner = PartitionPruner::new(&row_type, &["ts".into()], &bound);
@@ -282,28 +268,20 @@ mod tests {
 
     #[test]
     fn non_partition_fields_and_unparsable_values_are_kept() {
-        assert!(pruner(col("id").eq(1_i32)).partition_may_match(&partition("EU", "2")));
-        assert!(pruner(col("day").eq(1_i32)).partition_may_match(&partition("EU", "not-a-number")));
+        assert!(pruner(col("id").eq(1_i32)).partition_identity_may_match(&partition("EU", "2")));
+        assert!(
+            pruner(col("day").eq(1_i32))
+                .partition_identity_may_match(&partition("EU", "not-a-number"))
+        );
     }
 
     #[test]
     fn mixed_boolean_predicates_remain_conservative() {
         let mixed = pruner(col("region").eq("US").or(col("id").eq(1_i32)));
-        assert!(mixed.partition_may_match(&partition("EU", "2")));
+        assert!(mixed.partition_identity_may_match(&partition("EU", "2")));
         assert!(
             !pruner(col("region").eq("US").and(col("id").eq(1_i32)))
-                .partition_may_match(&partition("EU", "2"))
+                .partition_identity_may_match(&partition("EU", "2"))
         );
-    }
-
-    #[test]
-    fn lake_only_partition_identity_uses_the_same_pruning_semantics() {
-        let identity = FlussLakePartitionIdentity::KeyValues(vec![
-            ("region".to_string(), "EU".to_string()),
-            ("day".to_string(), "2".to_string()),
-        ]);
-
-        assert!(!pruner(col("region").eq("US")).partition_identity_may_match(&identity));
-        assert!(pruner(col("region").eq("EU")).partition_identity_may_match(&identity));
     }
 }

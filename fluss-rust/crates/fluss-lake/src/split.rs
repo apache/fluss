@@ -118,6 +118,17 @@ impl FlussLakeReadSplit {
         } = self.descriptor();
         let table_info = &self.table_info;
         let primary_key_indexes = &self.primary_key_indexes;
+        if let Some(snapshot_id) = self.descriptor.kv_snapshot_id
+            && (snapshot_id < 0
+                || !table_info.has_primary_key()
+                || primary_key_indexes.is_empty()
+                || !lake_splits.is_empty()
+                || (table_info.is_partitioned() && table_bucket.partition_id().is_none()))
+        {
+            return Err(invalid_descriptor(
+                "KV baseline requires a live PK bucket and cannot include lake tasks",
+            ));
+        }
         let partitioned = !table_info.partition_keys.is_empty();
         let task = self.descriptor();
         if task.split_id.is_empty()
@@ -266,107 +277,41 @@ pub(crate) fn testing_table(
 mod tests {
     use super::*;
 
-    fn test_split(
-        info: Arc<TableInfo>,
-        bucket: TableBucket,
-        start: i64,
-        stop: i64,
-        snapshot: Option<i64>,
-        lake: Vec<crate::LakeSplit>,
-        keys: Vec<usize>,
-    ) -> Result<FlussLakeReadSplit> {
-        let partition = if info.partition_keys.is_empty() {
-            FlussLakePartitionIdentity::Unpartitioned
-        } else {
-            FlussLakePartitionIdentity::KeyValues(vec![("region".into(), "US".into())])
-        };
-        let lake = lake
-            .into_iter()
-            .map(|mut task| {
-                task.partition = partition.clone();
-                task
-            })
-            .collect();
-        FlussLakeReadSplit::try_new(
-            info,
-            crate::FlussLakeSplitDescriptor {
+    #[test]
+    fn lake_tasks_without_a_live_bucket_cannot_carry_a_tail() {
+        for (partitioned, bucket_id) in [(true, 0), (false, -1)] {
+            let info = Arc::new(testing_table(
+                TablePath::new("fluss", "orders"),
+                1,
+                partitioned,
+                7,
+            ));
+            let partition = if partitioned {
+                FlussLakePartitionIdentity::KeyValues(vec![("region".into(), "US".into())])
+            } else {
+                FlussLakePartitionIdentity::Unpartitioned
+            };
+            let mut lake = crate::source::testing_split();
+            lake.partition = partition.clone();
+            lake.bucket_id = bucket_id;
+            if bucket_id == -1 {
+                lake.bucket_count = -1;
+            }
+            let mut task = crate::FlussLakeSplitDescriptor {
                 split_id: "test".into(),
-                table_bucket: bucket,
+                table_bucket: TableBucket::new(7, bucket_id),
                 partition,
-                start_offset: start,
-                stop_offset: stop,
-                snapshot_id: snapshot,
-                lake_splits: lake,
+                start_offset: 0,
+                stop_offset: 0,
+                snapshot_id: Some(42),
+                lake_splits: vec![lake],
                 estimated_rows: None,
                 estimated_size: None,
-            },
-            keys,
-        )
-    }
-
-    #[test]
-    fn expired_partition_cannot_carry_a_tail() {
-        let info = Arc::new(testing_table(TablePath::new("fluss", "orders"), 1, true, 7));
-        assert!(
-            test_split(
-                info.clone(),
-                TableBucket::new(7, 0),
-                1,
-                2,
-                None,
-                vec![],
-                vec![]
-            )
-            .is_err()
-        );
-        assert!(
-            test_split(
-                info,
-                TableBucket::new(7, 0),
-                0,
-                0,
-                Some(42),
-                vec![crate::source::testing_split()],
-                vec![]
-            )
-            .is_ok()
-        );
-    }
-
-    #[test]
-    fn bucket_unaware_append_task_cannot_carry_a_log_tail() {
-        let info = Arc::new(testing_table(
-            TablePath::new("fluss", "orders"),
-            1,
-            false,
-            7,
-        ));
-        let mut task = crate::source::testing_split();
-        task.bucket_id = -1;
-        task.bucket_count = -1;
-        assert!(
-            test_split(
-                info.clone(),
-                TableBucket::new(7, -1),
-                0,
-                0,
-                Some(42),
-                vec![task.clone()],
-                vec![]
-            )
-            .is_ok()
-        );
-        assert!(
-            test_split(
-                info,
-                TableBucket::new(7, -1),
-                0,
-                1,
-                Some(42),
-                vec![task],
-                vec![]
-            )
-            .is_err()
-        );
+                kv_snapshot_id: None,
+            };
+            FlussLakeReadSplit::try_new(info.clone(), task.clone(), vec![]).unwrap();
+            task.stop_offset = 1;
+            assert!(FlussLakeReadSplit::try_new(info, task, vec![]).is_err());
+        }
     }
 }

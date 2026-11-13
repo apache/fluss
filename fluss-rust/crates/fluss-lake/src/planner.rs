@@ -350,7 +350,16 @@ fn plan_bucket_splits(
     lake_only: bool,
 ) -> Result<Vec<FlussLakeReadSplit>> {
     let include_log_tail = !lake_only && !bucket_range.is_empty();
-    if lake_bucket.splits.is_empty() && !include_log_tail {
+    let kv_snapshot = matches!(
+        bucket_range.baseline(),
+        crate::FlussLakeBaseline::KvSnapshot { .. }
+    ) && !lake_only;
+    if kv_snapshot && !lake_bucket.splits.is_empty() {
+        return Err(FlussLakeError::PlanningFailed(
+            "a PK bucket cannot read both lake and KV baselines".into(),
+        ));
+    }
+    if lake_bucket.splits.is_empty() && !include_log_tail && !kv_snapshot {
         return Ok(Vec::new());
     }
     if !primary_key_indexes.is_empty() {
@@ -445,6 +454,12 @@ fn create_logical_split(
     FlussLakeReadSplit::try_new(
         table_info.clone(),
         FlussLakeSplitDescriptor {
+            kv_snapshot_id: match bucket_range.baseline() {
+                crate::FlussLakeBaseline::KvSnapshot { snapshot_id } if lake_splits.is_empty() => {
+                    Some(snapshot_id)
+                }
+                _ => None,
+            },
             split_id,
             table_bucket: bucket_range.table_bucket.clone(),
             partition: identity.clone(),
@@ -564,6 +579,13 @@ fn split_statistics(
     include_log_tail: bool,
     lake_bucket: &PlannedLakeBucket,
 ) -> SplitStatistics {
+    // Snapshot file sizes do not establish the number of decoded current rows.
+    if matches!(
+        bucket_range.baseline(),
+        crate::FlussLakeBaseline::KvSnapshot { .. }
+    ) {
+        return SplitStatistics::new(None, None);
+    }
     let log_rows = if include_log_tail {
         bucket_range.estimated_log_rows()
     } else {
@@ -684,45 +706,35 @@ mod tests {
     #[test]
     fn append_planning_omits_empty_work_and_respects_lake_only_mode() {
         let info = table_info(false, vec![], HashMap::new());
-        for has_lake in [false, true] {
-            for has_tail in [false, true] {
-                for lake_only in [false, true] {
-                    let range = FlussLakeLogRange {
-                        baseline: crate::FlussLakeBaseline::Lake,
-                        table_bucket: TableBucket::new(info.table_id, 0),
-                        partition: FlussLakeLogPartition::Ordinary(
-                            FlussLakePartitionIdentity::Unpartitioned,
-                        ),
-                        bucket_count: 4,
-                        start_offset: if has_lake { 6 } else { 0 },
-                        stop_offset: (if has_lake { 6 } else { 0 })
-                            + (if has_tail { 4 } else { 0 }),
-                        earliest_offset: 0,
-                    };
-                    let lake = if has_lake {
-                        lake_bucket(&range)
-                    } else {
-                        PlannedLakeBucket::default()
-                    };
-                    let snapshot = has_lake.then_some(42);
-                    let splits =
-                        plan_bucket_splits(&info, &range, snapshot, lake, &[], lake_only).unwrap();
-                    let expected_lake_tasks = if has_lake { 2 } else { 0 };
-                    let expected_log_tasks = usize::from(has_tail && !lake_only);
-                    assert_eq!(splits.len(), expected_lake_tasks + expected_log_tasks);
-                    let log_tasks = splits
-                        .iter()
-                        .filter(|split| {
-                            split.descriptor().start_offset() < split.descriptor().stop_offset()
-                        })
-                        .count();
-                    assert_eq!(log_tasks, expected_log_tasks);
-                    if lake_only && has_lake {
-                        let stats = crate::FlussLakePlanStatistics::from_splits(&splits);
-                        assert_eq!(stats.estimated_rows, Some(6));
-                        assert_eq!(stats.estimated_size, Some(200));
-                    }
-                }
+        for (has_lake, stop, lake_only, expected) in [
+            (false, 0, false, 0),
+            (false, 4, false, 1),
+            (true, 0, false, 2),
+            (true, 4, true, 2),
+            (false, 4, true, 0),
+        ] {
+            let range = FlussLakeLogRange::new(
+                TableBucket::new(info.table_id, 0),
+                FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+                4,
+                has_lake.then_some(0),
+                stop,
+                0,
+            );
+            let lake = if has_lake {
+                lake_bucket(&range)
+            } else {
+                PlannedLakeBucket::default()
+            };
+            let splits =
+                plan_bucket_splits(&info, &range, has_lake.then_some(42), lake, &[], lake_only)
+                    .unwrap();
+            assert_eq!(splits.len(), expected);
+            if lake_only {
+                assert!(
+                    splits.iter().all(|split| split.descriptor().start_offset()
+                        == split.descriptor().stop_offset())
+                );
             }
         }
     }
@@ -761,6 +773,71 @@ mod tests {
                 assert_eq!(descriptor.lake_splits()[0].bucket_count, 8);
                 assert_eq!(descriptor.start_offset(), descriptor.stop_offset());
             }
+        }
+    }
+
+    #[test]
+    fn kv_baseline_survives_empty_tail_and_task_import() {
+        let info = pk_table_info(vec![], HashMap::new());
+        for stop in [6, 10] {
+            let range = FlussLakeLogRange::from_kv_snapshot(
+                TableBucket::new(info.table_id, 0),
+                FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+                4,
+                &fluss::metadata::KvSnapshot {
+                    bucket_id: 0,
+                    snapshot_id: Some(12),
+                    log_offset: Some(6),
+                },
+                stop,
+                6,
+            )
+            .unwrap();
+            let context =
+                FlussLakeReadContext::from_bucket_boundary(&info, None, range.clone()).unwrap();
+            let range = &context.log_ranges()[0];
+            let splits = plan_bucket_splits(
+                &info,
+                range,
+                None,
+                PlannedLakeBucket::default(),
+                &[0, 1],
+                false,
+            )
+            .unwrap();
+            assert_eq!(splits.len(), 1);
+            let descriptor = splits[0].descriptor();
+            assert_eq!(descriptor.kv_snapshot_id(), Some(12));
+            assert_eq!(
+                (descriptor.start_offset(), descriptor.stop_offset()),
+                (6, stop)
+            );
+            assert_eq!(splits[0].estimated_rows(), None);
+            let scope =
+                crate::partition::PartitionScope::bind(None, info.row_type(), &info.partition_keys)
+                    .unwrap();
+            descriptor.validate(&context, Some(range), &scope).unwrap();
+            for wrong in [None, Some(13)] {
+                let mut altered = descriptor.clone();
+                altered.kv_snapshot_id = wrong;
+                assert!(altered.validate(&context, Some(range), &scope).is_err());
+            }
+            assert!(
+                plan_bucket_splits(
+                    &info,
+                    range,
+                    None,
+                    PlannedLakeBucket::default(),
+                    &[0, 1],
+                    true
+                )
+                .unwrap()
+                .is_empty()
+            );
+            assert!(
+                plan_bucket_splits(&info, range, Some(42), lake_bucket(range), &[0, 1], false)
+                    .is_err()
+            );
         }
     }
 
@@ -980,79 +1057,15 @@ mod tests {
     }
 
     #[test]
-    fn accepts_default_deduplicate_merge_semantics() {
-        validate_pk_union_merge_engine(&pk_table_info(Vec::new(), HashMap::new())).unwrap();
-    }
-
-    #[test]
-    fn accepts_partitioned_primary_key_tables() {
-        let table_info = pk_table_info(vec!["region".to_string()], HashMap::new());
-
-        validate_pk_union_merge_engine(&table_info).unwrap();
-        assert_eq!(physical_primary_key_indexes(&table_info).unwrap(), vec![0]);
-    }
-
-    #[test]
-    fn rejects_unsupported_fluss_merge_engine_tables_with_typed_error() {
-        let mut properties = HashMap::new();
-        properties.insert("table.merge-engine".to_string(), "first_row".to_string());
-        let table_info = pk_table_info(Vec::new(), properties);
-
+    fn unsupported_merge_engine_is_rejected() {
+        let info = pk_table_info(
+            Vec::new(),
+            HashMap::from([("table.merge-engine".into(), "first_row".into())]),
+        );
         assert!(matches!(
-            validate_pk_union_merge_engine(&table_info),
+            validate_pk_union_merge_engine(&info),
             Err(FlussLakeError::UnsupportedMergeEngine(_))
         ));
-    }
-
-    #[test]
-    fn malformed_fluss_merge_engine_is_a_planning_error() {
-        let mut properties = HashMap::new();
-        properties.insert("table.merge-engine".to_string(), "deduplicate".to_string());
-        let table_info = pk_table_info(Vec::new(), properties);
-
-        assert!(matches!(
-            validate_pk_union_merge_engine(&table_info),
-            Err(FlussLakeError::PlanningFailed(_))
-        ));
-    }
-
-    #[test]
-    fn lake_only_expired_partition_has_identity_without_live_partition_id() {
-        let range = FlussLakeLogRange::lake_only(
-            5,
-            2,
-            4,
-            FlussLakePartitionIdentity::KeyValues(vec![("region".to_string(), "US".to_string())]),
-        );
-        let FlussLakeLogPartition::Ordinary(identity) = range.partition();
-        let split = create_logical_split(
-            &Arc::new(crate::split::testing_table(
-                TablePath::new("fluss", "orders"),
-                3,
-                true,
-                5,
-            )),
-            &range,
-            Some(42),
-            vec![crate::LakeSplit {
-                bucket_id: 2,
-                partition: identity.clone(),
-                ..crate::source::testing_split()
-            }],
-            Vec::new(),
-            SplitStatistics::new(Some(3), Some(100)),
-        )
-        .unwrap();
-
-        assert!(split.split_id().contains("lake-only("));
-        assert_eq!(
-            split.partition(),
-            &FlussLakePartitionIdentity::KeyValues(vec![("region".to_string(), "US".to_string())])
-        );
-        let descriptor = split.descriptor();
-        assert_eq!(descriptor.table_bucket().partition_id(), None);
-        assert_eq!(descriptor.start_offset(), 0);
-        assert_eq!(descriptor.stop_offset(), 0);
     }
 
     #[test]

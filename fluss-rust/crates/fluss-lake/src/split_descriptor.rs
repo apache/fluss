@@ -39,6 +39,8 @@ pub struct FlussLakeSplitDescriptor {
     pub(crate) lake_splits: Vec<LakeSplit>,
     pub(crate) estimated_rows: Option<usize>,
     pub(crate) estimated_size: Option<usize>,
+    #[serde(default)]
+    pub(crate) kv_snapshot_id: Option<i64>,
 }
 
 impl FlussLakeSplitDescriptor {
@@ -70,6 +72,12 @@ impl FlussLakeSplitDescriptor {
     /// Pinned lake snapshot, when present.
     pub fn snapshot_id(&self) -> Option<i64> {
         self.snapshot_id
+    }
+
+    /// Persisted snapshot of `table_bucket`; `start_offset` is its matching log seam.
+    /// Execution must open this exact snapshot, aligned to the context schema.
+    pub fn kv_snapshot_id(&self) -> Option<i64> {
+        self.kv_snapshot_id
     }
 
     /// Source-owned lake tasks. Payloads must be interpreted by their backend.
@@ -128,7 +136,18 @@ impl FlussLakeSplitDescriptor {
                 "task partition layout mismatch".into(),
             ));
         }
-        if self.start_offset != self.stop_offset {
+        let expected_kv = range.and_then(|range| match range.baseline() {
+            crate::FlussLakeBaseline::KvSnapshot { snapshot_id } => Some(snapshot_id),
+            _ => None,
+        });
+        if self.kv_snapshot_id != expected_kv
+            && (self.kv_snapshot_id.is_some() || self.lake_splits.is_empty())
+        {
+            return Err(FlussLakeError::InvalidReadContext(
+                "task KV snapshot does not match the frozen context".into(),
+            ));
+        }
+        if self.start_offset != self.stop_offset || self.kv_snapshot_id.is_some() {
             let range = range.ok_or_else(|| {
                 FlussLakeError::InvalidReadContext("task log range absent from boundary".into())
             })?;
