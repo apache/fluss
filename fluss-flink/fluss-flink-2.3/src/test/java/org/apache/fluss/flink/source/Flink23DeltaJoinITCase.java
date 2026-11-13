@@ -316,6 +316,60 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
     }
 
     @Test
+    void testDeltaJoinWithMultiKeyPrefixLookup() throws Exception {
+        // disable cache to get stable results with updating
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
+        createSource(
+                "left_table",
+                "a1 bigint, b1 bigint, c1 varchar",
+                "a1, b1",
+                "a1",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        // looked up by the keys (a2, b2), with the bucket key a2
+        createSource(
+                "right_table",
+                "a2 bigint, b2 bigint, c2 bigint, d2 varchar",
+                "a2, b2, c2",
+                "a2",
+                null,
+                ImmutableMap.of("table.delete.behavior", "IGNORE"));
+        createSink(
+                "sink_table",
+                "a1 bigint, b1 bigint, c1 varchar, a2 bigint, b2 bigint, c2 bigint, d2 varchar",
+                "a1, b1, a2, b2, c2");
+
+        TablePath leftTablePath = TablePath.of(DEFAULT_DB, "left_table");
+        writeRows(conn, leftTablePath, Arrays.asList(row(1L, 1L, "l1"), row(2L, 1L, "l2")), false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(leftTablePath);
+        TablePath rightTablePath = TablePath.of(DEFAULT_DB, "right_table");
+        writeRows(
+                conn,
+                rightTablePath,
+                Arrays.asList(row(1L, 1L, 1L, "r1"), row(1L, 2L, 1L, "r2"), row(2L, 1L, 1L, "r3")),
+                false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(rightTablePath);
+
+        String sql =
+                "INSERT INTO sink_table SELECT * FROM left_table INNER JOIN right_table"
+                        + " ON a1 = a2 AND b1 = b2";
+        assertThat(tEnv.explainSql(sql))
+                .contains("DeltaJoin(joinType=[InnerJoin], where=[((a1 = a2) AND (b1 = b2))]");
+        tEnv.executeSql(sql);
+
+        CloseableIterator<Row> collected = tEnv.executeSql("select * from sink_table").collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, 1, l1, 1, 1, 1, r1]",
+                        "-U[1, 1, l1, 1, 1, 1, r1]",
+                        "+U[1, 1, l1, 1, 1, 1, r1]",
+                        "+I[2, 1, l2, 2, 1, 1, r3]",
+                        "-U[2, 1, l2, 2, 1, 1, r3]",
+                        "+U[2, 1, l2, 2, 1, 1, r3]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
     void testDeltaJoinWithCalc() throws Exception {
         String leftTableName = "left_table_proj";
         createSource(

@@ -20,7 +20,16 @@ package org.apache.fluss.server.zk;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
@@ -36,10 +45,19 @@ import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static java.util.stream.Collectors.toMap;
+import static org.apache.fluss.server.zk.ZooKeeperClient.createBucketMetadata;
+import static org.apache.fluss.server.zk.ZooKeeperClient.processGetDataResponsesOrThrow;
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -206,6 +224,91 @@ public class ZooKeeperUtils {
                     break;
             }
         }
+    }
+
+    /** Reads table buckets for describeBuckets, propagating errors other than missing ZNodes. */
+    public static List<BucketMetadata> describeTableBuckets(ZooKeeperClient client, long tableId)
+            throws Exception {
+        String path = TableIdZNode.path(tableId);
+        Map<Long, TableAssignment> assignments =
+                processGetDataResponsesOrThrow(
+                        client.getDataInBackground(Collections.singleton(path)),
+                        response -> tableId,
+                        data ->
+                                data == null || data.length == 0
+                                        ? null
+                                        : TableIdZNode.decode(data));
+        Map<TableBucket, BucketAssignment> buckets = new HashMap<>();
+        assignments.forEach(
+                (id, assignment) ->
+                        assignment
+                                .getBucketAssignments()
+                                .forEach(
+                                        (bucketId, bucketAssignment) ->
+                                                buckets.put(
+                                                        new TableBucket(id, bucketId),
+                                                        bucketAssignment)));
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = readLeaderAndIsrs(client, buckets.keySet());
+        List<BucketMetadata> result = new ArrayList<>();
+        buckets.forEach(
+                (bucket, assignment) ->
+                        result.add(
+                                createBucketMetadata(
+                                        bucket.getBucket(),
+                                        assignment,
+                                        leaderAndIsrs.get(bucket))));
+        return result;
+    }
+
+    /**
+     * Reads partition buckets for describeBuckets, propagating errors other than missing ZNodes.
+     */
+    public static Map<Long, List<BucketMetadata>> describePartitionBuckets(
+            ZooKeeperClient client, Collection<Long> partitionIds) throws Exception {
+        Map<String, Long> paths =
+                partitionIds.stream().collect(toMap(PartitionIdZNode::path, id -> id));
+        Map<Long, PartitionAssignment> assignments =
+                processGetDataResponsesOrThrow(
+                        client.getDataInBackground(paths.keySet()),
+                        response -> paths.get(response.getPath()),
+                        data ->
+                                data == null || data.length == 0
+                                        ? null
+                                        : PartitionIdZNode.decode(data));
+        Map<TableBucket, BucketAssignment> buckets = new HashMap<>();
+        assignments.forEach(
+                (partitionId, assignment) ->
+                        assignment
+                                .getBucketAssignments()
+                                .forEach(
+                                        (bucketId, bucketAssignment) ->
+                                                buckets.put(
+                                                        new TableBucket(
+                                                                assignment.getTableId(),
+                                                                partitionId,
+                                                                bucketId),
+                                                        bucketAssignment)));
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrs = readLeaderAndIsrs(client, buckets.keySet());
+        Map<Long, List<BucketMetadata>> result = new HashMap<>();
+        buckets.forEach(
+                (bucket, assignment) ->
+                        result.computeIfAbsent(bucket.getPartitionId(), id -> new ArrayList<>())
+                                .add(
+                                        createBucketMetadata(
+                                                bucket.getBucket(),
+                                                assignment,
+                                                leaderAndIsrs.get(bucket))));
+        return result;
+    }
+
+    private static Map<TableBucket, LeaderAndIsr> readLeaderAndIsrs(
+            ZooKeeperClient client, Collection<TableBucket> buckets) throws Exception {
+        Map<String, TableBucket> paths =
+                buckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
+        return processGetDataResponsesOrThrow(
+                client.getDataInBackground(paths.keySet()),
+                response -> paths.get(response.getPath()),
+                LeaderAndIsrZNode::decode);
     }
 
     /** Creates a ZooKeeper path of the form "/a/b/.../z". */

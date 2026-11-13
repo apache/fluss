@@ -128,20 +128,32 @@ fn from_fluss_type(dt: &metadata::DataType) -> Result<DataType, Error> {
     }
 }
 
+#[derive(NifStruct)]
+#[module = "Fluss.Column"]
+pub struct NifColumn {
+    pub name: String,
+    pub data_type: DataType,
+    pub comment: Option<String>,
+}
+
 /// Decoded from `%Fluss.Schema{}` Elixir struct.
 #[derive(NifStruct)]
 #[module = "Fluss.Schema"]
 pub struct NifSchema {
-    pub columns: Vec<(String, DataType)>,
+    pub columns: Vec<NifColumn>,
     pub primary_key: Vec<String>,
 }
 
 impl NifSchema {
     pub fn from_core(schema: &Schema) -> Result<NifSchema, Error> {
-        let mut columns: Vec<(String, DataType)> = Vec::new();
+        let mut columns: Vec<NifColumn> = Vec::new();
 
         for col in schema.columns() {
-            columns.push((col.name().to_string(), from_fluss_type(col.data_type())?));
+            columns.push(NifColumn {
+                name: col.name().to_string(),
+                data_type: from_fluss_type(col.data_type())?,
+                comment: col.comment().map(String::from),
+            });
         }
 
         let primary_key: Vec<String> = schema
@@ -174,8 +186,11 @@ fn table_descriptor_new(
     opts: NifTableOptions,
 ) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
     let mut schema_builder = Schema::builder();
-    for (name, dt) in &schema.columns {
-        schema_builder = schema_builder.column(name, to_fluss_type(dt));
+    for column in &schema.columns {
+        schema_builder = schema_builder.column(&column.name, to_fluss_type(&column.data_type));
+        if let Some(comment) = &column.comment {
+            schema_builder = schema_builder.with_comment(comment);
+        }
     }
     if !schema.primary_key.is_empty() {
         schema_builder = schema_builder

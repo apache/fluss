@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-flink-2.3</artifactId>
-    <name>Apache Fluss : Engine Flink : 2.3 </name>
+    <name>Apache Fluss : Engine Flink : 2.3</name>
     <properties>
         <flink.major.version>2.3</flink.major.version>
         <flink.minor.version>2.3.0</flink.minor.version>

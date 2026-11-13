@@ -17,66 +17,92 @@
 
 package org.apache.fluss.trino;
 
+import io.airlift.bootstrap.Bootstrap;
 import io.airlift.bootstrap.LifeCycleManager;
 import io.trino.spi.TrinoException;
-import io.trino.spi.connector.ConnectorMetadata;
-import io.trino.spi.connector.ConnectorPageSourceProvider;
-import io.trino.spi.connector.ConnectorSession;
-import io.trino.spi.connector.ConnectorSplitManager;
+import jakarta.annotation.PreDestroy;
 import org.junit.jupiter.api.Test;
 
 import static io.trino.spi.StandardErrorCode.UNSUPPORTED_ISOLATION_LEVEL;
 import static io.trino.spi.transaction.IsolationLevel.READ_COMMITTED;
 import static io.trino.spi.transaction.IsolationLevel.SERIALIZABLE;
+import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 
 /** Tests connector transaction and lifecycle contracts. */
-final class FlussConnectorTest {
+final class FlussConnectorTest extends FlussTrinoTestBase {
     @Test
-    void testMetadataForReadCommittedTransaction() {
-        ConnectorMetadata metadata = mock(ConnectorMetadata.class);
-        FlussConnector connector =
-                new FlussConnector(
-                        mock(LifeCycleManager.class),
-                        metadata,
-                        mock(ConnectorSplitManager.class),
-                        mock(ConnectorPageSourceProvider.class));
-        assertThat(connector.beginTransaction(READ_COMMITTED, true, true))
-                .isSameAs(FlussTransactionHandle.INSTANCE);
-        assertThat(
-                        connector.getMetadata(
-                                mock(ConnectorSession.class), FlussTransactionHandle.INSTANCE))
-                .isSameAs(metadata);
+    void testMetadataForReadCommittedTransaction() throws Exception {
+        createDatabase("sales");
+        LifeCycleManager lifecycle = createLifecycle();
+        FlussMetadata metadata = new FlussMetadata(access);
+        FlussConnector connector = createConnector(lifecycle, metadata);
+        try {
+            assertThat(connector.beginTransaction(READ_COMMITTED, true, true))
+                    .isSameAs(FlussTransactionHandle.INSTANCE);
+            assertThat(connector.getMetadata(SESSION, FlussTransactionHandle.INSTANCE))
+                    .isSameAs(metadata);
+            assertThat(
+                            connector
+                                    .getMetadata(SESSION, FlussTransactionHandle.INSTANCE)
+                                    .listSchemaNames(SESSION))
+                    .contains("sales");
+        } finally {
+            connector.shutdown();
+        }
     }
 
     @Test
     void testRejectUnsupportedIsolation() {
-        FlussConnector connector =
-                new FlussConnector(
-                        mock(LifeCycleManager.class),
-                        mock(ConnectorMetadata.class),
-                        mock(ConnectorSplitManager.class),
-                        mock(ConnectorPageSourceProvider.class));
-        assertThatThrownBy(() -> connector.beginTransaction(SERIALIZABLE, true, true))
-                .isInstanceOfSatisfying(
-                        TrinoException.class,
-                        failure ->
-                                assertThat(failure.getErrorCode())
-                                        .isEqualTo(UNSUPPORTED_ISOLATION_LEVEL.toErrorCode()));
+        FlussConnector connector = createConnector(createLifecycle(), new FlussMetadata(access));
+        try {
+            assertThatThrownBy(() -> connector.beginTransaction(SERIALIZABLE, true, true))
+                    .isInstanceOfSatisfying(
+                            TrinoException.class,
+                            failure ->
+                                    assertThat(failure.getErrorCode())
+                                            .isEqualTo(UNSUPPORTED_ISOLATION_LEVEL.toErrorCode()));
+        } finally {
+            connector.shutdown();
+        }
     }
 
     @Test
-    void testShutdownStopsLifecycle() {
-        LifeCycleManager lifecycle = mock(LifeCycleManager.class);
-        new FlussConnector(
-                        lifecycle,
-                        mock(ConnectorMetadata.class),
-                        mock(ConnectorSplitManager.class),
-                        mock(ConnectorPageSourceProvider.class))
-                .shutdown();
-        verify(lifecycle).stop();
+    void testShutdownStopsLifecycle() throws Exception {
+        LifeCycleManager lifecycle = createLifecycle();
+        CloseTracker tracker = new CloseTracker();
+        lifecycle.addInstance(tracker);
+        FlussConnector connector = createConnector(lifecycle, new FlussMetadata(access));
+        connector.shutdown();
+        connector.shutdown();
+        assertThat(tracker.closes).isEqualTo(1);
+    }
+
+    private FlussConnector createConnector(LifeCycleManager lifecycle, FlussMetadata metadata) {
+        return new FlussConnector(
+                lifecycle,
+                metadata,
+                new FlussSplitManager(access, new FlussSplitPlanner(access)),
+                new FlussPageSourceProvider(clients));
+    }
+
+    private static LifeCycleManager createLifecycle() {
+        return new Bootstrap()
+                .doNotInitializeLogging()
+                .disableSystemProperties()
+                .initialize()
+                .getInstance(LifeCycleManager.class);
+    }
+
+    /** Resource registered with the real Airlift lifecycle. */
+    public static final class CloseTracker {
+        private int closes;
+
+        /** Records lifecycle disposal. */
+        @PreDestroy
+        public void close() {
+            closes++;
+        }
     }
 }

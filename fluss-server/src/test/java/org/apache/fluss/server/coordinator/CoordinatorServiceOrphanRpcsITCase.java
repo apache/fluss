@@ -41,7 +41,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.types.DataTypes;
 
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -80,11 +80,11 @@ class CoordinatorServiceOrphanRpcsITCase {
 
     private static final int MAX_SNAPSHOTS_TO_RETAIN = 2;
 
-    private static long pkTableId;
+    private long pkTableId;
     @TempDir static Path tempDir;
 
-    @BeforeAll
-    static void setupTables() throws Exception {
+    @BeforeEach
+    void setupTables() throws Exception {
         pkTableId =
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, PK_TABLE_PATH, PK_TABLE_DESCRIPTOR);

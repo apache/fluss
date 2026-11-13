@@ -209,6 +209,35 @@ writer.flush();
 
 Fluss currently supports the following aggregate functions:
 
+### count
+
+Counts non-null input values for each primary key.
+
+- **Supported Data Type**: `BIGINT`, for both input and stored count
+- **Behavior**: Each non-null input contributes one, regardless of its numeric value. The first non-null input is stored as `1`.
+- **Null Handling**: Null inputs contribute zero. A null input initializes a `NULL` count to `0` and leaves an existing count unchanged.
+- **Partial Updates**: Only updates targeting this column contribute to the count. An untargeted count column retains its previous value, or remains `NULL` on the first write for a key. A targeted column follows the behavior above, including initialization to `0` for a null input.
+
+```sql
+CREATE TABLE event_counts (
+    id INT,
+    cnt BIGINT,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.cnt.agg' = 'count'
+);
+
+INSERT INTO event_counts VALUES (1, 100), (1, 0), (1, NULL);
+-- The stored cnt for id = 1 is 2.
+```
+
+For the Java API, use `.column("cnt", DataTypes.BIGINT(), AggFunctions.COUNT())`.
+To count every input row, provide a non-null value for this column in every row.
+To accumulate counts already computed upstream, use `sum` instead. Like other aggregation functions, `count` does not support retractions.
+
+When `'table.delete.behavior' = 'allow'`, a partial delete targeting the count column clears it to `NULL` rather than decrementing it. A subsequent targeted update starts the count at `1` for a non-null input or `0` for a null input. If the count column is not targeted by the delete, its value is retained; a count of `0` is non-null and therefore prevents the entire record from being removed when deleting other columns. See [Delete Behavior](#delete-behavior) for the full and partial delete rules.
+
 ### sum
 
 Aggregates values by computing the sum across multiple rows.
@@ -593,11 +622,15 @@ TableDescriptor.builder()
 
 ### first_value
 
-Retrieves and retains the first value seen for a field.
+Retrieves and retains the first non-null value seen for a field.
 
 - **Supported Data Types**: All data types
-- **Behavior**: Keeps the first received value, ignores all subsequent values
-- **Null Handling**: Null values are retained if received first
+- **Behavior**: Keeps the first received non-null value, ignores all subsequent values
+- **Null Handling**: Null values are treated as unset until a non-null value is received
+
+This function has the same behavior as `first_value_ignore_nulls`. For example,
+`NULL -> 10 -> 20` produces `10`. In partial updates, omitting a field does not
+prevent a later update from supplying its first non-null value.
 
 **Example:**
 <Tabs>
@@ -976,6 +1009,72 @@ functions (`rb_build_agg`, `rb_or_agg`, `rb_cardinality`, etc.) provided by Flus
 See [SQL Functions](/engine-flink/sql-functions.md) for the full function reference.
 :::
 
+### hll_sketch
+
+Aggregates serialized Apache DataSketches HLL sketch values by union.
+
+- **Supported Data Types**: `BYTES`
+- **Behavior**: Merges incoming HLL sketches with the accumulator and stores compact serialized sketch bytes
+- **Null Handling**: Null values are ignored
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE daily_user_metrics (
+    metric_day STRING,
+    user_hll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.user_hll.agg' = 'hll_sketch'
+);
+```
+
+:::note
+`hll_sketch` expects serialized Apache DataSketches HLL sketches, not raw input values.
+The stored value is a serialized HLL sketch, not a distinct count. After reading the sketch
+bytes, use `HllSketch.heapify(bytes).getEstimate()` to obtain the approximate distinct count.
+:::
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("metric_day", DataTypes.STRING())
+    .column("user_hll", DataTypes.BYTES(), AggFunctions.HLL_SKETCH())
+    .primaryKey("metric_day")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize HLL sketches using the Apache DataSketches library
+// HllSketch sketch1 = new HllSketch(12);
+// sketch1.update(userId1);
+// byte[] bytes1 = sketch1.toCompactByteArray();
+
+// Input: (2026-05-16, hll{user_a,user_b}), (2026-05-16, hll{user_b,user_c})
+// Result: (2026-05-16, hll{user_a,user_b,user_c}) -- union of the two sketches
+```
+
+Read the stored sketch bytes and extract the approximate distinct count using the Apache
+DataSketches client library:
+
+```java
+import org.apache.datasketches.hll.HllSketch;
+
+// bytes is the serialized sketch read from the user_hll column.
+double estimatedDistinctCount = HllSketch.heapify(bytes).getEstimate();
+```
+
+</TabItem>
+</Tabs>
+
 ### bool_and
 
 Evaluates whether all boolean values in a set are true (logical AND).
@@ -1149,6 +1248,118 @@ TableDescriptor.builder()
 
 // Input: (1, ['login']), (1, ['search']), (1, ['view', 'add_to_cart'])
 // Result: (1, ['search', 'view', 'add_to_cart'])
+```
+
+</TabItem>
+</Tabs>
+
+### collect
+
+Collects array elements into a single array.
+
+- **Supported Data Types**: `ARRAY<T>`
+- **Behavior**: Concatenates array elements; with `distinct=true`, duplicates are removed
+- **Ordering**: Elements follow the order writes reach the server. With `distinct=true`, the first occurrence of each element is retained
+- **Null Handling**: Null elements are retained; null inputs are ignored
+- **Parameters**: `distinct` (`true` or `false`, default is `false`)
+
+:::note
+The collected array has no size limit. Every update rewrites the whole stored array. With the default `'table.changelog.image' = 'full'`, both the old and the new array are also written to the changelog on every update. As the array grows, so do memory usage, write costs, and changelog volume. Use `last_n` when only a bounded number of recent elements is needed.
+:::
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_collect  (
+    id BIGINT,
+    tags ARRAY<INT>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.tags.agg' = 'collect',
+    'fields.tags.collect.distinct' = 'true'
+);
+
+INSERT INTO test_collect VALUES
+    (1, ARRAY[1, 2, 2]),
+    (1, ARRAY[2, 3, NULL]);
+
+SELECT * FROM test_collect;
+-- Result:
+-- (1, [1, 2, 3, NULL])
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("tags", DataTypes.ARRAY(DataTypes.INT()), AggFunctions.COLLECT(true))
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, [1, 2, 2]), (1, [2, 3, null])
+// Result: (1, [1, 2, 3, null])
+```
+
+</TabItem>
+</Tabs>
+
+### merge_map
+
+Merges map values by combining key-value pairs. For duplicate keys, the latest value wins.
+
+- **Supported Data Types**: `MAP<K, V>`
+- **Behavior**: Merges maps, overriding earlier values for duplicate keys
+- **Null Handling**: Null keys are not allowed; null values are allowed
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE test_merge_map  (
+    id BIGINT,
+    attributes MAP<INT, STRING>,
+    PRIMARY KEY (id) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.attributes.agg' = 'merge_map'
+);
+
+INSERT INTO test_merge_map VALUES
+    (1, MAP[1, 'a', 2, 'b']),
+    (1, MAP[2, 'c', 3, NULL]);
+
+SELECT * FROM test_merge_map;
+-- Result: (1, {1='a', 2='c', 3=NULL})
+```
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("id", DataTypes.BIGINT())
+    .column("attributes", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()), AggFunctions.MERGE_MAP())
+    .primaryKey("id")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Input: (1, {1='a', 2='b'}), (1, {2='c', 3=null})
+// Result: (1, {1='a', 2='c', 3=null})
 ```
 
 </TabItem>

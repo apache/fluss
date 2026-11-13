@@ -19,31 +19,28 @@
 //! `next_batch` until it returns `None` (like `RecordBatchLogReader`).
 //!
 //! Both log and KV batches are decoded against their write-time schema id and
-//! aligned to the current table schema. The KV branch uses [`FixedSchemaDecoder`]
+//! aligned to the current table schema. The KV branch uses `KvValueDecoder`
 //! (the same path as lookup), while the log branch resolves an Arrow read
 //! context per batch.
 
 use crate::client::ClientSchemaGetter;
 use crate::client::metadata::Metadata;
+use crate::client::table::kv_value_decoder::KvValueDecoder;
 use crate::client::table::read_context_resolver::ReadContextResolver;
 use crate::error::{ApiError, Error, FlussError, Result};
-use crate::metadata::{KvFormat, RowType, Schema, TableBucket, TableInfo};
+use crate::metadata::{RowType, TableBucket, TableInfo};
 use crate::proto::ErrorResponse;
-use crate::record::kv::{SCHEMA_ID_LENGTH, ValueRecordBatch};
+use crate::record::kv::ValueRecordBatch;
 use crate::record::{
-    LogRecordsBatches, ReadContext as ArrowReadContext, RowAppendRecordBatchBuilder, ScanBatch,
-    to_arrow_schema,
+    LogRecordsBatches, ReadContext as ArrowReadContext, ScanBatch, to_arrow_schema,
 };
-use crate::row::FixedSchemaDecoder;
 use crate::rpc::RpcClient;
 use crate::rpc::message::LimitScanRequest;
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
 use arrow_schema::SchemaRef;
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use futures::Stream;
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -310,72 +307,31 @@ async fn decode_kv_batch(
         return empty_record_batch(table_info.get_row_type(), projected_fields);
     }
 
-    let kv_format = table_info.table_config.get_kv_format()?;
-    let target_schema = table_info.get_schema();
-    let target_schema_id =
-        i16::try_from(table_info.get_schema_id()).map_err(|_| Error::UnexpectedError {
-            message: format!(
-                "Schema id {} does not fit in 16 bits — wire format violated",
-                table_info.get_schema_id()
-            ),
-            source: None,
-        })?;
-
+    let decoder = KvValueDecoder::for_table(table_info)?;
     let batch = ValueRecordBatch::new(Bytes::from(raw));
     let ranges = batch.value_ranges()?;
 
-    // Collect the distinct schema ids present, then build one decoder per id
-    // (fetching older schemas via the coordinator as needed).
-    let mut schema_ids: Vec<i16> = Vec::new();
-    for range in &ranges {
-        let id = read_schema_id(&batch.data()[range.clone()])?;
-        if !schema_ids.contains(&id) {
-            schema_ids.push(id);
-        }
-    }
-    let decoders = build_kv_decoders(
-        schema_getter,
-        target_schema,
-        target_schema_id,
-        kv_format,
-        &schema_ids,
-    )
-    .await?;
+    // Build one decoder per distinct schema id present, fetching older schemas
+    // via the coordinator as needed.
+    decoder
+        .ensure_decoders(schema_getter, payloads(&batch, &ranges))
+        .await?;
 
     value_records_to_record_batch(
         &batch,
         &ranges,
-        &decoders,
+        &decoder,
         table_info.get_row_type(),
         projected_fields,
         limit,
     )
 }
 
-/// Build one [`FixedSchemaDecoder`] per distinct schema id. The current schema
-/// decodes without projection; older schemas are fetched and projected onto the
-/// current schema.
-async fn build_kv_decoders(
-    schema_getter: &ClientSchemaGetter,
-    target_schema: &Schema,
-    target_schema_id: i16,
-    kv_format: KvFormat,
-    schema_ids: &[i16],
-) -> Result<HashMap<i16, FixedSchemaDecoder>> {
-    let mut decoders = HashMap::with_capacity(schema_ids.len());
-    for &id in schema_ids {
-        if decoders.contains_key(&id) {
-            continue;
-        }
-        let decoder = if id == target_schema_id {
-            FixedSchemaDecoder::new_no_projection(kv_format, target_schema)?
-        } else {
-            let source = schema_getter.get_schema(id as i32).await?;
-            FixedSchemaDecoder::new(kv_format, source.as_ref(), target_schema)?
-        };
-        decoders.insert(id, decoder);
-    }
-    Ok(decoders)
+fn payloads<'a>(
+    batch: &'a ValueRecordBatch,
+    ranges: &'a [Range<usize>],
+) -> impl Iterator<Item = &'a [u8]> + 'a {
+    ranges.iter().map(|range| &batch.data()[range.clone()])
 }
 
 /// Decode every value record into a row shaped by `target_row_type`, build a
@@ -383,50 +339,14 @@ async fn build_kv_decoders(
 fn value_records_to_record_batch(
     batch: &ValueRecordBatch,
     ranges: &[Range<usize>],
-    decoders: &HashMap<i16, FixedSchemaDecoder>,
+    decoder: &KvValueDecoder,
     target_row_type: &RowType,
     projected_fields: Option<&[usize]>,
     limit: usize,
 ) -> Result<RecordBatch> {
-    let mut builder = RowAppendRecordBatchBuilder::new(target_row_type)?;
-    for range in ranges {
-        let payload = &batch.data()[range.clone()];
-        let schema_id = read_schema_id(payload)?;
-        let decoder = decoders
-            .get(&schema_id)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!("No decoder built for schema id {schema_id}"),
-                source: None,
-            })?;
-        let row = decoder.decode(payload)?;
-        builder.append(&row)?;
-    }
-
-    let full = Arc::unwrap_or_clone(builder.build_arrow_record_batch()?);
+    let full = decoder.decode_to_record_batch(payloads(batch, ranges), target_row_type)?;
     let (full, _) = take_last_rows(full, 0, limit);
     project_batch(full, target_row_type, projected_fields)
-}
-
-/// Read the leading little-endian schema id from a `[schema_id | row]` payload.
-fn read_schema_id(payload: &[u8]) -> Result<i16> {
-    if payload.len() < SCHEMA_ID_LENGTH {
-        return Err(Error::UnexpectedError {
-            message: format!(
-                "Value record payload too short: {} bytes, need {} for schema id",
-                payload.len(),
-                SCHEMA_ID_LENGTH
-            ),
-            source: None,
-        });
-    }
-    let schema_id = LittleEndian::read_i16(&payload[..SCHEMA_ID_LENGTH]);
-    if schema_id < 0 {
-        return Err(Error::UnexpectedError {
-            message: format!("Invalid negative schema id {schema_id}; payload is corrupt"),
-            source: None,
-        });
-    }
-    Ok(schema_id)
 }
 
 /// Keep the last `limit` rows of `batch`, advancing `base_offset` by the number
@@ -475,14 +395,18 @@ mod tests {
     use super::*;
     use crate::client::WriteRecord;
     use crate::metadata::{
-        Column, DataField, DataType, DataTypes, PhysicalTablePath, Schema, TableInfo, TablePath,
+        Column, DataField, DataType, DataTypes, KvFormat, PhysicalTablePath, Schema, TableInfo,
+        TablePath,
     };
     use crate::record::MemoryLogRecordsArrowBuilder;
+    use crate::record::kv::SCHEMA_ID_LENGTH;
+    use crate::row::FixedSchemaDecoder;
     use crate::row::GenericRow;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use crate::test_utils::{build_table_info_with_columns, uncompressed_arrow_batch_config};
     use arrow::array::{Array, Int32Array, Int64Array, StringArray};
+    use std::sync::Arc;
 
     fn build_two_col_table_info() -> TableInfo {
         build_table_info_with_columns(
@@ -940,7 +864,7 @@ mod tests {
         let rb = value_records_to_record_batch(
             &batch,
             &ranges,
-            &HashMap::new(),
+            &KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(schema.clone()), 0).unwrap(),
             schema.row_type(),
             None,
             usize::MAX,
@@ -967,9 +891,8 @@ mod tests {
     #[test]
     fn value_records_decode_rows() {
         let schema = id_name_schema();
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &schema).unwrap();
-        let mut decoders = HashMap::new();
-        decoders.insert(0i16, decoder);
+        let decoders =
+            KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(schema.clone()), 0).unwrap();
 
         let r0 = compacted(2, |w| {
             w.write_int(1);
@@ -1000,9 +923,8 @@ mod tests {
     #[test]
     fn value_records_limit_keeps_last_rows() {
         let schema = id_name_schema();
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &schema).unwrap();
-        let mut decoders = HashMap::new();
-        decoders.insert(0i16, decoder);
+        let decoders =
+            KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(schema.clone()), 0).unwrap();
 
         let records: Vec<(i16, Vec<u8>)> = (1..=5)
             .map(|i| {
@@ -1030,9 +952,8 @@ mod tests {
     #[test]
     fn value_records_projection_keeps_requested_columns() {
         let schema = id_name_schema();
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &schema).unwrap();
-        let mut decoders = HashMap::new();
-        decoders.insert(0i16, decoder);
+        let decoders =
+            KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(schema.clone()), 0).unwrap();
 
         let r0 = compacted(2, |w| {
             w.write_int(9);
@@ -1064,17 +985,14 @@ mod tests {
             (2, "age", DataTypes::bigint()),
         ]);
 
-        let mut decoders = HashMap::new();
-        // Records with schema id 0 were written under the old schema.
-        decoders.insert(
-            0i16,
-            FixedSchemaDecoder::new(KvFormat::COMPACTED, &source, &target).unwrap(),
-        );
-        // Records with schema id 1 carry the current schema.
-        decoders.insert(
-            1i16,
-            FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap(),
-        );
+        // Records with schema id 1 carry the current schema; records with
+        // schema id 0 were written under the old schema.
+        let decoders = KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(target.clone()), 1)
+            .unwrap()
+            .with_decoder(
+                0,
+                FixedSchemaDecoder::new(KvFormat::COMPACTED, &source, &target).unwrap(),
+            );
 
         let old_row = compacted(2, |w| {
             w.write_int(1);

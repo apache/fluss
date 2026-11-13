@@ -8,6 +8,7 @@ anstyle-parse@1.0.0	X									X
 anstyle-query@1.1.5	X									X			
 anstyle-wincon@3.0.11	X									X			
 anyhow@1.0.102	X									X			
+arc-swap@1.9.3	X									X			
 arrow@59.0.0	X												
 arrow-arith@59.0.0	X												
 arrow-array@59.0.0	X									X			
@@ -35,6 +36,7 @@ backon@1.6.0	X
 base64@0.21.7	X									X			
 base64@0.22.1	X									X			
 bigdecimal@0.4.10	X									X			
+bindgen@0.72.1				X									
 bitflags@2.11.0	X									X			
 bitvec@1.0.1										X			
 block-buffer@0.10.4	X									X			
@@ -44,9 +46,12 @@ bollard-stubs@1.52.1-rc.29.1.3	X
 bumpalo@3.20.2	X									X			
 byteorder@1.5.0										X		X	
 bytes@1.11.1										X			
+bzip2-sys@0.1.13+1.0.8	X									X			
 cc@1.2.59	X									X			
+cexpr@0.6.0	X									X			
 cfg-if@1.0.4	X									X			
 chrono@0.4.44	X									X			
+clang-sys@1.9.1	X												
 clap@4.6.0	X									X			
 clap_builder@4.6.0	X									X			
 clap_derive@4.6.0	X									X			
@@ -102,6 +107,7 @@ generic-array@0.14.7										X
 getrandom@0.2.17	X									X			
 getrandom@0.3.4	X									X			
 getrandom@0.4.2	X									X			
+glob@0.3.4	X									X			
 gloo-timers@0.3.0	X									X			
 h2@0.4.13										X			
 half@2.7.1	X									X			
@@ -139,6 +145,7 @@ indexmap@2.13.1	X									X
 ipnet@2.12.0	X									X			
 iri-string@0.7.12	X									X			
 is_terminal_polyfill@1.70.2	X									X			
+itertools@0.13.0	X									X			
 itertools@0.14.0	X									X			
 itoa@1.0.18	X									X			
 jiff@0.2.23										X		X	
@@ -153,20 +160,26 @@ lexical-util@1.0.7	X									X
 lexical-write-float@1.0.6	X									X			
 lexical-write-integer@1.0.6	X									X			
 libc@0.2.184	X									X			
+libloading@0.8.9								X					
 libm@0.2.16										X			
 libredox@0.1.15										X			
+librocksdb-sys@0.17.3+10.4.2	X			X						X			
+libz-sys@1.1.31	X									X			
 linked-hash-map@0.5.6	X									X			
 linux-raw-sys@0.12.1	X	X								X			
 litemap@0.8.2											X		
 lock_api@0.4.14	X									X			
 log@0.4.29	X									X			
+lz4-sys@1.11.1+lz4-1.10.0										X			
 lz4_flex@0.13.1										X			
 matchit@0.8.4				X						X			
 md-5@0.10.6	X									X			
 memchr@2.8.0										X		X	
 metrics@0.24.5										X			
 mime@0.3.17	X									X			
+minimal-lexical@0.2.1	X									X			
 mio@1.2.0										X			
+nom@7.1.3										X			
 num@0.4.3	X									X			
 num-bigint@0.4.6	X									X			
 num-complex@0.4.6	X									X			
@@ -223,6 +236,7 @@ regex-syntax@0.8.10	X									X
 reqsign@0.16.5	X												
 reqwest@0.12.28	X									X			
 ring@0.17.14	X							X					
+rocksdb@0.24.0	X												
 rust-ini@0.21.3										X			
 rustc-hash@2.1.2	X									X			
 rustc_version@0.4.1	X									X			
@@ -304,6 +318,7 @@ utf8_iter@1.0.4	X									X
 utf8parse@0.2.2	X									X			
 uuid@1.23.0	X									X			
 value-bag@1.12.0	X									X			
+vcpkg@0.2.15	X									X			
 version_check@0.9.5	X									X			
 want@0.3.1										X			
 wasi@0.11.1+wasi-snapshot-preview1	X	X								X			

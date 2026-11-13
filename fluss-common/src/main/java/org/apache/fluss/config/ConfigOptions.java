@@ -241,6 +241,50 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT =
+            key("coordinator.rebalance.target-unavailable-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if its target tablet servers remain unavailable and no "
+                                    + "bucket-state progress is observed. Observed progress or all "
+                                    + "target servers becoming live resets this timer. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT =
+            key("coordinator.rebalance.no-progress-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if no bucket-state progress is observed, even when its target "
+                                    + "tablet servers are live. Observed progress resets this timer; "
+                                    + "this does not limit the total migration duration. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS =
+            key("coordinator.rebalance.max-tracked-timed-out-tasks")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "The maximum number of non-final timed-out bucket migrations tracked "
+                                    + "before the coordinator stops admitting new bucket migrations. "
+                                    + "Admission resumes when a tracked migration reaches a final "
+                                    + "status. This limits concurrent migrations and reconciliation "
+                                    + "work on the coordinator and ZooKeeper. Must be at least 1.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
+            key("coordinator.rebalance.max-inflight-tasks")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "The maximum number of bucket-level rebalance tasks that can be "
+                                    + "executed concurrently by the coordinator. A higher value "
+                                    + "can speed up rebalance, while a lower value reduces the "
+                                    + "number of simultaneous bucket movements. Must be at least "
+                                    + "1.");
+
     public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
             key("coordinator.offline-leader.retry-delay")
                     .durationType()
@@ -809,10 +853,10 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
-                    .defaultValue(Duration.ofDays(7))
+                    .defaultValue(Duration.ofDays(1))
                     .withDescription(
                             "The time that the tablet server will wait without receiving any write request from "
-                                    + "a client before expiring the related status. The default value is 7 days.");
+                                    + "a client before expiring the related status. The default value is 1 day.");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
@@ -1278,23 +1322,38 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The number of threads that the server uses for receiving requests "
-                                    + "from the network and sending responses to the network.");
+                            "The number of network threads per listener resource group for receiving "
+                                    + "requests and sending responses. When the server binds both the "
+                                    + "listener selected by internal.listener.name and external listeners, "
+                                    + "the internal listener uses a dedicated group and all external "
+                                    + "listeners share another group. Otherwise, all listeners share "
+                                    + "one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_WORKER_THREADS =
             key("netty.server.num-worker-threads")
                     .intType()
                     .defaultValue(8)
                     .withDescription(
-                            "The number of threads that the server uses for processing requests, "
-                                    + "which may include disk and remote I/O.");
+                            "The number of worker threads per listener resource group for processing "
+                                    + "requests, which may include disk and remote I/O. When the server "
+                                    + "binds both the listener selected by internal.listener.name and "
+                                    + "external listeners, the internal listener uses a dedicated group "
+                                    + "and all external listeners share another group. Otherwise, all "
+                                    + "listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_REQUESTS =
             key("netty.server.max-queued-requests")
                     .intType()
                     .defaultValue(500)
                     .withDescription(
-                            "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
+                            "The queued-request backpressure threshold per listener resource group, "
+                                    + "divided among its worker threads. When a worker queue reaches its "
+                                    + "threshold, reads are paused on its associated connections. Queues "
+                                    + "are unbounded; this is not a hard limit on queued requests. When "
+                                    + "the server binds both the listener selected by internal.listener.name "
+                                    + "and external listeners, the internal listener uses a dedicated "
+                                    + "group and all external listeners share another group. Otherwise, "
+                                    + "all listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
             key("netty.server.max-queued-historical-requests")
@@ -1792,7 +1851,11 @@ public class ConfigOptions {
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
@@ -1823,6 +1886,26 @@ public class ConfigOptions {
                     .withDescription(
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF =
+            key("client.lookup.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a lookup that failed with a retriable error, "
+                                    + "such as NOT_LEADER_OR_FOLLOWER, or whose bucket has no known leader. The "
+                                    + "delay doubles with each attempt and uses 20% jitter, up to "
+                                    + "client.lookup.retry-backoff-max. Attempts made while a bucket has no known "
+                                    + "leader don't count toward client.lookup.max-retries. "
+                                    + "Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
+            key("client.lookup.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a lookup. "
+                                    + "Must be between the initial backoff and 2147483647ms.");
 
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
@@ -2211,16 +2294,16 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss database name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
             key("table.datalake.table-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon. "
-                                    + "If not set, the Fluss table name is used. The option may be configured before the Paimon table is created and cannot be changed after creation.");
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -2497,6 +2580,16 @@ public class ConfigOptions {
                                     + "This applies to primary key tables, does not affect WAL or MANIFEST I/O, "
                                     + "and requires a TabletServer restart to take effect. "
                                     + "The default value is `false`.");
+
+    public static final ConfigOption<MemorySize> KV_COMPACTION_READAHEAD_SIZE =
+            key("kv.rocksdb.compaction.readahead-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription(
+                            "The amount of data to prefetch when reading RocksDB SST files during compaction. "
+                                    + "A value of `0` disables compaction readahead. "
+                                    + "This applies to primary key tables and requires a TabletServer restart to take effect. "
+                                    + "The default value is `2MB`.");
 
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
@@ -3039,6 +3132,13 @@ public class ConfigOptions {
                                     + "Multiple directories can be separated by comma or the system path separator. "
                                     + "If not configured and the tiering service runs in a Flink job, Fluss uses "
                                     + "Flink's IO temporary directories with a 'fluss' child directory.");
+
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

@@ -40,6 +40,8 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.iceberg.exceptions.NoSuchTableException;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -52,11 +54,15 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test case for union read primary key table. */
 public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
@@ -356,6 +362,72 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         assertThat(firstSnapshot.getField(5)).as("summary should not be null").isNotNull();
 
         jobClient.cancel().get();
+    }
+
+    @Test
+    void testUnionReadWithCustomLakeTablePath() throws Exception {
+        String tableName = "pk_table_custom_lake_mapping";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_target");
+
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(DEFAULT_BUCKET_NUM, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                                lakeTablePath.getDatabaseName())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                lakeTablePath.getTableName())
+                        .build();
+        long tableId = createTable(tablePath, descriptor);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        writeRows(tablePath, Arrays.asList(row(1, "v1"), row(2, "v2")), false);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        // wait until the two rows are tiered to the mapped Iceberg table
+        assertReplicaStatus(tableBucket, 2);
+
+        // the physical Iceberg table is created at the mapped path, not the Fluss table path
+        icebergCatalog.loadTable(toIceberg(lakeTablePath));
+        assertThatThrownBy(() -> icebergCatalog.loadTable(toIceberg(tablePath)))
+                .isInstanceOf(NoSuchTableException.class);
+
+        // union read merges the Iceberg snapshot with the un-tiered Fluss changelog
+        try (CloseableIterator<Row> unionRows =
+                streamTEnv.executeSql("select a, b from " + tableName).collect()) {
+            assertRowResultsIgnoreOrder(
+                    unionRows, Arrays.asList(Row.of(1, "v1"), Row.of(2, "v2")), false);
+            jobClient.cancel().get(1, TimeUnit.MINUTES);
+            writeRows(tablePath, Collections.singletonList(row(3, "v3")), false);
+            assertRowResultsIgnoreOrder(
+                    unionRows, Collections.singletonList(Row.of(3, "v3")), false);
+
+            // read the Iceberg lake table directly via $lake
+            try (CloseableIterator<Row> lakeRows =
+                    batchTEnv.executeSql("select a, b from " + tableName + "$lake").collect()) {
+                assertRowResultsIgnoreOrder(
+                        lakeRows, Arrays.asList(Row.of(1, "v1"), Row.of(2, "v2")), true);
+            }
+
+            // read the Iceberg metadata table via $lake$snapshots
+            try (CloseableIterator<Row> snapshotRows =
+                    batchTEnv
+                            .executeSql("select * from " + tableName + "$lake$snapshots")
+                            .collect()) {
+                assertThat(collectRowsWithTimeout(snapshotRows, 1)).hasSize(1);
+            }
+        }
     }
 
     private void writeFullTypeRow(TablePath tablePath, String partition) throws Exception {

@@ -47,17 +47,22 @@ pub struct Cluster {
 }
 
 impl Cluster {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         coordinator_server: Option<ServerNode>,
         alive_tablet_servers_by_id: HashMap<i32, ServerNode>,
         available_locations_by_path: HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
-        available_locations_by_bucket: HashMap<TableBucket, BucketLocation>,
         table_id_by_path: HashMap<TablePath, TableId>,
         table_info_by_path: HashMap<TablePath, TableInfo>,
         partitions_id_by_path: HashMap<Arc<PhysicalTablePath>, PartitionId>,
         bucket_count_by_table_or_partition: HashMap<TableOrPartition, i32>,
     ) -> Self {
+        // Derive both routing views from the same locations so stale leaders cannot survive.
+        let available_locations_by_bucket = available_locations_by_path
+            .values()
+            .flatten()
+            .filter(|location| location.leader().is_some())
+            .map(|location| (location.table_bucket.clone(), location.clone()))
+            .collect();
         let alive_tablet_servers = alive_tablet_servers_by_id.values().cloned().collect();
         let table_path_by_id = table_id_by_path
             .iter()
@@ -95,14 +100,12 @@ impl Cluster {
             .filter_map(|id| self.table_path_by_id.get(id))
             .collect();
 
-        let (available_locations_by_path, available_locations_by_bucket) =
-            self.filter_bucket_locations_by_path(&table_paths);
+        let available_locations_by_path = self.filter_bucket_locations_by_path(&table_paths);
 
         Cluster::new(
             self.coordinator_server.clone(),
             alive_tablet_servers_by_id,
             available_locations_by_path,
-            available_locations_by_bucket,
             self.table_id_by_path.clone(),
             self.table_info_by_path.clone(),
             self.partitions_id_by_path.clone(),
@@ -114,7 +117,7 @@ impl Cluster {
         &self,
         physical_tables_to_invalid: &HashSet<PhysicalTablePath>,
     ) -> Self {
-        let (available_locations_by_path, available_locations_by_bucket) =
+        let available_locations_by_path =
             self.filter_bucket_locations_by_physical_path(physical_tables_to_invalid);
 
         // A table or partition id keeps one bucket count for life, so the counts stay cached.
@@ -122,7 +125,6 @@ impl Cluster {
             self.coordinator_server.clone(),
             self.alive_tablet_servers_by_id.clone(),
             available_locations_by_path,
-            available_locations_by_bucket,
             self.table_id_by_path.clone(),
             self.table_info_by_path.clone(),
             self.partitions_id_by_path.clone(),
@@ -130,12 +132,61 @@ impl Cluster {
         )
     }
 
+    /// Returns a copy that has no leader for those of `table_buckets` that `server_id` leads, or
+    /// `None` if it leads none of them, e.g. because another failed lookup already dropped them.
+    /// The buckets stay listed for their table or partition, like other buckets without a leader.
+    pub fn invalidate_bucket_leaders(
+        &self,
+        table_buckets: &HashSet<TableBucket>,
+        server_id: i32,
+    ) -> Option<Self> {
+        let led_by_server: HashMap<&TableBucket, &Arc<PhysicalTablePath>> = table_buckets
+            .iter()
+            .filter_map(|table_bucket| {
+                let location = self.available_locations_by_bucket.get(table_bucket)?;
+                let leader_id = location.leader().as_ref().map(ServerNode::id);
+                (leader_id == Some(server_id))
+                    .then_some((table_bucket, &location.physical_table_path))
+            })
+            .collect();
+        if led_by_server.is_empty() {
+            return None;
+        }
+
+        let mut available_locations_by_path = self.available_locations_by_path.clone();
+        let paths: HashSet<&Arc<PhysicalTablePath>> = led_by_server.values().copied().collect();
+        for path in paths {
+            let Some(locations) = available_locations_by_path.get_mut(path) else {
+                continue;
+            };
+            for location in locations
+                .iter_mut()
+                .filter(|location| led_by_server.contains_key(&location.table_bucket))
+            {
+                *location = BucketLocation::new(
+                    location.table_bucket.clone(),
+                    None,
+                    Arc::clone(&location.physical_table_path),
+                );
+            }
+        }
+
+        Some(Cluster::new(
+            self.coordinator_server.clone(),
+            self.alive_tablet_servers_by_id.clone(),
+            available_locations_by_path,
+            self.table_id_by_path.clone(),
+            self.table_info_by_path.clone(),
+            self.partitions_id_by_path.clone(),
+            self.bucket_count_by_table_or_partition.clone(),
+        ))
+    }
+
     /// Returns a copy without `table_path`'s id, info, partitions and bucket
     /// locations. Used once the table is known to be dropped or recreated.
     pub fn evict_table(&self, table_path: &TablePath) -> Self {
         let table_paths = HashSet::from([table_path]);
-        let (available_locations_by_path, available_locations_by_bucket) =
-            self.filter_bucket_locations_by_path(&table_paths);
+        let available_locations_by_path = self.filter_bucket_locations_by_path(&table_paths);
 
         let table_id_by_path = self
             .table_id_by_path
@@ -178,7 +229,6 @@ impl Cluster {
             self.coordinator_server.clone(),
             self.alive_tablet_servers_by_id.clone(),
             available_locations_by_path,
-            available_locations_by_bucket,
             table_id_by_path,
             table_info_by_path,
             partitions_id_by_path,
@@ -216,53 +266,23 @@ impl Cluster {
     fn filter_bucket_locations_by_path(
         &self,
         table_paths: &HashSet<&TablePath>,
-    ) -> (
-        HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
-        HashMap<TableBucket, BucketLocation>,
-    ) {
-        let available_locations_by_path = self
-            .available_locations_by_path
+    ) -> HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>> {
+        self.available_locations_by_path
             .iter()
             .filter(|&(path, _)| !table_paths.contains(path.get_table_path()))
             .map(|(path, locations)| (path.clone(), locations.clone()))
-            .collect();
-
-        let available_locations_by_bucket = self
-            .available_locations_by_bucket
-            .iter()
-            .filter(|&(_bucket, location)| {
-                !table_paths.contains(&location.physical_table_path.get_table_path())
-            })
-            .map(|(bucket, location)| (bucket.clone(), location.clone()))
-            .collect();
-
-        (available_locations_by_path, available_locations_by_bucket)
+            .collect()
     }
 
     fn filter_bucket_locations_by_physical_path(
         &self,
         physical_table_paths: &HashSet<PhysicalTablePath>,
-    ) -> (
-        HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>>,
-        HashMap<TableBucket, BucketLocation>,
-    ) {
-        let available_locations_by_path = self
-            .available_locations_by_path
+    ) -> HashMap<Arc<PhysicalTablePath>, Vec<BucketLocation>> {
+        self.available_locations_by_path
             .iter()
             .filter(|&(path, _)| !physical_table_paths.contains(path.as_ref()))
             .map(|(path, locations)| (path.clone(), locations.clone()))
-            .collect();
-
-        let available_locations_by_bucket = self
-            .available_locations_by_bucket
-            .iter()
-            .filter(|&(_bucket, location)| {
-                !physical_table_paths.contains(location.physical_table_path.as_ref())
-            })
-            .map(|(bucket, location)| (bucket.clone(), location.clone()))
-            .collect();
-
-        (available_locations_by_path, available_locations_by_bucket)
+            .collect()
     }
 
     pub fn from_metadata_response(
@@ -284,7 +304,6 @@ impl Cluster {
         let mut table_info_by_path = HashMap::new();
         let mut partitions_id_by_path = HashMap::new();
         let mut tmp_available_locations_by_path = HashMap::new();
-        let mut tmp_available_location_by_bucket = HashMap::new();
         let mut bucket_count_by_table_or_partition = HashMap::new();
 
         // A table's metadata never lists its partitions, so a table recreated under the same
@@ -313,7 +332,6 @@ impl Cluster {
             table_id_by_path.extend(origin.get_table_id_by_path().clone());
             partitions_id_by_path.extend(origin.partitions_id_by_path.clone());
             tmp_available_locations_by_path.extend(origin.available_locations_by_path.clone());
-            tmp_available_location_by_bucket.extend(origin.available_locations_by_bucket.clone());
             bucket_count_by_table_or_partition
                 .extend(origin.bucket_count_by_table_or_partition.clone());
         }
@@ -398,6 +416,14 @@ impl Cluster {
                 Arc::new(table_path),
                 Some(partition_name),
             ));
+            // Partition ids only ever grow, so a lower id than the cached one comes from a
+            // server that hasn't seen the partition re-created yet.
+            if partitions_id_by_path
+                .get(&physical_table_path)
+                .is_some_and(|cached_id| *cached_id > partition_id)
+            {
+                continue;
+            }
 
             partitions_id_by_path.insert(Arc::clone(&physical_table_path), partition_id);
 
@@ -417,20 +443,10 @@ impl Cluster {
             tmp_available_locations_by_path.insert(physical_table_path, bucket_locations);
         }
 
-        for bucket_locations in &mut tmp_available_locations_by_path.values() {
-            for location in bucket_locations {
-                if location.leader().is_some() {
-                    tmp_available_location_by_bucket
-                        .insert(location.table_bucket.clone(), location.clone());
-                }
-            }
-        }
-
         Ok(Cluster::new(
             coordinator_server,
             servers,
             tmp_available_locations_by_path,
-            tmp_available_location_by_bucket,
             table_id_by_path,
             table_info_by_path,
             partitions_id_by_path,
@@ -618,6 +634,7 @@ mod tests {
     use super::*;
     use crate::metadata::{DataTypes, Schema};
     use crate::proto::{PbPartitionMetadata, PbServerNode, PbTableMetadata, PbTablePath};
+    use crate::test_utils::{pb_bucket, pb_metadata_response, pb_table_metadata};
 
     fn make_coordinator() -> ServerNode {
         ServerNode::new(
@@ -679,7 +696,6 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
-            HashMap::new(),
         );
 
         let nodes = cluster.get_server_nodes();
@@ -703,7 +719,6 @@ mod tests {
         let cluster = Cluster::new(
             None,
             make_tablet_servers(),
-            HashMap::new(),
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -748,12 +763,8 @@ mod tests {
             None,
             HashMap::from([(leader.id(), leader)]),
             HashMap::from([
-                (Arc::clone(&partition_1), vec![location_1.clone()]),
-                (Arc::clone(&partition_2), vec![location_2.clone()]),
-            ]),
-            HashMap::from([
-                (bucket_1.clone(), location_1),
-                (bucket_2.clone(), location_2),
+                (Arc::clone(&partition_1), vec![location_1]),
+                (Arc::clone(&partition_2), vec![location_2]),
             ]),
             HashMap::new(),
             HashMap::new(),
@@ -788,6 +799,78 @@ mod tests {
     }
 
     #[test]
+    fn invalidate_bucket_leaders_only_drops_the_given_buckets_led_by_the_server() {
+        let table_path = Arc::new(PhysicalTablePath::of(Arc::new(TablePath::new("db", "t"))));
+        let servers = make_tablet_servers();
+        let location = |bucket_id, leader_id| {
+            BucketLocation::new(
+                TableBucket::new(1, bucket_id),
+                Some(servers[&leader_id].clone()),
+                Arc::clone(&table_path),
+            )
+        };
+        let locations = vec![location(0, 2), location(1, 1), location(2, 2)];
+        let cluster = Cluster::new(
+            None,
+            servers.clone(),
+            HashMap::from([(Arc::clone(&table_path), locations)]),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([(TableOrPartition::Table(1), 3)]),
+        );
+
+        let updated_cluster = cluster
+            .invalidate_bucket_leaders(
+                &HashSet::from([TableBucket::new(1, 0), TableBucket::new(1, 1)]),
+                2,
+            )
+            .expect("server 2 leads bucket 0");
+
+        assert!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 0))
+                .is_none()
+        );
+        assert_eq!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 1))
+                .map(ServerNode::id),
+            Some(1)
+        );
+        assert_eq!(
+            updated_cluster
+                .leader_for(&TableBucket::new(1, 2))
+                .map(ServerNode::id),
+            Some(2)
+        );
+        let listed: Vec<(i32, Option<i32>)> = updated_cluster
+            .get_available_buckets_for_table_path(&table_path)
+            .iter()
+            .map(|location| {
+                (
+                    location.table_bucket.bucket_id(),
+                    location.leader().as_ref().map(ServerNode::id),
+                )
+            })
+            .collect();
+        assert_eq!(listed, [(0, None), (1, Some(1)), (2, Some(2))]);
+        assert_eq!(
+            updated_cluster.bucket_count(TableOrPartition::Table(1)),
+            Some(3)
+        );
+
+        assert!(
+            updated_cluster
+                .invalidate_bucket_leaders(
+                    &HashSet::from([TableBucket::new(1, 0), TableBucket::new(1, 1)]),
+                    2,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn test_evict_table_removes_all_table_state() {
         let table_path_a = Arc::new(TablePath::new("db", "table_a"));
         let table_path_b = Arc::new(TablePath::new("db", "table_b"));
@@ -813,12 +896,8 @@ mod tests {
             None,
             HashMap::from([(leader.id(), leader)]),
             HashMap::from([
-                (Arc::clone(&partition_a), vec![location_a.clone()]),
-                (Arc::clone(&physical_b), vec![location_b.clone()]),
-            ]),
-            HashMap::from([
-                (bucket_a.clone(), location_a),
-                (bucket_b.clone(), location_b),
+                (Arc::clone(&partition_a), vec![location_a]),
+                (Arc::clone(&physical_b), vec![location_b]),
             ]),
             HashMap::from([
                 (table_path_a.as_ref().clone(), 1),
@@ -924,7 +1003,6 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
-            HashMap::new(),
             HashMap::from([(TableOrPartition::Partition(10), 4)]),
         );
 
@@ -980,6 +1058,7 @@ mod tests {
                 port: 9123,
                 listeners: None,
                 rack: None,
+                server_tag: None,
             }],
             table_metadata: vec![PbTableMetadata {
                 table_path: PbTablePath {
@@ -994,6 +1073,7 @@ mod tests {
                 modified_time: 0,
                 remote_data_dir: None,
                 bucket_count_epoch: None,
+                bucket_count: None,
             }],
             partition_metadata: vec![PbPartitionMetadata {
                 table_id,
@@ -1049,6 +1129,7 @@ mod tests {
             port: 9123,
             listeners: None,
             rack: None,
+            server_tag: None,
         };
         let table_response = MetadataResponse {
             coordinator_server: None,
@@ -1066,6 +1147,7 @@ mod tests {
                 modified_time: 0,
                 remote_data_dir: None,
                 bucket_count_epoch: Some(2),
+                bucket_count: None,
             }],
             partition_metadata: vec![],
         };
@@ -1114,68 +1196,101 @@ mod tests {
         );
     }
 
-    fn pb_table_metadata(
-        table_name: &str,
-        table_id: TableId,
-        partitioned: bool,
-        bucket_metadata: Vec<PbBucketMetadata>,
-    ) -> PbTableMetadata {
-        let mut descriptor = TableDescriptor::builder().schema(
-            Schema::builder()
-                .column("id", DataTypes::int())
-                .column("p", DataTypes::string())
-                .build()
-                .unwrap(),
+    #[test]
+    fn metadata_refresh_removes_stale_leaders_and_preserves_other_tables() {
+        let path_routes = |cluster: &Cluster, table_name: &str| {
+            let path = PhysicalTablePath::of(Arc::new(TablePath::new("db", table_name)));
+            cluster
+                .get_available_buckets_for_table_path(&path)
+                .iter()
+                .map(|location| {
+                    (
+                        location.bucket_id(),
+                        location.leader().as_ref().map(ServerNode::id),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let current = pb_metadata_response(
+            vec![
+                pb_table_metadata("plain", 1, false, vec![pb_bucket(0), pb_bucket(1)]),
+                pb_table_metadata("other", 2, false, vec![pb_bucket(0)]),
+            ],
+            vec![],
         );
-        if partitioned {
-            descriptor = descriptor.partitioned_by(vec!["p"]);
-        }
-        let descriptor = descriptor
-            .distributed_by(Some(4), vec!["id".to_string()])
-            .build()
-            .unwrap();
-        PbTableMetadata {
-            table_path: PbTablePath {
-                database_name: "db".to_string(),
-                table_name: table_name.to_string(),
-            },
-            table_id,
-            schema_id: 1,
-            table_json: serde_json::to_vec(&descriptor.serialize_json().unwrap()).unwrap(),
-            bucket_metadata,
-            created_time: 0,
-            modified_time: 0,
-            remote_data_dir: None,
-            bucket_count_epoch: None,
+        let current = Cluster::from_metadata_response(current, None).unwrap();
+        let mut leaderless = pb_bucket(0);
+        leaderless.leader_id = None;
+        // Bucket 0 loses its leader; bucket 1 disappears from the refreshed table.
+        let response = pb_metadata_response(
+            vec![pb_table_metadata("plain", 1, false, vec![leaderless])],
+            vec![],
+        );
+        let updated = Cluster::from_metadata_response(response, Some(&current)).unwrap();
+        assert!(updated.leader_for(&TableBucket::new(1, 0)).is_none());
+        assert!(updated.leader_for(&TableBucket::new(1, 1)).is_none());
+        assert_eq!(path_routes(&updated, "plain"), vec![(0, None)]);
+
+        let mut new_leader = pb_bucket(0);
+        new_leader.leader_id = Some(2);
+        new_leader.replica_id = vec![2];
+        new_leader.isr = vec![2];
+        let mut recovered = pb_metadata_response(
+            vec![pb_table_metadata("plain", 1, false, vec![new_leader])],
+            vec![],
+        );
+        recovered.tablet_servers.push(PbServerNode {
+            node_id: 2,
+            host: "ts2".to_string(),
+            ..recovered.tablet_servers[0].clone()
+        });
+        let recovered = Cluster::from_metadata_response(recovered, Some(&updated)).unwrap();
+        assert_eq!(
+            recovered.leader_for(&TableBucket::new(1, 0)).unwrap().id(),
+            2
+        );
+        assert_eq!(path_routes(&recovered, "plain"), vec![(0, Some(2))]);
+        assert!(recovered.leader_for(&TableBucket::new(1, 1)).is_none());
+        for cluster in [&updated, &recovered] {
+            assert_eq!(cluster.leader_for(&TableBucket::new(2, 0)).unwrap().id(), 1);
+            assert_eq!(path_routes(cluster, "other"), vec![(0, Some(1))]);
         }
     }
 
-    fn pb_bucket(bucket_id: i32) -> PbBucketMetadata {
-        PbBucketMetadata {
-            bucket_id,
-            leader_id: Some(1),
-            replica_id: vec![1],
-            leader_epoch: None,
-            bucket_epoch: None,
-            isr: vec![1],
-        }
-    }
-
-    fn pb_metadata_response(
-        table_metadata: Vec<PbTableMetadata>,
-        partition_metadata: Vec<PbPartitionMetadata>,
-    ) -> MetadataResponse {
-        MetadataResponse {
-            coordinator_server: None,
-            tablet_servers: vec![PbServerNode {
-                node_id: 1,
-                host: "ts1".to_string(),
-                port: 9123,
-                listeners: None,
-                rack: None,
-            }],
-            table_metadata,
-            partition_metadata,
+    #[test]
+    fn partition_metadata_refresh_preserves_other_partitions() {
+        let partition = |name: &str, id, buckets| PbPartitionMetadata {
+            table_id: 1,
+            partition_name: name.to_string(),
+            partition_id: id,
+            bucket_metadata: buckets,
+            bucket_count: Some(2),
+        };
+        let current = pb_metadata_response(
+            vec![pb_table_metadata("parts", 1, true, vec![])],
+            vec![
+                partition("p1", 10, vec![pb_bucket(0), pb_bucket(1)]),
+                partition("p2", 20, vec![pb_bucket(0), pb_bucket(1)]),
+            ],
+        );
+        let current = Cluster::from_metadata_response(current, None).unwrap();
+        let mut leaderless = pb_bucket(0);
+        leaderless.leader_id = None;
+        let response = pb_metadata_response(vec![], vec![partition("p1", 10, vec![leaderless])]);
+        let updated = Cluster::from_metadata_response(response, Some(&current)).unwrap();
+        for bucket_id in [0, 1] {
+            assert!(
+                updated
+                    .leader_for(&TableBucket::new_with_partition(1, Some(10), bucket_id))
+                    .is_none()
+            );
+            assert_eq!(
+                updated
+                    .leader_for(&TableBucket::new_with_partition(1, Some(20), bucket_id))
+                    .unwrap()
+                    .id(),
+                1
+            );
         }
     }
 
@@ -1234,6 +1349,42 @@ mod tests {
             Some(2)
         );
         assert_eq!(cluster.get_partition_id(&partition_path), None);
+        assert_eq!(cluster.bucket_count(TableOrPartition::Partition(10)), None);
+    }
+
+    #[test]
+    fn from_metadata_response_keeps_a_re_created_partition_over_stale_metadata() {
+        let partition = |partition_id| PbPartitionMetadata {
+            table_id: 1,
+            partition_name: "p1".to_string(),
+            partition_id,
+            bucket_metadata: vec![pb_bucket(0)],
+            bucket_count: Some(2),
+        };
+        let current = pb_metadata_response(
+            vec![pb_table_metadata("parts", 1, true, vec![])],
+            vec![partition(11)],
+        );
+        let current = Cluster::from_metadata_response(current, None).unwrap();
+        let partition_path = PhysicalTablePath::of_partitioned(
+            Arc::new(TablePath::new("db", "parts")),
+            Some("p1".to_string()),
+        );
+
+        let stale = pb_metadata_response(vec![], vec![partition(10)]);
+        let cluster = Cluster::from_metadata_response(stale, Some(&current)).unwrap();
+
+        assert_eq!(cluster.get_partition_id(&partition_path), Some(11));
+        assert!(
+            cluster
+                .leader_for(&TableBucket::new_with_partition(1, Some(11), 0))
+                .is_some()
+        );
+        assert!(
+            cluster
+                .leader_for(&TableBucket::new_with_partition(1, Some(10), 0))
+                .is_none()
+        );
         assert_eq!(cluster.bucket_count(TableOrPartition::Partition(10)), None);
     }
 }

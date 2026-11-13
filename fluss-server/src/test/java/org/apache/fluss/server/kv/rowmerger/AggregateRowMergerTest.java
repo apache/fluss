@@ -203,6 +203,12 @@ class AggregateRowMergerTest {
         // First row: id=1, count=10, total=100.0
         BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, 10L, 100.0});
 
+        BinaryValue first = partialMerger.merge(null, toBinaryValue(row1));
+        assertThat(first.row.getInt(0)).isEqualTo(1);
+        assertThat(first.row.getLong(1)).isEqualTo(10L);
+        assertThat(first.row.isNullAt(2)).isTrue();
+        assertThat(partialMerger.delete(first)).isNull();
+
         // Second row (partial): id=1, count=5, total=50.0
         // Only count should be aggregated (10 + 5 = 15)
         // total should remain unchanged (100.0)

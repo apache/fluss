@@ -42,6 +42,7 @@ import org.apache.fluss.utils.CloseableIterator;
 public class IndexedLakeSplitRecordIterator implements CloseableIterator<InternalRow> {
     private final CloseableIterator<LogRecord> logRecordIterators;
     private final int currentLakeSplitIndex;
+    private boolean closed;
 
     public IndexedLakeSplitRecordIterator(
             CloseableIterator<LogRecord> logRecordIterators, int currentLakeSplitIndex) {
@@ -55,7 +56,12 @@ public class IndexedLakeSplitRecordIterator implements CloseableIterator<Interna
 
     @Override
     public void close() {
-        logRecordIterators.close();
+        // both the reader, once the batch is emitted, and the scanner, when moving past the split,
+        // close this iterator
+        if (!closed) {
+            closed = true;
+            logRecordIterators.close();
+        }
     }
 
     @Override

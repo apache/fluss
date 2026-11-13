@@ -1,0 +1,89 @@
+################################################################################
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+name: DevKit Smoke
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'devkit/**'
+      - 'pom.xml'
+      - '.github/workflows/devkit-smoke.yaml'
+  push:
+    branches:
+      - main
+      - release-**
+    paths:
+      - 'devkit/**'
+      - 'pom.xml'
+      - '.github/workflows/devkit-smoke.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
+  cancel-in-progress: true
+
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
+jobs:
+  smoke:
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v5
+        with:
+          java-version: '11'
+          distribution: temurin
+
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
+
+      - name: Validate managed profile dependency versions
+        run: bash devkit/validate-managed-dependency-versions.sh
+
+      - name: Core smoke
+        working-directory: devkit
+        run: python3 -m unittest smoke_test.CoreSmoke
+
+      - name: Gateway smoke
+        working-directory: devkit
+        run: python3 -m unittest smoke_test.GatewaySmoke
+
+      - name: Paimon smoke
+        working-directory: devkit
+        run: python3 -m unittest smoke_test.PaimonLakeSmoke
+
+      - name: Iceberg smoke
+        working-directory: devkit
+        run: python3 -m unittest smoke_test.IcebergLakeSmoke
+
+      - name: Lance smoke
+        working-directory: devkit
+        run: python3 -m unittest smoke_test.LanceLakeSmoke
+
+      - name: Clean up DevKit
+        if: always()
+        working-directory: devkit
+        run: just clean

@@ -37,6 +37,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 
@@ -137,9 +138,11 @@ class RocksDBKvTest {
                                                                 Arrays.copyOf(key, prefix.length),
                                                                 prefix))
                                 .toArray(byte[][]::new);
-                assertThat(kv.prefixLookup(prefix))
-                        .as("prefix %s (flushed=%s)", Arrays.toString(prefix), flush)
-                        .containsExactly(expected);
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .as("prefix %s (flushed=%s)", Arrays.toString(prefix), flush)
+                            .containsExactly(expected);
+                }
             }
         }
     }
@@ -166,15 +169,92 @@ class RocksDBKvTest {
                 kv.put(key1, new byte[] {5});
                 kv.delete(key2);
                 kv.put(key4, new byte[] {4});
-                assertThat(kv.prefixLookup(prefix))
-                        .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
                 kv.db.flush(options);
-                assertThat(kv.prefixLookup(prefix))
-                        .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
                 kv.db.compactRange();
-                assertThat(kv.prefixLookup(prefix))
-                        .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixReadViewSurvivesConcurrentMutations(boolean flush, @TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(new byte[] {1, 0}, new byte[] {10});
+            kv.put(new byte[] {1, 1}, new byte[] {11});
+            kv.put(new byte[] {2}, new byte[] {20});
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            byte[] prefix = {1};
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                prefix[0] = 2;
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                kv.put(new byte[] {1, 0}, new byte[] {12});
+                kv.delete(new byte[] {1, 1});
+                kv.put(new byte[] {1, 2}, new byte[] {13});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                // Seek has not run yet: the view must date from opening, not the first seek.
+                assertThat(lookup.readAll()).containsExactly(new byte[] {10}, new byte[] {11});
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll()).containsExactly(new byte[] {12}, new byte[] {13});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {3})) {
+                assertThat(lookup.readAll()).isEmpty();
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+        }
+    }
+
+    @Test
+    void testMultiGetSnapshotSurvivesFlushCompactionAndDelete(@TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            byte[] key = new byte[] {1};
+            byte[] missing = new byte[] {2};
+            kv.put(key, new byte[] {10});
+            RocksDBKv.MultiGetLookup lookup = kv.openMultiGet();
+            try {
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isEqualTo(1);
+                kv.delete(key);
+                kv.put(missing, new byte[] {20});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                assertThat(lookup.read(Arrays.asList(key, missing, key)))
+                        .containsExactly(new byte[] {10}, null, new byte[] {10});
+            } finally {
+                lookup.close();
+            }
+            lookup.close();
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
+            assertThatThrownBy(() -> lookup.read(Arrays.asList(key)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("closed");
+            assertThat(kv.multiGet(Arrays.asList(key, missing)))
+                    .containsExactly(null, new byte[] {20});
         }
     }
 

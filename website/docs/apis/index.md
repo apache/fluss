@@ -24,7 +24,7 @@ You need a running Fluss cluster to use any of the client libraries. See the [De
   - **Offset** — the position of a record within a log table's bucket. Used to track reading progress. Start from `EARLIEST_OFFSET` to read all data, or resolve the current latest offset via `list_offsets` to only read new records.
 - **Primary key (PK) table** — a table with a primary key. Supports upsert, delete, and point lookups.
 - **Bucket** — the unit of parallelism within a table (similar to Kafka partitions). Each table has one or more buckets. Readers subscribe to individual buckets.
-- **Partition** — a way to organize data by column values (e.g. by date or region). Each partition contains its own set of buckets. Partitions must be created explicitly before writing.
+- **Partition** — a way to organize data by column values (e.g. by date or region). Each partition contains its own set of buckets. Partitions can be created explicitly, and by default a write to a partition that doesn't exist creates it.
 
 ## Client Overview
 

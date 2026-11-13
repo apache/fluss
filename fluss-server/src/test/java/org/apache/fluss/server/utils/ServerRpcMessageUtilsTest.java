@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -32,10 +34,21 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -47,6 +60,7 @@ import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
 import org.apache.fluss.server.entity.ProduceLogDataForBucket;
 import org.apache.fluss.server.entity.PutKvDataForBucket;
@@ -54,6 +68,7 @@ import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
@@ -62,7 +77,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
@@ -74,9 +92,216 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMeta
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
+
+    @Test
+    void testUnknownPartitionCountRemainsAbsentOnWire() {
+        PartitionMetadata partition =
+                new PartitionMetadata(
+                        1,
+                        "p",
+                        2,
+                        Collections.singletonList(
+                                new BucketMetadata(0, null, null, Collections.emptyList())),
+                        null);
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        null,
+                        null,
+                        Collections.emptySet(),
+                        Collections.emptyList(),
+                        Collections.singletonList(partition));
+        assertThat(request.getPartitionMetadatasList().get(0).hasBucketCount()).isFalse();
+    }
+
+    @Test
+    void testCommitConsumerOffsetsRequestKeepsLastOffsetPerBucket() {
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setOffset(40L);
+        request.addTable()
+                .setTableId(2L)
+                .addBucket()
+                .setBucketId(1)
+                .setOffset(30L)
+                .setMetadata("last");
+
+        TableBucket bucket = new TableBucket(2L, 1);
+        assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .containsOnly(entry(bucket, new ConsumerOffsetAndMetadata(30L, "last")));
+    }
+
+    @Test
+    void testCommitConsumerOffsetsRequestRejectsReservedPartitionId() {
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable()
+                .setTableId(2L)
+                .addBucket()
+                .setBucketId(1)
+                .setPartitionId(-1L)
+                .setOffset(10L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1")
+                .hasMessageContaining("omit partition_id");
+    }
+
+    @Test
+    void testDecodeGetConsumerOffsetsRequest() {
+        GetConsumerOffsetsRequest allOffsets =
+                new GetConsumerOffsetsRequest().setGroupId("group-1").setAllOffsets(true);
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(allOffsets)).isNull();
+
+        GetConsumerOffsetsRequest empty =
+                new GetConsumerOffsetsRequest().setGroupId("group-1").setAllOffsets(false);
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(empty)).isEmpty();
+
+        PbGetConsumerOffsetsRequestBucket bucket =
+                new PbGetConsumerOffsetsRequestBucket().setBucketId(2);
+        PbGetConsumerOffsetsRequestTable table =
+                new PbGetConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Collections.singletonList(bucket));
+        GetConsumerOffsetsRequest selected =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(false)
+                        .addAllTables(Collections.singletonList(table));
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(selected))
+                .containsExactly(new TableBucket(3L, 2));
+    }
+
+    @Test
+    void testGetConsumerOffsetsRequestRejectsInvalidCombinations() {
+        PbGetConsumerOffsetsRequestBucket bucket =
+                new PbGetConsumerOffsetsRequestBucket().setBucketId(2);
+        PbGetConsumerOffsetsRequestTable table =
+                new PbGetConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Arrays.asList(bucket, bucket));
+
+        GetConsumerOffsetsRequest allOffsetsWithBuckets =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(true)
+                        .addAllTables(Collections.singletonList(table));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
+                                        allOffsetsWithBuckets))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("all_offsets");
+
+        GetConsumerOffsetsRequest duplicateBuckets =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(false)
+                        .addAllTables(Collections.singletonList(table));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
+                                        duplicateBuckets))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("Duplicate table bucket");
+    }
+
+    @Test
+    void testBuildGetConsumerOffsetsResponsePreservesOrderAndRequiredMetadata() {
+        TableBucket committedBucket = new TableBucket(2L, 3);
+        TableBucket missingBucket = new TableBucket(2L, 1);
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new LinkedHashMap<>();
+        offsets.put(committedBucket, new ConsumerOffsetAndMetadata(42L, "metadata"));
+        offsets.put(missingBucket, null);
+
+        GetConsumerOffsetsResponse response =
+                ServerRpcMessageUtils.makeGetConsumerOffsetsResponse(offsets);
+
+        List<PbGetConsumerOffsetsResponseBucket> buckets =
+                response.getTablesList().get(0).getBucketsList();
+        assertThat(buckets)
+                .extracting(PbGetConsumerOffsetsResponseBucket::getBucketId)
+                .containsExactly(3, 1);
+        assertThat(buckets.get(0).getOffset()).isEqualTo(42L);
+        assertThat(buckets.get(0).getMetadata()).isEqualTo("metadata");
+        assertThat(buckets.get(1).hasOffset()).isFalse();
+        assertThat(buckets.get(1).hasMetadata()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCommitConsumerOffsetsRequestRejectsPartitionSentinelAlias(boolean sentinelFirst) {
+        PbCommitConsumerOffsetsRequestBucket absentPartition =
+                new PbCommitConsumerOffsetsRequestBucket().setBucketId(1).setOffset(10L);
+        PbCommitConsumerOffsetsRequestBucket sentinelPartition =
+                new PbCommitConsumerOffsetsRequestBucket()
+                        .setBucketId(1)
+                        .setPartitionId(-1L)
+                        .setOffset(20L);
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable()
+                .setTableId(2L)
+                .addAllBuckets(
+                        sentinelFirst
+                                ? Arrays.asList(sentinelPartition, absentPartition)
+                                : Arrays.asList(absentPartition, sentinelPartition));
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1");
+    }
+
+    @Test
+    void testCommitConsumerOffsetsRequestPreservesDistinctPartitions() {
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setOffset(10L);
+        PbCommitConsumerOffsetsRequestTable table = request.addTable().setTableId(3L);
+        table.addBucket().setBucketId(1).setPartitionId(100L).setOffset(20L);
+        table.addBucket().setBucketId(1).setPartitionId(101L).setOffset(30L);
+
+        assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .containsOnly(
+                        entry(new TableBucket(2L, 1), new ConsumerOffsetAndMetadata(10L, null)),
+                        entry(
+                                new TableBucket(3L, 100L, 1),
+                                new ConsumerOffsetAndMetadata(20L, null)),
+                        entry(
+                                new TableBucket(3L, 101L, 1),
+                                new ConsumerOffsetAndMetadata(30L, null)));
+    }
+
+    @Test
+    void testCommitConsumerOffsetsResponseGroupsBucketResultsByTable() {
+        Map<TableBucket, Errors> results = new HashMap<>();
+        results.put(new TableBucket(2L, 3), Errors.NONE);
+        results.put(new TableBucket(2L, 1), Errors.NOT_CONSUMER_GROUP_OWNER);
+        results.put(new TableBucket(1L, 2), Errors.NONE);
+
+        CommitConsumerOffsetsResponse response =
+                ServerRpcMessageUtils.makeCommitConsumerOffsetsResponse(results);
+
+        List<PbCommitConsumerOffsetsResponseTable> tables = response.getTablesList();
+        assertThat(tables)
+                .extracting(PbCommitConsumerOffsetsResponseTable::getTableId)
+                .containsExactlyInAnyOrder(2L, 1L);
+        Map<TableBucket, Errors> bucketResults = new HashMap<>();
+        for (PbCommitConsumerOffsetsResponseTable table : tables) {
+            for (PbCommitConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                TableBucket key = new TableBucket(table.getTableId(), bucket.getBucketId());
+                Errors error =
+                        bucket.hasErrorCode() ? Errors.forCode(bucket.getErrorCode()) : Errors.NONE;
+                assertThat(bucket.hasErrorCode()).isEqualTo(error != Errors.NONE);
+                assertThat(bucketResults.put(key, error)).isNull();
+            }
+        }
+        assertThat(bucketResults).isEqualTo(results);
+    }
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
@@ -303,7 +528,8 @@ class ServerRpcMessageUtilsTest {
                                 2, 2, 4, Arrays.asList(2, 3), Collections.emptyList(), 5));
         TableMetadata tableMetadata = new TableMetadata(DATA1_TABLE_INFO, bucketMetadata);
         PartitionMetadata partitionMetadata =
-                new PartitionMetadata(DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata);
+                new PartitionMetadata(
+                        DATA1_TABLE_INFO.getTableId(), "p1", 10L, bucketMetadata, null);
 
         UpdateMetadataRequest request =
                 makeUpdateMetadataRequest(
@@ -314,6 +540,7 @@ class ServerRpcMessageUtilsTest {
                         Collections.singletonList(partitionMetadata));
 
         PbTableMetadata pbTableMetadata = request.getTableMetadatasList().get(0);
+        assertThat(pbTableMetadata.getBucketCount()).isEqualTo(DATA1_TABLE_INFO.getNumBuckets());
         assertAuthoritativeWireMetadata(pbTableMetadata.getBucketMetadatasList());
         PbPartitionMetadata pbPartitionMetadata = request.getPartitionMetadatasList().get(0);
         assertAuthoritativeWireMetadata(pbPartitionMetadata.getBucketMetadatasList());

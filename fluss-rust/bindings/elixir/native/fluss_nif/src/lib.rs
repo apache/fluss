@@ -30,6 +30,7 @@ mod atoms;
 mod config;
 mod connection;
 mod log_scanner;
+mod lookuper;
 mod row_convert;
 mod schema;
 mod table;

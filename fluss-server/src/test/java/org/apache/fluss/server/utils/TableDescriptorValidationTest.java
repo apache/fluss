@@ -142,6 +142,26 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testRejectNonPositiveBucketCount() {
+        for (int bucketCount : new int[] {0, -1}) {
+            TableDescriptor tableDescriptor =
+                    TableDescriptor.builder()
+                            .schema(TestData.DATA1_SCHEMA)
+                            .distributedBy(bucketCount)
+                            .build()
+                            .withReplicationFactor(3);
+
+            assertThatThrownBy(
+                            () ->
+                                    TableDescriptorValidation.validateTableDescriptor(
+                                            tableDescriptor, 100, null))
+                    .isInstanceOf(InvalidTableException.class)
+                    .hasMessageContaining("Bucket count must be greater than 0")
+                    .hasMessageContaining(String.valueOf(bucketCount));
+        }
+    }
+
+    @Test
     void testCreateLogTableWithKvTTLFails() {
         assertThatThrownBy(
                         () ->
@@ -242,6 +262,19 @@ class TableDescriptorValidationTest {
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key())
                 .hasMessageContaining("exceeds");
+    }
+
+    @Test
+    void testCustomLakePathRejectedForUnsupportedFormat() {
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME,
+                                                "lance_db"),
+                                        DataLakeFormat.LANCE))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("only supported for Paimon and Iceberg");
     }
 
     @Test
@@ -380,16 +413,15 @@ class TableDescriptorValidationTest {
         assertThatCode(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
                 .doesNotThrowAnyException();
 
-        // custom lake paths are not supported for Iceberg
-        assertThatThrownBy(
+        // custom lake paths are now supported for Iceberg
+        assertThatCode(
                         () ->
                                 validate(
                                         tableDescriptorWithLakeName(
                                                 ConfigOptions.TABLE_DATALAKE_TABLE_NAME,
                                                 "lake_table"),
                                         DataLakeFormat.ICEBERG))
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining("Custom lake table path is only supported for Paimon");
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -416,6 +448,22 @@ class TableDescriptorValidationTest {
                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                 .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.AGGREGATION)
                 .build();
+    }
+
+    @Test
+    void testLakeFormatMustMatchClusterWhenLakeIsDisabled() {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(TestData.DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+
+        assertThatThrownBy(() -> validate(tableDescriptor, DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_FORMAT.key())
+                .hasMessageContaining("must match");
     }
 
     private static Stream<Arguments> supportedKvTTLTimeColumnTypes() {

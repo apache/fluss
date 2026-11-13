@@ -171,21 +171,16 @@ public class TableDescriptorValidation {
             return;
         }
 
-        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
-            return;
-        }
-
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            "'%s' ('%s') must match cluster '%s' ('%s').",
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
                             tableDataLakeFormat.get(),
                             ConfigOptions.DATALAKE_FORMAT.key(),
-                            clusterDataLakeFormat,
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+                            clusterDataLakeFormat));
         }
     }
 
@@ -261,9 +256,9 @@ public class TableDescriptorValidation {
                 tableConf
                         .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
                         .orElse(clusterDataLakeFormat);
-        if (dataLakeFormat != DataLakeFormat.PAIMON) {
+        if (dataLakeFormat != DataLakeFormat.PAIMON && dataLakeFormat != DataLakeFormat.ICEBERG) {
             throw new InvalidConfigException(
-                    "Custom lake table path is only supported for Paimon.");
+                    "Custom lake table path is only supported for Paimon and Iceberg.");
         }
     }
 
@@ -468,6 +463,10 @@ public class TableDescriptorValidation {
             throw new InvalidTableException("Bucket number must be set.");
         }
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        if (bucketCount <= 0) {
+            throw new InvalidTableException(
+                    String.format("Bucket count must be greater than 0, but is %s.", bucketCount));
+        }
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(

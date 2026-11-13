@@ -15,25 +15,32 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event;
+package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
-import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.types.DataType;
 
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
+/** Counts non-null input values, storing the count as a BIGINT. */
+public class FieldCountAgg extends FieldAggregator {
 
-    private final TableBucket tableBucket;
+    private static final long serialVersionUID = 1L;
 
-    public RebalanceTaskTimeoutEvent(TableBucket tableBucket) {
-        this.tableBucket = tableBucket;
-    }
-
-    public TableBucket getTableBucket() {
-        return tableBucket;
+    /**
+     * Creates a COUNT aggregator.
+     *
+     * @param dataType the BIGINT type of the aggregated column
+     */
+    public FieldCountAgg(DataType dataType) {
+        super(dataType);
     }
 
     @Override
-    public String toString() {
-        return "RebalanceTaskTimeoutEvent{tableBucket=" + tableBucket + "}";
+    public Object agg(Object accumulator, Object inputField) {
+        long count = accumulator == null ? 0L : (long) accumulator;
+        return inputField == null ? count : count + 1L;
+    }
+
+    @Override
+    public boolean requiresAggOnFirstWrite() {
+        return true;
     }
 }

@@ -71,9 +71,11 @@ mod ffi {
         writer_dynamic_batch_size_enabled: bool,
         writer_dynamic_batch_size_min: i32,
         writer_bucket_no_key_assigner: String,
+        writer_dynamic_create_partition_enabled: bool,
         scanner_remote_log_prefetch_num: usize,
         remote_file_download_thread_num: usize,
         scanner_remote_log_read_concurrency: usize,
+        scanner_io_tmp_dir: String,
         scanner_log_max_poll_records: usize,
         scanner_log_fetch_max_bytes: i32,
         scanner_log_fetch_min_bytes: i32,
@@ -88,6 +90,7 @@ mod ffi {
         writer_retry_backoff_ms: u64,
         writer_retry_max_backoff_ms: u64,
         connect_timeout_ms: u64,
+        connection_max_idle_time_ms: u64,
         security_protocol: String,
         security_sasl_mechanism: String,
         security_sasl_username: String,
@@ -97,6 +100,8 @@ mod ffi {
         lookup_batch_timeout_ms: u64,
         lookup_max_inflight_requests: usize,
         lookup_max_retries: i32,
+        lookup_retry_backoff_ms: u64,
+        lookup_retry_max_backoff_ms: u64,
     }
 
     struct FfiResult {
@@ -255,6 +260,7 @@ mod ffi {
         bucket_id: i32,
         base_offset: i64,
         commit_timestamp: i64,
+        schema_id: i32,
     }
 
     struct FfiArrowRecordBatches {
@@ -682,8 +688,8 @@ mod ffi {
         // configured buffer wait timeout, >= 0 caps the wait at that many ms
         // (0 = non-blocking), letting callers keep a submit within a fixed budget.
         fn append(self: &mut AppendWriter, row: &GenericRowInner, budget_ms: i64) -> FfiPtrResult;
-        // Partition (if partitioned) comes from the first row, so all rows must
-        // share one partition; rows are distributed across buckets by key.
+        // Rows are routed to their respective partitions and distributed across
+        // buckets by their bucket key when configured.
         fn append_arrow_batch(
             self: &mut AppendWriter,
             array_ptr: usize,
@@ -1190,9 +1196,12 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         writer_dynamic_batch_size_min: config.writer_dynamic_batch_size_min,
         writer_batch_timeout_ms: config.writer_batch_timeout_ms,
         writer_bucket_no_key_assigner: assigner_type,
+        writer_dynamic_create_partition_enabled: config.writer_dynamic_create_partition_enabled,
         scanner_remote_log_prefetch_num: config.scanner_remote_log_prefetch_num,
         remote_file_download_thread_num: config.remote_file_download_thread_num,
         scanner_remote_log_read_concurrency: config.scanner_remote_log_read_concurrency,
+        scanner_io_tmp_dir: (!config.scanner_io_tmp_dir.is_empty())
+            .then(|| config.scanner_io_tmp_dir.to_string()),
         scanner_log_max_poll_records: config.scanner_log_max_poll_records,
         scanner_log_fetch_max_bytes: config.scanner_log_fetch_max_bytes,
         scanner_log_fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -1206,6 +1215,7 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         writer_retry_backoff_ms: config.writer_retry_backoff_ms,
         writer_retry_max_backoff_ms: config.writer_retry_max_backoff_ms,
         connect_timeout_ms: config.connect_timeout_ms,
+        connection_max_idle_time_ms: config.connection_max_idle_time_ms,
         security_protocol: config.security_protocol.to_string(),
         security_sasl_mechanism: config.security_sasl_mechanism.to_string(),
         security_sasl_username: config.security_sasl_username.to_string(),
@@ -1215,6 +1225,8 @@ fn new_connection(config: &ffi::FfiConfig) -> ffi::FfiPtrResult {
         lookup_batch_timeout_ms: config.lookup_batch_timeout_ms,
         lookup_max_inflight_requests: config.lookup_max_inflight_requests,
         lookup_max_retries: config.lookup_max_retries,
+        lookup_retry_backoff_ms: config.lookup_retry_backoff_ms,
+        lookup_retry_max_backoff_ms: config.lookup_retry_max_backoff_ms,
     };
 
     let conn = RUNTIME.block_on(async { fcore::client::FlussConnection::new(config_core).await });

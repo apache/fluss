@@ -34,10 +34,13 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbServerNode;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.server.tools.ClusterHealthReadinessCheck;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -56,8 +59,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.annotation.Nullable;
+
+import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -182,6 +189,138 @@ class CoordinatorHighAvailabilityITCase {
     }
 
     @Test
+    void testDescribeClusterReportsLiveStandbyCoordinators() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+        waitUntilCoordinatorServerElected();
+
+        String leaderId = zookeeperClient.getCoordinatorLeaderAddress().get().getId();
+        CoordinatorServer standbyServer = findServerByNotId(leaderId);
+        String standbyId = standbyServer.getServerId();
+        CoordinatorGateway leaderGateway = createGatewayForServer(findServerById(leaderId));
+        List<Endpoint> standbyEndpoints =
+                zookeeperClient
+                        .getCoordinatorServers(Collections.singleton(standbyId))
+                        .get(standbyId)
+                        .getEndpoints();
+
+        // the leader is reported as coordinator_server and only the other one as standby
+        waitUntil(
+                () ->
+                        leaderGateway
+                                        .describeCluster(new DescribeClusterRequest())
+                                        .get()
+                                        .getCoordinatorStandbysCount()
+                                == 1,
+                Duration.ofSeconds(30),
+                "Leader did not report the standby coordinator");
+        PbServerNode standby =
+                leaderGateway
+                        .describeCluster(new DescribeClusterRequest())
+                        .get()
+                        .getCoordinatorStandbysList()
+                        .get(0);
+        assertThat(standbyEndpoints)
+                .anySatisfy(
+                        endpoint -> {
+                            assertThat(endpoint.getHost()).isEqualTo(standby.getHost());
+                            assertThat(endpoint.getPort()).isEqualTo(standby.getPort());
+                        });
+
+        // a stopped standby is no longer reported
+        standbyServer.close();
+        if (standbyServer == coordinatorServer1) {
+            coordinatorServer1 = null;
+        } else {
+            coordinatorServer2 = null;
+        }
+        waitUntil(
+                () ->
+                        leaderGateway
+                                        .describeCluster(new DescribeClusterRequest())
+                                        .get()
+                                        .getCoordinatorStandbysCount()
+                                == 0,
+                Duration.ofSeconds(30),
+                "Leader still reports the stopped standby coordinator");
+    }
+
+    @Test
+    void testReadinessCheckForLeaderAndStandby() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+        waitUntilCoordinatorServerElected();
+
+        String leaderId = zookeeperClient.getCoordinatorLeaderAddress().get().getId();
+        // Both coordinators advertise the same CLIENT address in this test, so the probe uses
+        // the FLUSS listener, where each coordinator has its own address.
+        String leader = internalAddress(findServerById(leaderId));
+        String standby = internalAddress(findServerByNotId(leaderId));
+        String coordinators = leader + "," + standby;
+
+        // the leader is Ready on its own cluster-health answer
+        assertThat(runCoordinatorReadinessCheck(leader, coordinators, null))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_READY);
+
+        // the standby rejects cluster health and is Ready once the leader lists it
+        waitUntil(
+                () ->
+                        runCoordinatorReadinessCheck(standby, coordinators, standby)
+                                == ClusterHealthReadinessCheck.EXIT_READY,
+                Duration.ofSeconds(30),
+                "Standby coordinator did not become ready");
+
+        // a standby the leader does not list is not Ready
+        assertThat(runCoordinatorReadinessCheck(standby, coordinators, "unknown:1"))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_NOT_READY);
+        // without a reachable leader the standby is not Ready
+        assertThat(runCoordinatorReadinessCheck(standby, standby, standby))
+                .isEqualTo(ClusterHealthReadinessCheck.EXIT_NOT_READY);
+
+        // a coordinator that accepts connections but never answers, listed before the leader,
+        // does not keep the standby NotReady
+        try (ServerSocket hung = new ServerSocket(0)) {
+            String withHung = "127.0.0.1:" + hung.getLocalPort() + "," + coordinators;
+            assertThat(runCoordinatorReadinessCheck(standby, withHung, standby))
+                    .isEqualTo(ClusterHealthReadinessCheck.EXIT_READY);
+        }
+    }
+
+    private static String internalAddress(CoordinatorServer server) {
+        Endpoint endpoint =
+                server.getRpcServer().getBindEndpoints().stream()
+                        .filter(e -> e.getListenerName().equals("FLUSS"))
+                        .findFirst()
+                        .get();
+        return endpoint.getHost() + ":" + endpoint.getPort();
+    }
+
+    private static int runCoordinatorReadinessCheck(
+            String local, String coordinators, @Nullable String advertised) {
+        int idx = local.lastIndexOf(':');
+        List<String> args =
+                new ArrayList<>(
+                        Arrays.asList(
+                                "--role",
+                                "coordinator",
+                                "--host",
+                                local.substring(0, idx),
+                                "--port",
+                                local.substring(idx + 1),
+                                "--coordinators",
+                                coordinators));
+        if (advertised != null) {
+            args.add("--advertisedAddress");
+            args.add(advertised);
+        }
+        return ClusterHealthReadinessCheck.run(args.toArray(new String[0]));
+    }
+
+    @Test
     void testLeaderLosesLeadershipAndReElected() throws Exception {
         coordinatorServer1 = new CoordinatorServer(createConfiguration());
         coordinatorServer2 = new CoordinatorServer(createConfiguration());
@@ -246,7 +385,7 @@ class CoordinatorHighAvailabilityITCase {
         assertThat(leader).isNotNull();
         assertThat(standby).isNotNull();
 
-        String configKey = ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key();
+        String configKey = ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key();
 
         // Alter a dynamic config through the current leader. This persists it to ZK and inserts a
         // change notification that every server (including the standby) should react to.
@@ -272,6 +411,10 @@ class CoordinatorHighAvailabilityITCase {
         assertThat(dynamicConfigValue(standby, configKey))
                 .as("Newly promoted leader should use the dynamic config it tracked while standby")
                 .isEqualTo("3");
+        waitUntil(
+                () -> rebalanceMaxInflightTasks(standby) == 3,
+                Duration.ofSeconds(30),
+                "Newly promoted leader did not apply the dynamic rebalance concurrency");
 
         // As the new leader it is now the sole writer: a further alter must take effect and stick.
         standby.getDynamicConfigManager()
@@ -279,6 +422,20 @@ class CoordinatorHighAvailabilityITCase {
                         Collections.singletonList(
                                 new AlterConfig(configKey, "5", AlterConfigOpType.SET)));
         assertThat(dynamicConfigValue(standby, configKey)).isEqualTo("5");
+        waitUntil(
+                () -> rebalanceMaxInflightTasks(standby) == 5,
+                Duration.ofSeconds(30),
+                "Leader did not apply the updated dynamic rebalance concurrency");
+    }
+
+    private static int rebalanceMaxInflightTasks(CoordinatorServer server) {
+        try {
+            return server.getCoordinatorEventProcessor()
+                    .getRebalanceManager()
+                    .getMaxInflightRebalanceTasks();
+        } catch (IllegalStateException ignored) {
+            return -1;
+        }
     }
 
     /** Reads the effective value of a config key from a server's DynamicConfigManager. */

@@ -79,7 +79,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     @ValueSource(strings = {"", "1"})
     void testSinkMetrics(String clientId) throws Exception {
         admin.createDatabase(
-                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+                        DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
+                .get();
         createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
 
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
@@ -112,7 +113,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     @Test
     void testFlussSchemaChange() throws Exception {
         admin.createDatabase(
-                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+                        DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
+                .get();
         createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
         admin.alterTable(
                         DEFAULT_SINK_TABLE_PATH,

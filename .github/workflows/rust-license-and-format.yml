@@ -66,14 +66,16 @@ defaults:
   run:
     working-directory: fluss-rust
 
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
 jobs:
   check-license-and-formatting:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Check License Header
-        uses: apache/skywalking-eyes/header@61275cc80d0798a405cb070f7d3a8aaf7cf2c2c1 # v0.8.0
+        uses: apache/skywalking-eyes/header@a196742f472feaffafea537ce5a2a4c3c53a8de4 # v0.9.0
         with:
           config: fluss-rust/.licenserc.yaml
 

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::TableId;
 use crate::client::WriteRecord;
 use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
 use crate::compression::{
@@ -22,10 +23,14 @@ use crate::compression::{
     DEFAULT_NON_ZSTD_COMPRESSION_LEVEL,
 };
 use crate::metadata::{
-    DataField, DataTypes, PhysicalTablePath, RowType, Schema, TableBucket, TableDescriptor,
-    TableInfo, TableOrPartition, TablePath,
+    DataField, DataTypes, JsonSerde, PhysicalTablePath, RowType, Schema, TableBucket,
+    TableDescriptor, TableInfo, TableOrPartition, TablePath,
 };
 use crate::metrics::{LABEL_DATABASE, LABEL_TABLE, ScannerMetrics};
+use crate::proto::{
+    MetadataResponse, PbBucketMetadata, PbPartitionMetadata, PbServerNode, PbTableMetadata,
+    PbTablePath,
+};
 use crate::record::{
     APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, ArrowBatchConfig, CRC_LENGTH, CRC_OFFSET, ChangeType,
     LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V1, LOG_OVERHEAD, MAGIC_OFFSET,
@@ -94,48 +99,50 @@ pub(crate) fn build_cluster_with_port(
     buckets: i32,
     port: u32,
 ) -> Cluster {
+    build_cluster_with_tables(&[(table_path, table_id, buckets)], port)
+}
+
+/// Build a Cluster whose tables are all led by tablet server 1 at the given port.
+pub(crate) fn build_cluster_with_tables(tables: &[(&TablePath, i64, i32)], port: u32) -> Cluster {
     let server = ServerNode::new(1, "127.0.0.1".to_string(), port, ServerType::TabletServer);
 
     let mut servers = HashMap::new();
     servers.insert(server.id(), server.clone());
 
     let mut locations_by_path = HashMap::new();
-    let mut locations_by_bucket = HashMap::new();
-    let mut bucket_locations = Vec::new();
-
-    for bucket_id in 0..buckets {
-        let table_bucket = TableBucket::new(table_id, bucket_id);
-        let bucket_location = BucketLocation::new(
-            table_bucket.clone(),
-            Some(server.clone()),
-            Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-        );
-        bucket_locations.push(bucket_location.clone());
-        locations_by_bucket.insert(table_bucket, bucket_location);
-    }
-    locations_by_path.insert(
-        Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone()))),
-        bucket_locations,
-    );
-
     let mut table_id_by_path = HashMap::new();
-    table_id_by_path.insert(table_path.clone(), table_id);
-
     let mut table_info_by_path = HashMap::new();
-    table_info_by_path.insert(
-        table_path.clone(),
-        build_table_info(table_path.clone(), table_id, buckets),
-    );
+    let mut bucket_count_by_table = HashMap::new();
+
+    for (table_path, table_id, buckets) in tables {
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new((*table_path).clone())));
+        let mut bucket_locations = Vec::new();
+        for bucket_id in 0..*buckets {
+            let table_bucket = TableBucket::new(*table_id, bucket_id);
+            let bucket_location = BucketLocation::new(
+                table_bucket,
+                Some(server.clone()),
+                Arc::clone(&physical_path),
+            );
+            bucket_locations.push(bucket_location);
+        }
+        locations_by_path.insert(physical_path, bucket_locations);
+        table_id_by_path.insert((*table_path).clone(), *table_id);
+        table_info_by_path.insert(
+            (*table_path).clone(),
+            build_table_info((*table_path).clone(), *table_id, *buckets),
+        );
+        bucket_count_by_table.insert(TableOrPartition::Table(*table_id), *buckets);
+    }
 
     Cluster::new(
         None,
         servers,
         locations_by_path,
-        locations_by_bucket,
         table_id_by_path,
         table_info_by_path,
         HashMap::new(),
-        HashMap::from([(TableOrPartition::Table(table_id), buckets)]),
+        bucket_count_by_table,
     )
 }
 
@@ -281,4 +288,71 @@ pub(crate) fn splice_change_type_vector(
     let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
     data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
     data
+}
+
+pub(crate) fn pb_table_metadata(
+    table_name: &str,
+    table_id: TableId,
+    partitioned: bool,
+    bucket_metadata: Vec<PbBucketMetadata>,
+) -> PbTableMetadata {
+    let mut descriptor = TableDescriptor::builder().schema(
+        Schema::builder()
+            .column("id", DataTypes::int())
+            .column("p", DataTypes::string())
+            .build()
+            .unwrap(),
+    );
+    if partitioned {
+        descriptor = descriptor.partitioned_by(vec!["p"]);
+    }
+    let descriptor = descriptor
+        .distributed_by(Some(4), vec!["id".to_string()])
+        .build()
+        .unwrap();
+    PbTableMetadata {
+        table_path: PbTablePath {
+            database_name: "db".to_string(),
+            table_name: table_name.to_string(),
+        },
+        table_id,
+        schema_id: 1,
+        table_json: serde_json::to_vec(&descriptor.serialize_json().unwrap()).unwrap(),
+        bucket_metadata,
+        created_time: 0,
+        modified_time: 0,
+        remote_data_dir: None,
+        bucket_count_epoch: None,
+        bucket_count: None,
+    }
+}
+
+pub(crate) fn pb_bucket(bucket_id: i32) -> PbBucketMetadata {
+    PbBucketMetadata {
+        bucket_id,
+        leader_id: Some(1),
+        replica_id: vec![1],
+        leader_epoch: None,
+        bucket_epoch: None,
+        isr: vec![1],
+    }
+}
+
+pub(crate) fn pb_metadata_response(
+    table_metadata: Vec<PbTableMetadata>,
+    partition_metadata: Vec<PbPartitionMetadata>,
+) -> MetadataResponse {
+    MetadataResponse {
+        coordinator_server: None,
+        tablet_servers: vec![PbServerNode {
+            node_id: 1,
+            host: "ts1".to_string(),
+            port: 9123,
+            listeners: None,
+            rack: None,
+            server_tag: None,
+        }],
+        table_metadata,
+        partition_metadata,
+    }
 }

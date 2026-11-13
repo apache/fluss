@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-cos</artifactId>
-    <name>Fluss : FileSystems : COS FS</name>
+    <name>Apache Fluss : FileSystems : COS FS</name>
 
     <properties>
         <fs.hadoop.cos.version>3.3.5</fs.hadoop.cos.version>

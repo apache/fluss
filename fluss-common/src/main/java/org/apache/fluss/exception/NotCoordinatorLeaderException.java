@@ -18,11 +18,14 @@
 package org.apache.fluss.exception;
 
 /**
- * Exception thrown when a request is sent to a stand by coordinator server.
+ * Exception thrown when a request is sent to a standby coordinator server.
+ *
+ * <p>The server rejects the request before executing it. Clients should refresh cluster metadata to
+ * discover the current coordinator leader before retrying.
  *
  * @since 1.0
  */
-public class NotCoordinatorLeaderException extends ApiException {
+public class NotCoordinatorLeaderException extends InvalidMetadataException {
 
     private static final long serialVersionUID = 1L;
 

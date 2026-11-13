@@ -38,16 +38,19 @@ use log::warn;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt;
-use std::io::Cursor;
+use std::io::{self, Cursor};
+use std::marker::PhantomData;
 use std::ops::DerefMut;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufStream, WriteHalf};
 use tokio::sync::Mutex as AsyncMutex;
-use tokio::sync::oneshot::{Sender, channel};
+use tokio::sync::Notify;
+use tokio::sync::oneshot::{Receiver, Sender, channel};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 pub type MessengerTransport = ServerConnectionInner<BufStream<Transport>>;
 
@@ -187,11 +190,102 @@ fn validate_server_type(
     })
 }
 
+/// Identifies a cached connection by server UID, host and port.
+///
+/// Connections to different endpoints of one server may coexist: `ServerNode` carries no epoch,
+/// so the client cannot tell which endpoint is newer while callers hold different metadata
+/// snapshots. Once a metadata refresh advertises a server at another endpoint,
+/// [`RpcClient::disconnect_superseded_endpoints`] drops the connections to its old endpoints.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ConnectionKey {
+    server_uid: String,
+    host: String,
+    port: u32,
+}
+
+impl From<&ServerNode> for ConnectionKey {
+    fn from(node: &ServerNode) -> Self {
+        ConnectionKey {
+            server_uid: node.uid().to_owned(),
+            host: node.host().to_owned(),
+            port: node.port(),
+        }
+    }
+}
+
+impl fmt::Display for ConnectionKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}:{}", self.server_uid, self.host, self.port)
+    }
+}
+
+#[derive(Debug, Default)]
+struct ConnectionCache {
+    connections: HashMap<ConnectionKey, ServerConnection>,
+    /// The endpoint of each server, by UID, in the metadata last passed to
+    /// [`RpcClient::disconnect_superseded_endpoints`].
+    advertised: HashMap<String, ConnectionKey>,
+}
+
+/// Returns the endpoint at which `advertised` lists the server of `key`, if it is another one.
+fn superseding_endpoint<'a>(
+    advertised: &'a HashMap<String, ConnectionKey>,
+    key: &ConnectionKey,
+) -> Option<&'a ConnectionKey> {
+    advertised
+        .get(&key.server_uid)
+        .filter(|endpoint| *endpoint != key)
+}
+
+/// Closes and evicts the cached connections without reads or writes for at least `max_idle_time`
+/// at `now`.
+///
+/// Returns when to evict next: `max_idle_time` after `now`, for the connections cached later, or
+/// when a kept connection becomes idle, if earlier, unless that is beyond the range of the clock.
+fn evict_idle_connections(
+    cache: &RwLock<ConnectionCache>,
+    now: Instant,
+    max_idle_time: Duration,
+) -> Option<Instant> {
+    let mut evicted = Vec::new();
+    let mut next_eviction = now.checked_add(max_idle_time);
+    cache.write().connections.retain(|key, connection| {
+        if let Some(idle_time) = connection.close_if_idle(now, max_idle_time) {
+            evicted.push((key.clone(), idle_time));
+            return false;
+        }
+        if let Some(idle_at) = connection.last_activity().checked_add(max_idle_time) {
+            next_eviction = Some(next_eviction.map_or(idle_at, |next| next.min(idle_at)));
+        }
+        true
+    });
+    for (key, idle_time) in evicted {
+        log::info!("Closed the connection to {key} after {idle_time:?} without reads or writes.");
+    }
+    next_eviction
+}
+
+/// Closes each cached connection once it becomes idle, until the cache is dropped.
+async fn evict_idle_connections_until_dropped(
+    cache: Weak<RwLock<ConnectionCache>>,
+    max_idle_time: Duration,
+) {
+    while let Some(deadline) = cache
+        .upgrade()
+        .and_then(|cache| evict_idle_connections(&cache, Instant::now(), max_idle_time))
+    {
+        tokio::time::sleep_until(deadline).await;
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct RpcClient {
-    connections: RwLock<HashMap<String, ServerConnection>>,
+    cache: Arc<RwLock<ConnectionCache>>,
     client_id: Arc<str>,
     timeout: Option<Duration>,
+    max_idle_time: Option<Duration>,
+    /// Closes idle connections, started once a connection is made.
+    idle_eviction_task: OnceLock<JoinHandle<()>>,
     max_message_size: usize,
     sasl_config: Option<SaslConfig>,
 }
@@ -199,16 +293,28 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new() -> Self {
         RpcClient {
-            connections: Default::default(),
+            cache: Default::default(),
             client_id: Arc::from(""),
             timeout: None,
+            max_idle_time: None,
+            idle_eviction_task: OnceLock::new(),
             max_message_size: usize::MAX,
             sasl_config: None,
         }
     }
 
+    /// Bounds establishing a connection, including TCP connect, API negotiation and SASL.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Closes cached connections without reads or writes for `max_idle_time`, like Java's
+    /// `netty.connection.max-idle-time`. As in Java, the requests still waiting on a closed
+    /// connection for a response or to be written fail with a retriable error, and later requests
+    /// open a new connection. Zero, the default, disables closing idle connections.
+    pub fn with_max_idle_time(mut self, max_idle_time: Duration) -> Self {
+        self.max_idle_time = (!max_idle_time.is_zero()).then_some(max_idle_time);
         self
     }
 
@@ -217,58 +323,144 @@ impl RpcClient {
         self
     }
 
-    pub(crate) fn disconnect(&self, server_uid: &str) {
-        self.connections.write().remove(server_uid);
+    /// Drops the cached connection to the endpoint of `server_node`. Requests already sent on it
+    /// still complete, since they hold their own reference to the connection.
+    pub(crate) fn disconnect_endpoint(&self, server_node: &ServerNode) {
+        self.cache
+            .write()
+            .connections
+            .remove(&ConnectionKey::from(server_node));
+    }
+
+    /// Drops the cached connections of servers that `live_nodes` advertise at another endpoint.
+    ///
+    /// A server that moved may have left its old address to another server, so the connection to
+    /// the old address must not be reused. While the latest call advertises the server at another
+    /// endpoint, [`get_connection`](Self::get_connection) does not cache connections to the old
+    /// address either, including those whose handshake is in progress during this call.
+    /// Connections of servers missing from `live_nodes` are kept until they are idle for
+    /// [`with_max_idle_time`](Self::with_max_idle_time).
+    pub(crate) fn disconnect_superseded_endpoints(&self, live_nodes: &[ServerNode]) {
+        let advertised: HashMap<String, ConnectionKey> = live_nodes
+            .iter()
+            .map(|node| (node.uid().to_owned(), ConnectionKey::from(node)))
+            .collect();
+        let mut dropped = Vec::new();
+        {
+            let mut guard = self.cache.write();
+            let cache = &mut *guard;
+            cache.advertised = advertised;
+            cache.connections.retain(
+                |key, _| match superseding_endpoint(&cache.advertised, key) {
+                    Some(endpoint) => {
+                        dropped.push((key.clone(), endpoint.clone()));
+                        false
+                    }
+                    None => true,
+                },
+            );
+        }
+        for (key, endpoint) in dropped {
+            log::info!(
+                "Dropping the connection to {key}: the server moved to {}:{}.",
+                endpoint.host,
+                endpoint.port
+            );
+        }
     }
 
     pub(crate) async fn get_connection(
         &self,
         server_node: &ServerNode,
     ) -> Result<ServerConnection, Error> {
-        let server_id = server_node.uid();
+        let key = ConnectionKey::from(server_node);
         {
-            let connections = self.connections.read();
-            if let Some(conn) = connections.get(server_id).cloned() {
+            let cache = self.cache.read();
+            if let Some(conn) = cache.connections.get(&key).cloned() {
                 if !conn.is_poisoned() {
                     return Ok(conn);
                 }
             }
         }
         let new_server = self.connect(server_node).await?;
-        {
-            let mut connections = self.connections.write();
-            if let Some(race_conn) = connections.get(server_id) {
+        let superseded = {
+            let mut cache = self.cache.write();
+            if let Some(race_conn) = cache.connections.get(&key) {
                 if !race_conn.is_poisoned() {
                     return Ok(race_conn.clone());
                 }
             }
 
-            connections.insert(server_id.to_owned(), new_server.clone());
+            // A superseded endpoint means the request was routed with metadata older than the
+            // latest refresh, which may have run during the handshake. Caching the connection
+            // would keep it past that refresh.
+            match superseding_endpoint(&cache.advertised, &key).cloned() {
+                Some(endpoint) => Some((key, endpoint)),
+                None => {
+                    cache.connections.insert(key, new_server.clone());
+                    None
+                }
+            }
+        };
+        self.start_idle_eviction();
+        if let Some((key, endpoint)) = superseded {
+            // The caller still sends its request to the endpoint it was routed to; the
+            // connection closes once it is released.
+            log::info!(
+                "Not caching the connection to {key}: the server moved to {}:{}.",
+                endpoint.host,
+                endpoint.port
+            );
         }
         Ok(new_server)
     }
 
+    fn start_idle_eviction(&self) {
+        if let Some(max_idle_time) = self.max_idle_time {
+            self.idle_eviction_task.get_or_init(|| {
+                tokio::spawn(evict_idle_connections_until_dropped(
+                    Arc::downgrade(&self.cache),
+                    max_idle_time,
+                ))
+            });
+        }
+    }
+
     async fn connect(&self, server_node: &ServerNode) -> Result<ServerConnection, Error> {
         let url = server_node.url();
-        let transport = Transport::connect(&url, self.timeout)
-            .await
-            .map_err(|error| ConnectionError(error.to_string()))?;
+        let connecting = async {
+            let transport = Transport::connect(&url, None)
+                .await
+                .map_err(|error| ConnectionError(error.to_string()))?;
 
-        let messenger = ServerConnectionInner::new(
-            BufStream::new(transport),
-            self.max_message_size,
-            self.client_id.clone(),
-        );
-        let connection = ServerConnection::new(messenger);
+            let messenger = ServerConnectionInner::new(
+                BufStream::new(transport),
+                self.max_message_size,
+                self.client_id.clone(),
+            );
+            let connection = ServerConnection::new(messenger);
 
-        // Negotiate API versions (must happen before authentication).
-        Self::check_api_versions(&connection, server_node.server_type()).await?;
+            // Negotiate API versions (must happen before authentication).
+            Self::check_api_versions(&connection, server_node.server_type()).await?;
 
-        if let Some(ref sasl) = self.sasl_config {
-            Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+            if let Some(ref sasl) = self.sasl_config {
+                Self::authenticate(&connection, &sasl.username, &sasl.password).await?;
+            }
+
+            Ok(connection)
+        };
+        match self.timeout {
+            Some(timeout) => tokio::time::timeout(timeout, connecting)
+                .await
+                .unwrap_or_else(|_| {
+                    Err(RpcError::IO(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("Connection to {url} did not complete within {timeout:?}"),
+                    ))
+                    .into())
+                }),
+            None => connecting.await,
         }
-
-        Ok(connection)
     }
 
     /// Send an `ApiVersionsRequest`, validate the advertised `server_type`, and
@@ -287,8 +479,8 @@ impl RpcClient {
 
     /// Perform SASL/PLAIN authentication handshake.
     ///
-    /// Retries on `RetriableAuthenticateException` with exponential backoff
-    /// (matching Java's unbounded retry behaviour). Non-retriable errors
+    /// Retries on `RetriableAuthenticateException` with exponential backoff until the configured
+    /// connection establishment deadline. Non-retriable errors
     /// (wrong password, unknown user) propagate immediately as
     /// `Error::FlussAPIError` with the original error code.
     async fn authenticate(
@@ -344,6 +536,35 @@ impl RpcClient {
                 Err(e) => return Err(e),
             }
         }
+    }
+}
+
+impl Drop for RpcClient {
+    fn drop(&mut self) {
+        if let Some(idle_eviction_task) = self.idle_eviction_task.get() {
+            idle_eviction_task.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+impl RpcClient {
+    /// Drops the cached connections to every endpoint of the server `server_uid`. Requests
+    /// already sent on them still complete, since they hold their own reference to the connection.
+    pub(crate) fn disconnect(&self, server_uid: &str) {
+        self.cache
+            .write()
+            .connections
+            .retain(|key, _| key.server_uid != server_uid);
+    }
+
+    pub(crate) fn cached_endpoints(&self) -> std::collections::HashSet<String> {
+        self.cache
+            .read()
+            .connections
+            .keys()
+            .map(ToString::to_string)
+            .collect()
     }
 }
 
@@ -448,6 +669,37 @@ impl ConnectionState {
     }
 }
 
+/// The time of the last read or write on a connection: when a whole response frame is read, or
+/// when a request frame starts being written and when it is flushed. As in Java, whose idle
+/// handler follows the frame decoder, partially received responses do not count, so a connection
+/// receiving one response for longer than the max idle time is closed and that request fails.
+#[derive(Debug)]
+struct LastActivity {
+    origin: Instant,
+    /// Nanoseconds from `origin` to the last read or write.
+    elapsed_nanos: AtomicU64,
+}
+
+impl LastActivity {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            elapsed_nanos: AtomicU64::new(0),
+        }
+    }
+
+    fn record(&self) {
+        let elapsed_nanos = u64::try_from(self.origin.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        // The read task and the writers record concurrently, so keep the latest.
+        self.elapsed_nanos
+            .fetch_max(elapsed_nanos, Ordering::Relaxed);
+    }
+
+    fn get(&self) -> Instant {
+        self.origin + Duration::from_nanos(self.elapsed_nanos.load(Ordering::Relaxed))
+    }
+}
+
 #[derive(Debug)]
 pub struct ServerConnectionInner<RW> {
     /// The half of the stream that we use to send data TO the broker.
@@ -465,6 +717,11 @@ pub struct ServerConnectionInner<RW> {
     /// `None` until the ApiVersions handshake completes.
     api_versions: Mutex<Option<ServerApiVersions>>,
 
+    last_activity: Arc<LastActivity>,
+
+    /// Notified when the connection is closed or dropped, to abandon a write in progress.
+    closed: Arc<Notify>,
+
     join_handle: JoinHandle<()>,
 }
 
@@ -476,12 +733,15 @@ where
         let (stream_read, stream_write) = tokio::io::split(stream);
         let state = Arc::new(Mutex::new(ConnectionState::RequestMap(HashMap::default())));
         let state_captured = Arc::clone(&state);
+        let last_activity = Arc::new(LastActivity::new());
+        let last_activity_captured = Arc::clone(&last_activity);
 
         let join_handle = tokio::spawn(async move {
             let mut stream_read = stream_read;
             loop {
                 match stream_read.read_message(max_message_size).await {
                     Ok(msg) => {
+                        last_activity_captured.record();
                         // message was read, so all subsequent errors should not poison the whole stream
                         let mut cursor = Cursor::new(msg);
                         let header = match ResponseHeader::read(&mut cursor) {
@@ -534,6 +794,8 @@ where
             request_id: AtomicI32::new(0),
             state,
             api_versions: Mutex::new(None),
+            last_activity,
+            closed: Arc::new(Notify::new()),
             join_handle,
         }
     }
@@ -548,7 +810,46 @@ where
         matches!(*guard, ConnectionState::Poison(_))
     }
 
+    /// The time of the last read or write, or of the connection's creation if there was none.
+    fn last_activity(&self) -> Instant {
+        self.last_activity.get()
+    }
+
+    /// Closes the connection if it has had no reads or writes for `max_idle_time` at `now`, and
+    /// returns for how long. As in Java, the requests waiting for a response or to be written fail
+    /// with a retriable error, and those not written yet are not sent.
+    fn close_if_idle(&self, now: Instant, max_idle_time: Duration) -> Option<Duration> {
+        let mut state = self.state.lock();
+        let idle_time = now.saturating_duration_since(self.last_activity());
+        if idle_time < max_idle_time {
+            return None;
+        }
+        state.poison(RpcError::IdleConnectionClosed(idle_time));
+        drop(state);
+        self.closed.notify_waiters();
+        // The socket closes once the requests that just failed release the connection.
+        self.join_handle.abort();
+        Some(idle_time)
+    }
+
     pub(crate) async fn request<R>(&self, msg: R) -> Result<R::ResponseBody, Error>
+    where
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
+    {
+        self.dispatch_request(msg).await?.receive().await
+    }
+
+    /// Writes the complete request frame without waiting for the response.
+    ///
+    /// Ordered callers must serialize this phase, including connection acquisition, rather
+    /// than racing multiple dispatch futures for the socket lock. The returned handle owns
+    /// response decoding, request registration and round-trip metrics. The caller must
+    /// retain the connection until the response completes, keeping its read task alive.
+    pub(crate) async fn dispatch_request<R>(
+        &self,
+        msg: R,
+    ) -> Result<PendingResponse<R::ResponseBody>, Error>
     where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
@@ -575,8 +876,7 @@ where
 
         // to prevent stale data in inner state, ensure that we would remove the request again if we are cancelled while
         // sending the request
-        let _cleanup_on_cancel =
-            CleanupRequestStateOnCancel::new(Arc::clone(&self.state), request_id);
+        let registration = CleanupRequestStateOnCancel::new(Arc::clone(&self.state), request_id);
 
         match self.state.lock().deref_mut() {
             ConnectionState::RequestMap(map) => {
@@ -592,7 +892,77 @@ where
         self.send_message(buf)
             .await
             .inspect_err(|_| request_metrics.complete(0))?;
-        _cleanup_on_cancel.message_sent();
+        Ok(PendingResponse {
+            rx,
+            request_metrics,
+            _registration: registration,
+            api_key: R::API_KEY,
+            api_version,
+            response_type: PhantomData,
+        })
+    }
+
+    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RpcError> {
+        let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
+        let state = Arc::clone(&self.state);
+        let last_activity = Arc::clone(&self.last_activity);
+        let closed = Arc::clone(&self.closed);
+
+        // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
+        let fut = CancellationSafeFuture::new(async move {
+            // Created before the state check, so that a close after the check wakes it.
+            let closed = closed.notified();
+            match &*state.lock() {
+                ConnectionState::Poison(error) => {
+                    return Err(RpcError::Poisoned(Arc::clone(error)));
+                }
+                // Under the state lock, so that closing for idleness either sees this write and
+                // keeps the connection, or comes first and the write is not sent.
+                ConnectionState::RequestMap(_) => last_activity.record(),
+            }
+            let write = async {
+                stream_write.write_message(&msg).await?;
+                stream_write.flush().await?;
+                last_activity.record();
+                Ok(())
+            };
+            let result = tokio::select! {
+                // A write that completes at once does not register for the close.
+                biased;
+                result = write => result,
+                // Closing poisons the connection first, so `poison` below keeps its original error.
+                () = closed => Err(ConnectionError("closed while writing".to_string())),
+            };
+            // This must live inside the cancellation-safe future: if the caller is
+            // cancelled mid-frame, a failure of its background write still poisons
+            // the connection before the write lock is released to another request.
+            result.map_err(|error| RpcError::Poisoned(state.lock().poison(error)))
+        });
+
+        fut.await
+    }
+}
+
+/// An already-dispatched request whose response may be awaited independently of later writes.
+pub(crate) struct PendingResponse<T> {
+    rx: Receiver<Result<Response, RpcError>>,
+    request_metrics: RequestMetricsLifecycle,
+    _registration: CleanupRequestStateOnCancel,
+    api_key: ApiKey,
+    api_version: ApiVersion,
+    response_type: PhantomData<fn() -> T>,
+}
+
+impl<T: ReadType<Cursor<Vec<u8>>>> PendingResponse<T> {
+    pub(crate) async fn receive(self) -> Result<T, Error> {
+        let Self {
+            rx,
+            mut request_metrics,
+            _registration,
+            api_key,
+            api_version,
+            ..
+        } = self;
         let mut response = rx
             .await
             .map_err(|e| Error::UnexpectedError {
@@ -613,7 +983,7 @@ where
             });
         }
 
-        let body = R::ResponseBody::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
+        let body = T::read(&mut response.data).map_err(RpcError::ReadMessageError)?;
 
         let read_bytes = response.data.position();
         let message_bytes = response.data.into_inner().len() as u64;
@@ -621,42 +991,23 @@ where
             return Err(RpcError::TooMuchData {
                 message_size: message_bytes,
                 read: read_bytes,
-                api_key: R::API_KEY,
+                api_key,
                 api_version,
             }
             .into());
         }
         Ok(body)
     }
-
-    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RpcError> {
-        match self.send_message_inner(msg).await {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // need to poison the stream because message framing might be out-of-sync
-                let mut state = self.state.lock();
-                Err(RpcError::Poisoned(state.poison(e)))
-            }
-        }
-    }
-
-    async fn send_message_inner(&self, msg: Vec<u8>) -> Result<(), RpcError> {
-        let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
-
-        // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
-        let fut = CancellationSafeFuture::new(async move {
-            stream_write.write_message(&msg).await?;
-            stream_write.flush().await?;
-            Ok(())
-        });
-
-        fut.await
-    }
 }
 
 impl<RW> Drop for ServerConnectionInner<RW> {
     fn drop(&mut self) {
-        // todo: should remove from server_connections map?
+        // A cancelled handshake may leave a write running on an uncached connection. No caller
+        // can reuse the connection now, so release its transport instead of finishing the frame.
+        self.state
+            .lock()
+            .poison(ConnectionError("connection dropped".to_string()));
+        self.closed.notify_waiters();
         self.join_handle.abort();
     }
 }
@@ -740,37 +1091,23 @@ where
     }
 }
 
-/// Helper that ensures that a request is removed when a request is cancelled before it was actually sent out.
+/// Unregisters a cancelled request, both during dispatch and while waiting for its response.
 struct CleanupRequestStateOnCancel {
     state: Arc<Mutex<ConnectionState>>,
     request_id: i32,
-    message_sent: bool,
 }
 
 impl CleanupRequestStateOnCancel {
     /// Create new helper.
-    ///
-    /// You must call [`message_sent`](Self::message_sent) when the request was sent.
     fn new(state: Arc<Mutex<ConnectionState>>, request_id: i32) -> Self {
-        Self {
-            state,
-            request_id,
-            message_sent: false,
-        }
-    }
-
-    /// Request was sent. Do NOT clean the state any longer.
-    fn message_sent(mut self) {
-        self.message_sent = true;
+        Self { state, request_id }
     }
 }
 
 impl Drop for CleanupRequestStateOnCancel {
     fn drop(&mut self) {
-        if !self.message_sent {
-            if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
-                map.remove(&self.request_id);
-            }
+        if let ConnectionState::RequestMap(map) = self.state.lock().deref_mut() {
+            map.remove(&self.request_id);
         }
     }
 }
@@ -783,12 +1120,13 @@ mod tests {
     use crate::rpc::api_version::ApiVersion;
     use crate::rpc::frame::{ReadError, WriteError};
     use crate::rpc::message::{ReadType, RequestBody, WriteType};
+    use futures::FutureExt;
     use metrics::{SharedString, Unit};
     use metrics_util::CompositeKey;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
-    use std::sync::OnceLock;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream};
-    use tokio::sync::Mutex as AsyncMutex;
+    use std::collections::HashSet;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufStream, DuplexStream};
+    use tokio::net::{TcpListener, TcpStream};
 
     // -- Test-only request/response types --------------------------------
 
@@ -908,24 +1246,8 @@ mod tests {
 
     // -- Recorder setup --------------------------------------------------
 
-    /// Shared test recorder (installed once per test binary).
-    static TEST_SNAPSHOTTER: OnceLock<metrics_util::debugging::Snapshotter> = OnceLock::new();
-    static TEST_LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
-
-    fn test_snapshotter() -> &'static metrics_util::debugging::Snapshotter {
-        TEST_SNAPSHOTTER.get_or_init(|| {
-            let recorder = DebuggingRecorder::new();
-            let snapshotter = recorder.snapshotter();
-            recorder
-                .install()
-                .expect("debugging recorder install should succeed in this test binary");
-            snapshotter
-        })
-    }
-
-    fn test_lock() -> &'static AsyncMutex<()> {
-        TEST_LOCK.get_or_init(|| AsyncMutex::new(()))
-    }
+    // Each metrics test uses a local recorder on its current-thread Tokio runtime,
+    // so concurrent real-RPC tests cannot change or consume its metric samples.
 
     fn server_api_versions(server_versions: &[PbApiVersion]) -> ServerApiVersions {
         ServerApiVersions::new(server_versions).unwrap()
@@ -1005,10 +1327,171 @@ mod tests {
 
     // -- Tests -----------------------------------------------------------
 
+    /// ProduceLog-only version table, so `dispatch_request` skips the real handshake.
+    fn produce_api_versions() -> ServerApiVersions {
+        server_api_versions(&[PbApiVersion {
+            api_key: 1014,
+            min_version: 0,
+            max_version: 0,
+        }])
+    }
+
+    /// Connection over an in-memory duplex with ProduceLog already negotiated.
+    fn duplex_conn(
+        capacity: usize,
+    ) -> (ServerConnectionInner<BufStream<DuplexStream>>, DuplexStream) {
+        let (client, server) = tokio::io::duplex(capacity);
+        let conn = ServerConnectionInner::new(BufStream::new(client), usize::MAX, Arc::from("t"));
+        *conn.api_versions.lock() = Some(produce_api_versions());
+        (conn, server)
+    }
+
+    /// Reads one request frame and returns its request id.
+    async fn read_request_id(server: &mut (impl AsyncRead + Unpin)) -> i32 {
+        let len = server.read_i32().await.unwrap();
+        let mut frame = vec![0; len as usize];
+        server.read_exact(&mut frame).await.unwrap();
+        i32::from_be_bytes(frame[4..8].try_into().unwrap())
+    }
+
+    async fn write_empty_response(server: &mut (impl AsyncWrite + Unpin), request_id: i32) {
+        server.write_i32(5).await.unwrap();
+        server.write_u8(0).await.unwrap();
+        server.write_i32(request_id).await.unwrap();
+    }
+
+    /// Metrics for the dispatched path are covered by the `request_` metrics tests below,
+    /// which now run through `dispatch_request` + `PendingResponse::receive` as well.
+    #[tokio::test]
+    async fn dispatched_response_keeps_registration_until_ack() {
+        let (conn, mut server) = duplex_conn(4096);
+        let pending = conn.dispatch_request(TestProduceRequest).await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.len() == 1));
+        let request_id = read_request_id(&mut server).await;
+        write_empty_response(&mut server, request_id).await;
+        pending.receive().await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn complete_frames_update_last_activity() {
+        let (conn, mut server) = duplex_conn(1);
+        let created_at = conn.last_activity();
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let (pending, request_id) = tokio::join!(
+            conn.dispatch_request(TestProduceRequest),
+            read_request_id(&mut server)
+        );
+        let pending = pending.unwrap();
+        assert_eq!(conn.last_activity(), created_at + Duration::from_secs(1));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        server.write_i32(5).await.unwrap();
+        server.write_u8(0).await.unwrap();
+        assert_eq!(conn.last_activity(), created_at + Duration::from_secs(1));
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        server.write_i32(request_id).await.unwrap();
+        pending.receive().await.unwrap();
+        assert_eq!(conn.last_activity(), created_at + Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn cancelling_dispatched_response_unregisters_request() {
+        let (conn, _server) = duplex_conn(4096);
+        let pending = conn.dispatch_request(TestProduceRequest).await.unwrap();
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.len() == 1));
+        drop(pending);
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_dispatch_still_poisoned_on_write_failure() {
+        let (writer, server) = tokio::io::duplex(8);
+        // Keep the read side open on its own transport: otherwise dropping the write
+        // peer can poison through read EOF and mask a broken write-error path.
+        let (reader, _read_peer) = tokio::io::duplex(8);
+        let conn = ServerConnectionInner::new(
+            BufStream::new(tokio::io::join(reader, writer)),
+            usize::MAX,
+            Arc::from("t"),
+        );
+        *conn.api_versions.lock() = Some(produce_api_versions());
+        // A 12-byte frame cannot fit the 8-byte transport, so dropping this future leaves
+        // the cancellation-safe write running in the background.
+        assert!(
+            conn.dispatch_request(TestProduceRequest)
+                .now_or_never()
+                .is_none()
+        );
+        assert!(matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty()));
+        drop(server);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !conn.is_poisoned() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled write did not poison the connection");
+        assert!(conn.dispatch_request(TestProduceRequest).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn dropping_connection_abandons_cancelled_partial_dispatch() {
+        let (conn, mut server) = duplex_conn(8);
+        let write_half = Arc::downgrade(&conn.stream_write);
+        assert!(
+            conn.dispatch_request(TestProduceRequest)
+                .now_or_never()
+                .is_none()
+        );
+        drop(conn);
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while write_half.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the cancelled write must release the dropped connection's transport");
+
+        let mut received = Vec::new();
+        server.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_dispatch_finishes_before_next_frame() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (conn, mut server) = duplex_conn(8);
+            assert!(
+                conn.dispatch_request(TestProduceRequest)
+                    .now_or_never()
+                    .is_none()
+            );
+            let (pending, ()) = tokio::join!(conn.dispatch_request(TestProduceRequest), async {
+                // Cancellation must finish the first frame before the successor writes.
+                for expected_id in 0..2 {
+                    assert_eq!(read_request_id(&mut server).await, expected_id);
+                }
+                write_empty_response(&mut server, 1).await;
+            });
+            pending.unwrap().receive().await.unwrap();
+            assert!(!conn.is_poisoned());
+            assert!(
+                matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.is_empty())
+            );
+        })
+        .await
+        .expect("cancelled partial write blocked its successor");
+    }
+
     #[tokio::test]
     async fn request_records_metrics_for_reportable_api_key() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_echo_server(server));
@@ -1052,8 +1535,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_skips_metrics_for_non_reportable_api_key() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_echo_server(server));
@@ -1094,8 +1578,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_records_completion_metrics_when_send_fails() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(64);
         drop(server); // force write failure on request path
@@ -1146,8 +1631,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_records_completion_metrics_when_server_returns_api_error() {
-        let _test_guard = test_lock().lock().await;
-        let snapshotter = test_snapshotter();
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _recorder_guard = metrics::set_default_local_recorder(&recorder);
 
         let (client, server) = tokio::io::duplex(4096);
         tokio::spawn(mock_error_server(server));
@@ -1289,6 +1775,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_metadata_version_negotiates_with_legacy_servers() {
+        for server_max in [0, 1] {
+            let negotiated = server_api_versions(&[PbApiVersion {
+                api_key: 1024,
+                min_version: 0,
+                max_version: server_max,
+            }]);
+            let expected = if cfg!(feature = "kv-snapshot") {
+                server_max as i16
+            } else {
+                0
+            };
+            assert_eq!(
+                negotiated
+                    .highest_available_version(ApiKey::GetKvSnapshotMetadata)
+                    .unwrap(),
+                ApiVersion(expected),
+            );
+        }
+    }
+
+    #[test]
     fn server_api_versions_returns_error_for_out_of_range_api_key() {
         let api_key = i32::from(i16::MAX) + 1;
         let error = ServerApiVersions::new(&[PbApiVersion {
@@ -1399,5 +1907,433 @@ mod tests {
             validate_server_type(&ServerType::CoordinatorServer, Some(99),),
             Err(Error::InvalidServerType { .. })
         ));
+    }
+
+    // -- Connection cache ------------------------------------------------
+
+    #[tokio::test]
+    async fn connect_timeout_bounds_api_negotiation_and_authentication() {
+        use prost::Message;
+
+        for stalled_api in [ApiKey::ApiVersion, ApiKey::Authenticate] {
+            let connect_timeout = Duration::from_secs(60);
+            let negotiation_time = Duration::from_secs(40);
+            let listener = bind().await;
+            let client = Arc::new(
+                RpcClient::new()
+                    .with_timeout(connect_timeout)
+                    .with_sasl("user".to_string(), "password".to_string()),
+            );
+            let server = node(1, port(&listener), ServerType::TabletServer);
+            let connecting = {
+                let client = Arc::clone(&client);
+                tokio::spawn(async move { client.get_connection(&server).await })
+            };
+            let (mut stream, _) = listener.accept().await.unwrap();
+            loop {
+                let len = stream.read_i32().await.unwrap();
+                let mut request = vec![0; len as usize];
+                stream.read_exact(&mut request).await.unwrap();
+                let api = ApiKey::from(i16::from_be_bytes([request[0], request[1]]));
+                if api == stalled_api {
+                    break;
+                }
+                assert_eq!(api, ApiKey::ApiVersion);
+                tokio::time::pause();
+                tokio::time::advance(negotiation_time).await;
+                tokio::time::resume();
+                let mut response = vec![0];
+                response.extend_from_slice(&request[4..8]);
+                crate::proto::ApiVersionsResponse {
+                    api_versions: vec![PbApiVersion {
+                        api_key: i32::from(i16::from(ApiKey::Authenticate)),
+                        min_version: 0,
+                        max_version: 0,
+                    }],
+                    server_type: Some(ServerType::TabletServer.to_type_id()),
+                }
+                .encode(&mut response)
+                .unwrap();
+                stream.write_i32(response.len() as i32).await.unwrap();
+                stream.write_all(&response).await.unwrap();
+            }
+
+            tokio::time::pause();
+            tokio::time::advance(if stalled_api == ApiKey::ApiVersion {
+                connect_timeout
+            } else {
+                connect_timeout - negotiation_time
+            })
+            .await;
+            tokio::time::resume();
+
+            let error = tokio::time::timeout(Duration::from_secs(2), connecting)
+                .await
+                .expect("the configured connect timeout also bounds the handshake")
+                .unwrap()
+                .unwrap_err();
+            assert!(error.is_retriable(), "{stalled_api:?}: {error}");
+            assert!(client.cached_endpoints().is_empty());
+            assert_closed(&mut stream).await;
+        }
+    }
+
+    async fn bind() -> TcpListener {
+        TcpListener::bind("127.0.0.1:0").await.unwrap()
+    }
+
+    fn node(id: i32, port: u16, server_type: ServerType) -> ServerNode {
+        ServerNode::new(id, "127.0.0.1".to_string(), u32::from(port), server_type)
+    }
+
+    fn port(listener: &TcpListener) -> u16 {
+        listener.local_addr().unwrap().port()
+    }
+
+    async fn accept_handshake(
+        listener: &TcpListener,
+        server_type: &ServerType,
+        before_reply: impl FnOnce(),
+    ) -> TcpStream {
+        use prost::Message;
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let len = stream.read_i32().await.unwrap();
+        let mut request = vec![0u8; len as usize];
+        stream.read_exact(&mut request).await.unwrap();
+        assert_eq!(
+            i16::from_be_bytes([request[0], request[1]]),
+            i16::from(ApiKey::ApiVersion)
+        );
+        let mut reply = vec![0u8];
+        reply.extend_from_slice(&request[4..8]);
+        crate::proto::ApiVersionsResponse {
+            api_versions: vec![],
+            server_type: Some(server_type.to_type_id()),
+        }
+        .encode(&mut reply)
+        .unwrap();
+        before_reply();
+        stream.write_i32(reply.len() as i32).await.unwrap();
+        stream.write_all(&reply).await.unwrap();
+        stream
+    }
+
+    async fn connect(
+        client: &RpcClient,
+        node: &ServerNode,
+        listener: &TcpListener,
+    ) -> (ServerConnection, TcpStream) {
+        connect_with(client, node, listener, || {}).await
+    }
+
+    async fn connect_with(
+        client: &RpcClient,
+        node: &ServerNode,
+        listener: &TcpListener,
+        before_reply: impl FnOnce(),
+    ) -> (ServerConnection, TcpStream) {
+        let (connection, stream) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(
+                client.get_connection(node),
+                accept_handshake(listener, node.server_type(), before_reply)
+            )
+        })
+        .await
+        .unwrap_or_else(|_| panic!("no new connection to {}", node.url()));
+        (connection.unwrap(), stream)
+    }
+
+    fn endpoint(node: &ServerNode) -> String {
+        ConnectionKey::from(node).to_string()
+    }
+
+    async fn assert_closed(stream: &mut TcpStream) {
+        let mut buf = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf))
+            .await
+            .expect("the connection was not closed");
+        assert_eq!(read.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn connections_are_cached_per_endpoint() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+
+        let (old_connection, _old_stream) = connect(&client, &at_old, &old_listener).await;
+        let (new_connection, _new_stream) = connect(&client, &at_new, &new_listener).await;
+        assert!(!Arc::ptr_eq(&old_connection, &new_connection));
+
+        let reused_old = client.get_connection(&at_old).await.unwrap();
+        let reused_new = client.get_connection(&at_new).await.unwrap();
+        assert!(Arc::ptr_eq(&reused_old, &old_connection));
+        assert!(Arc::ptr_eq(&reused_new, &new_connection));
+
+        client.disconnect_endpoint(&at_old);
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_new)])
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_drops_every_endpoint_of_server() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+        let other_server = node(2, port(&old_listener), ServerType::TabletServer);
+        let mut connections = Vec::new();
+        for (cached, listener) in [
+            (&at_old, &old_listener),
+            (&at_new, &new_listener),
+            (&other_server, &old_listener),
+        ] {
+            connections.push(connect(&client, cached, listener).await);
+        }
+
+        client.disconnect(at_old.uid());
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&other_server)])
+        );
+    }
+
+    #[tokio::test]
+    async fn connections_to_superseded_endpoints_are_not_cached() {
+        let (old_listener, new_listener) = (bind().await, bind().await);
+        let client = RpcClient::new();
+        let at_old = node(1, port(&old_listener), ServerType::TabletServer);
+        let at_new = node(1, port(&new_listener), ServerType::TabletServer);
+
+        let (connection, _old_stream) = connect_with(&client, &at_old, &old_listener, || {
+            client.disconnect_superseded_endpoints(std::slice::from_ref(&at_new))
+        })
+        .await;
+        assert!(client.cached_endpoints().is_empty());
+        let released = Arc::downgrade(&connection);
+        drop(connection);
+        assert!(released.upgrade().is_none());
+
+        let (_stale_connection, _stale_stream) = connect(&client, &at_old, &old_listener).await;
+        connect(&client, &at_new, &new_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_new)])
+        );
+
+        client.disconnect_superseded_endpoints(std::slice::from_ref(&at_old));
+        connect(&client, &at_old, &old_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_old)])
+        );
+
+        client.disconnect_superseded_endpoints(&[]);
+        connect(&client, &at_new, &new_listener).await;
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&at_old), endpoint(&at_new)])
+        );
+    }
+
+    #[tokio::test]
+    async fn superseded_endpoints_are_disconnected() {
+        let listener = bind().await;
+        let old_port = port(&listener);
+        let new_port = port(&bind().await);
+        let client = RpcClient::new();
+        let moved_coordinator = node(0, old_port, ServerType::CoordinatorServer);
+        let moved_server = node(1, old_port, ServerType::TabletServer);
+        let reusing_server = node(2, old_port, ServerType::TabletServer);
+        let unlisted_server = node(3, old_port, ServerType::TabletServer);
+        let bootstrap = node(-1, old_port, ServerType::Unknown);
+        let mut connections = Vec::new();
+        for cached in [
+            &moved_coordinator,
+            &moved_server,
+            &reusing_server,
+            &unlisted_server,
+            &bootstrap,
+        ] {
+            connections.push(connect(&client, cached, &listener).await);
+        }
+
+        client.disconnect_superseded_endpoints(&[
+            node(0, new_port, ServerType::CoordinatorServer),
+            node(1, new_port, ServerType::TabletServer),
+            reusing_server.clone(),
+        ]);
+
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([
+                endpoint(&reusing_server),
+                endpoint(&unlisted_server),
+                endpoint(&bootstrap),
+            ])
+        );
+    }
+
+    /// Waits for `request` to fail with a retriable error because its connection closed, and
+    /// returns for how long the connection was idle.
+    async fn idle_time_of<T>(request: impl Future<Output = Result<T, Error>>) -> Duration {
+        let error = tokio::time::timeout(Duration::from_secs(10), request)
+            .await
+            .ok()
+            .and_then(Result::err)
+            .expect("the request did not fail");
+        assert!(error.is_retriable());
+        match &error {
+            Error::RpcError {
+                source: RpcError::Poisoned(cause),
+                ..
+            } => match **cause {
+                RpcError::IdleConnectionClosed(idle_time) => idle_time,
+                _ => panic!("{error:?}"),
+            },
+            _ => panic!("{error:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_connections_are_closed() {
+        let listener = bind().await;
+        let max_idle_time = Duration::from_secs(600);
+        let client = RpcClient::new();
+        let first = node(1, port(&listener), ServerType::TabletServer);
+        let second = node(2, port(&listener), ServerType::TabletServer);
+        let (first_connection, mut first_stream) = connect(&client, &first, &listener).await;
+        let (second_connection, mut second_stream) = connect(&client, &second, &listener).await;
+        *second_connection.api_versions.lock() = Some(produce_api_versions());
+        let pending = second_connection
+            .dispatch_request(TestProduceRequest)
+            .await
+            .unwrap();
+
+        let first_idle_at = first_connection.last_activity() + max_idle_time;
+        let second_idle_at = second_connection.last_activity() + max_idle_time;
+        assert!(first_idle_at < second_idle_at);
+        let evict = |now| evict_idle_connections(&client.cache, now, max_idle_time);
+
+        assert_eq!(
+            evict(first_idle_at - Duration::from_nanos(1)),
+            Some(first_idle_at)
+        );
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&first), endpoint(&second)])
+        );
+
+        assert_eq!(evict(first_idle_at), Some(second_idle_at));
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&second)])
+        );
+        assert!(first_connection.is_poisoned());
+        drop(first_connection);
+        assert_closed(&mut first_stream).await;
+
+        assert_eq!(
+            evict_idle_connections(&client.cache, second_idle_at, Duration::MAX),
+            None
+        );
+        assert_eq!(
+            client.cached_endpoints(),
+            HashSet::from([endpoint(&second)])
+        );
+
+        assert_eq!(evict(second_idle_at), Some(second_idle_at + max_idle_time));
+        assert!(client.cached_endpoints().is_empty());
+        read_request_id(&mut second_stream).await;
+        assert_eq!(idle_time_of(pending.receive()).await, max_idle_time);
+        drop(second_connection);
+        assert_closed(&mut second_stream).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn closing_idle_connection_abandons_writes() {
+        let max_idle_time = Duration::from_secs(600);
+        // A frame cannot fit the 8-byte transport, so its write waits for the server to read.
+        let (conn, mut server) = duplex_conn(8);
+        let conn = Arc::new(conn);
+        let created_at = conn.last_activity();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        let dispatch = || {
+            let conn = Arc::clone(&conn);
+            let task = tokio::spawn(async move { conn.dispatch_request(TestProduceRequest).await });
+            async { task.await.unwrap() }
+        };
+        let (blocked, queued) = (dispatch(), dispatch());
+        while !matches!(&*conn.state.lock(), ConnectionState::RequestMap(map) if map.len() == 2) {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(
+            conn.close_if_idle(created_at + max_idle_time, max_idle_time),
+            None
+        );
+        let write_started_at = created_at + Duration::from_secs(1);
+        assert_eq!(
+            conn.close_if_idle(write_started_at + max_idle_time, max_idle_time),
+            Some(max_idle_time)
+        );
+        assert_eq!(idle_time_of(blocked).await, max_idle_time);
+        assert_eq!(idle_time_of(queued).await, max_idle_time);
+
+        // Only the part of the first frame that fit was sent.
+        drop(conn);
+        let mut received = Vec::new();
+        server.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn idle_connections_are_closed_in_background() {
+        let listener = bind().await;
+        let max_idle_time = Duration::from_millis(100);
+        let client = RpcClient::new().with_max_idle_time(max_idle_time);
+        let server = node(1, port(&listener), ServerType::TabletServer);
+        for _ in 0..2 {
+            let (connection, mut stream) = connect(&client, &server, &listener).await;
+            *connection.api_versions.lock() = Some(produce_api_versions());
+            let (idle_time, _) = tokio::join!(
+                idle_time_of(connection.request(TestProduceRequest)),
+                read_request_id(&mut stream)
+            );
+            assert!(idle_time >= max_idle_time);
+            drop(connection);
+            assert_closed(&mut stream).await;
+            assert!(client.cached_endpoints().is_empty());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_eviction_stops_with_client() {
+        let client = RpcClient::new().with_max_idle_time(Duration::from_secs(600));
+        client.start_idle_eviction();
+        let task = client.idle_eviction_task.get().unwrap().abort_handle();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(!task.is_finished());
+
+        let cache = Arc::downgrade(&client.cache);
+        drop(client);
+        assert!(cache.upgrade().is_none());
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(task.is_finished());
+    }
+
+    #[test]
+    fn idle_eviction_can_be_disabled() {
+        for client in [
+            RpcClient::new(),
+            RpcClient::new().with_max_idle_time(Duration::ZERO),
+        ] {
+            client.start_idle_eviction();
+            assert!(client.idle_eviction_task.get().is_none());
+        }
     }
 }

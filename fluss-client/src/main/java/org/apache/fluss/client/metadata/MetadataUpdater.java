@@ -382,10 +382,10 @@ public class MetadataUpdater {
                     break;
                 }
             } catch (Exception e) {
-                // We should dis-connected with the bootstrap server id to make sure the next
-                // retry can rebuild the connection.
+                // Disconnect only the failed bootstrap endpoint so the next retry can
+                // rebuild its connection without affecting other bootstrap endpoints.
                 if (serverNode != null) {
-                    rpcClient.disconnect(serverNode.uid());
+                    rpcClient.disconnect(serverNode);
                 }
                 LOG.error(
                         "Failed to initialize fluss client connection to bootstrap server: {}",
@@ -429,9 +429,9 @@ public class MetadataUpdater {
                     throw e;
                 }
 
-                // We should dis-connected with the bootstrap server id to make sure the next
-                // retry can rebuild the connection.
-                rpcClient.disconnect(serverNode.uid());
+                // Disconnect only the failed bootstrap endpoint so the next retry can
+                // rebuild its connection without affecting other bootstrap endpoints.
+                rpcClient.disconnect(serverNode);
 
                 long delayMs = (long) (RETRY_INTERVAL_MS * Math.pow(2, retryCount));
                 LOG.warn(

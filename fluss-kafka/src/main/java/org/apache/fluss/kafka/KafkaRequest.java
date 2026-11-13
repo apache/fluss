@@ -17,8 +17,10 @@
 
 package org.apache.fluss.kafka;
 
+import org.apache.fluss.kafka.security.KafkaSaslConnection;
 import org.apache.fluss.rpc.netty.server.RpcRequest;
 import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
@@ -26,6 +28,7 @@ import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;
+import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.protocol.Message;
 import org.apache.kafka.common.protocol.ObjectSerializationCache;
 import org.apache.kafka.common.requests.AbstractRequest;
@@ -34,6 +37,7 @@ import org.apache.kafka.common.requests.RequestHeader;
 import org.apache.kafka.common.requests.ResponseHeader;
 
 import java.nio.ByteBuffer;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -48,19 +52,27 @@ public class KafkaRequest implements RpcRequest {
     private final RequestHeader header;
     private final AbstractRequest request;
     private final String listenerName;
+    private final KafkaSaslConnection saslConnection;
+    private final FlussPrincipal principal;
     private final ByteBuf buffer;
     private final ChannelHandlerContext ctx;
     private final long startTimeMs;
+    private final int requestBytes;
+    private volatile long requestDequeTimeMs;
+    private volatile long requestCompletedTimeMs;
     private final CompletableFuture<AbstractResponse> future;
     private final AtomicBoolean bufferReleased = new AtomicBoolean();
     private volatile boolean cancelled = false;
+    private volatile boolean closeConnectionAfterResponse;
 
+    /** Creates a request that snapshots identity from the supplied connection security state. */
     protected KafkaRequest(
             ApiKeys apiKey,
             short apiVersion,
             RequestHeader header,
             AbstractRequest request,
             String listenerName,
+            KafkaSaslConnection saslConnection,
             ByteBuf buffer,
             ChannelHandlerContext ctx,
             CompletableFuture<AbstractResponse> future) {
@@ -69,9 +81,12 @@ public class KafkaRequest implements RpcRequest {
         this.header = header;
         this.request = request;
         this.listenerName = listenerName;
+        this.saslConnection = saslConnection;
+        this.principal = saslConnection.principal();
         this.buffer = buffer.retain();
         this.ctx = ctx;
         this.startTimeMs = System.currentTimeMillis();
+        this.requestBytes = buffer.readableBytes();
         this.future = future;
     }
 
@@ -111,6 +126,16 @@ public class KafkaRequest implements RpcRequest {
         return listenerName;
     }
 
+    /** Returns the connection-level SASL state associated with this request. */
+    public KafkaSaslConnection saslConnection() {
+        return saslConnection;
+    }
+
+    /** Returns the principal captured when this request was parsed. */
+    public FlussPrincipal principal() {
+        return principal;
+    }
+
     public ChannelHandlerContext ctx() {
         return ctx;
     }
@@ -124,6 +149,7 @@ public class KafkaRequest implements RpcRequest {
     }
 
     public void complete(AbstractResponse response) {
+        requestCompletedTimeMs = System.currentTimeMillis();
         future.complete(response);
     }
 
@@ -139,6 +165,16 @@ public class KafkaRequest implements RpcRequest {
         return cancelled;
     }
 
+    /** Marks this request so the channel closes only after its response has been flushed. */
+    public void closeConnectionAfterResponse() {
+        closeConnectionAfterResponse = true;
+    }
+
+    /** Returns whether the channel must close after this request's response is flushed. */
+    public boolean shouldCloseConnectionAfterResponse() {
+        return closeConnectionAfterResponse;
+    }
+
     public ByteBuf responseBuffer() {
         try {
             AbstractResponse response = future.join();
@@ -149,6 +185,34 @@ public class KafkaRequest implements RpcRequest {
         } finally {
             releaseBuffer();
         }
+    }
+
+    int requestBytes() {
+        return requestBytes;
+    }
+
+    void setRequestDequeTimeMs(long requestDequeTimeMs) {
+        this.requestDequeTimeMs = requestDequeTimeMs;
+    }
+
+    long requestDequeTimeMs() {
+        return requestDequeTimeMs;
+    }
+
+    long requestCompletedTimeMs() {
+        return requestCompletedTimeMs;
+    }
+
+    boolean failed() {
+        if (future.isCompletedExceptionally()) {
+            return true;
+        }
+        for (Map.Entry<Errors, Integer> error : future.join().errorCounts().entrySet()) {
+            if (error.getKey() != Errors.NONE && error.getValue() > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ByteBuf serialize(AbstractResponse response) {

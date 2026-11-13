@@ -18,13 +18,19 @@
 package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.bucketing.FlussBucketingFunction;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.CompactedRowEncoder;
 import org.apache.fluss.row.encode.KeyEncoder;
-import org.apache.fluss.row.encode.RowEncoder;
+import org.apache.fluss.row.encode.KvValueLayout;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -32,8 +38,6 @@ import org.apache.fluss.types.RowType;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-
-import static org.apache.fluss.row.BinaryString.EMPTY_UTF8;
 
 /** Schema and encoding helpers for the {@code sys.consumer_offsets} system table. */
 @Internal
@@ -56,33 +60,38 @@ public final class ConsumerOffsetSchema {
     /** Sentinel used for non-partitioned tables because primary-key columns cannot be null. */
     public static final long NON_PARTITIONED_PARTITION_ID = -1L;
 
-    private static final ConsumerOffsetAndMetadata EMPTY_OFFSET =
-            new ConsumerOffsetAndMetadata(-1L, "");
-
     private static final List<String> PRIMARY_KEYS =
             Collections.unmodifiableList(
                     Arrays.asList(
-                            GROUP_ID_COLUMN,
                             RECORD_TYPE_COLUMN,
+                            GROUP_ID_COLUMN,
                             TABLE_ID_COLUMN,
                             PARTITION_ID_COLUMN,
                             BUCKET_ID_COLUMN));
+
+    private static final List<String> GROUP_LOOKUP_PREFIX_KEYS =
+            Collections.unmodifiableList(Arrays.asList(RECORD_TYPE_COLUMN, GROUP_ID_COLUMN));
 
     private static final Schema TABLE_SCHEMA = createTableSchema();
     private static final RowType ROW_TYPE = TABLE_SCHEMA.getRowType();
     private static final DataType[] DATA_TYPES = ROW_TYPE.getChildren().toArray(new DataType[0]);
 
-    private ConsumerOffsetSchema() {}
-
-    /**
-     * Creates an encoder for complete consumer-offset primary keys.
-     *
-     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers and are not thread
-     * safe. Each caller should retain and reuse its own encoder rather than sharing one globally.
-     */
-    public static KeyEncoder createOffsetKeyEncoder() {
-        return KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null);
-    }
+    private final ThreadLocal<CompactedRowEncoder> rowEncoder =
+            ThreadLocal.withInitial(() -> new CompactedRowEncoder(DATA_TYPES));
+    // sys.consumer_offsets has no lake format, so ofPrimaryKeyEncoder uses compacted keys
+    // for both KV v1 and v2. Passing the full primary key and a null lake format to
+    // ofBucketKeyEncoder selects the same encoding without requiring a TableConfig.
+    private final ThreadLocal<KeyEncoder> primaryKeyEncoder =
+            ThreadLocal.withInitial(
+                    () -> KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, PRIMARY_KEYS, null));
+    private final ThreadLocal<KeyEncoder> groupBucketKeyEncoder =
+            ThreadLocal.withInitial(
+                    () ->
+                            KeyEncoder.ofBucketKeyEncoder(
+                                    ROW_TYPE, Collections.singletonList(GROUP_ID_COLUMN), null));
+    private final ThreadLocal<KeyEncoder> groupLookupPrefixEncoder =
+            ThreadLocal.withInitial(
+                    () -> KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, GROUP_LOOKUP_PREFIX_KEYS, null));
 
     /** Returns the schema of the consumer-offset system table. */
     public static Schema getTableSchema() {
@@ -100,76 +109,86 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the complete primary key of an offset row. */
-    public static byte[] encodeOffsetKey(
-            KeyEncoder keyEncoder, String groupId, long tableId, Long partitionId, int bucketId) {
+    public byte[] encodeOffsetKey(String groupId, long tableId, Long partitionId, int bucketId) {
         return encodeOffsetKey(
-                keyEncoder,
-                encodeOffsetRow(
-                        groupId,
+                GenericRow.of(
                         OFFSET_COMMIT_RECORD_TYPE,
+                        BinaryString.fromString(groupId),
                         tableId,
-                        partitionId,
-                        bucketId,
-                        EMPTY_OFFSET));
+                        partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId,
+                        bucketId));
     }
 
-    /** Encodes the {@code group_id} prefix used to enumerate all rows belonging to a group. */
-    public static byte[] encodeGroupPrefix(String groupId) {
-        return createGroupPrefixEncoder()
+    /** Creates a decoder for values stored with the consumer-offset schema. */
+    public static ValueDecoder createValueDecoder(SchemaGetter schemaGetter) {
+        return new ValueDecoder(schemaGetter, KvFormat.COMPACTED, KvValueLayout.PLAIN);
+    }
+
+    /** Converts a decoded offset row into its committed offset and metadata. */
+    static ConsumerOffsetAndMetadata toOffsetAndMetadata(InternalRow row) {
+        return new ConsumerOffsetAndMetadata(
+                row.getLong(5), row.isNullAt(6) ? null : row.getString(6).toString());
+    }
+
+    /** Converts a decoded offset row into its source table bucket. */
+    static TableBucket toTableBucket(InternalRow row) {
+        long partitionId = row.getLong(3);
+        return new TableBucket(row.getLong(2), partitionId < 0 ? null : partitionId, row.getInt(4));
+    }
+
+    /** Encodes the bucket key used to route a group to its offsets-table bucket. */
+    public byte[] encodeGroupBucketKey(String groupId) {
+        // The bucket-key encoder reads group_id from column 1; record_type is only a placeholder.
+        return groupBucketKeyEncoder
+                .get()
                 .encodeKey(
-                        encodeOffsetRow(
-                                groupId,
-                                OFFSET_COMMIT_RECORD_TYPE,
-                                -1L,
-                                NON_PARTITIONED_PARTITION_ID,
-                                -1,
-                                EMPTY_OFFSET));
-    }
-
-    /** Encodes the complete primary key of an already materialized offset row. */
-    static byte[] encodeOffsetKey(KeyEncoder keyEncoder, InternalRow row) {
-        return keyEncoder.encodeKey(row);
+                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
     }
 
     /**
-     * Creates a new group-prefix encoder.
-     *
-     * <p>{@link KeyEncoder} implementations may reuse mutable internal writers, so a new encoder
-     * must be created for each call to keep concurrent key encoding isolated.
+     * Encodes the {@code record_type} and {@code group_id} prefix used to enumerate a group's
+     * committed offsets.
      */
-    private static KeyEncoder createGroupPrefixEncoder() {
-        return KeyEncoder.ofBucketKeyEncoder(
-                ROW_TYPE, Collections.singletonList(GROUP_ID_COLUMN), null);
+    public byte[] encodeOffsetCommitPrefix(String groupId) {
+        return groupLookupPrefixEncoder
+                .get()
+                .encodeKey(
+                        GenericRow.of(OFFSET_COMMIT_RECORD_TYPE, BinaryString.fromString(groupId)));
     }
 
-    /** Encodes one consumer-offset table row. */
-    public static CompactedRow encodeOffsetRow(
+    /** Encodes the complete primary key of an already materialized offset row. */
+    byte[] encodeOffsetKey(InternalRow row) {
+        return primaryKeyEncoder.get().encodeKey(row);
+    }
+
+    int bucketFor(String groupId, int bucketCount) {
+        return FlussBucketingFunction.bucketForRowKey(encodeGroupBucketKey(groupId), bucketCount);
+    }
+
+    /** The returned row uses this thread's buffer until its next call to this method. */
+    CompactedRow encodeOffsetRow(
             String groupId,
             int recordType,
             long tableId,
             Long partitionId,
             int bucketId,
             ConsumerOffsetAndMetadata offsetAndMetadata) {
-        RowEncoder rowEncoder = new CompactedRowEncoder(DATA_TYPES);
-        rowEncoder.startNewRow();
-        rowEncoder.encodeField(0, BinaryString.fromString(groupId));
-        rowEncoder.encodeField(1, recordType);
-        rowEncoder.encodeField(2, tableId);
-        rowEncoder.encodeField(3, partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId);
-        rowEncoder.encodeField(4, bucketId);
-        rowEncoder.encodeField(5, offsetAndMetadata.getOffset());
-        rowEncoder.encodeField(
-                6,
-                offsetAndMetadata.getMetadata().isEmpty()
-                        ? EMPTY_UTF8
-                        : BinaryString.fromString(offsetAndMetadata.getMetadata()));
-        return (CompactedRow) rowEncoder.finishRow();
+        CompactedRowEncoder encoder = rowEncoder.get();
+        encoder.startNewRow();
+        encoder.encodeField(0, recordType);
+        encoder.encodeField(1, BinaryString.fromString(groupId));
+        encoder.encodeField(2, tableId);
+        encoder.encodeField(3, partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId);
+        encoder.encodeField(4, bucketId);
+        encoder.encodeField(5, offsetAndMetadata.getOffset());
+        encoder.encodeField(6, offsetAndMetadata.getMetadata());
+        return encoder.finishRow();
     }
 
     private static Schema createTableSchema() {
         return Schema.newBuilder()
-                .column(GROUP_ID_COLUMN, DataTypes.STRING())
                 .column(RECORD_TYPE_COLUMN, DataTypes.INT())
+                .column(GROUP_ID_COLUMN, DataTypes.STRING())
                 .column(TABLE_ID_COLUMN, DataTypes.BIGINT())
                 .column(PARTITION_ID_COLUMN, DataTypes.BIGINT())
                 .column(BUCKET_ID_COLUMN, DataTypes.INT())

@@ -62,6 +62,15 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_io_tmp_dir.empty());
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_io_tmp_dir.empty());
+    config.scanner_io_tmp_dir = "/tmp/fluss logs";
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(std::string(ffi_config.scanner_io_tmp_dir), "/tmp/fluss logs");
+}
+
 TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     fluss::Configuration config;
     EXPECT_EQ(config.writer_retry_backoff_ms, 100u);
@@ -72,6 +81,38 @@ TEST(FfiConverterTest, WriterRetryBackoffConfiguration) {
     auto ffi_config = fluss::utils::to_ffi_config(config);
     EXPECT_EQ(ffi_config.writer_retry_backoff_ms, 250u);
     EXPECT_EQ(ffi_config.writer_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, ConnectionMaxIdleTimeConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 600000u);
+
+    config.connection_max_idle_time_ms = 60000;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 60000u);
+
+    config.connection_max_idle_time_ms = 0;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).connection_max_idle_time_ms, 0u);
+}
+
+TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_retry_backoff_ms, 100u);
+    EXPECT_EQ(config.lookup_retry_max_backoff_ms, 1000u);
+
+    config.lookup_retry_backoff_ms = 250;
+    config.lookup_retry_max_backoff_ms = 5000;
+    auto ffi_config = fluss::utils::to_ffi_config(config);
+    EXPECT_EQ(ffi_config.lookup_retry_backoff_ms, 250u);
+    EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
+
+    config.writer_dynamic_create_partition_enabled = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).writer_dynamic_create_partition_enabled);
 }
 
 // --- DataType value semantics ---

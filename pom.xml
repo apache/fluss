@@ -97,6 +97,7 @@
         <iceberg.version>1.10.1</iceberg.version>
         <hudi.version>1.1.0</hudi.version>
         <roaringbitmap.version>1.3.0</roaringbitmap.version>
+        <datasketches-java.version>6.2.0</datasketches-java.version>
 
         <!-- spark & scala -->
         <scala212.version>2.12.18</scala212.version>
@@ -108,7 +109,7 @@
 
         <fluss.hadoop.version>3.4.3</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
-        <fluss-rocksdb.version>11.8.1-fluss-3</fluss-rocksdb.version>
+        <fluss-rocksdb.version>11.8.1-fluss-5</fluss-rocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
         <log4j.version>2.25.4</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>

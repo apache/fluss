@@ -51,6 +51,7 @@ public class ConfigurationUtils {
         "token",
         "basic-auth",
         "jaas.config",
+        "security.sasl.plain.credentials",
         "http-headers",
         "private.key",
         "private-key",

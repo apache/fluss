@@ -163,6 +163,22 @@ public class KafkaTopicMapperTest {
     }
 
     @Test
+    public void testAliasTopicIdsKeepTableIdentityAndDetectRecreation() {
+        for (long tableId : new long[] {0L, 123L, Long.MAX_VALUE}) {
+            Uuid canonical = mapper.toTopicId(tableId);
+            Uuid alias = mapper.toAliasTopicId(tableId);
+            assertThat(alias)
+                    .isNotIn(canonical, Uuid.ZERO_UUID, Uuid.ONE_UUID, Uuid.METADATA_TOPIC_ID)
+                    .isEqualTo(new KafkaTopicMapper().toAliasTopicId(tableId));
+            assertThat(mapper.isMappedTopicId(alias)).isTrue();
+            assertThat(mapper.toTableId(alias)).isEqualTo(mapper.toTableId(canonical));
+        }
+        assertThat(mapper.toAliasTopicId(124L)).isNotEqualTo(mapper.toAliasTopicId(123L));
+        assertThatThrownBy(() -> mapper.toAliasTopicId(-1L))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     public void testRejectsInvalidTopicIds() {
         assertThatThrownBy(() -> mapper.toTopicId(-1L))
                 .isInstanceOf(IllegalArgumentException.class);

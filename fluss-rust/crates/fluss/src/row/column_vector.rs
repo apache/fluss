@@ -513,6 +513,17 @@ impl TimeColumn {
         }
     }
 
+    /// Exact time-of-day value for filters. Unlike `get_millis`, this preserves
+    /// sub-millisecond input and does not narrow Arrow's physical integer range.
+    pub(crate) fn get_nanos(&self, row_id: usize) -> i128 {
+        match self {
+            Self::Second(a) => i128::from(a.value(row_id)) * 1_000_000_000,
+            Self::Millisecond(a) => i128::from(a.value(row_id)) * 1_000_000,
+            Self::Microsecond(a) => i128::from(a.value(row_id)) * 1_000,
+            Self::Nanosecond(a) => i128::from(a.value(row_id)),
+        }
+    }
+
     fn get_millis(&self, row_id: usize) -> i32 {
         match self {
             Self::Second(a) => a.value(row_id) * 1000,

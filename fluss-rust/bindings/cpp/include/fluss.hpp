@@ -242,6 +242,7 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
+               code == NOT_COORDINATOR_LEADER_EXCEPTION ||
                code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
                code == HISTORICAL_PARTITION_THROTTLED;
     }
@@ -1401,6 +1402,8 @@ class ArrowRecordBatch {
     // timestamp, which is the case for a limit scan because it merges several
     // log batches into one Arrow batch.
     static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
 
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
@@ -1417,13 +1420,16 @@ class ArrowRecordBatch {
     int64_t GetLastOffset() const;
     // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
     int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset, int64_t commit_timestamp) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1434,6 +1440,7 @@ class ArrowRecordBatch {
     // Defaults to the sentinel so any future construction path that forgets to
     // set it reports "unknown" rather than an arbitrary value.
     int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {
@@ -1639,12 +1646,16 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
     // Remote log read concurrency within one file (streaming read path)
     size_t scanner_remote_log_read_concurrency{4};
+    // Parent directory for downloaded remote logs; empty uses the OS temporary directory plus `/fluss`
+    std::string scanner_io_tmp_dir;
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     // Maximum bytes per fetch response for LogScanner (16 MB)
@@ -1673,8 +1684,12 @@ struct Configuration {
     uint64_t writer_retry_backoff_ms{100};
     // Maximum writer retry backoff (ms) after exponential growth
     uint64_t writer_retry_max_backoff_ms{1000};
-    // Connect timeout in milliseconds for TCP transport connect
+    // Connection establishment timeout in milliseconds, including TCP connect,
+    // API negotiation and SASL authentication
     uint64_t connect_timeout_ms{15000};
+    // Close cached connections without reads or writes for this long (ms), failing the requests
+    // still waiting on them with a retriable error. 0 disables closing idle connections
+    uint64_t connection_max_idle_time_ms{600000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1683,7 +1698,9 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
-    // Maximum number of pending lookup operations
+    // Capacity of the send queue; new lookups wait when it is full.
+    // Each bucket also holds up to this many lookups while waiting for a leader.
+    // Additional lookups for that bucket fail immediately with a buffer exhaustion error
     size_t lookup_queue_size{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
@@ -1691,8 +1708,16 @@ struct Configuration {
     uint64_t lookup_batch_timeout_ms{100};
     // Maximum number of unacknowledged lookup requests
     size_t lookup_max_inflight_requests{128};
-    // Maximum number of lookup retries
+    // Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's
+    // leader is not a retry, so this does not bound how long a lookup waits for one
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error, growing per
+    // retry of that lookup, and before refreshing a bucket without a known leader again, growing
+    // per refresh of that bucket and shared by its lookups
+    uint64_t lookup_retry_backoff_ms{100};
+    // Cap (ms) for the delays of lookup_retry_backoff_ms after exponential growth, before +/-20%
+    // jitter; must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {

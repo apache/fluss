@@ -23,7 +23,8 @@ mod table_test {
         create_table, dt_array_int, dt_map_string_int, dt_row_seq_label, extract_ids_from_batches,
         get_shared_cluster, make_int_array, make_string_array, map_dt_basics_columns,
         poll_until_count, poll_until_nonempty, row_dt_basics_columns, scalar_dt_columns,
-        wait_for_partitions_ready, wait_for_table_buckets_ready, wait_for_table_ready,
+        server_predates_1_0, wait_for_partition_buckets_ready, wait_for_partitions_ready,
+        wait_for_table_buckets_ready, wait_for_table_ready,
     };
     use arrow::array::{
         Array, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StringArray,
@@ -32,8 +33,10 @@ mod table_test {
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use fluss::client::{
-        EARLIEST_OFFSET, FlussAdmin, FlussTable, RecordBatchLogScanner, TableScan,
+        AppendWriter, EARLIEST_OFFSET, FlussAdmin, FlussConnection, FlussTable,
+        RecordBatchLogReader, RecordBatchLogScanner, TableScan,
     };
+    use fluss::config::Config;
     use fluss::error::FlussError;
     use fluss::metadata::{
         AddColumn, AlterTableChanges, ColumnPositionType, DataField, DataTypes, JsonSerde,
@@ -1787,6 +1790,9 @@ mod table_test {
         scanner.subscribe(0, 0).await.unwrap();
         let batches = collect_batches(&scanner, 6).await;
         assert_batch_timestamps_match_records(&batches, &timestamps_by_offset);
+        for batch in &batches {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
 
         // Subscribing mid-batch slices leading rows off the first batch; the
         // slice must keep the timestamp of the log batch it came from.
@@ -1799,6 +1805,9 @@ mod table_test {
             "first batch should start at the subscribed offset"
         );
         assert_batch_timestamps_match_records(&sliced, &timestamps_by_offset);
+        for batch in &sliced {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
 
         // Projection prunes columns but must not disturb the metadata.
         let projected_scanner = table
@@ -1811,6 +1820,105 @@ mod table_test {
         let projected = collect_batches(&projected_scanner, 6).await;
         assert_eq!(projected[0].batch().num_columns(), 1);
         assert_batch_timestamps_match_records(&projected, &timestamps_by_offset);
+        for batch in &projected {
+            assert_eq!(batch.schema_id(), table.get_table_info().get_schema_id());
+        }
+    }
+
+    /// Each Arrow batch reports the schema ID it was written with, even when a
+    /// fixed-schema scan aligns its columns to a newer schema.
+    #[tokio::test]
+    async fn record_batch_scanner_reports_source_schema_id_after_add_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+
+        let table_path = TablePath::new("fluss", "test_batch_schema_id_after_add_column");
+        create_table(
+            &admin,
+            &table_path,
+            &TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("name", DataTypes::string())
+                        .build()
+                        .unwrap(),
+                )
+                .distributed_by(Some(1), vec!["id".to_string()])
+                .build()
+                .unwrap(),
+        )
+        .await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        let table_v1 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v1.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["a", "b"])).unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let age_type_json =
+            serde_json::to_vec(&DataTypes::int().serialize_json().unwrap()).unwrap();
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let table_v2 = connection.get_table(&table_path).await.unwrap();
+        let writer = table_v2.new_append().unwrap().create_writer().unwrap();
+        writer
+            .append_arrow_batch(
+                record_batch!(
+                    ("id", Int32, [3]),
+                    ("name", Utf8, ["c"]),
+                    ("age", Int32, [30])
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let old_id = table_v1.get_table_info().get_schema_id();
+        let new_id = table_v2.get_table_info().get_schema_id();
+        assert_ne!(old_id, new_id);
+
+        for fixed_schema in [false, true] {
+            let scanner = table_v2
+                .new_scan()
+                .with_fixed_schema(fixed_schema)
+                .create_record_batch_log_scanner()
+                .unwrap();
+            scanner.subscribe(0, EARLIEST_OFFSET).await.unwrap();
+            let batches: Vec<(i64, i32, usize)> = collect_batches(&scanner, 3)
+                .await
+                .iter()
+                .map(|b| (b.base_offset(), b.schema_id(), b.batch().num_columns()))
+                .collect();
+            let old_columns = if fixed_schema { 3 } else { 2 };
+            assert_eq!(
+                batches,
+                vec![(0, old_id, old_columns), (2, new_id, 3)],
+                "fixed_schema={fixed_schema}"
+            );
+        }
+
+        admin.drop_table(&table_path, false).await.unwrap();
     }
 
     /// Polls a record-batch scanner until it has yielded `expected_rows` rows.
@@ -1831,6 +1939,80 @@ mod table_test {
             "scanner did not yield {expected_rows} rows in time"
         );
         collected
+    }
+
+    #[tokio::test]
+    async fn append_mixed_partition_arrow_batch() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().unwrap();
+        for (table_name, bucket_keys) in [
+            ("test_arrow_mixed_partition_keyless", vec![]),
+            ("test_arrow_mixed_partition_keyed", vec!["id".to_string()]),
+        ] {
+            let path = TablePath::new("fluss", table_name);
+            let descriptor = TableDescriptor::builder()
+                .schema(
+                    Schema::builder()
+                        .column("id", DataTypes::int())
+                        .column("region", DataTypes::string())
+                        .build()
+                        .unwrap(),
+                )
+                .partitioned_by(vec!["region"])
+                .distributed_by(Some(2), bucket_keys)
+                .build()
+                .unwrap();
+            create_table(&admin, &path, &descriptor).await;
+            create_partitions(&admin, &path, "region", &["US", "EU"]).await;
+            for partition in ["US", "EU"] {
+                wait_for_partition_buckets_ready(&admin, &path, partition, &[0, 1]).await;
+            }
+
+            let table = connection.get_table(&path).await.unwrap();
+            let writer = table.new_append().unwrap().create_writer().unwrap();
+            let batch = record_batch!(
+                ("id", Int32, [1, 2, 3, 4, 5, 6]),
+                ("region", Utf8, ["US", "EU", "US", "EU", "US", "EU"])
+            )
+            .unwrap();
+            tokio::time::timeout(
+                DEFAULT_POLL_TIMEOUT,
+                writer.append_arrow_batch(batch).unwrap(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+            let partitions = admin.list_partition_infos(&path).await.unwrap();
+            assert_eq!(partitions.len(), 2);
+            for partition in partitions {
+                let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+                for bucket in [0, 1] {
+                    scanner
+                        .subscribe_partition(partition.get_partition_id(), bucket, EARLIEST_OFFSET)
+                        .await
+                        .unwrap();
+                }
+                let mut reader = RecordBatchLogReader::new_until_latest(scanner, &admin)
+                    .await
+                    .unwrap();
+                let batches =
+                    tokio::time::timeout(DEFAULT_POLL_TIMEOUT, reader.collect_all_batches())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut ids = extract_ids_from_batches(&batches);
+                ids.sort_unstable();
+                let name = partition.get_partition_name();
+                let expected = match name.as_str() {
+                    "US" => [1, 3, 5],
+                    "EU" => [2, 4, 6],
+                    _ => panic!("Unexpected partition {name}"),
+                };
+                assert_eq!(ids, expected, "{table_name}: partition {name}");
+            }
+        }
     }
 
     async fn create_region_partitioned_log_table(admin: &FlussAdmin, table_path: &TablePath) {
@@ -1896,7 +2078,6 @@ mod table_test {
         append_writer.flush().await.expect("Failed to flush");
 
         // Test append_arrow_batch for partitioned tables
-        // Each batch must contain rows from the same partition
         let us_batch = record_batch!(
             ("id", Int32, [5, 6]),
             ("region", Utf8, ["US", "US"]),
@@ -4000,6 +4181,149 @@ mod table_test {
             total, 4,
             "the recreated table must hold only its own rows, got {offsets:?}"
         );
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn partition_row(id: i32, partition: &'static str) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, partition);
+        row
+    }
+
+    async fn append_writer(connection: &FlussConnection, table_path: &TablePath) -> AppendWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_append()
+            .expect("append")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn append_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("region", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = append_writer(&no_create_connection, &table_path).await;
+        let missing = writer.append(&partition_row(1, "APAC")).expect("append");
+        let other_missing = writer.append(&partition_row(2, "LATAM")).expect("append");
+        let existing = writer.append(&partition_row(3, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            for write in [missing, other_missing] {
+                assert_eq!(
+                    write.await.expect_err("missing partition").api_error(),
+                    Some(FlussError::PartitionNotExists)
+                );
+            }
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let partitions = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions");
+        assert_eq!(
+            partitions.len(),
+            1,
+            "no partition is created: {partitions:?}"
+        );
+
+        let writer = append_writer(&connection, &table_path).await;
+        let missing = writer.append(&partition_row(4, "APAC")).expect("append");
+        let invalid = writer.append(&partition_row(5, "EU West")).expect("append");
+        let existing = writer.append(&partition_row(6, "US")).expect("append");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("write to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("write to the existing partition");
+        })
+        .await
+        .expect("writes must complete instead of retrying");
+        let offsets = admin
+            .list_partition_offsets(&table_path, "APAC", &[0], OffsetSpec::Latest)
+            .await
+            .expect("list offsets of the created partition");
+        assert_eq!(offsets.get(&0), Some(&1));
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    #[tokio::test]
+    async fn append_to_expired_auto_partition_is_rejected_from_1_0_on() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_append_to_expired_auto_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("year", DataTypes::string())
+                    .build()
+                    .expect("Failed to build schema"),
+            )
+            .partitioned_by(vec!["year"])
+            .property("table.auto-partition.enabled", "true")
+            .property("table.auto-partition.key", "year")
+            .property("table.auto-partition.time-unit", "YEAR")
+            .property("table.auto-partition.num-precreate", "0")
+            .build()
+            .expect("Failed to build table");
+        create_table(&admin, &table_path, &table_descriptor).await;
+
+        let writer = append_writer(&connection, &table_path).await;
+        let expired = writer.append(&partition_row(1, "2001")).expect("append");
+        let written = tokio::time::timeout(Duration::from_secs(60), expired)
+            .await
+            .expect("the write must complete instead of retrying");
+
+        if server_predates_1_0() {
+            written.expect("an older server creates the expired partition");
+        } else {
+            assert_eq!(
+                written.expect_err("expired partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            let partitions = admin
+                .list_partition_infos(&table_path)
+                .await
+                .expect("list partitions");
+            assert!(
+                partitions.is_empty(),
+                "no partition is created: {partitions:?}"
+            );
+        }
 
         admin.drop_table(&table_path, false).await.expect("drop");
     }

@@ -609,6 +609,22 @@ final class KvManagerTest {
         verifyMultiGet(newKv2, k2, valueOf(kvRecord2));
     }
 
+    @Test
+    void testStatisticsSharedAcrossBucketsAndPartitionsOfSameTable() throws Exception {
+        KvTablet first = getOrCreateKv(tablePath1, "p1", new TableBucket(15001L, 11L, 0));
+        KvTablet second = getOrCreateKv(tablePath1, "p2", new TableBucket(15001L, 12L, 1));
+        KvTablet other = getOrCreateKv(tablePath2, "p1", new TableBucket(15002L, 11L, 0));
+
+        assertThat(first.getRocksDBKv().getStatistics())
+                .isSameAs(second.getRocksDBKv().getStatistics())
+                .isNotSameAs(other.getRocksDBKv().getStatistics());
+        first.getRocksDBKv().put(new byte[] {1}, new byte[] {2});
+        first.close();
+        assertThat(second.getRocksDBKv().getStatistics().isOwningHandle()).isTrue();
+        second.getRocksDBKv().put(new byte[] {3}, new byte[] {4});
+        assertThat(second.getRocksDBKv().get(new byte[] {3})).containsExactly((byte) 4);
+    }
+
     @ParameterizedTest
     @MethodSource("partitionProvider")
     void testReopenKvDirectlyWithoutStartupCleanup(String partitionName) throws Exception {

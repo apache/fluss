@@ -21,6 +21,7 @@ import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
@@ -67,8 +68,10 @@ public class CoordinatorChangeWatcher extends ServerBaseChangeWatcher {
                     {
                         if (newData != null && newData.getData().length > 0) {
                             String serverId = getServerIdFromEvent(newData);
+                            CoordinatorAddress coordinatorAddress =
+                                    ZkData.CoordinatorIdZNode.decode(newData.getData());
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(new NewCoordinatorEvent(serverId));
+                            eventManager.put(new NewCoordinatorEvent(coordinatorAddress));
                         }
                         break;
                     }

@@ -22,6 +22,7 @@ import org.apache.fluss.plugin.Plugin;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.rpc.netty.server.RequestHandler;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;
@@ -43,9 +44,10 @@ public interface NetworkProtocolPlugin extends Plugin {
 
     /**
      * Creates a Netty {@link ChannelHandler} for handling server side I/O events and operations of
-     * the network protocol.
+     * the network protocol, using the request metrics shared by this server's listeners.
      */
-    ChannelHandler createChannelHandler(RequestChannel[] requestChannels, String listenerName);
+    ChannelHandler createChannelHandler(
+            RequestChannel[] requestChannels, String listenerName, RequestsMetrics requestsMetrics);
 
     /**
      * Creates a {@link RequestHandler} for processing the incoming requests of the network

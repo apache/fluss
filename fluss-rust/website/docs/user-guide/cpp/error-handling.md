@@ -93,7 +93,7 @@ if (!result.Ok()) {
 | `ErrorCode::PARTITION_NOT_EXISTS`             | 36   | Partition does not exist            |
 | `ErrorCode::PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
 | `ErrorCode::PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
-| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for bucket      |
 | `ErrorCode::AUTHENTICATE_EXCEPTION`           | 46   | Authentication failed (bad credentials) |
 
 See `fluss::ErrorCode` in `fluss.hpp` for the full list of named constants.
@@ -141,7 +141,11 @@ if (fluss::ErrorCode::IsRetriable(result.error_code)) {
 | `ErrorCode::STORAGE_EXCEPTION`                          | 26   | Transient storage error                   |
 | `ErrorCode::NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION` | 28   | Wrote to server but with low ISR size     |
 | `ErrorCode::NOT_ENOUGH_REPLICAS_EXCEPTION`              | 29   | Low ISR size at write time                |
-| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`             | 44   | No leader available for partition         |
+| `ErrorCode::LEADER_NOT_AVAILABLE_EXCEPTION`             | 44   | No leader available for bucket            |
+| `ErrorCode::NOT_COORDINATOR_LEADER_EXCEPTION`           | 65   | Coordinator is not the leader             |
+| `ErrorCode::DISK_WRITE_LOCKED`                          | 70   | Data disk reached the write limit         |
+| `ErrorCode::STORAGE_BACKPRESSURE_EXCEPTION`             | 72   | KV storage engine backpressure            |
+| `ErrorCode::HISTORICAL_PARTITION_THROTTLED`             | 73   | Too many historical partition requests    |
 
 Client-side errors (`ErrorCode::CLIENT_ERROR`, code -2) always return `false` from `IsRetriable()`.
 
@@ -178,20 +182,20 @@ if (!result.Ok()) {
 
 ### Partition Not Found
 
-Writing to a partitioned primary key table before creating partitions:
+With `writer_dynamic_create_partition_enabled` set to `false`, a write to a partition that doesn't exist fails:
 
 ```cpp
-// This will fail if partitions are not created first
 auto row = table.NewRow();
 row.Set("user_id", 1);
 row.Set("region", "US");
 row.Set("score", static_cast<int64_t>(100));
 fluss::WriteResult wr;
 fluss::Result result = writer.Upsert(row, wr);
-if (!result.Ok()) {
-    if (result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
-        std::cerr << "Partition not found, create partitions before writing" << std::endl;
-    }
+if (result.Ok()) {
+    result = wr.Wait();
+}
+if (!result.Ok() && result.error_code == fluss::ErrorCode::PARTITION_NOT_EXISTS) {
+    std::cerr << "Partition not found, create partitions before writing" << std::endl;
 }
 ```
 
@@ -235,4 +239,4 @@ if (!result.Ok()) {
 1. **Always check `Result`**: Never ignore the return value of operations that return `Result`.
 2. **Handle errors gracefully**: Log errors and retry or fail gracefully rather than crashing.
 3. **Verify connection state**: Use `Available()` to check connection validity before operations.
-4. **Create partitions before writing**: For partitioned primary key tables, always create partitions before attempting upserts.
+4. **Create partitions before writing when dynamic creation is off**: With `writer_dynamic_create_partition_enabled` set to `false`, writes to a partition that doesn't exist fail with `PARTITION_NOT_EXISTS`.

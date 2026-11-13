@@ -20,12 +20,33 @@ import pytest
 import fluss
 
 
+def test_remote_log_directory_configuration():
+    config = fluss.Config()
+    assert config.scanner_io_tmp_dir is None
+
+    config = fluss.Config({"scanner.io.tmpdir": "/tmp/fluss logs"})
+    assert config.scanner_io_tmp_dir == "/tmp/fluss logs"
+    config.scanner_io_tmp_dir = "/tmp/remote logs"
+    assert config.scanner_io_tmp_dir == "/tmp/remote logs"
+    config.scanner_io_tmp_dir = None
+    assert config.scanner_io_tmp_dir is None
+
+
 def test_kv_backpressure_configuration():
     config = fluss.Config({"writer.kv-backpressure.max-throttle-ms": "1500"})
     assert config.writer_kv_backpressure_max_throttle_ms == 1500
 
     config.writer_kv_backpressure_max_throttle_ms = 750
     assert config.writer_kv_backpressure_max_throttle_ms == 750
+
+
+def test_connection_max_idle_time_configuration():
+    assert fluss.Config().connection_max_idle_time_ms == 600000
+
+    config = fluss.Config({"connection.max-idle-time-ms": "60000"})
+    assert config.connection_max_idle_time_ms == 60000
+    config.connection_max_idle_time_ms = 0
+    assert config.connection_max_idle_time_ms == 0
 
 
 def test_writer_retry_backoff_configuration():
@@ -44,6 +65,18 @@ def test_writer_retry_backoff_configuration():
     assert config.writer_retry_max_backoff_ms == 1000
 
 
+def test_writer_dynamic_create_partition_configuration():
+    assert fluss.Config().writer_dynamic_create_partition_enabled is True
+
+    config = fluss.Config({"writer.dynamic-create-partition.enabled": "false"})
+    assert config.writer_dynamic_create_partition_enabled is False
+    config.writer_dynamic_create_partition_enabled = True
+    assert config.writer_dynamic_create_partition_enabled is True
+
+    with pytest.raises(fluss.FlussError, match="expected 'true' or 'false'"):
+        fluss.Config({"writer.dynamic-create-partition.enabled": "yes"})
+
+
 def test_lookup_configuration():
     config = fluss.Config(
         {
@@ -52,6 +85,8 @@ def test_lookup_configuration():
             "lookup.batch-timeout-ms": "5",
             "lookup.max-inflight-requests": "16",
             "lookup.max-retries": "3",
+            "lookup.retry-backoff-ms": "250",
+            "lookup.retry-max-backoff-ms": "5000",
         }
     )
     assert config.lookup_queue_size == 1024
@@ -59,9 +94,16 @@ def test_lookup_configuration():
     assert config.lookup_batch_timeout_ms == 5
     assert config.lookup_max_inflight_requests == 16
     assert config.lookup_max_retries == 3
+    assert config.lookup_retry_backoff_ms == 250
+    assert config.lookup_retry_max_backoff_ms == 5000
 
     config.lookup_batch_timeout_ms = 1
     assert config.lookup_batch_timeout_ms == 1
+
+    config.lookup_retry_backoff_ms = 0
+    config.lookup_retry_max_backoff_ms = 1000
+    assert config.lookup_retry_backoff_ms == 0
+    assert config.lookup_retry_max_backoff_ms == 1000
 
     with pytest.raises(fluss.FlussError, match="Invalid value 'soon'"):
         fluss.Config({"lookup.batch-timeout-ms": "soon"})

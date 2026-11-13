@@ -266,11 +266,16 @@ public final class FlussClusterExtension
 
     /** Start a coordinator server. start a new one if no coordinator server exists. */
     public void startCoordinatorServer() throws Exception {
+        startCoordinatorServer(coordinatorServerListeners);
+    }
+
+    /** Start a coordinator server with the given listeners. */
+    public void startCoordinatorServer(String bindListeners) throws Exception {
         if (coordinatorServer == null) {
             // if no coordinator server exists, create a new coordinator server and start
             Configuration conf = new Configuration(clusterConf);
             conf.setString(ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
-            conf.setString(ConfigOptions.BIND_LISTENERS, coordinatorServerListeners);
+            conf.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
             setRemoteDataDir(conf);
             setRemoteDataDirs(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
@@ -313,6 +318,16 @@ public final class FlussClusterExtension
         startTabletServer(serverId, false);
     }
 
+    /** Start a new tablet server with the given listeners. */
+    public void startTabletServer(int serverId, String bindListeners) throws Exception {
+        if (tabletServers.containsKey(serverId)) {
+            throw new IllegalArgumentException("Tablet server " + serverId + " already exists.");
+        }
+        Configuration overwriteConfig = new Configuration();
+        overwriteConfig.setString(ConfigOptions.BIND_LISTENERS, bindListeners);
+        startTabletServer(serverId, overwriteConfig);
+    }
+
     public void startTabletServer(int serverId, boolean forceStartIfExists) throws Exception {
         if (tabletServers.containsKey(serverId)) {
             if (!forceStartIfExists) {
@@ -320,7 +335,7 @@ public final class FlussClusterExtension
                         "Tablet server " + serverId + " already exists.");
             }
         }
-        startTabletServer(serverId, null);
+        startTabletServer(serverId, (Configuration) null);
     }
 
     private void startTabletServer(int serverId, @Nullable Configuration overwriteConfig)
@@ -574,7 +589,7 @@ public final class FlussClusterExtension
         }
     }
 
-    /** Wait until all the table assignments buckets are ready for table. */
+    /** Wait until all assigned table buckets have online replicas, metadata, and a ready leader. */
     public void waitUntilTableReady(long tableId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
@@ -583,8 +598,42 @@ public final class FlussClusterExtension
                     Optional<TableAssignment> tableAssignmentOpt =
                             zkClient.getTableAssignment(tableId);
                     assertThat(tableAssignmentOpt).isPresent();
-                    waitReplicaInAssignmentReady(zkClient, tableAssignmentOpt.get(), tableId, null);
+                    assertReplicasInAssignmentReady(
+                            zkClient, tableAssignmentOpt.get(), tableId, null);
                 });
+    }
+
+    /**
+     * Wait until a table is ready using the table or partition assignment waits. For
+     * auto-partitioned tables, waits for the configured precreated partitions. Manual partitions
+     * must have been created before calling this method.
+     */
+    public void waitUntilTableReady(TablePath tablePath) throws Exception {
+        Optional<TableRegistration> tableRegistration = zooKeeperClient.getTable(tablePath);
+        assertThat(tableRegistration).isPresent();
+        TableRegistration table = tableRegistration.get();
+        if (table.isPartitioned()) {
+            Configuration tableConf = Configuration.fromMap(table.properties);
+            Map<String, Long> partitions;
+            if (tableConf.get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED)) {
+                partitions =
+                        waitUntilPartitionsCreated(
+                                tablePath,
+                                tableConf.get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE));
+            } else {
+                partitions =
+                        zooKeeperClient.getPartitionRegistrations(tablePath).entrySet().stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                Map.Entry::getKey,
+                                                e -> e.getValue().getPartitionId()));
+            }
+            for (long partitionId : partitions.values()) {
+                waitUntilTablePartitionReady(table.tableId, partitionId);
+            }
+        } else {
+            waitUntilTableReady(table.tableId);
+        }
     }
 
     /**
@@ -621,6 +670,7 @@ public final class FlussClusterExtension
                 });
     }
 
+    /** Wait until all partition buckets have online replicas, metadata, and a ready leader. */
     public void waitUntilTablePartitionReady(long tableId, long partitionId) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
@@ -629,28 +679,19 @@ public final class FlussClusterExtension
                     Optional<PartitionAssignment> partitionAssignmentOpt =
                             zkClient.getPartitionAssignment(partitionId);
                     assertThat(partitionAssignmentOpt).isPresent();
-                    waitReplicaInAssignmentReady(
+                    assertReplicasInAssignmentReady(
                             zkClient, partitionAssignmentOpt.get(), tableId, partitionId);
                 });
     }
 
-    private void waitReplicaInAssignmentReady(
+    private void assertReplicasInAssignmentReady(
             ZooKeeperClient zkClient,
             TableAssignment tableAssignment,
             long tableId,
             Long partitionId)
             throws Exception {
-        Set<Integer> buckets = tableAssignment.getBucketAssignments().keySet();
-        for (int bucketId : buckets) {
-            TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
-            Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tb);
-            assertThat(leaderAndIsrOpt).isPresent();
-            List<Integer> isr = leaderAndIsrOpt.get().isr();
-            for (int replicaId : isr) {
-                ReplicaManager replicaManager = getTabletServerById(replicaId).getReplicaManager();
-                assertThat(replicaManager.getReplica(tb))
-                        .isInstanceOf(ReplicaManager.OnlineReplica.class);
-            }
+        for (int bucketId : tableAssignment.getBucketAssignments().keySet()) {
+            assertAllReplicasReady(zkClient, new TableBucket(tableId, partitionId, bucketId));
         }
     }
 
@@ -680,41 +721,38 @@ public final class FlussClusterExtension
                 });
     }
 
-    /** Wait until all the replicas are ready if we have multi replica for one table bucket. */
+    /** Wait until a bucket has online ISR replicas, table metadata, and a ready local leader. */
     public void waitUntilAllReplicaReady(TableBucket tableBucket) {
         ZooKeeperClient zkClient = getZooKeeperClient();
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tableBucket);
-                    assertThat(leaderAndIsrOpt).isPresent();
-                    LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
-                    List<Integer> isr = leaderAndIsr.isr();
-                    for (int replicaId : isr) {
-                        TabletServer tabletServer = getTabletServerById(replicaId);
-                        assertThat(tabletServer)
-                                .as("Tablet server %s should be available.", replicaId)
-                                .isNotNull();
-                        ReplicaManager replicaManager = tabletServer.getReplicaManager();
-                        assertThat(replicaManager.getReplica(tableBucket))
-                                .isInstanceOf(ReplicaManager.OnlineReplica.class);
+        retry(Duration.ofMinutes(1), () -> assertAllReplicasReady(zkClient, tableBucket));
+    }
 
-                        // check table metadata.
-                        TabletServerMetadataCache serverMetadataCache =
-                                tabletServer.getMetadataCache();
-                        assertThat(serverMetadataCache.getTablePath(tableBucket.getTableId()))
-                                .isPresent();
-                    }
+    private void assertAllReplicasReady(ZooKeeperClient zkClient, TableBucket tableBucket)
+            throws Exception {
+        Optional<LeaderAndIsr> leaderAndIsrOpt = zkClient.getLeaderAndIsr(tableBucket);
+        assertThat(leaderAndIsrOpt).isPresent();
+        LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+        for (int replicaId : leaderAndIsr.isr()) {
+            TabletServer tabletServer = getTabletServerById(replicaId);
+            assertThat(tabletServer)
+                    .as("Tablet server %s should be available.", replicaId)
+                    .isNotNull();
+            ReplicaManager replicaManager = tabletServer.getReplicaManager();
+            assertThat(replicaManager.getReplica(tableBucket))
+                    .isInstanceOf(ReplicaManager.OnlineReplica.class);
 
-                    int leader = leaderAndIsr.leader();
-                    TabletServer leaderServer = getTabletServerById(leader);
-                    assertThat(leaderServer)
-                            .as("Leader tablet server %s should be available.", leader)
-                            .isNotNull();
-                    ReplicaManager replicaManager = leaderServer.getReplicaManager();
-                    assertThat(replicaManager.getReplicaOrException(tableBucket).isLeader())
-                            .isTrue();
-                });
+            TabletServerMetadataCache serverMetadataCache = tabletServer.getMetadataCache();
+            assertThat(serverMetadataCache.getTablePath(tableBucket.getTableId())).isPresent();
+        }
+
+        TabletServer leaderServer = getTabletServerById(leaderAndIsr.leader());
+        assertThat(leaderServer)
+                .as("Leader tablet server %s should be available.", leaderAndIsr.leader())
+                .isNotNull();
+        ReplicaManager.HostedReplica leaderReplica =
+                leaderServer.getReplicaManager().getReplica(tableBucket);
+        assertThat(leaderReplica).isInstanceOf(ReplicaManager.OnlineReplica.class);
+        assertThat(((ReplicaManager.OnlineReplica) leaderReplica).getReplica().isLeader()).isTrue();
     }
 
     /**

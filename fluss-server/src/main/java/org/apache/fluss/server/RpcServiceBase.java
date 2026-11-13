@@ -99,6 +99,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -391,7 +392,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private Map<Long, List<BucketMetadata>> getPartitionBucketMetadataForDescribeBuckets(
             TablePath tablePath, Collection<Long> partitionIds) {
         try {
-            return zkClient.getBucketMetadataForPartitions(partitionIds);
+            return ZooKeeperUtils.describePartitionBuckets(zkClient, partitionIds);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to describe buckets for table '%s'.", tablePath), e);
@@ -401,8 +402,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     private List<BucketMetadata> getTableBucketMetadataForDescribeBuckets(
             TablePath tablePath, long tableId) {
         try {
-            return zkClient.getBucketMetadataForTables(Collections.singleton(tableId))
-                    .getOrDefault(tableId, Collections.emptyList());
+            return ZooKeeperUtils.describeTableBuckets(zkClient, tableId);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to describe buckets for table '%s'.", tablePath), e);
@@ -751,6 +751,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
     }
 
+    /** Shared DESCRIBE authorization for native and protocol-adapter metadata requests. */
+    protected static boolean isTableMetadataAuthorized(
+            Session session, Authorizer authorizer, TablePath path) {
+        return authorizer == null
+                || authorizer.isAuthorized(
+                        session,
+                        OperationType.DESCRIBE,
+                        Resource.table(path.getDatabaseName(), path.getTableName()));
+    }
+
     protected MetadataResponse processMetadataRequest(
             MetadataRequest request,
             String listenerName,
@@ -760,12 +770,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             MetadataProvider metadataProvider) {
         List<TablePath> authorizedTables = new ArrayList<>();
         for (PbTablePath pbTablePath : request.getTablePathsList()) {
-            if (authorizer == null
-                    || authorizer.isAuthorized(
-                            session,
-                            OperationType.DESCRIBE,
-                            Resource.table(
-                                    pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
+            if (isTableMetadataAuthorized(
+                    session, authorizer, ServerRpcMessageUtils.toTablePath(pbTablePath))) {
                 authorizedTables.add(ServerRpcMessageUtils.toTablePath(pbTablePath));
             }
         }
@@ -838,21 +844,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         // collect partition metadata
         List<PhysicalTablePath> authorizedPartitions = new ArrayList<>();
         for (PhysicalTablePath path : partitionPaths) {
-            if (authorizer == null
-                    || authorizer.isAuthorized(
-                            session,
-                            OperationType.DESCRIBE,
-                            Resource.table(path.getDatabaseName(), path.getTableName()))) {
+            if (isTableMetadataAuthorized(
+                    session,
+                    authorizer,
+                    TablePath.of(path.getDatabaseName(), path.getTableName()))) {
                 authorizedPartitions.add(path);
             }
         }
+        Map<PhysicalTablePath, PartitionMetadata> metadataFromCache =
+                metadataProvider.getPartitionsMetadataFromCache(authorizedPartitions);
         List<PartitionMetadata> partitionsMetadata = new ArrayList<>();
         List<PhysicalTablePath> unknownPartitions = new ArrayList<>();
         for (PhysicalTablePath partitionPath : authorizedPartitions) {
-            Optional<PartitionMetadata> metadataFromCache =
-                    metadataProvider.getPartitionMetadataFromCache(partitionPath);
-            if (metadataFromCache.isPresent()) {
-                partitionsMetadata.add(metadataFromCache.get());
+            PartitionMetadata cached = metadataFromCache.get(partitionPath);
+            if (cached != null) {
+                partitionsMetadata.add(cached);
             } else {
                 unknownPartitions.add(partitionPath);
             }

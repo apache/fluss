@@ -26,15 +26,22 @@ Complete API reference for the Fluss C++ client.
 | `writer_dynamic_batch_size_min`       | `int32_t`     | `262144` (256 KB)    | Lower bound for the dynamic batch size estimator (ignored when disabled)                 |
 | `writer_batch_timeout_ms`             | `int64_t`     | `100`                | Maximum time in ms to wait for a writer batch to fill up before sending                  |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `writer_dynamic_create_partition_enabled` | `bool`    | `true`               | Create a partition that a write targets but that does not exist yet. When `false`, such writes fail with `PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
+| `scanner_io_tmp_dir`                  | `std::string` | `""`                 | Parent for remote log downloads; empty uses the OS temporary directory plus `/fluss`                  |
 | `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
 | `scanner_log_fetch_max_bytes`         | `int32_t`     | `16777216` (16 MB)   | Maximum bytes per fetch response for LogScanner                                          |
 | `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
 | `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
 | `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
-| `connect_timeout_ms`                  | `uint64_t`    | `120000`             | TCP connect timeout in milliseconds                                                      |
+| `lookup_queue_size`                   | `size_t`      | `25600`              | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
+| `lookup_max_retries`                  | `int32_t`     | `INT32_MAX`          | Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's leader is not a retry, so this is not a lookup timeout |
+| `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling with each retry of that lookup; also before a bucket without a known leader is refreshed again, doubling with each refresh of that bucket and shared by its lookups. ±20% jitter; `0` resends and refreshes immediately |
+| `lookup_retry_max_backoff_ms`         | `uint64_t`    | `1000`               | Cap in ms for the lookup retry delay and the refresh delay of a bucket without a known leader, applied before jitter; must be >= `lookup_retry_backoff_ms` |
+| `connect_timeout_ms`                  | `uint64_t`    | `15000`              | Connection establishment timeout in milliseconds, including TCP connect, API negotiation and SASL authentication |
+| `connection_max_idle_time_ms`         | `uint64_t`    | `600000` (10 min)    | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
 | `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
@@ -479,10 +486,16 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
 | `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+| `GetSchemaId() -> int32_t`                                     | Schema ID from the source log batch |
 
 `GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
 when the batch carries no single timestamp, which is the case for a limit scan
 because it merges several log batches into one Arrow batch.
+
+`GetSchemaId()` returns the ID of the schema the log batch was written with. It can
+differ from the schema of the batch's columns, because the scanner aligns every batch
+to the table schema it was created with. It returns `ArrowRecordBatch::NO_SCHEMA_ID`
+(`-1`) for a limit scan, which merges several log batches into one.
 
 ## `ArrowRecordBatches`
 

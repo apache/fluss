@@ -88,8 +88,10 @@ defmodule Fluss.MixProject do
         "Connection & Configuration": [Fluss, Fluss.Config, Fluss.Connection, Fluss.Error],
         Admin: [
           Fluss.Admin,
+          Fluss.Column,
           Fluss.DatabaseDescriptor,
           Fluss.DatabaseInfo,
+          Fluss.PartitionInfo,
           Fluss.Schema,
           Fluss.SchemaInfo,
           Fluss.ServerNode,

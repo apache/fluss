@@ -38,7 +38,9 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -60,6 +62,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
@@ -114,14 +117,17 @@ public class CoordinatorRequestBatch {
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
     private final CoordinatorContext coordinatorContext;
+    private final Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver;
 
     public CoordinatorRequestBatch(
             CoordinatorChannelManager coordinatorChannelManager,
             EventManager eventManager,
-            CoordinatorContext coordinatorContext) {
+            CoordinatorContext coordinatorContext,
+            Function<TableBucket, RebalanceExecutionKey> rebalanceExecutionKeyResolver) {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.eventManager = eventManager;
         this.coordinatorContext = coordinatorContext;
+        this.rebalanceExecutionKeyResolver = rebalanceExecutionKeyResolver;
     }
 
     public void newBatch() {
@@ -237,8 +243,14 @@ public class CoordinatorRequestBatch {
 
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        // A missing bucket count means the assignment required to build BucketMetadata is absent.
-        if (bucketCount != null) {
+        // Location updates require the bucket's replica assignment even when its count is known.
+        Map<Integer, List<Integer>> assignment =
+                tableBucket.getPartitionId() == null
+                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
+                        : coordinatorContext.getPartitionAssignment(
+                                new TablePartition(
+                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
+        if (assignment.containsKey(tableBucket.getBucket())) {
             addUpdateMetadataRequestForTabletServers(
                     coordinatorContext.getLiveTabletServers().keySet(),
                     null,
@@ -248,21 +260,16 @@ public class CoordinatorRequestBatch {
     }
 
     /**
-     * The actual bucket count of the bucket's owning table/partition, or null when no assignment is
-     * in the coordinator context. The count is immutable per bucket, so it is carried with the
-     * activation instead of waiting for the metadata push.
+     * The logical count of the bucket's owning table/partition, or null before that layout count
+     * has been loaded. Activation carries the count independently of incremental location updates.
      */
     private @Nullable Integer getBucketCount(TableBucket tableBucket) {
-        Map<Integer, List<Integer>> assignment;
         if (tableBucket.getPartitionId() != null) {
-            assignment =
-                    coordinatorContext.getPartitionAssignment(
-                            new TablePartition(
-                                    tableBucket.getTableId(), tableBucket.getPartitionId()));
-        } else {
-            assignment = coordinatorContext.getTableAssignment(tableBucket.getTableId());
+            return coordinatorContext.getPartitionBucketCount(
+                    new TablePartition(tableBucket.getTableId(), tableBucket.getPartitionId()));
         }
-        return assignment.isEmpty() ? null : assignment.size();
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        return tableInfo == null ? null : tableInfo.getNumBuckets();
     }
 
     private @Nullable Long getBucketCountEpoch(long tableId) {
@@ -456,6 +463,19 @@ public class CoordinatorRequestBatch {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts = new HashMap<>();
+            for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
+                    notifyRequestEntry.getValue().entrySet()) {
+                PbNotifyLeaderAndIsrReqForBucket request = entry.getValue();
+                requestContexts.put(
+                        entry.getKey(),
+                        new NotifyLeaderAndIsrRequestContext(
+                                coordinatorEpoch,
+                                request.getLeader(),
+                                request.getLeaderEpoch(),
+                                request.getBucketEpoch(),
+                                rebalanceExecutionKeyResolver.apply(entry.getKey())));
+            }
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
             // those entries (where leader == serverId) need to be cleared if the request fails
@@ -504,7 +524,9 @@ public class CoordinatorRequestBatch {
                         // put the response receive event into the event manager
                         eventManager.put(
                                 new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                                        getNotifyLeaderAndIsrResponseData(response),
+                                        serverId,
+                                        requestContexts));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
@@ -716,13 +738,10 @@ public class CoordinatorRequestBatch {
                                 coordinatorContext.isPartitionQueuedForDeletion(
                                         new TablePartition(tableId, partitionId));
                         String partitionName = coordinatorContext.getPartitionName(partitionId);
-                        // the partition assignment size is the partition's actual bucket count;
-                        // null when the assignment is not in context
-                        Map<Integer, List<Integer>> partitionAssignment =
-                                coordinatorContext.getPartitionAssignment(
-                                        new TablePartition(tableId, partitionId));
+                        // Count belongs to the registered layout, not the incremental locations.
                         Integer bucketCount =
-                                partitionAssignment.isEmpty() ? null : partitionAssignment.size();
+                                coordinatorContext.getPartitionBucketCount(
+                                        new TablePartition(tableId, partitionId));
                         PartitionMetadata partitionMetadata;
                         if (partitionName == null) {
                             if (partitionQueuedForDeletion) {

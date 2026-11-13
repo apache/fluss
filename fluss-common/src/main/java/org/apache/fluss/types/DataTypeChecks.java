@@ -63,6 +63,20 @@ public final class DataTypeChecks {
     }
 
     /**
+     * Checks whether two data types are equal, ignoring row field descriptions and ids.
+     *
+     * <p>Row fields are compared by name and type in the same order. The comparison applies
+     * recursively to rows, arrays, and maps, preserving nullability and type parameters such as
+     * precision, scale, and length.
+     */
+    public static boolean equalsIgnoreFieldDescriptionsAndIds(DataType original, DataType that) {
+        if (original.isNullable() != that.isNullable()) {
+            return false;
+        }
+        return that.accept(new DataTypeEqualsIgnoreFieldDescriptionsAndIds(original));
+    }
+
+    /**
      * Check if the given data type is supported for statistics collection. Uses a whitelist
      * approach to ensure only types with meaningful statistical properties are included.
      *
@@ -212,6 +226,62 @@ public final class DataTypeChecks {
             }
 
             return true;
+        }
+
+        @Override
+        protected Boolean defaultMethod(DataType that) {
+            return original.equals(that);
+        }
+    }
+
+    private static class DataTypeEqualsIgnoreFieldDescriptionsAndIds
+            extends DataTypeDefaultVisitor<Boolean> {
+        private final DataType original;
+
+        private DataTypeEqualsIgnoreFieldDescriptionsAndIds(DataType original) {
+            this.original = original;
+        }
+
+        @Override
+        public Boolean visit(RowType that) {
+            if (!(original instanceof RowType)) {
+                return false;
+            }
+            List<DataField> originalFields = ((RowType) original).getFields();
+            List<DataField> thatFields = that.getFields();
+            if (originalFields.size() != thatFields.size()) {
+                return false;
+            }
+            for (int i = 0; i < originalFields.size(); i++) {
+                DataField originalField = originalFields.get(i);
+                DataField thatField = thatFields.get(i);
+                if (!originalField.getName().equals(thatField.getName())
+                        || !equalsIgnoreFieldDescriptionsAndIds(
+                                originalField.getType(), thatField.getType())) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public Boolean visit(ArrayType that) {
+            if (!(original instanceof ArrayType)) {
+                return false;
+            }
+            return equalsIgnoreFieldDescriptionsAndIds(
+                    ((ArrayType) original).getElementType(), that.getElementType());
+        }
+
+        @Override
+        public Boolean visit(MapType that) {
+            if (!(original instanceof MapType)) {
+                return false;
+            }
+            MapType originalMap = (MapType) original;
+            return equalsIgnoreFieldDescriptionsAndIds(originalMap.getKeyType(), that.getKeyType())
+                    && equalsIgnoreFieldDescriptionsAndIds(
+                            originalMap.getValueType(), that.getValueType());
         }
 
         @Override

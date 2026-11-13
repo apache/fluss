@@ -155,3 +155,14 @@ pub(crate) mod proto {
     #![allow(clippy::doc_lazy_continuation)]
     include!("proto/fluss.rs");
 }
+
+/// Shared protobuf messages for engine-owned UnionRead boundary transport.
+///
+/// These messages describe source boundaries, not physical tasks or scheduling.
+/// Consumers must validate versions and semantic discriminants before use.
+pub mod protocol {
+    pub use crate::proto::{
+        PbCompoundPredicate, PbLeafPredicate, PbLiteralValue, PbPredicate, PbUnionReadContext,
+        PbUnionReadLake, PbUnionReadLogRange,
+    };
+}
