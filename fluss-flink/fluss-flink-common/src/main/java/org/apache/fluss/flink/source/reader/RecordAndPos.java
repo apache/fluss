@@ -55,6 +55,7 @@ public class RecordAndPos {
     protected int currentSplitIndex;
 
     private final boolean isSnapshotPhaseFinished;
+    private final boolean skipEmission;
 
     public RecordAndPos(ScanRecord scanRecord) {
         this(scanRecord, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX);
@@ -65,23 +66,36 @@ public class RecordAndPos {
     }
 
     public RecordAndPos(ScanRecord scanRecord, long readRecordsCount, int currentSplitIndex) {
-        this(scanRecord, readRecordsCount, currentSplitIndex, false);
+        this(scanRecord, readRecordsCount, currentSplitIndex, false, false);
     }
 
     private RecordAndPos(
             ScanRecord scanRecord,
             long readRecordsCount,
             int currentSplitIndex,
-            boolean isSnapshotPhaseFinished) {
+            boolean isSnapshotPhaseFinished,
+            boolean skipEmission) {
         this.scanRecord = scanRecord;
         this.readRecordsCount = readRecordsCount;
         this.currentSplitIndex = currentSplitIndex;
         this.isSnapshotPhaseFinished = isSnapshotPhaseFinished;
+        this.skipEmission = skipEmission;
     }
 
     /** Creates a marker indicating that the snapshot phase has been fully read. */
     public static RecordAndPos snapshotPhaseFinished() {
-        return new RecordAndPos(null, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX, true);
+        return new RecordAndPos(null, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX, true, false);
+    }
+
+    /** Creates a marker that advances the log offset without emitting the filtered update. */
+    public static RecordAndPos filteredUpdate(ScanRecord updateAfter) {
+        return new RecordAndPos(
+                updateAfter, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX, false, true);
+    }
+
+    /** Returns whether only the position should be processed, without deserialization or output. */
+    public boolean skipEmission() {
+        return skipEmission;
     }
 
     public long readRecordsCount() {
@@ -113,13 +127,18 @@ public class RecordAndPos {
         return readRecordsCount == that.readRecordsCount
                 && currentSplitIndex == that.currentSplitIndex
                 && isSnapshotPhaseFinished == that.isSnapshotPhaseFinished
+                && skipEmission == that.skipEmission
                 && Objects.equals(scanRecord, that.scanRecord);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                scanRecord, readRecordsCount, currentSplitIndex, isSnapshotPhaseFinished);
+                scanRecord,
+                readRecordsCount,
+                currentSplitIndex,
+                isSnapshotPhaseFinished,
+                skipEmission);
     }
 
     @Override
@@ -132,6 +151,7 @@ public class RecordAndPos {
                 + ", currentSplitIndex="
                 + currentSplitIndex
                 + (isSnapshotPhaseFinished ? ", isSnapshotPhaseFinished=true" : "")
+                + (skipEmission ? ", skipEmission=true" : "")
                 + '}';
     }
 }

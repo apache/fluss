@@ -59,6 +59,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_FILTER_UNCHANGED_ROW_ENABLED;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 
 /** A Flink table source for the $changelog virtual table. */
@@ -226,9 +227,12 @@ public class ChangelogFlinkTableSource
         // Create the source with the changelog deserialization schema
         OffsetsInitializer stoppingOffsetsInitializer =
                 FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(streaming, boundedOptions);
+        Configuration sourceConf = new Configuration(flussConfig);
+        // Preserve change history even when projected values are unchanged.
+        sourceConf.setBoolean(SCAN_FILTER_UNCHANGED_ROW_ENABLED.key(), false);
         FlinkSource<RowData> source =
                 new FlinkSource<>(
-                        flussConfig,
+                        sourceConf,
                         tablePath,
                         // Changelog/binlog virtual tables are purely log-based and don't have a
                         // primary key, setting hasPrimaryKey "false" to ensure the enumerator

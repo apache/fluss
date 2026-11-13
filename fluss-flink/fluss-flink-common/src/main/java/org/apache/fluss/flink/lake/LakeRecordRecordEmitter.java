@@ -65,7 +65,9 @@ public class LakeRecordRecordEmitter<OUT> {
                 // update the log offset
                 lakeSnapshotAndFlussLogSplitState.setNextLogOffset(scanRecord.logOffset() + 1);
             }
-            sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
+            if (!recordAndPos.skipEmission()) {
+                sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
+            }
         } else {
             throw new UnsupportedOperationException(
                     "Unknown split state type: " + splitState.getClass());

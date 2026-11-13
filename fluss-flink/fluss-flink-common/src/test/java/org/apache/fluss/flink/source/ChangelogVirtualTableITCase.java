@@ -49,6 +49,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -469,6 +471,39 @@ abstract class ChangelogVirtualTableITCase {
                             "+I[insert, 2, Bob]",
                             "+I[update_before, 1, Alice]",
                             "+I[update_after, 1, Alice-2]");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedChangelogPreservesUnchangedUpdates(boolean filterUnchangedRows)
+            throws Exception {
+        String tableName = "projected_changelog_" + filterUnchangedRows;
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (id INT NOT NULL, name STRING, age INT, "
+                        + "PRIMARY KEY (id) NOT ENFORCED) WITH ('bucket.num' = '1')");
+        writeRows(
+                conn,
+                TablePath.of(DEFAULT_DB, tableName),
+                Arrays.asList(row(1, "Alice", 10), row(1, "Alice", 20)),
+                false);
+
+        String query =
+                "SELECT _change_type, _log_offset, id, name FROM "
+                        + tableName
+                        + "$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                        + "'scan.bounded.mode' = 'latest-offset', "
+                        + "'scan.filter-unchanged-row.enabled' = '"
+                        + filterUnchangedRows
+                        + "') */";
+        try (CloseableIterator<Row> rows = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rows))
+                    .containsExactly(
+                            "+I[insert, 0, 1, Alice]",
+                            "+I[update_before, 1, 1, Alice]",
+                            "+I[update_after, 2, 1, Alice]");
         }
     }
 

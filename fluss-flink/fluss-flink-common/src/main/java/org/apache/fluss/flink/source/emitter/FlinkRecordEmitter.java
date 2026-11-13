@@ -88,18 +88,16 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                 // update the records number to skip
                 hybridSnapshotLogSplitState.setRecordsToSkip(recordAndPosition.readRecordsCount());
             }
-            processAndEmitRecord(scanRecord, sourceOutput);
+            if (!recordAndPosition.skipEmission()) {
+                processAndEmitRecord(scanRecord, sourceOutput);
+            }
         } else if (splitState.isLogSplitState()) {
-            // Attempt to process and emit the record.
-            // For $binlog, this returns true only when a complete row (or the final part of
-            // a split) is emitted.
-            boolean emitted = processAndEmitRecord(recordAndPosition.record(), sourceOutput);
+            boolean consumed =
+                    recordAndPosition.skipEmission()
+                            || processAndEmitRecord(recordAndPosition.record(), sourceOutput);
 
-            if (emitted) {
-                // Only advance the offset in state if the record was successfully emitted.
-                // This ensures that if a crash occurs mid-update (between BEFORE and AFTER),
-                // the source will re-read the same log offset upon recovery,
-                // allowing the BinlogDeserializationSchema to correctly reconstruct the state.
+            if (consumed) {
+                // Buffered $binlog UPDATE_BEFORE records must be replayed after recovery.
                 splitState
                         .asLogSplitState()
                         .setNextOffset(recordAndPosition.record().logOffset() + 1);
