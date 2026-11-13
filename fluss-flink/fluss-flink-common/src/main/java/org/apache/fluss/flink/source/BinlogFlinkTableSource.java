@@ -42,6 +42,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_FILTER_UNCHANGED_ROW_ENABLED;
+
 /** A Flink table source for the $binlog virtual table. */
 public class BinlogFlinkTableSource
         implements ScanTableSource, SupportsProjectionPushDown, SupportsFilterPushDown {
@@ -170,9 +172,12 @@ public class BinlogFlinkTableSource
         // Create the source with the binlog deserialization schema
         OffsetsInitializer stoppingOffsetsInitializer =
                 FlinkConnectorOptionsUtils.toStoppingOffsetsInitializer(streaming, boundedOptions);
+        Configuration sourceConf = new Configuration(flussConfig);
+        // Preserve change history even when projected values are unchanged.
+        sourceConf.setBoolean(SCAN_FILTER_UNCHANGED_ROW_ENABLED.key(), false);
         FlinkSource<RowData> source =
                 new FlinkSource<>(
-                        flussConfig,
+                        sourceConf,
                         tablePath,
                         false,
                         isPartitioned,

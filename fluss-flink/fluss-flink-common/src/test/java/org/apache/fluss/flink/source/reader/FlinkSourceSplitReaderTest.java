@@ -198,17 +198,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "false, 0, true",
-        "false, 2, true",
-        "false, 3, true",
-        "true, 0, true",
-        "true, 2, true",
-        "true, 3, true",
-        "true, 2, false"
-    })
-    void testFilterUnchangedUpdatesFromConfiguration(
-            boolean enabled, int projectedColumnCount, boolean hasPrimaryKey) throws Exception {
+    @CsvSource({"false, 0", "false, 2", "false, 3", "true, 0", "true, 2", "true, 3"})
+    void testFilterUnchangedUpdatesFromConfiguration(boolean enabled, int projectedColumnCount)
+            throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "configured_projected_updates");
         Schema schema =
                 Schema.newBuilder()
@@ -242,7 +234,6 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 new FlinkSourceSplitReader(
                         sourceConf,
                         tablePath,
-                        hasPrimaryKey,
                         sourceOutputType,
                         projectedFields,
                         null,
@@ -266,7 +257,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         }
                     });
         }
-        if (enabled && projectedColumnCount == 2 && hasPrimaryKey) {
+        if (enabled && projectedColumnCount == 2) {
             assertThat(actual)
                     .extracting(RecordAndPos::skipEmission)
                     .containsExactly(false, true, true);
@@ -299,7 +290,6 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                 new FlinkSourceSplitReader(
                                         clientConf,
                                         tablePath1,
-                                        true,
                                         DataTypes.ROW(
                                                 DataTypes.FIELD(
                                                         "id", DataTypes.BIGINT().copy(false)),
@@ -319,7 +309,6 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                 new FlinkSourceSplitReader(
                                         clientConf,
                                         tablePath1,
-                                        true,
                                         DataTypes.ROW(
                                                 DataTypes.FIELD("name2", DataTypes.STRING()),
                                                 DataTypes.FIELD("id", DataTypes.BIGINT())),
@@ -334,7 +323,6 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 new FlinkSourceSplitReader(
                         clientConf,
                         tablePath1,
-                        true,
                         DataTypes.ROW(
                                 DataTypes.FIELD("name", DataTypes.STRING()),
                                 DataTypes.FIELD("id", DataTypes.BIGINT().copy(false))),
@@ -493,7 +481,6 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 new FlinkSourceSplitReader(
                         sourceConf,
                         tablePath,
-                        false,
                         schema.getRowType(),
                         null,
                         null,
@@ -833,17 +820,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         splitReader.handleSplitsChanges(splitsChange);
     }
 
-    private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType)
-            throws Exception {
+    private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
-                clientConf,
-                tablePath,
-                admin.getTableInfo(tablePath).get().hasPrimaryKey(),
-                rowType,
-                null,
-                null,
-                null,
-                createMockSourceReaderMetrics());
+                clientConf, tablePath, rowType, null, null, null, createMockSourceReaderMetrics());
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {
