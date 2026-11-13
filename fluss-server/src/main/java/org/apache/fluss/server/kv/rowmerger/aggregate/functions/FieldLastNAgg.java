@@ -22,6 +22,7 @@ import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.array.BinaryArraySplicer;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.utils.ArrayDistinctCollector;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 
@@ -35,6 +36,8 @@ public class FieldLastNAgg extends FieldAggregator {
     private static final long serialVersionUID = 1L;
 
     private final int size;
+    private final boolean distinct;
+    private final ArrayDistinctCollector distinctCollector;
     private final DataType elementType;
     private final boolean spliceable;
     private final InternalArray.ElementGetter elementGetter;
@@ -46,12 +49,25 @@ public class FieldLastNAgg extends FieldAggregator {
      * @param size the number of elements to keep, must be positive
      */
     public FieldLastNAgg(ArrayType dataType, int size) {
+        this(dataType, size, false);
+    }
+
+    /**
+     * Creates a LAST_N aggregator with optional deduplication by last occurrence.
+     *
+     * @param dataType the array type
+     * @param size the positive maximum number of elements
+     * @param distinct whether to keep only distinct elements
+     */
+    public FieldLastNAgg(ArrayType dataType, int size, boolean distinct) {
         super(dataType);
         checkArgument(size > 0, "size must be positive, but was %s", size);
         this.size = size;
         this.elementType = dataType.getElementType();
         this.spliceable = BinaryArraySplicer.supports(elementType);
         this.elementGetter = InternalArray.createElementGetter(elementType);
+        this.distinct = distinct;
+        this.distinctCollector = distinct ? new ArrayDistinctCollector(elementType) : null;
     }
 
     @Override
@@ -61,6 +77,9 @@ public class FieldLastNAgg extends FieldAggregator {
         }
         InternalArray older = (InternalArray) accumulator;
         InternalArray newer = (InternalArray) inputField;
+        if (distinct) {
+            return distinct(older, newer);
+        }
         if (older != null && newer.size() == 0) {
             return accumulator;
         }
@@ -81,6 +100,23 @@ public class FieldLastNAgg extends FieldAggregator {
                             : elementGetter.getElementOrNull(newer, i - olderSize);
         }
         return new GenericArray(result);
+    }
+
+    private InternalArray distinct(@Nullable InternalArray older, InternalArray newer) {
+        ArrayDistinctCollector.Accumulator elements = distinctCollector.newAccumulator();
+        collectDistinct(elements, newer);
+        collectDistinct(elements, older);
+        return elements.toReversedArray();
+    }
+
+    private void collectDistinct(
+            ArrayDistinctCollector.Accumulator elements, @Nullable InternalArray source) {
+        if (source == null) {
+            return;
+        }
+        for (int i = source.size() - 1; i >= 0 && elements.size() < size; i--) {
+            elements.add(source, i);
+        }
     }
 
     /** Copies the kept elements as bytes, without reading each one. */
