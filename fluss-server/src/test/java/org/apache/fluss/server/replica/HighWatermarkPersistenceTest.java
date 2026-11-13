@@ -206,60 +206,57 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
 
         Replica replica = replicaManager.getReplicaOrException(tb);
         replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
-        replicaManager.checkpointHighWatermarks();
-        // These rows are acknowledged (ISR is only this server) but written after the checkpoint.
         replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        // All 20 rows are acknowledged, as the ISR is only this server.
         assertThat(replica.getLogTablet().getHighWatermark()).isEqualTo(20L);
-        assertThat(checkpointFile.read().get(tb)).isEqualTo(10L);
 
-        // Simulate a crash and restart: a new ReplicaManager restores the high watermark from the
-        // stale checkpoint, as the old one never got to checkpoint on shutdown.
-        ReplicaManager crashedReplicaManager = replicaManager;
+        // Simulate a crash: shut down first so only one ReplicaManager ever writes the checkpoint
+        // file, then put back a checkpoint taken before the last 10 rows, which is what a crash
+        // between two checkpoints leaves behind.
+        replicaManager.shutdown();
+        checkpointFile.write(Collections.singletonMap(tb, 10L));
         replicaManager = buildReplicaManager(testCoordinatorGateway);
         replicaManager.startup();
-        try {
-            // The coordinator kept this server as the only ISR member with NO_LEADER, so the
-            // restarted replica first becomes a follower without a leader.
-            makeLeaderAndFollower(
-                    Collections.singletonList(
-                            new NotifyLeaderAndIsrData(
-                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                    tb,
-                                    onlyReplica,
-                                    new LeaderAndIsr(
-                                            LeaderAndIsr.NO_LEADER,
-                                            INITIAL_LEADER_EPOCH + 1,
-                                            onlyReplica,
-                                            Collections.emptyList(),
-                                            INITIAL_COORDINATOR_EPOCH,
-                                            INITIAL_BUCKET_EPOCH + 1),
-                                    TEST_ROUTING_BUCKET_COUNT,
-                                    0L)));
-            LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
-            assertThat(logTablet.getHighWatermark()).isEqualTo(10L);
-            assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
 
-            // Then the same replica is elected leader and must still serve all acknowledged rows.
-            makeLeaderAndFollower(
-                    Collections.singletonList(
-                            new NotifyLeaderAndIsrData(
-                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                    tb,
-                                    onlyReplica,
-                                    new LeaderAndIsr(
-                                            TABLET_SERVER_ID,
-                                            INITIAL_LEADER_EPOCH + 2,
-                                            onlyReplica,
-                                            Collections.emptyList(),
-                                            INITIAL_COORDINATOR_EPOCH,
-                                            INITIAL_BUCKET_EPOCH + 2),
-                                    TEST_ROUTING_BUCKET_COUNT,
-                                    0L)));
-            assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
-            assertThat(logTablet.getHighWatermark()).isEqualTo(20L);
-        } finally {
-            crashedReplicaManager.shutdown();
-        }
+        // The coordinator kept this server as the only ISR member with NO_LEADER, so the
+        // restarted replica first becomes a follower without a leader.
+        makeLeaderAndFollower(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                tb,
+                                onlyReplica,
+                                new LeaderAndIsr(
+                                        LeaderAndIsr.NO_LEADER,
+                                        INITIAL_LEADER_EPOCH + 1,
+                                        onlyReplica,
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH + 1),
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        assertThat(logTablet.getHighWatermark()).isEqualTo(10L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
+
+        // Then the same replica is elected leader and must still serve all acknowledged rows.
+        makeLeaderAndFollower(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                tb,
+                                onlyReplica,
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH + 2,
+                                        onlyReplica,
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH + 2),
+                                TEST_ROUTING_BUCKET_COUNT,
+                                0L)));
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
+        assertThat(logTablet.getHighWatermark()).isEqualTo(20L);
     }
 
     private long highWatermarkFor(TableBucket tableBucket) throws Exception {
