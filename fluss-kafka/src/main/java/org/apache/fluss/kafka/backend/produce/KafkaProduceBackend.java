@@ -19,6 +19,9 @@ package org.apache.fluss.kafka.backend.produce;
 
 import org.apache.fluss.annotation.Internal;
 
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
+
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** Narrow backend used by the Kafka Produce API. */
@@ -38,8 +41,13 @@ public interface KafkaProduceBackend extends AutoCloseable {
      * objects or Fluss rows) before returning. Asynchronous work must use only independently owned
      * data and must not retain the command's records, buffers or header arrays. The returned future
      * represents completion of the write, not permission to continue reading the input payloads.
+     *
+     * <p>The returned future completes with one {@link TopicProduceResponse} per command topic in
+     * command order, each holding one partition response per command partition in command order,
+     * under the original request topic names. Every written partition must get a response entry; a
+     * client waiting on an omitted entry hangs until its delivery timeout.
      */
-    CompletableFuture<KafkaProduceResult> write(KafkaProduceCommand command);
+    CompletableFuture<List<TopicProduceResponse>> write(KafkaProduceCommand command);
 
     /** Releases backend resources after request processing stops. */
     @Override
