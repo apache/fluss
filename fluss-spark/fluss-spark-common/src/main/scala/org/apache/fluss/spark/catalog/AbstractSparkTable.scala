@@ -20,7 +20,7 @@ package org.apache.fluss.spark.catalog
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
-import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.spark.{SparkConnectorOptions, SparkConversions}
 
 import org.apache.spark.sql.CatalogV2UtilShim
 import org.apache.spark.sql.connector.catalog.{Table, TableCapability}
@@ -41,6 +41,30 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   override def name(): String = tableInfo.getTablePath.toString
 
   override def schema(): StructType = _schema
+
+  /** Returns table properties with structural options derived from authoritative metadata. */
+  override def properties(): util.Map[String, String] = {
+    val customProperties = tableInfo.getCustomProperties.toMap.asScala.filterNot {
+      case (key, _) => SparkConnectorOptions.SPARK_TABLE_OPTIONS.exists(_.equalsIgnoreCase(key))
+    }
+    val properties = new util.HashMap[String, String](customProperties.asJava)
+    properties.putAll(tableInfo.getProperties.toMap)
+    properties.put(SparkConnectorOptions.BUCKET_NUMBER.key(), tableInfo.getNumBuckets.toString)
+    if (!tableInfo.getPrimaryKeys.isEmpty) {
+      properties.put(
+        SparkConnectorOptions.PRIMARY_KEY.key(),
+        tableInfo.getPrimaryKeys.asScala.mkString(","))
+    }
+    if (!tableInfo.getBucketKeys.isEmpty) {
+      properties.put(
+        SparkConnectorOptions.BUCKET_KEY.key(),
+        tableInfo.getBucketKeys.asScala.mkString(","))
+    }
+    if (tableInfo.getComment.isPresent) {
+      properties.put(SparkConnectorOptions.COMMENT.key(), tableInfo.getComment.get())
+    }
+    properties
+  }
 
   override def capabilities(): util.Set[TableCapability] = {
     Set(
