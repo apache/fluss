@@ -18,6 +18,7 @@
 package org.apache.fluss.server.utils;
 
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -36,6 +37,8 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
@@ -43,6 +46,9 @@ import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
@@ -72,6 +78,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -142,6 +149,87 @@ class ServerRpcMessageUtilsTest {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("partition_id=-1")
                 .hasMessageContaining("omit partition_id");
+    }
+
+    @Test
+    void testDecodeGetConsumerOffsetsRequest() {
+        GetConsumerOffsetsRequest allOffsets =
+                new GetConsumerOffsetsRequest().setGroupId("group-1").setAllOffsets(true);
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(allOffsets)).isNull();
+
+        GetConsumerOffsetsRequest empty =
+                new GetConsumerOffsetsRequest().setGroupId("group-1").setAllOffsets(false);
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(empty)).isEmpty();
+
+        PbGetConsumerOffsetsRequestBucket bucket =
+                new PbGetConsumerOffsetsRequestBucket().setBucketId(2);
+        PbGetConsumerOffsetsRequestTable table =
+                new PbGetConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Collections.singletonList(bucket));
+        GetConsumerOffsetsRequest selected =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(false)
+                        .addAllTables(Collections.singletonList(table));
+        assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(selected))
+                .containsExactly(new TableBucket(3L, 2));
+    }
+
+    @Test
+    void testGetConsumerOffsetsRequestRejectsInvalidCombinations() {
+        PbGetConsumerOffsetsRequestBucket bucket =
+                new PbGetConsumerOffsetsRequestBucket().setBucketId(2);
+        PbGetConsumerOffsetsRequestTable table =
+                new PbGetConsumerOffsetsRequestTable()
+                        .setTableId(3L)
+                        .addAllBuckets(Arrays.asList(bucket, bucket));
+
+        GetConsumerOffsetsRequest allOffsetsWithBuckets =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(true)
+                        .addAllTables(Collections.singletonList(table));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
+                                        allOffsetsWithBuckets))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("all_offsets");
+
+        GetConsumerOffsetsRequest duplicateBuckets =
+                new GetConsumerOffsetsRequest()
+                        .setGroupId("group-1")
+                        .setAllOffsets(false)
+                        .addAllTables(Collections.singletonList(table));
+        assertThatThrownBy(
+                        () ->
+                                ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(
+                                        duplicateBuckets))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("Duplicate table bucket");
+    }
+
+    @Test
+    void testBuildGetConsumerOffsetsResponsePreservesOrderAndRequiredMetadata() {
+        TableBucket committedBucket = new TableBucket(2L, 3);
+        TableBucket missingBucket = new TableBucket(2L, 1);
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new LinkedHashMap<>();
+        offsets.put(committedBucket, new ConsumerOffsetAndMetadata(42L, "metadata"));
+        offsets.put(missingBucket, null);
+
+        GetConsumerOffsetsResponse response =
+                ServerRpcMessageUtils.makeGetConsumerOffsetsResponse(offsets);
+
+        List<PbGetConsumerOffsetsResponseBucket> buckets =
+                response.getTablesList().get(0).getBucketsList();
+        assertThat(buckets)
+                .extracting(PbGetConsumerOffsetsResponseBucket::getBucketId)
+                .containsExactly(3, 1);
+        assertThat(buckets.get(0).getOffset()).isEqualTo(42L);
+        assertThat(buckets.get(0).getMetadata()).isEqualTo("metadata");
+        assertThat(buckets.get(1).hasOffset()).isFalse();
+        assertThat(buckets.get(1).hasMetadata()).isFalse();
     }
 
     @ParameterizedTest

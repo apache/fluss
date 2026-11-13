@@ -89,7 +89,7 @@ class ConsumerOffsetTableITCase {
         int standardBucket =
                 BucketingFunction.of(tableConfig.getDataLakeFormat().orElse(null))
                         .bucketing(
-                                offsetSchema.encodeGroupPrefix(groupId),
+                                offsetSchema.encodeGroupBucketKey(groupId),
                                 tableRegistration.bucketCount);
         assertThat(offsetSchema.bucketFor(groupId, tableRegistration.bucketCount))
                 .isEqualTo(standardBucket);

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
@@ -29,6 +30,7 @@ import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -55,6 +57,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
@@ -80,6 +83,8 @@ import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -127,6 +132,10 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
@@ -1253,6 +1262,72 @@ public class ServerRpcMessageUtils {
             }
         }
         return offsets;
+    }
+
+    /** Decodes the requested table buckets; returns {@code null} for an all-offsets request. */
+    @VisibleForTesting
+    public static List<TableBucket> decodeGetConsumerOffsetsRequest(
+            GetConsumerOffsetsRequest request) {
+        boolean allOffsets = request.hasAllOffsets() && request.isAllOffsets();
+        if (allOffsets && !request.getTablesList().isEmpty()) {
+            throw new InvalidRequestException(
+                    "GetConsumerOffsets request cannot specify both all_offsets and buckets");
+        }
+        if (allOffsets) {
+            return null;
+        }
+
+        List<TableBucket> requestedBuckets = new ArrayList<>();
+        Set<TableBucket> seenBuckets = new HashSet<>();
+        for (PbGetConsumerOffsetsRequestTable table : request.getTablesList()) {
+            for (PbGetConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
+                Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
+                TableBucket tableBucket =
+                        new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
+                if (!seenBuckets.add(tableBucket)) {
+                    throw new InvalidRequestException(
+                            "Duplicate table bucket in GetConsumerOffsets request: " + tableBucket);
+                }
+                requestedBuckets.add(tableBucket);
+            }
+        }
+        return requestedBuckets;
+    }
+
+    /** Builds a response grouped by table ID from decoded consumer offsets. */
+    @VisibleForTesting
+    public static GetConsumerOffsetsResponse makeGetConsumerOffsetsResponse(
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        Map<Long, List<PbGetConsumerOffsetsResponseBucket>> bucketsByTable = new HashMap<>();
+        offsets.forEach(
+                (tableBucket, offsetAndMetadata) -> {
+                    PbGetConsumerOffsetsResponseBucket bucket =
+                            new PbGetConsumerOffsetsResponseBucket()
+                                    .setBucketId(tableBucket.getBucket());
+                    if (tableBucket.getPartitionId() != null) {
+                        bucket.setPartitionId(tableBucket.getPartitionId());
+                    }
+                    if (offsetAndMetadata != null) {
+                        bucket.setOffset(offsetAndMetadata.getOffset());
+                        BinaryString metadata = offsetAndMetadata.getMetadata();
+                        if (metadata != null) {
+                            bucket.setMetadata(metadata.toString());
+                        }
+                    }
+                    bucketsByTable
+                            .computeIfAbsent(tableBucket.getTableId(), ignored -> new ArrayList<>())
+                            .add(bucket);
+                });
+
+        GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
+        bucketsByTable.forEach(
+                (tableId, buckets) ->
+                        response.addAllTables(
+                                Collections.singletonList(
+                                        new PbGetConsumerOffsetsResponseTable()
+                                                .setTableId(tableId)
+                                                .addAllBuckets(buckets))));
+        return response;
     }
 
     /**

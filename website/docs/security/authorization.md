@@ -124,6 +124,7 @@ Below is a summary of the currently public protocols and their relationship with
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
+| GET_CONSUMER_OFFSETS | DESCRIBE | Table | Requires `DESCRIBE` on every source table in the request. `allOffsets` requests do not perform table-level ACL checks yet. |
 | DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
 | ACQUIRE_KV_SNAPSHOT_LEASE | READ | Table | Requires `READ` on all tables in the request. |
 | RELEASE_KV_SNAPSHOT_LEASE | READ | Table | Requires `READ` on all tables in the request. |

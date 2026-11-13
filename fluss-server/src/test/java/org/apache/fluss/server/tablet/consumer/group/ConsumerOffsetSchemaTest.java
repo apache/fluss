@@ -28,6 +28,7 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -49,15 +50,15 @@ class ConsumerOffsetSchemaTest {
 
     @Test
     void testSchemaMatchesFip() {
-        // PK: (group_id, record_type, table_id, partition_id, bucket_id)
+        // PK: (record_type, group_id, table_id, partition_id, bucket_id)
         assertThat(ConsumerOffsetSchema.getPrimaryKeys())
                 .containsExactly(
-                        "group_id", "record_type", "table_id", "partition_id", "bucket_id");
+                        "record_type", "group_id", "table_id", "partition_id", "bucket_id");
         // Value: (offset, metadata) — FIP-53 has no commit_timestamp.
         assertThat(ConsumerOffsetSchema.getTableSchema().getColumnNames())
                 .containsExactly(
-                        "group_id",
                         "record_type",
+                        "group_id",
                         "table_id",
                         "partition_id",
                         "bucket_id",
@@ -77,8 +78,8 @@ class ConsumerOffsetSchemaTest {
                         new ConsumerOffsetAndMetadata(100L, "wm=5"));
 
         InternalRow decoded = decode(row);
-        assertThat(decoded.getString(0).toString()).isEqualTo("my-group");
-        assertThat(decoded.getInt(1)).isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        assertThat(decoded.getInt(0)).isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+        assertThat(decoded.getString(1).toString()).isEqualTo("my-group");
         assertThat(decoded.getLong(2)).isEqualTo(42L);
         assertThat(decoded.getLong(3)).isEqualTo(7L);
         assertThat(decoded.getInt(4)).isEqualTo(3);
@@ -153,12 +154,12 @@ class ConsumerOffsetSchemaTest {
     }
 
     @Test
-    void testGroupPrefixIsBytePrefixOfFullKey() {
+    void testOffsetCommitPrefixIsBytePrefixOfFullKey() {
         // The prefix scan correctness of the zero-memory ConsumerGroupManager depends on this
         // property:
-        // encodeGroupPrefix(g) must be a strict byte prefix of every encodeOffsetKey of group g.
+        // encodeOffsetCommitPrefix(g) must be a strict byte prefix of every offset-commit key.
         for (String group : new String[] {"a", "my-group", "group-with-ünicode", "x"}) {
-            byte[] prefix = offsetSchema.encodeGroupPrefix(group);
+            byte[] prefix = offsetSchema.encodeOffsetCommitPrefix(group);
             assertThat(prefix).isNotEmpty();
 
             byte[] keyNonPartitioned = offsetSchema.encodeOffsetKey(group, 1L, null, 0);
@@ -173,7 +174,7 @@ class ConsumerOffsetSchemaTest {
 
     @Test
     void testDifferentGroupsPrefixesDoNotCrossMatch() {
-        byte[] prefixA = offsetSchema.encodeGroupPrefix("group-a");
+        byte[] prefixA = offsetSchema.encodeOffsetCommitPrefix("group-a");
         byte[] keyB = offsetSchema.encodeOffsetKey("group-b", 1L, null, 0);
         // "group-a" and "group-b" share a common byte prefix ("group-"), but the full encoded
         // group prefixes must diverge before the end — otherwise a prefix scan for group-a
@@ -184,9 +185,9 @@ class ConsumerOffsetSchemaTest {
     }
 
     @Test
-    void testEncodeGroupPrefixMatchesStandardBucketKeyEncoder() {
+    void testGroupBucketKeyMatchesStandardBucketKeyEncoder() {
         // The standard KV path creates a bucket key encoder from the table's schema and
-        // the distributedBy column ("group_id"). ConsumerOffsetSchema.encodeGroupPrefix must
+        // the distributedBy column ("group_id"). ConsumerOffsetSchema.encodeGroupBucketKey must
         // produce
         // identical bytes — this is the guarantee that FindConsumerGroupOwner routes to the
         // same bucket where the data actually resides.
@@ -214,10 +215,36 @@ class ConsumerOffsetSchemaTest {
                             -1,
                             new ConsumerOffsetAndMetadata(-1L, ""));
             byte[] standardBytes = standardEncoder.encodeKey(row);
-            byte[] consumerOffsetSchemaBytes = offsetSchema.encodeGroupPrefix(group);
+            byte[] consumerOffsetSchemaBytes = offsetSchema.encodeGroupBucketKey(group);
 
             assertThat(consumerOffsetSchemaBytes)
-                    .as("encodeGroupPrefix(%s) must match the standard bucket key encoder", group)
+                    .as(
+                            "encodeGroupBucketKey(%s) must match the standard bucket key encoder",
+                            group)
+                    .isEqualTo(standardBytes);
+        }
+    }
+
+    @Test
+    void testOffsetCommitPrefixMatchesRecordTypeAndGroupEncoder() {
+        KeyEncoder standardEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        ConsumerOffsetSchema.getTableSchema().getRowType(),
+                        Arrays.asList("record_type", "group_id"),
+                        null);
+
+        for (String group : new String[] {"a", "my-group", "group-with-ünicode", "x"}) {
+            CompactedRow row =
+                    offsetSchema.encodeOffsetRow(
+                            group,
+                            ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                            -1L,
+                            -1L,
+                            -1,
+                            new ConsumerOffsetAndMetadata(-1L, ""));
+            byte[] standardBytes = standardEncoder.encodeKey(row);
+            assertThat(offsetSchema.encodeOffsetCommitPrefix(group))
+                    .as("offset-commit prefix for %s must encode record_type then group_id", group)
                     .isEqualTo(standardBytes);
         }
     }
@@ -249,7 +276,7 @@ class ConsumerOffsetSchemaTest {
             for (int i = 0; i < threads; i++) {
                 String groupId = "group-" + i;
                 byte[] expectedKey = offsetSchema.encodeOffsetKey(groupId, 42L, 7L, 3);
-                byte[] expectedPrefix = offsetSchema.encodeGroupPrefix(groupId);
+                byte[] expectedPrefix = offsetSchema.encodeOffsetCommitPrefix(groupId);
                 futures.add(
                         executor.submit(
                                 () -> {
@@ -268,7 +295,7 @@ class ConsumerOffsetSchemaTest {
                                             assertThat(rowsReady.await(30, TimeUnit.SECONDS))
                                                     .isTrue();
                                         }
-                                        assertThat(offsetSchema.encodeGroupPrefix(groupId))
+                                        assertThat(offsetSchema.encodeOffsetCommitPrefix(groupId))
                                                 .isEqualTo(expectedPrefix);
                                         assertThat(offsetSchema.encodeOffsetKey(row))
                                                 .isEqualTo(expectedKey);

@@ -19,8 +19,11 @@ package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -109,6 +112,19 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         if (lakeCatalogLoader != null) {
             lakeCatalogLoader.close();
         }
+    }
+
+    @Test
+    void testValueDecoderReuseBySchemaGetter() {
+        SchemaGetter first = new TestingSchemaGetter(1, ConsumerOffsetSchema.getTableSchema());
+        SchemaGetter second = new TestingSchemaGetter(1, ConsumerOffsetSchema.getTableSchema());
+
+        ValueDecoder firstDecoder = groupManager.getValueDecoder(first);
+        assertThat(groupManager.getValueDecoder(first)).isSameAs(firstDecoder);
+
+        ValueDecoder secondDecoder = groupManager.getValueDecoder(second);
+        assertThat(secondDecoder).isNotSameAs(firstDecoder);
+        assertThat(groupManager.getValueDecoder(second)).isSameAs(secondDecoder);
     }
 
     @Test
