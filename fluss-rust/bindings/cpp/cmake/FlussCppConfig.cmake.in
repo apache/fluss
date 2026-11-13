@@ -1,0 +1,58 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+find_dependency(Arrow CONFIG)
+
+if(TARGET Arrow::arrow_shared)
+    set(_FlussCpp_arrow Arrow::arrow_shared)
+elseif(TARGET Arrow::arrow_static)
+    set(_FlussCpp_arrow Arrow::arrow_static)
+else()
+    set(FlussCpp_FOUND FALSE)
+    set(FlussCpp_NOT_FOUND_MESSAGE "Arrow must provide Arrow::arrow_shared or Arrow::arrow_static")
+    return()
+endif()
+
+# Resolve our prefix after find_dependency, which can load other package configs.
+get_filename_component(_FlussCpp_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+set_and_check(_FlussCpp_include "${_FlussCpp_prefix}/include")
+set_and_check(_FlussCpp_wrapper "${_FlussCpp_prefix}/lib/libfluss_cpp.a")
+set_and_check(_FlussCpp_rust "${_FlussCpp_prefix}/lib/libfluss_rust.a")
+file(READ "${CMAKE_CURRENT_LIST_DIR}/native-link.rsp" _FlussCpp_native)
+# Preserve Apple framework flags as single link items when parsing rustc output.
+string(REGEX REPLACE "-framework ([^ \r\n]+)" "\"-framework \\1\"" _FlussCpp_native "${_FlussCpp_native}")
+separate_arguments(_FlussCpp_native UNIX_COMMAND "${_FlussCpp_native}")
+
+if(NOT TARGET FlussCpp::fluss_rust)
+    add_library(FlussCpp::fluss_rust STATIC IMPORTED)
+    set_target_properties(FlussCpp::fluss_rust PROPERTIES
+        IMPORTED_LOCATION "${_FlussCpp_rust}"
+        INTERFACE_LINK_LIBRARIES "${_FlussCpp_native}")
+endif()
+if(NOT TARGET FlussCpp::fluss_cpp)
+    add_library(FlussCpp::fluss_cpp STATIC IMPORTED)
+    set_target_properties(FlussCpp::fluss_cpp PROPERTIES
+        IMPORTED_LOCATION "${_FlussCpp_wrapper}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_FlussCpp_include}"
+        INTERFACE_COMPILE_FEATURES cxx_std_17
+        INTERFACE_LINK_LIBRARIES "FlussCpp::fluss_rust;${_FlussCpp_arrow};Threads::Threads")
+endif()
+check_required_components(FlussCpp)

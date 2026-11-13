@@ -121,6 +121,8 @@ else()
         SOURCE_SUBDIR cpp
     )
     FetchContent_MakeAvailable(apache_arrow_src)
+    # Arrow is a consumer-provided dependency, not part of the Fluss install.
+    set_property(DIRECTORY "${apache_arrow_src_SOURCE_DIR}/cpp" PROPERTY EXCLUDE_FROM_ALL TRUE)
     set(FLUSS_CPP_ARROW_EXTRA_INCLUDE_DIRS
         "${apache_arrow_src_SOURCE_DIR}/cpp/src"
         "${apache_arrow_src_BINARY_DIR}/src")
@@ -131,6 +133,14 @@ else()
     if (NOT TARGET Arrow::arrow_shared)
         message(FATAL_ERROR "Arrow build mode did not produce target Arrow::arrow_shared (or arrow_shared).")
     endif()
+endif()
+
+if (TARGET Arrow::arrow_shared)
+    set(FLUSS_CPP_ARROW_TARGET Arrow::arrow_shared)
+elseif (TARGET Arrow::arrow_static)
+    set(FLUSS_CPP_ARROW_TARGET Arrow::arrow_static)
+else()
+    message(FATAL_ERROR "Arrow did not provide Arrow::arrow_shared or Arrow::arrow_static")
 endif()
 
 # Get cargo target dir
@@ -169,9 +179,11 @@ if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND CARGO_BUILD_FLAGS "--release")
 endif()
 
+configure_file(cmake/BuildRust.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/BuildRust.cmake" @ONLY)
 add_custom_target(cargo_build
-    COMMAND ${FLUSS_CARGO_EXECUTABLE} build --manifest-path ${CARGO_MANIFEST} ${CARGO_BUILD_FLAGS}
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/BuildRust.cmake"
     BYPRODUCTS ${RUST_BRIDGE_CPP} ${RUST_LIB} ${RUST_HEADER_FILE}
+        "${CMAKE_CURRENT_BINARY_DIR}/native-link.rsp"
     DEPENDS ${RUST_SOURCE_FILE}
     USES_TERMINAL
     COMMENT "Running cargo..."
@@ -186,7 +198,7 @@ if (FLUSS_CPP_ARROW_EXTRA_INCLUDE_DIRS)
 endif()
 target_link_libraries(fluss_cpp PUBLIC ${RUST_LIB})
 target_link_libraries(fluss_cpp PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-target_link_libraries(fluss_cpp PUBLIC Arrow::arrow_shared)
+target_link_libraries(fluss_cpp PUBLIC ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp PRIVATE ARROW_FOUND)
 if(APPLE)
     target_link_libraries(fluss_cpp PUBLIC "-framework CoreFoundation" "-framework Security")
@@ -194,31 +206,31 @@ endif()
 
 add_executable(fluss_cpp_example examples/example.cpp)
 target_link_libraries(fluss_cpp_example PRIVATE fluss_cpp)
-target_link_libraries(fluss_cpp_example PRIVATE Arrow::arrow_shared)
+target_link_libraries(fluss_cpp_example PRIVATE ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_example PUBLIC ${CPP_INCLUDE_DIR})
 
 add_executable(fluss_cpp_admin_example examples/admin_example.cpp)
 target_link_libraries(fluss_cpp_admin_example PRIVATE fluss_cpp)
-target_link_libraries(fluss_cpp_admin_example PRIVATE Arrow::arrow_shared)
+target_link_libraries(fluss_cpp_admin_example PRIVATE ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp_admin_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_admin_example PUBLIC ${CPP_INCLUDE_DIR})
 
 add_executable(fluss_cpp_kv_example examples/kv_example.cpp)
 target_link_libraries(fluss_cpp_kv_example PRIVATE fluss_cpp)
-target_link_libraries(fluss_cpp_kv_example PRIVATE Arrow::arrow_shared)
+target_link_libraries(fluss_cpp_kv_example PRIVATE ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp_kv_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_kv_example PUBLIC ${CPP_INCLUDE_DIR})
 
 add_executable(fluss_cpp_auto_increment_example examples/auto_increment_example.cpp)
 target_link_libraries(fluss_cpp_auto_increment_example PRIVATE fluss_cpp)
-target_link_libraries(fluss_cpp_auto_increment_example PRIVATE Arrow::arrow_shared)
+target_link_libraries(fluss_cpp_auto_increment_example PRIVATE ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp_auto_increment_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_auto_increment_example PUBLIC ${CPP_INCLUDE_DIR})
 
 add_executable(fluss_cpp_kv_changelog_example examples/kv_changelog_example.cpp)
 target_link_libraries(fluss_cpp_kv_changelog_example PRIVATE fluss_cpp)
-target_link_libraries(fluss_cpp_kv_changelog_example PRIVATE Arrow::arrow_shared)
+target_link_libraries(fluss_cpp_kv_changelog_example PRIVATE ${FLUSS_CPP_ARROW_TARGET})
 target_compile_definitions(fluss_cpp_kv_changelog_example PRIVATE ARROW_FOUND)
 target_include_directories(fluss_cpp_kv_changelog_example PUBLIC ${CPP_INCLUDE_DIR})
 
@@ -228,6 +240,20 @@ if (CARGO_TARGET_DIR)
     )
 endif()
 add_dependencies(fluss_cpp cargo_build)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(cmake/FlussCppConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/FlussCppConfig.cmake"
+    INSTALL_DESTINATION lib/cmake/FlussCpp)
+install(TARGETS fluss_cpp ARCHIVE DESTINATION lib)
+# Preserve Cargo output names; avoid collision with the installed C++ wrapper.
+install(FILES "${RUST_LIB}" DESTINATION lib RENAME libfluss_rust.a)
+install(FILES include/fluss.hpp DESTINATION include)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/FlussCppConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/native-link.rsp"
+    DESTINATION lib/cmake/FlussCpp)
+install(FILES "${PROJECT_SOURCE_DIR}/../../../LICENSE"
+    "${PROJECT_SOURCE_DIR}/../../../NOTICE" DESTINATION share/fluss)
 
 if (FLUSS_ENABLE_ADDRESS_SANITIZER)
     target_compile_options(fluss_cpp PRIVATE -fsanitize=leak,address,undefined -fno-omit-frame-pointer -fno-common -O1)
@@ -259,7 +285,7 @@ if (FLUSS_ENABLE_TESTING)
     file(GLOB TEST_SOURCE_FILES "test/*.cpp")
     add_executable(fluss_cpp_test ${TEST_SOURCE_FILES})
     target_link_libraries(fluss_cpp_test PRIVATE fluss_cpp GTest::gtest nlohmann_json::nlohmann_json)
-    target_link_libraries(fluss_cpp_test PRIVATE Arrow::arrow_shared)
+    target_link_libraries(fluss_cpp_test PRIVATE ${FLUSS_CPP_ARROW_TARGET})
     target_compile_definitions(fluss_cpp_test PRIVATE ARROW_FOUND)
     target_include_directories(fluss_cpp_test PRIVATE
         ${CPP_INCLUDE_DIR}
