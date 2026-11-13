@@ -20,11 +20,13 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
@@ -36,6 +38,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.ConnectionMetrics;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
@@ -47,11 +50,18 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.NotSslRecordException;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandshakeCompletionEvent;
 import org.apache.fluss.utils.ExponentialBackoff;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -86,6 +96,8 @@ final class ServerConnection {
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
+    @Nullable private final SslContext sslContext;
+    @Nullable private final String endpointIdentificationAlgorithm;
     private final Object lock = new Object();
 
     @GuardedBy("lock")
@@ -109,11 +121,18 @@ final class ServerConnection {
     @GuardedBy("lock")
     private int retryAuthCount = 0;
 
+    /** The cause the connection closed with, null while it is open. */
+    @GuardedBy("lock")
+    @Nullable
+    private Throwable closeCause;
+
     ServerConnection(
             Bootstrap bootstrap,
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            @Nullable SslContext sslContext,
+            @Nullable String endpointIdentificationAlgorithm,
             BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
@@ -122,6 +141,8 @@ final class ServerConnection {
                         node.uid() + "@" + node.host() + ":" + node.port());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        this.sslContext = sslContext;
+        this.endpointIdentificationAlgorithm = endpointIdentificationAlgorithm;
         whenClose(closeCallback);
 
         // connect and handle should be last in case of other variables are nullable and close
@@ -164,6 +185,7 @@ final class ServerConnection {
             }
 
             switchState(ConnectionState.DISCONNECTED);
+            closeCause = cause;
 
             // when the remote server shutdowns, the exception may be
             // AnnotatedConnectException/ClosedChannelException/
@@ -272,6 +294,28 @@ final class ServerConnection {
                 channel = future.channel();
                 channel.pipeline()
                         .addLast("handler", new NettyClientHandler(new ResponseCallback()));
+                if (sslContext != null) {
+                    SslHandler sslHandler;
+                    try {
+                        sslHandler =
+                                SslContextFactory.createClientSslHandler(
+                                        sslContext,
+                                        channel.alloc(),
+                                        node.host(),
+                                        node.port(),
+                                        endpointIdentificationAlgorithm);
+                    } catch (Throwable t) {
+                        // Without this the connection stays CONNECTING forever and every request
+                        // queues up behind it.
+                        LOG.error("Failed to create the TLS handler for server {}.", node, t);
+                        close(t);
+                        return;
+                    }
+                    sslHandler.setHandshakeTimeoutMillis(
+                            channel.config().getConnectTimeoutMillis());
+                    channel.pipeline().addFirst("ssl", sslHandler);
+                    channel.pipeline().addFirst("tls-record-check", new TlsRecordCheck());
+                }
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server
@@ -288,6 +332,14 @@ final class ServerConnection {
         }
     }
 
+    /**
+     * Check if {@code cause} is a non-retriable authentication failure, e.g. a failed TLS
+     * handshake.
+     */
+    static boolean isAuthenticationFailure(@Nullable Throwable cause) {
+        return cause instanceof AuthenticationException && !(cause instanceof RetriableException);
+    }
+
     private CompletableFuture<ApiMessage> doSend(
             ApiKeys apiKey,
             ApiMessage rawRequest,
@@ -295,6 +347,10 @@ final class ServerConnection {
             boolean isInternalRequest) {
         synchronized (lock) {
             if (state.isDisconnected()) {
+                if (isAuthenticationFailure(closeCause)) {
+                    responseFuture.completeExceptionally(closeCause);
+                    return responseFuture;
+                }
                 Exception exception =
                         new NetworkException(
                                 new DisconnectException(
@@ -657,7 +713,57 @@ final class ServerConnection {
     }
 
     @VisibleForTesting
+    Channel channel() {
+        synchronized (lock) {
+            return channel;
+        }
+    }
+
+    @VisibleForTesting
     int numInflightRequests() {
         return inflightRequests.size();
+    }
+
+    /**
+     * Detects a TLS client connected to a plaintext listener.
+     *
+     * <p>The plaintext server answers with a {@code SERVER_FAILURE} frame. The {@link SslHandler}
+     * reads its first bytes as the start of an incomplete TLS record and waits for more data. The
+     * handshake fails only when the server closes the connection, and then as a retriable error.
+     *
+     * <p>This handler checks the first byte from the server. If it cannot start a TLS record, the
+     * handler fires a failed {@link SslHandshakeCompletionEvent}, which {@link NettyClientHandler}
+     * reports as a non-retriable error, and closes the connection. It removes itself after the
+     * first byte.
+     */
+    private static final class TlsRecordCheck extends ChannelInboundHandlerAdapter {
+
+        /** TLS record content types: change_cipher_spec, alert, handshake, data, heartbeat. */
+        private static final int MIN_TLS_CONTENT_TYPE = 20;
+
+        private static final int MAX_TLS_CONTENT_TYPE = 24;
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            ByteBuf buf = (ByteBuf) msg;
+            if (!buf.isReadable()) {
+                ctx.fireChannelRead(msg);
+                return;
+            }
+            ctx.pipeline().remove(this);
+            int contentType = buf.getUnsignedByte(buf.readerIndex());
+            if (contentType >= MIN_TLS_CONTENT_TYPE && contentType <= MAX_TLS_CONTENT_TYPE) {
+                ctx.fireChannelRead(msg);
+                return;
+            }
+            buf.release();
+            ctx.fireUserEventTriggered(
+                    new SslHandshakeCompletionEvent(
+                            new NotSslRecordException(
+                                    "The server sent data that is not TLS. Check that its "
+                                            + "listener is listed in 'security.ssl.enabled."
+                                            + "listeners'.")));
+            ctx.close();
+        }
     }
 }

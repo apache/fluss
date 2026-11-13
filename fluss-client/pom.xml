@@ -110,6 +110,31 @@
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
+
+        <!-- TestSslUtils (from the fluss-rpc test-jar) generates certificates with Netty's
+             SelfSignedCertificate, which needs BouncyCastle from JDK 16 on. Test-scoped
+             dependencies do not come along with a test-jar, so they are repeated here;
+             see fluss-rpc/pom.xml for why bcutil and bcprov are pinned. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcutil-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

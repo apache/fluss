@@ -1415,7 +1415,9 @@ public class ConfigOptions {
             key("client.connect-timeout")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(15))
-                    .withDescription("The Netty client connect timeout.");
+                    .withDescription(
+                            "The Netty client connect timeout. With TLS enabled, this option is also used "
+                                    + "for the TLS handshake timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
             key("bootstrap.servers")
@@ -1711,7 +1713,10 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Whether the client connects over TLS. Must match the listener it "
-                                    + "connects to (`security.ssl.enabled.listeners`).");
+                                    + "connects to (`security.ssl.enabled.listeners`). In the "
+                                    + "server configuration it controls the connections between "
+                                    + "servers, so it must be true exactly when the internal "
+                                    + "listener (`internal.listener.name`) is TLS-enabled.");
 
     public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
             key("client.security.ssl.enabled.protocols")
