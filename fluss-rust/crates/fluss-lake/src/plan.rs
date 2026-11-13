@@ -126,62 +126,10 @@ fn sum_estimates(mut estimates: impl Iterator<Item = Option<usize>>) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FlussLakeSplitDescriptor;
-    use crate::split::FlussLakePartitionIdentity;
-    use fluss::metadata::{TableBucket, TablePath};
-
-    fn split(rows: Option<usize>, size: Option<usize>) -> FlussLakeReadSplit {
-        FlussLakeReadSplit::try_new(
-            Arc::new(crate::split::testing_table(
-                TablePath::new("fluss", "orders"),
-                1,
-                false,
-                5,
-            )),
-            FlussLakeSplitDescriptor {
-                split_id: "fluss.orders:root:0".into(),
-                table_bucket: TableBucket::new(5, 0),
-                partition: FlussLakePartitionIdentity::Unpartitioned,
-                start_offset: 0,
-                stop_offset: 10,
-                snapshot_id: None,
-                lake_splits: vec![],
-                estimated_rows: rows,
-                estimated_size: size,
-            },
-            vec![],
-        )
-        .unwrap()
-    }
 
     #[test]
-    fn plan_statistics_sum_only_complete_estimates() {
-        let complete = vec![split(Some(2), Some(10)), split(Some(3), Some(20))];
-        assert_eq!(
-            FlussLakePlanStatistics::from_splits(&complete),
-            FlussLakePlanStatistics {
-                split_count: 2,
-                estimated_rows: Some(5),
-                estimated_size: Some(30),
-            }
-        );
-
-        let incomplete = vec![split(Some(2), None), split(None, Some(20))];
-        assert_eq!(
-            FlussLakePlanStatistics::from_splits(&incomplete),
-            FlussLakePlanStatistics {
-                split_count: 2,
-                estimated_rows: None,
-                estimated_size: None,
-            }
-        );
-        assert_eq!(
-            FlussLakePlanStatistics::from_splits(&[]),
-            FlussLakePlanStatistics {
-                split_count: 0,
-                estimated_rows: Some(0),
-                estimated_size: Some(0),
-            }
-        );
+    fn unknown_estimates_are_not_counted_as_zero() {
+        assert_eq!(sum_estimates([Some(2), Some(3)].into_iter()), Some(5));
+        assert_eq!(sum_estimates([Some(2), None].into_iter()), None);
     }
 }

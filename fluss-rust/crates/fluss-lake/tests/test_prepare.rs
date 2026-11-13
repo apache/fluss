@@ -106,6 +106,97 @@ async fn prepare_freezes_fluss_only_ranges_and_schema() {
 }
 
 #[tokio::test]
+async fn kv_snapshot_boundaries_plan_and_import_without_lake() {
+    let cluster = support::get_shared_cluster();
+    let connection = Arc::new(cluster.get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "prepare_kv_snapshot");
+    let descriptor = TableDescriptor::builder()
+        .schema(
+            Schema::builder()
+                .column("id", DataTypes::int())
+                .column("region", DataTypes::string())
+                .primary_key(vec!["region", "id"])
+                .unwrap()
+                .build()
+                .unwrap(),
+        )
+        .partitioned_by(vec!["region"])
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    admin
+        .create_partition(
+            &path,
+            &PartitionSpec::new(HashMap::from([("region", "US")])),
+            false,
+        )
+        .await
+        .unwrap();
+    let core_table = connection.get_table(&path).await.unwrap();
+    let writer = core_table.new_upsert().unwrap().create_writer().unwrap();
+    let mut row = fluss::row::GenericRow::new(2);
+    row.set_field(0, 1);
+    row.set_field(1, "US");
+    let write = writer.upsert(&row).unwrap();
+    writer.flush().await.unwrap();
+    write.await.unwrap();
+
+    let table = FlussLakeTable::new(connection.clone(), &path);
+    let context = tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let context = table.capture_read_context().await.unwrap();
+            if context.log_ranges().iter().any(|range| {
+                matches!(range.baseline(), FlussLakeBaseline::KvSnapshot { .. })
+                    && range.start_offset() >= 1
+            }) {
+                break context;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("persisted KV snapshot was not captured");
+    let range = &context.log_ranges()[0];
+    let FlussLakeBaseline::KvSnapshot { snapshot_id } = range.baseline() else {
+        unreachable!()
+    };
+    let bucket = range.table_bucket();
+    let metadata = admin
+        .get_kv_snapshot_metadata(
+            bucket.table_id(),
+            bucket.partition_id(),
+            bucket.bucket_id(),
+            snapshot_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(range.start_offset(), metadata.log_offset);
+    assert_eq!(range.stop_offset(), 1);
+    assert_eq!(context.lake_snapshot_id(), None);
+
+    // Later writes must not change the baseline or stop of assigned work.
+    row.set_field(0, 2);
+    let write = writer.upsert(&row).unwrap();
+    writer.flush().await.unwrap();
+    write.await.unwrap();
+    let scan = table.new_scan();
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    assert_eq!(plan.split_count(), 1);
+    let tasks = vec![plan.splits()[0].descriptor().clone()];
+    assert_eq!(tasks[0].kv_snapshot_id(), Some(snapshot_id));
+    assert_eq!(tasks[0].stop_offset(), 1);
+    let imported = scan
+        .import_splits(&context.to_protobuf().unwrap(), &tasks)
+        .await
+        .unwrap();
+    assert_eq!(imported[0].descriptor(), &tasks[0]);
+    drop(writer);
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
 async fn partition_filter_preserves_scope_and_resolved_bucket_counts() {
     let cluster = support::get_shared_cluster();
     let connection = Arc::new(cluster.get_fluss_connection().await);

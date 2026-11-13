@@ -69,7 +69,12 @@ impl FlussLakeReadContext {
                         baseline: Some(match range.baseline {
                             FlussLakeBaseline::None => 0,
                             FlussLakeBaseline::Lake => 1,
+                            FlussLakeBaseline::KvSnapshot { .. } => 2,
                         }),
+                        kv_snapshot_id: match range.baseline {
+                            FlussLakeBaseline::KvSnapshot { snapshot_id } => Some(snapshot_id),
+                            _ => None,
+                        },
                         start_offset: Some(range.start_offset),
                         stop_offset: Some(range.stop_offset),
                         earliest_offset: Some(range.earliest_offset),
@@ -134,6 +139,9 @@ impl FlussLakeReadContext {
             .log_ranges
             .iter()
             .map(|range| {
+                if range.baseline != Some(2) && range.kv_snapshot_id.is_some() {
+                    return Err(invalid_context("KV snapshot ID requires a KV baseline"));
+                }
                 if range.partition_values.len() != pb.partition_keys.len() {
                     return Err(invalid_context(
                         "partition values do not match the captured keys",
@@ -161,6 +169,9 @@ impl FlussLakeReadContext {
                     baseline: match range.baseline {
                         Some(0) => FlussLakeBaseline::None,
                         Some(1) => FlussLakeBaseline::Lake,
+                        Some(2) => FlussLakeBaseline::KvSnapshot {
+                            snapshot_id: required(range.kv_snapshot_id, "kv_snapshot_id")?,
+                        },
                         _ => return Err(invalid_context("unknown or missing baseline kind")),
                     },
                     start_offset: required(range.start_offset, "start_offset")?,

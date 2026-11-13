@@ -2411,7 +2411,8 @@ pub struct PbUnionReadLogRange {
     pub bucket_id: ::core::option::Option<i32>,
     #[prost(int32, optional, tag = "4")]
     pub bucket_count: ::core::option::Option<i32>,
-    /// 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+    /// 0: no baseline; 1: lake snapshot; 2: persisted KV snapshot.
+    /// For either snapshot kind, start_offset is its matching log seam.
     #[prost(int32, optional, tag = "5")]
     pub baseline: ::core::option::Option<i32>,
     /// Concrete half-open range; no EARLIEST/LATEST sentinels.
@@ -2422,4 +2423,7 @@ pub struct PbUnionReadLogRange {
     /// Observed retention lower bound, not a lease.
     #[prost(int64, optional, tag = "8")]
     pub earliest_offset: ::core::option::Option<i64>,
+    /// Required for baseline kind 2; absent for other kinds. Scoped to this bucket.
+    #[prost(int64, optional, tag = "9")]
+    pub kv_snapshot_id: ::core::option::Option<i64>,
 }

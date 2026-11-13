@@ -40,6 +40,7 @@ static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
             .expect("Failed to create UnionRead integration test runtime");
         runtime.block_on(async {
             let cluster_conf = HashMap::from([
+                ("kv.snapshot.interval".to_string(), "1s".to_string()),
                 ("datalake.enabled".to_string(), "true".to_string()),
                 ("datalake.format".to_string(), "paimon".to_string()),
                 (

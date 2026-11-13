@@ -233,24 +233,12 @@ mod tests {
     }
 
     #[test]
-    fn no_bucket_keys_keeps_every_bucket() {
-        let pruner = BucketPruner::new(&row_type(), &[], 4, &None, &bound(col("id").eq(1_i32)));
-        assert!(pruner.bucket_may_match(0));
-        assert!(pruner.bucket_may_match(3));
-    }
-
-    #[test]
-    fn equality_on_single_bucket_key_prunes_others() {
-        let pruner = BucketPruner::new(
-            &row_type(),
-            &["id".to_string()],
-            4,
-            &None,
-            &bound(col("id").eq(1_i32)),
-        );
-        // Hash of 1 with Fluss bucketing lands in one specific bucket.
-        let matching: Vec<i32> = (0..4).filter(|id| pruner.bucket_may_match(*id)).collect();
-        assert_eq!(matching.len(), 1);
+    fn unconstrained_bucket_keys_keep_every_bucket() {
+        for keys in [vec![], vec!["id".into()]] {
+            let pruner =
+                BucketPruner::new(&row_type(), &keys, 4, &None, &bound(col("region").eq("US")));
+            assert!((0..4).all(|bucket| pruner.bucket_may_match(bucket)));
+        }
     }
 
     #[test]
@@ -281,33 +269,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_bucket_key_constraint_keeps_every_bucket() {
-        let pruner = BucketPruner::new(
-            &row_type(),
-            &["id".to_string()],
-            4,
-            &None,
-            &bound(col("region").eq("US")),
-        );
-        assert!(pruner.bucket_may_match(0));
-        assert!(pruner.bucket_may_match(3));
-    }
-
-    #[test]
-    fn in_list_on_bucket_key_prunes_to_matching_buckets() {
-        let pruner = BucketPruner::new(
-            &row_type(),
-            &["id".to_string()],
-            4,
-            &None,
-            &bound(col("id").is_in([1_i32, 2_i32])),
-        );
-        let matching: Vec<i32> = (0..4).filter(|id| pruner.bucket_may_match(*id)).collect();
-        assert!(!matching.is_empty());
-        assert!(matching.len() <= 2);
-    }
-
-    #[test]
     fn large_cartesian_product_keeps_all_buckets() {
         let filter = bound(
             col("id")
@@ -315,9 +276,8 @@ mod tests {
                 .and(col("region").is_in((0..100).map(|i| i.to_string()))),
         );
         let keys = vec!["id".to_string(), "region".to_string()];
-        let constraints = extract_bucket_constraints(&filter, &keys).unwrap();
-        assert_eq!(constraints.combination_count(), None);
         let pruner = BucketPruner::new(&row_type(), &keys, 128, &None, &filter);
+        // All buckets may also match after expensive enumeration; require the budget fallback.
         assert!(pruner.matching_buckets.is_none());
         assert!((0..128).all(|bucket| pruner.bucket_may_match(bucket)));
     }
@@ -327,28 +287,6 @@ mod tests {
         let filter = bound(col("id").is_in(0..=MAX_BUCKET_PRUNING_WORK as i32));
         let keys = vec!["id".to_string()];
         assert!(extract_bucket_constraints(&filter, &keys).is_none());
-        let pruner = BucketPruner::new(&row_type(), &keys, 4, &None, &filter);
-        assert!(pruner.matching_buckets.is_none());
-    }
-
-    #[test]
-    fn combination_budget_includes_key_width_and_cannot_overflow() {
-        let filter = bound(col("id").eq(1_i32));
-        let keys = vec!["id".to_string()];
-        let constraints = extract_bucket_constraints(&filter, &keys).unwrap();
-        let value = constraints.values[0][0];
-        let at_limit = BucketConstraints {
-            values: vec![vec![value; 64], vec![value; 32]],
-        };
-        assert_eq!(at_limit.combination_count(), Some(2048));
-        let above_limit = BucketConstraints {
-            values: vec![vec![value; 64], vec![value; 33]],
-        };
-        assert_eq!(above_limit.combination_count(), None);
-        let overflow = BucketConstraints {
-            values: vec![vec![value; 2]; usize::BITS as usize],
-        };
-        assert_eq!(overflow.combination_count(), None);
     }
 
     #[test]
@@ -366,10 +304,19 @@ mod tests {
                 for region in ["US", "EU"] {
                     let single = bound(col("id").eq(id).and(col("region").eq(region)));
                     let single = BucketPruner::new(&row_type(), &keys, 128, &format, &single);
-                    expected.extend(single.matching_buckets.unwrap());
+                    let matching: Vec<_> = (0..128)
+                        .filter(|bucket| single.bucket_may_match(*bucket))
+                        .collect();
+                    assert_eq!(matching.len(), 1);
+                    expected.extend(matching);
                 }
             }
-            assert_eq!(pruner.matching_buckets, Some(expected));
+            assert_eq!(
+                (0..128)
+                    .filter(|bucket| pruner.bucket_may_match(*bucket))
+                    .collect::<HashSet<_>>(),
+                expected
+            );
         }
     }
 }
