@@ -679,7 +679,7 @@ pub struct ListConsumerGroupsResponse {
     #[prost(message, repeated, tag = "1")]
     pub groups: ::prost::alloc::vec::Vec<PbListedGroup>,
 }
-/// Delete consumer groups request and response.
+/// Delete consumer-group metadata. Committed offsets are not removed by this request.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteConsumerGroupsRequest {
     /// An empty list is a valid no-op and produces an empty successful response.
