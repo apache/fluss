@@ -63,8 +63,15 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+use crate::client::consumer_offsets::ConsumerGroup;
+use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
+
+mod consumer_group;
+pub use consumer_group::OffsetsInitializer;
+
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
+    consumer_group: Option<ConsumerGroupOptions>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
@@ -82,6 +89,7 @@ impl<'a> TableScan<'a> {
     pub fn new(conn: &'a FlussConnection, table_info: TableInfo, metadata: Arc<Metadata>) -> Self {
         Self {
             conn,
+            consumer_group: None,
             table_info,
             metadata,
             projected_fields: None,
@@ -89,6 +97,15 @@ impl<'a> TableScan<'a> {
             limit: None,
             filter: None,
         }
+    }
+
+    /// Enables persisted offsets for a manually assigned consumer group.
+    /// Existing subscriptions still use their explicit starting offsets; use
+    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. No background commits are made.
+    pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
+        options.validate()?;
+        self.consumer_group = Some(options);
+        Ok(self)
     }
 
     /// Controls how log scanners handle schema evolution.
@@ -173,6 +190,11 @@ impl<'a> TableScan<'a> {
         self,
         table_bucket: TableBucket,
     ) -> Result<LimitBatchScanner> {
+        if self.consumer_group.is_some() {
+            return Err(Error::UnsupportedOperation {
+                message: "Consumer offsets require a log scanner".into(),
+            });
+        }
         self.reject_filter("BatchScanner")?;
         let limit = self.limit.ok_or_else(|| Error::IllegalArgument {
             message: "create_bucket_batch_scanner requires a limit configured via .limit(n)"
@@ -408,7 +430,7 @@ impl<'a> TableScan<'a> {
         self.reject_limit("LogScanner")?;
         validate_scan_support_inner(&self.table_info.table_path, &self.table_info, true)?;
         let admin = self.conn.get_admin()?;
-        let inner = LogScannerInner::new(
+        let mut inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
@@ -418,6 +440,14 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.consumer_group = self.consumer_group.map(|options| {
+            Arc::new(ConsumerGroup::new(
+                self.table_info.table_id,
+                options,
+                self.conn.get_connections(),
+                self.metadata.clone(),
+            ))
+        });
         Ok(LogScanner {
             inner: Arc::new(inner),
         })
@@ -433,7 +463,7 @@ impl<'a> TableScan<'a> {
         self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support(&self.table_info.table_path, &self.table_info)?;
         let admin = self.conn.get_admin()?;
-        let inner = LogScannerInner::new(
+        let mut inner = LogScannerInner::new(
             &self.table_info,
             self.metadata.clone(),
             self.conn.get_connections(),
@@ -443,6 +473,14 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.consumer_group = self.consumer_group.map(|options| {
+            Arc::new(ConsumerGroup::new(
+                self.table_info.table_id,
+                options,
+                self.conn.get_connections(),
+                self.metadata.clone(),
+            ))
+        });
         Ok(RecordBatchLogScanner {
             inner: Arc::new(inner),
         })
@@ -471,6 +509,7 @@ pub struct RecordBatchLogScanner {
 
 /// Private shared implementation for both scanner types
 struct LogScannerInner {
+    consumer_group: Option<Arc<ConsumerGroup>>,
     table_path: TablePath,
     table_id: TableId,
     table_info: TableInfo,
@@ -669,6 +708,7 @@ impl LogScannerInner {
             Arc::clone(&metrics),
         );
         Ok(Self {
+            consumer_group: None,
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             table_info: table_info.clone(),
@@ -728,6 +768,15 @@ impl LogScannerInner {
                 // This enables pipelining while user processes the data
                 self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
+                if let Some(group) = &self.consumer_group {
+                    let mut delivered = group.delivered.lock();
+                    for (bucket, records) in &fetch_result {
+                        if let Some(last) = records.last() {
+                            delivered
+                                .insert(bucket.clone(), OffsetAndMetadata::new(last.offset() + 1));
+                        }
+                    }
+                }
                 return Ok(ScanRecords::new(fetch_result));
             }
 
@@ -869,6 +918,9 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
+        if let Some(group) = &self.consumer_group {
+            group.delivered.lock().remove(&table_bucket);
+        }
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
         Ok(())
@@ -931,6 +983,9 @@ impl LogScannerInner {
             .await?;
         let _subscription_guard = self.subscription_lock.lock();
         self.check_no_active_reader()?;
+        if let Some(group) = &self.consumer_group {
+            group.delivered.lock().remove(&table_bucket);
+        }
         self.log_scanner_status
             .assign_scan_bucket(table_bucket, offset);
         Ok(())
@@ -1017,6 +1072,12 @@ impl LogScannerInner {
         } else {
             self.check_no_active_reader()?;
         }
+        if let Some(group) = &self.consumer_group {
+            let mut delivered = group.delivered.lock();
+            for bucket in bucket_offsets.keys() {
+                delivered.remove(bucket);
+            }
+        }
         self.log_scanner_status.assign_scan_buckets(bucket_offsets);
         Ok(())
     }
@@ -1078,6 +1139,17 @@ impl LogScannerInner {
                 // Pipeline known leaders without awaiting metadata after advancing offsets.
                 self.log_fetcher.refresh_metadata_in_background();
                 self.log_fetcher.send_fetches_without_metadata_refresh();
+                if let Some(group) = &self.consumer_group {
+                    let mut delivered = group.delivered.lock();
+                    for batch in &batches {
+                        delivered.insert(
+                            batch.bucket().clone(),
+                            OffsetAndMetadata::new(
+                                batch.base_offset() + batch.batch().num_rows() as i64,
+                            ),
+                        );
+                    }
+                }
                 return Ok(batches);
             }
 

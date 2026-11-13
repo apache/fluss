@@ -51,7 +51,7 @@ pub use reader::{
 pub use remote_log::{
     DEFAULT_REMOTE_FILE_DOWNLOAD_THREAD_NUM, DEFAULT_SCANNER_REMOTE_LOG_PREFETCH_NUM,
 };
-pub use scanner::{LogScanner, RecordBatchLogScanner, TableScan};
+pub use scanner::{LogScanner, OffsetsInitializer, RecordBatchLogScanner, TableScan};
 pub use upsert::{TableUpsert, UpsertWriter};
 
 #[allow(dead_code)]

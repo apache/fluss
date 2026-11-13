@@ -71,6 +71,26 @@ impl FlussAdmin {
         }
     }
 
+    /// Reads saved next offsets across tables without moving a scanner.
+    /// Returns `None` for a bucket with no commit; any bucket error fails the query.
+    /// Uses a 30-second deadline including owner discovery and routing retries.
+    pub async fn get_consumer_offsets(
+        &self,
+        group_id: &str,
+        buckets: &[TableBucket],
+    ) -> Result<HashMap<TableBucket, Option<crate::client::OffsetAndMetadata>>> {
+        let options = crate::client::ConsumerGroupOptions::new(group_id);
+        options.validate()?;
+        crate::client::consumer_offsets::ConsumerGroup::new(
+            0,
+            options,
+            self.rpc_client.clone(),
+            self.metadata.clone(),
+        )
+        .fetch(buckets)
+        .await
+    }
+
     async fn admin_gateway(&self) -> Result<ServerConnection> {
         let cluster = self.metadata.get_cluster();
         let coordinator =

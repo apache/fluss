@@ -196,3 +196,6 @@ macro_rules! impl_read_type {
         }
     };
 }
+
+mod consumer_offsets;
+pub(crate) use consumer_offsets::*;

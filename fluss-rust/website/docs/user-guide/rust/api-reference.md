@@ -196,6 +196,80 @@ Single-consumer: overlapping `poll` calls on handles that share state, or `poll`
 | `fn table_path(&self) -> &TablePath`                                                                      | Get the table path                                       |
 | `fn table_id(&self) -> TableId`                                                                           | Get the table ID                                         |
 
+## Consumer offsets
+
+Both log scanner types support persisted offsets for manually assigned buckets. Configure a
+nonempty group ID, restore subscriptions, process a poll, then commit:
+
+```rust
+use fluss::client::{ConsumerGroupOptions, OffsetsInitializer, OffsetCommitOutcome};
+use fluss::metadata::TableBucket;
+
+let bucket = TableBucket::new(table.get_table_info().table_id, 0);
+let scanner = table.new_scan()
+    .with_consumer_group(ConsumerGroupOptions::new("orders-worker"))?
+    .create_log_scanner()?;
+scanner.subscribe_with_initializer(
+    &[bucket], &OffsetsInitializer::committed("orders-worker")
+).await?;
+let records = scanner.poll(std::time::Duration::from_secs(5)).await?;
+process_all(&records)?; // Commit only after processing succeeds.
+let outcomes = scanner.commit_sync().await?;
+for (bucket, outcome) in outcomes {
+    match outcome {
+        OffsetCommitOutcome::Committed => {}
+        failure => return Err(format!("Commit failed for {bucket}: {failure:?}").into()),
+    }
+}
+```
+
+| Method | Contract |
+| --- | --- |
+| `subscribe_with_initializer(buckets, initializer).await` | Resolve and update selected buckets together; retain other subscriptions. Resolution errors leave subscriptions unchanged. |
+| `admin.get_consumer_offsets(group_id, buckets).await` | Query saved positions across tables independently of a scanner. Missing commits are `None`, distinct from zero; any bucket error fails the query. |
+| `commit_sync().await` | Commit the next offsets after records returned by completed polls. Internal prefetch is excluded. Process the entire returned batch first. |
+| `commit_offsets_sync(offsets).await` | Commit explicit next offsets, with optional metadata. Use for partially processed poll results. |
+| `commit_async()` / `commit_offsets_async(offsets)` | Return an `OffsetCommitHandle`, capturing the offsets at invocation. Await with `handle.await??` and inspect each bucket outcome. Dropping or aborting the handle lets the operation finish. |
+
+`OffsetsInitializer::committed(group_id)` uses `earliest()` for missing commits. Use
+`committed_with_fallback(group_id, strategy)` to choose `latest()`, `timestamp(ms)`, `offset(n)`
+or `fail()` instead. RPC/authorization errors and expired committed offsets do not trigger fallback.
+Initializers also work on scanners without a commit group; the source group may differ from the
+configured commit group. Restore and Admin queries use a 30-second deadline for offset fetches.
+Existing explicit-offset subscriptions keep their behavior. Rust uses distinct names for explicit
+commits because it does not support method overloading.
+
+Commits on one scanner execute in invocation order; offset decreases are allowed. Drive poll,
+subscription changes and commit initiation from one consumer task. Different scanners/processes
+using the same group are independent writers: assign each bucket to one active consumer yourself.
+There is no membership management or rebalance. Group IDs are sent unchanged and validated by the
+server. For compatibility with servers enforcing group naming rules, use 1–200 ASCII letters,
+digits, underscores or hyphens, without a `__` prefix. For nonpartitioned buckets, use
+`TableBucket::new`; do not send partition ID `-1`.
+
+Offset operations reuse the connection's authentication credentials. Selected-offset queries need
+DESCRIBE on each source table; commits need READ. Servers with group ACLs also enforce permissions
+on the group. Authorization failures are returned to the caller and never trigger offset fallback.
+Reading after processing without a successful commit can replay records after reconnecting;
+closing a scanner or connection does not commit automatically.
+
+Request rejection is `OffsetCommitError::Rejected`. Transport failures after dispatch, ACK timeouts
+and unclassified write errors can have an unknown outcome; these block further commits on that
+scanner. A partial response retains successful buckets and distinguishes metadata rejection from
+unknown write results. Never retry the entire batch blindly. Reading the saved offset does not
+fence a delayed write: settle the previous writer before resuming with a new scanner. Processing
+followed by commit provides at-least-once recovery while the required records remain retained and
+each group/bucket has one active consumer. Downstream effects must tolerate replay: a crash after
+processing but before a successful commit can deliver the same records again. Offset commits are
+not atomic with writes to an external sink. No cross-process fencing token is sent, so replacing a
+consumer requires stopping the previous writer before the replacement starts committing.
+
+`ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
+after preceding queued commits finish. Background auto-commit is disabled. Existing scanners with
+no group retain their behavior. Offset persistence requires a server implementing discovery,
+commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
+consumer offsets. A committed offset that has expired from log retention is not silently reset.
+
 ## `RecordBatchLogReader`
 
 Bounded log reader that consumes data up to specified stopping offsets, then terminates.
