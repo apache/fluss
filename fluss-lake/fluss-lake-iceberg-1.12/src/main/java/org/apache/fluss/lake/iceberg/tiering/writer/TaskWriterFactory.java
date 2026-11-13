@@ -22,6 +22,7 @@ import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
+import org.apache.iceberg.TableUtil;
 import org.apache.iceberg.data.GenericFileWriterFactory;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.OutputFileFactory;
@@ -87,6 +88,16 @@ public class TaskWriterFactory {
                 columns.add(schema.findField(fieldId).name());
             }
             Schema deleteSchema = schema.select(columns);
+            if (TableUtil.formatVersion(table) >= 3) {
+                return new GenericRecordDVWriter(
+                        table,
+                        deleteSchema,
+                        format,
+                        writerFactory,
+                        targetFileSize,
+                        partition,
+                        bucket);
+            }
             return new GenericRecordDeltaWriter(
                     table,
                     deleteSchema,

@@ -146,7 +146,10 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
     @Override
     public void close() throws IOException {
-        try {
+        // Always release the catalog, even when the task writer fails to close. If both fail,
+        // try-with-resources preserves the writer failure and suppresses the catalog failure.
+        try (Closeable closeableCatalog =
+                icebergCatalog instanceof Closeable ? (Closeable) icebergCatalog : null) {
             if (compactionFuture != null && !compactionFuture.isDone()) {
                 compactionFuture.cancel(true);
             }
@@ -160,9 +163,6 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
             if (recordWriter != null) {
                 recordWriter.close();
-            }
-            if (icebergCatalog != null && icebergCatalog instanceof Closeable) {
-                ((Closeable) icebergCatalog).close();
             }
         } catch (Exception e) {
             throw new IOException("Failed to close IcebergLakeWriter.", e);
