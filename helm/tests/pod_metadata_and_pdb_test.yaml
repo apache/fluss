@@ -22,16 +22,18 @@ templates:
   - templates/sts-coordinator.yaml
 
 tests:
-  - it: should not render pod annotations by default on tablet
+  - it: should render the config checksum pod annotation by default on tablet
     asserts:
-      - isNull:
-          path: spec.template.metadata.annotations
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: ^[0-9a-f]{64}$
         template: templates/sts-tablet.yaml
 
-  - it: should not render pod annotations by default on coordinator
+  - it: should render the config checksum pod annotation by default on coordinator
     asserts:
-      - isNull:
-          path: spec.template.metadata.annotations
+      - matchRegex:
+          path: spec.template.metadata.annotations["checksum/config"]
+          pattern: ^[0-9a-f]{64}$
         template: templates/sts-coordinator.yaml
 
 ---
@@ -47,19 +49,21 @@ tests:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9249"
     asserts:
-      - equal:
+      - isSubset:
           path: spec.template.metadata.annotations
-          value:
+          content:
             prometheus.io/scrape: "true"
             prometheus.io/port: "9249"
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
 
   - it: should not apply coordinator annotations to tablet
     set:
       coordinator.podAnnotations:
         prometheus.io/scrape: "true"
     asserts:
-      - isNull:
-          path: spec.template.metadata.annotations
+      - notExists:
+          path: spec.template.metadata.annotations["prometheus.io/scrape"]
 
 ---
 
@@ -73,10 +77,12 @@ tests:
       coordinator.podAnnotations:
         prometheus.io/scrape: "true"
     asserts:
-      - equal:
+      - isSubset:
           path: spec.template.metadata.annotations
-          value:
+          content:
             prometheus.io/scrape: "true"
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
 
 ---
 

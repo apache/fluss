@@ -36,6 +36,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Checksum of the ConfigMap data the servers read at startup. Set as a pod
+annotation so that an upgrade changing only configuration still changes the pod
+template and rolls the servers.
+*/}}
+{{- define "fluss.configChecksum" -}}
+{{- $data := include "fluss.config.data" . -}}
+{{- if include "fluss.security.jaas.required" . -}}
+{{- $data = print $data (include "fluss.security.jaas.configData" .) -}}
+{{- end -}}
+{{- sha256sum $data -}}
+{{- end }}
+
+{{/*
 Image name
 */}}
 {{- define "fluss.image" -}}
@@ -100,3 +113,57 @@ imagePullSecrets:
 {{-   printf "\nPDB VALIDATION:\n%s" $errMessage | fail -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Data of the server ConfigMap. Shared with fluss.configChecksum, so the pod
+annotation tracks exactly what the ConfigMap renders.
+*/}}
+{{- define "fluss.config.data" }}
+  server.yaml: |
+    {{- range $key, $val := .Values.configurationOverrides }}
+    {{ $key }}: {{ tpl (printf "%v" $val) $ }}
+    {{- end }}
+
+    ### Security
+
+    {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
+    {{- $clientProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "client") | trim -}}
+    {{- $externalProtocol := include "fluss.security.external.protocol" . | trim -}}
+    {{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
+    {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+    {{- if (include "fluss.security.sasl.enabled" .) }}
+    {{- $protocolEntries := list (printf "INTERNAL:%s" $internalProtocol) (printf "CLIENT:%s" $clientProtocol) -}}
+    {{- if (include "fluss.listeners.external.enabled" .) -}}
+    {{- $protocolEntries = append $protocolEntries (printf "%s:%s" (include "fluss.listeners.external.name" .) $externalProtocol) -}}
+    {{- end }}
+    security.protocol.map: {{ join "," $protocolEntries }}
+    security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
+    {{- if ne $internalMechanism "" }}
+    client.security.protocol: SASL
+    client.security.sasl.mechanism: {{ upper $internalMechanism }}
+    {{- end }}
+
+    {{- end }}
+
+    {{- if include "fluss.metrics.enabled" . }}
+    ### Metrics
+
+    metrics.reporters: {{ .Values.metrics.reporters }}
+    {{- range $name := (include "fluss.metrics.reporterNames" . | fromYamlArray) }}
+    {{ printf "metrics.reporter.%s.port" $name }}: {{ (index $.Values.metrics $name).port }}
+    {{- end }}
+
+    {{- end }}
+
+    ### Zookeeper
+
+    {{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
+    zookeeper.client.config-path: /etc/fluss/conf/zookeeper-client.properties
+    {{- end }}
+
+    {{- if include "fluss.secrets.enabled" . }}
+    ### Secrets
+
+    {{- include "fluss.secrets.configLines" . | nindent 4 }}
+    {{- end }}
+{{- end }}
