@@ -72,6 +72,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @PublicEvolving
 public final class UnionReadBoundaryPlanner {
 
+    private static final int CONTEXT_VERSION = 1;
+    private static final int COVERAGE_COMPLETE_PARTITIONS = 0;
+
     private UnionReadBoundaryPlanner() {}
 
     /**
@@ -120,8 +123,8 @@ public final class UnionReadBoundaryPlanner {
                 PredicateBuilder.partition(capturedScope.getSpecMap(), table.getRowType());
         PbUnionReadContext context =
                 new PbUnionReadContext()
-                        .setVersion(1)
-                        .setCoverage(0)
+                        .setVersion(CONTEXT_VERSION)
+                        .setCoverage(COVERAGE_COMPLETE_PARTITIONS)
                         .setDatabaseName(tablePath.getDatabaseName())
                         .setTableName(tablePath.getTableName())
                         .setTableId(table.getTableId())
