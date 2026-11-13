@@ -341,4 +341,17 @@ defmodule Fluss.ConfigTest do
     assert config.writer_retries == 3
     assert config.writer_bucket_no_key_assigner == :round_robin
   end
+
+  test "scanner_log_check_crc preserves the default and explicit overrides" do
+    config = Fluss.Config.default()
+    assert config.scanner_log_check_crc == nil
+
+    for value <- [true, false] do
+      assert Fluss.Config.set_scanner_log_check_crc(config, value).scanner_log_check_crc == value
+    end
+
+    assert_raise FunctionClauseError, fn ->
+      Fluss.Config.set_scanner_log_check_crc(config, "false")
+    end
+  end
 end

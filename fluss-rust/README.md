@@ -263,6 +263,7 @@ cargo build --example example-table --release
 | `scanner_log_fetch_wait_max_time_ms`   | 500 ms            | Max wait time for fetch                       |
 | `scanner_remote_log_read_concurrency`  | 4                 | Concurrency for remote log reads              |
 | `scanner_io_tmp_dir`                  | OS temp dir/fluss | Parent for isolated remote log download directories |
+| `scanner_log_check_crc`                | `true`            | Check log batch CRCs; server-projected batches are exempt |
 | `connect_timeout_ms`                   | 15 s              | Connection timeout                            |
 | `connection_max_idle_time_ms`          | 10 min            | Close idle cached connections (0: disabled)   |
 | `security_sasl_username` / `security_sasl_password` | — | SASL PLAIN authentication             |

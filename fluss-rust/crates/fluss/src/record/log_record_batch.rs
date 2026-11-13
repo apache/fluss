@@ -506,7 +506,25 @@ impl LogRecordBatch {
     }
 
     pub fn ensure_valid(&self) -> Result<()> {
-        // TODO enable validation once checksum handling is corrected.
+        self.ensure_header_complete()?;
+        let length =
+            LittleEndian::read_i32(&self.data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]);
+        if length < 0 || length as usize + LOG_OVERHEAD != self.data.len() {
+            return Err(Error::UnexpectedError {
+                message: "Corrupt log record batch: length does not match batch data".to_string(),
+                source: None,
+            });
+        }
+        let stored = self.checksum();
+        let computed = self.compute_checksum();
+        if stored != computed {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "Corrupt log record batch: CRC mismatch (stored {stored}, computed {computed})"
+                ),
+                source: None,
+            });
+        }
         Ok(())
     }
 
@@ -522,7 +540,7 @@ impl LogRecordBatch {
     /// Rejects unsupported magic versions and batches shorter than their
     /// magic's fixed header, so the fixed-offset accessors cannot slice past
     /// the buffer. Mirrors the guard in Java's `DefaultLogRecordBatch`.
-    fn ensure_header_complete(&self) -> Result<usize> {
+    pub(crate) fn ensure_header_complete(&self) -> Result<usize> {
         if self.data.len() <= MAGIC_OFFSET {
             return Err(Error::UnexpectedError {
                 message: format!(
@@ -882,6 +900,7 @@ mod tests {
             for bytes in [bytes.clone(), v1, v2] {
                 let batch = LogRecordBatch::new(Bytes::from(bytes));
                 assert!(batch.is_valid());
+                batch.ensure_valid()?;
                 assert_eq!(batch.next_log_offset(), 1);
                 assert_eq!(batch.records(&context)?.count(), 0);
                 let decoded = batch.record_batch(&context)?;
@@ -1250,11 +1269,69 @@ mod tests {
     }
 
     #[test]
+    fn ensure_valid_checks_crc_for_all_log_versions() {
+        let (_, v0) = build_append_only_batch(&[(1, "a")]);
+        let v1 = splice_statistics_section(&v0, &[1, 2, 3]);
+        let v2 = splice_leader_epoch(&v1, 42);
+        for bytes in [v0, v1, v2] {
+            let batch = LogRecordBatch::new(Bytes::from(bytes.clone()));
+            batch.ensure_valid().unwrap();
+            let mut excluded = bytes.clone();
+            excluded[BASE_OFFSET_OFFSET] ^= 1;
+            excluded[COMMIT_TIMESTAMP_OFFSET] ^= 1;
+            LogRecordBatch::new(Bytes::from(excluded))
+                .ensure_valid()
+                .unwrap();
+            for length in [-1_i32, 0, i32::MAX] {
+                let mut invalid = bytes.clone();
+                invalid[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+                    .copy_from_slice(&length.to_le_bytes());
+                assert!(
+                    LogRecordBatch::new(Bytes::from(invalid))
+                        .ensure_valid()
+                        .is_err()
+                );
+            }
+            for len in [
+                0,
+                MAGIC_OFFSET,
+                record_batch_header_size(batch.magic()).unwrap() - 1,
+            ] {
+                assert!(
+                    LogRecordBatch::new(Bytes::copy_from_slice(&bytes[..len]))
+                        .ensure_valid()
+                        .is_err()
+                );
+            }
+            let start = SCHEMA_ID_OFFSET + batch.header_field_shift();
+            for offset in [
+                start,
+                record_batch_header_size(batch.magic()).unwrap() - 1,
+                bytes.len() - 1,
+            ] {
+                let mut corrupt = bytes.clone();
+                corrupt[offset] ^= 1;
+                let batch = LogRecordBatch::new(Bytes::from(corrupt));
+                assert!(!batch.is_valid());
+                assert!(
+                    batch
+                        .ensure_valid()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("CRC")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn is_valid_is_false_for_an_unsupported_magic() {
         let (_, append_only) = build_append_only_batch(&[(1, "a")]);
         let mut data = append_only;
         data[MAGIC_OFFSET] = 3;
-        assert!(!LogRecordBatch::new(Bytes::from(data)).is_valid());
+        let batch = LogRecordBatch::new(Bytes::from(data));
+        assert!(!batch.is_valid());
+        assert!(batch.ensure_valid().is_err());
     }
 
     /// Turns a V1 batch into a wire-valid V2 batch by inserting the leader

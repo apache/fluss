@@ -62,6 +62,14 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, ScannerLogCrcConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_log_check_crc);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_log_check_crc);
+    config.scanner_log_check_crc = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).scanner_log_check_crc);
+}
+
 TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
     fluss::Configuration config;
     EXPECT_TRUE(config.scanner_io_tmp_dir.empty());

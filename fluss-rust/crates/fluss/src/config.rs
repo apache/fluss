@@ -151,6 +151,11 @@ pub struct Config {
     #[arg(long)]
     pub scanner_io_tmp_dir: Option<String>,
 
+    /// Check log batch CRCs, except for batches projected by the server. Default: true.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[serde(default = "default_scanner_log_check_crc")]
+    pub scanner_log_check_crc: bool,
+
     /// Maximum number of records returned in a single call to poll() for LogScanner.
     /// Default: 500 (matching Java CLIENT_SCANNER_LOG_MAX_POLL_RECORDS)
     #[arg(long, default_value_t = DEFAULT_MAX_POLL_RECORDS)]
@@ -308,6 +313,7 @@ impl std::fmt::Debug for Config {
                 &self.scanner_remote_log_prefetch_num,
             )
             .field("scanner_io_tmp_dir", &self.scanner_io_tmp_dir)
+            .field("scanner_log_check_crc", &self.scanner_log_check_crc)
             .field(
                 "remote_file_download_thread_num",
                 &self.remote_file_download_thread_num,
@@ -373,6 +379,10 @@ impl std::fmt::Debug for Config {
     }
 }
 
+fn default_scanner_log_check_crc() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -392,6 +402,7 @@ impl Default for Config {
             remote_file_download_thread_num: DEFAULT_DOWNLOAD_THREADS,
             scanner_remote_log_read_concurrency: DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY,
             scanner_io_tmp_dir: None,
+            scanner_log_check_crc: true,
             scanner_log_max_poll_records: DEFAULT_MAX_POLL_RECORDS,
             scanner_log_fetch_max_bytes: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES,
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
@@ -857,5 +868,39 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_writer().is_err());
+    }
+
+    #[test]
+    fn scanner_crc_defaults_and_overrides() {
+        assert!(Config::default().scanner_log_check_crc);
+        assert!(
+            Config::try_parse_from(["fluss"])
+                .unwrap()
+                .scanner_log_check_crc
+        );
+        for (value, expected) in [("true", true), ("false", false)] {
+            assert_eq!(
+                Config::try_parse_from(["fluss", "--scanner-log-check-crc", value])
+                    .unwrap()
+                    .scanner_log_check_crc,
+                expected
+            );
+        }
+        let mut json = serde_json::to_value(Config::default()).unwrap();
+        json["security_sasl_password"] = serde_json::json!("");
+        json.as_object_mut()
+            .unwrap()
+            .remove("scanner_log_check_crc");
+        assert!(
+            serde_json::from_value::<Config>(json.clone())
+                .unwrap()
+                .scanner_log_check_crc
+        );
+        json["scanner_log_check_crc"] = serde_json::json!(false);
+        assert!(
+            !serde_json::from_value::<Config>(json)
+                .unwrap()
+                .scanner_log_check_crc
+        );
     }
 }
