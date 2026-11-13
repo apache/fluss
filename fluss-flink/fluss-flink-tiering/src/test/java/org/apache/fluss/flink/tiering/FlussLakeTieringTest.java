@@ -17,12 +17,30 @@
 
 package org.apache.fluss.flink.tiering;
 
+import org.apache.fluss.flink.tiering.source.TieringSourceOptions;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlussLakeTiering}. */
 class FlussLakeTieringTest {
+
+    @Test
+    void testTieringGroupArgument() {
+        String[] args = {
+            "--fluss.bootstrap.servers",
+            "localhost:9123",
+            "--datalake.format",
+            "paimon",
+            "--fluss.tiering.group",
+            "large"
+        };
+
+        FlussLakeTiering tiering = new FlussLakeTiering(args);
+
+        assertThat(tiering.flussConfig.get(TieringSourceOptions.TIERING_GROUP)).isEqualTo("large");
+    }
 
     @Test
     void testMultipleDecoratorsApplied() {

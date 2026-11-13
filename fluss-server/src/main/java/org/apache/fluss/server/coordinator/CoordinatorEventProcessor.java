@@ -1076,6 +1076,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 lakeTableTieringManager.updateTableLakeFreshness(
                         newTableInfo.getTableId(), newFreshness.toMillis());
             }
+            String oldGroup = oldTableInfo.getTableConfig().getDataLakeTieringGroup();
+            String newGroup = newTableInfo.getTableConfig().getDataLakeTieringGroup();
+            if (!Objects.equals(oldGroup, newGroup)) {
+                lakeTableTieringManager.updateTableTieringGroup(
+                        newTableInfo.getTableId(), newGroup);
+            }
         }
 
         AutoPartitionStrategy oldAutoPartitionStrategy =

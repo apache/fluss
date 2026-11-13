@@ -55,6 +55,33 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class TableDescriptorValidationTest {
 
     @Test
+    void testTieringGroupValidation() {
+        String key = ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.key();
+        for (String group : new String[] {"default", "large", "Large", "Large_1-small"}) {
+            validate(logTableWithProperty(key, group), null);
+        }
+        for (String group :
+                new String[] {"", " ", " large", "large ", "a\nb", "a\0b", "__reserved"}) {
+            assertThatThrownBy(() -> validate(logTableWithProperty(key, group), null))
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining(key);
+        }
+
+        TableInfo lakeTable =
+                TableInfo.of(
+                        TestData.DATA1_TABLE_PATH_PK,
+                        TestData.DATA1_TABLE_ID_PK,
+                        1,
+                        TestData.DATA1_TABLE_DESCRIPTOR_PK.withDataLakeFormat(
+                                DataLakeFormat.PAIMON),
+                        "file://remote",
+                        1L,
+                        1L);
+        TableDescriptorValidation.validateAlterTableProperties(
+                lakeTable, Collections.singleton(key));
+    }
+
+    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
@@ -38,6 +39,7 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbApiVersion;
@@ -317,6 +319,43 @@ public class ServerConnectionTest {
                                             ApiKeys.ALTER_TABLE, (short) 0, bucketCountRequest))
                     .isInstanceOf(UnsupportedVersionException.class)
                     .hasMessageContaining("requires ALTER_TABLE version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
+    void testTieringGroupVersionCompatibility() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.validateVersionCompatibility(
+                    ApiKeys.LAKE_TIERING_HEARTBEAT, (short) 0, new LakeTieringHeartbeatRequest());
+            connection.validateVersionCompatibility(
+                    ApiKeys.LAKE_TIERING_HEARTBEAT,
+                    (short) 0,
+                    new LakeTieringHeartbeatRequest()
+                            .setTieringGroup(
+                                    ConfigOptions.TABLE_DATALAKE_TIERING_GROUP.defaultValue()));
+
+            LakeTieringHeartbeatRequest groupedRequest =
+                    new LakeTieringHeartbeatRequest().setTieringGroup("large");
+            connection.validateVersionCompatibility(
+                    ApiKeys.LAKE_TIERING_HEARTBEAT, (short) 1, groupedRequest);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.LAKE_TIERING_HEARTBEAT,
+                                            (short) 0,
+                                            groupedRequest))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("require LAKE_TIERING_HEARTBEAT version 1 or newer")
                     .hasMessageContaining("negotiated version 0");
         } finally {
             connection.close().get();
