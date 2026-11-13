@@ -84,6 +84,7 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateIcebergBucketKeys;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -132,6 +133,8 @@ public class MetadataManager {
                 maxBucketNum,
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
         KafkaTableSchema.validateTablePath(tablePath, tableDescriptor);
+        // Currently, only Iceberg tables with a single bucket key are supported.
+        validateIcebergBucketKeys(tableDescriptor);
     }
 
     public void createDatabase(
