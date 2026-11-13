@@ -164,6 +164,41 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testCancelledPendingRequestIsRemoved() throws Exception {
+        nettyServer.close();
+        CompletableFuture<Void> handshake = new CompletableFuture<>();
+        buildNettyServer(
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return handshake.thenCompose(ignored -> super.apiVersions(request));
+                    }
+                });
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, error) -> {});
+        try {
+            LookupRequest request = new LookupRequest().setTableId(1);
+            request.addBucketsReq().setBucketId(0);
+            CompletableFuture<ApiMessage> response = connection.send(ApiKeys.LOOKUP, request);
+            assertThat(connection.numPendingRequests()).isOne();
+            response.cancel(false);
+            assertThat(connection.numPendingRequests()).isZero();
+            handshake.complete(null);
+            assertThat(connection.send(ApiKeys.LOOKUP, request).get(10, TimeUnit.SECONDS))
+                    .isNotNull();
+        } finally {
+            handshake.complete(null);
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testConnectionMetrics() throws ExecutionException, InterruptedException {
         MockMetricRegistry metricRegistry = new MockMetricRegistry();
         ClientMetricGroup client = new ClientMetricGroup(metricRegistry, "client");

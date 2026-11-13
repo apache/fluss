@@ -693,6 +693,98 @@ final class NettyClientTest {
                 RequestsMetrics.createTabletServerRequestMetrics(metricGroup));
     }
 
+    @Test
+    void testCancelledRequestIsRemovedFromConnection() throws Exception {
+        try (NetUtils.Port port = getAvailablePort()) {
+            ServerNode node =
+                    new ServerNode(20, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            DelayedLookupGatewayService delayedService = new DelayedLookupGatewayService();
+            try (NettyServer server = createTabletServer(node, delayedService)) {
+                server.start();
+                CompletableFuture<ApiMessage> response =
+                        nettyClient.sendRequest(node, ApiKeys.LOOKUP, newLookupRequest());
+                assertThat(delayedService.awaitFirstLookup()).isTrue();
+                ServerConnection connection = nettyClient.connections().iterator().next();
+                assertThat(connection.numInflightRequests()).isOne();
+                assertThatThrownBy(() -> response.completeExceptionally(null))
+                        .isInstanceOf(NullPointerException.class);
+                assertThat(response).isNotDone();
+                assertThat(connection.numInflightRequests()).isOne();
+                response.cancel(false);
+                assertThat(connection.numInflightRequests()).isZero();
+                delayedService.completeFirstLookup();
+            }
+        }
+    }
+
+    @Test
+    void testRequestTimeoutDoesNotCloseActiveConnection() throws Exception {
+        nettyClient.close();
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofSeconds(1));
+        nettyClient = new NettyClient(conf, clientMetrics);
+        try (NetUtils.Port port = getAvailablePort()) {
+            ServerNode node =
+                    new ServerNode(20, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            DelayedLookupGatewayService delayedService = new DelayedLookupGatewayService();
+            try (NettyServer server = createTabletServer(node, delayedService)) {
+                server.start();
+                CompletableFuture<ApiMessage> response =
+                        nettyClient.sendRequest(node, ApiKeys.LOOKUP, newLookupRequest());
+                assertThat(delayedService.awaitFirstLookup()).isTrue();
+                ServerConnection connection = nettyClient.connections().iterator().next();
+                retry(Duration.ofSeconds(5), () -> assertThat(response.isDone()).isTrue());
+                assertThatThrownBy(response::get)
+                        .rootCause()
+                        .isInstanceOf(org.apache.fluss.exception.TimeoutException.class);
+                assertThat(connection.numInflightRequests()).isZero();
+                assertThat(nettyClient.isReady(node)).isTrue();
+                assertThat(nettyClient.sendRequest(node, ApiKeys.LOOKUP, newLookupRequest()).get())
+                        .isInstanceOf(LookupResponse.class);
+                delayedService.completeFirstLookup();
+            }
+        }
+    }
+
+    @Test
+    void testTimeoutRetiresRequestBeforeRunningCallerCallback() throws Exception {
+        nettyClient.close();
+        conf.set(ConfigOptions.CLIENT_REQUEST_TIMEOUT, Duration.ofSeconds(1));
+        nettyClient = new NettyClient(conf, clientMetrics);
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        CountDownLatch releaseCallback = new CountDownLatch(1);
+        try (NetUtils.Port port = getAvailablePort()) {
+            ServerNode node =
+                    new ServerNode(20, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            DelayedLookupGatewayService delayedService = new DelayedLookupGatewayService();
+            try (NettyServer server = createTabletServer(node, delayedService)) {
+                server.start();
+                CompletableFuture<ApiMessage> response =
+                        nettyClient.sendRequest(node, ApiKeys.LOOKUP, newLookupRequest());
+                assertThat(delayedService.awaitFirstLookup()).isTrue();
+                ServerConnection connection = nettyClient.connections().iterator().next();
+                response.whenComplete(
+                        (value, error) -> {
+                            callbackEntered.countDown();
+                            try {
+                                releaseCallback.await(10, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+                try {
+                    assertThat(callbackEntered.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThat(response.isCompletedExceptionally()).isTrue();
+                    assertThat(connection.numInflightRequests()).isZero();
+                } finally {
+                    releaseCallback.countDown();
+                    delayedService.completeFirstLookup();
+                }
+            }
+        } finally {
+            releaseCallback.countDown();
+        }
+    }
+
     private static LookupRequest newLookupRequest() {
         LookupRequest request = new LookupRequest().setTableId(1);
         request.addBucketsReq().setBucketId(1);
