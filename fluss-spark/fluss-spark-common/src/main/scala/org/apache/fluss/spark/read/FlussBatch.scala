@@ -20,6 +20,7 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
+import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.read.lake.FlussLakePartitionReaderFactory
 
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory}
@@ -72,7 +73,11 @@ class FlussAppendBatch(
         pushedPredicate,
         appendPlanner.logTailPredicate,
         limit,
-        flussConfig)
+        flussConfig,
+        if (options.containsKey(SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()))
+          Some(HistoricalReadMetadata.from(tableInfo))
+        else None
+      )
     } else {
       new FlussAppendPartitionReaderFactory(
         tablePath,
@@ -106,7 +111,11 @@ class FlussUpsertBatch(
         pushedPredicate,
         upsertPlanner.logTailPredicate,
         limit,
-        flussConfig)
+        flussConfig,
+        if (options.containsKey(SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()))
+          Some(HistoricalReadMetadata.from(tableInfo))
+        else None
+      )
     } else {
       new FlussUpsertPartitionReaderFactory(tablePath, projection, limit, options, flussConfig)
     }

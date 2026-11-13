@@ -25,7 +25,7 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistryBase
 import org.apache.spark.sql.catalyst.analysis.TableFunctionRegistry.TableFunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Attribute, CurrentTimestamp, Expression, ExpressionInfo, RuntimeReplaceable}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, CurrentTimestamp, CurrentTimestampLike, Expression, ExpressionInfo, Literal, RuntimeReplaceable}
 import org.apache.spark.sql.catalyst.plans.logical.{LeafNode, LogicalPlan}
 import org.apache.spark.sql.connector.catalog.{Identifier, TableCatalog}
 import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Relation
@@ -47,7 +47,9 @@ object FlussTableValuedFunctions {
 
   val INCREMENTAL_BETWEEN_TIMESTAMP = "fluss_incremental_between_timestamp"
 
-  val supportedFnNames: Seq[String] = Seq(INCREMENTAL_BETWEEN_TIMESTAMP)
+  val SNAPSHOT_AT_TIMESTAMP = "fluss_snapshot_at_timestamp"
+
+  val supportedFnNames: Seq[String] = Seq(INCREMENTAL_BETWEEN_TIMESTAMP, SNAPSHOT_AT_TIMESTAMP)
 
   private type TableFunctionDescription =
     (FunctionIdentifier, ExpressionInfo, TableFunctionBuilder)
@@ -56,6 +58,8 @@ object FlussTableValuedFunctions {
     val (info, builder) = fnName match {
       case INCREMENTAL_BETWEEN_TIMESTAMP =>
         FunctionRegistryBase.build[IncrementalBetweenTimestamp](fnName, since = None)
+      case SNAPSHOT_AT_TIMESTAMP =>
+        FunctionRegistryBase.build[SnapshotAtTimestamp](fnName, since = None)
       case _ =>
         throw new IllegalArgumentException(
           s"Function $fnName isn't a supported Fluss table valued function.")
@@ -128,10 +132,17 @@ object FlussTableValuedFunctions {
    * start of that day, and TIMESTAMP / TIMESTAMP_NTZ are converted from Spark's internal
    * microseconds.
    */
-  private[logical] def toTimestampOptionValue(fnName: String, expr: Expression): String = {
+  private[logical] def toTimestampOptionValue(
+      fnName: String,
+      expr: Expression,
+      queryNowMs: Option[Long] = None): String = {
     // RuntimeReplaceable expressions (e.g. the `-` in `now() - INTERVAL 1 HOUR`) only become
     // evaluable once the optimizer rewrites them, which has not happened yet during analysis.
-    val evaluable = expr.transformUp { case r: RuntimeReplaceable => r.replacement }
+    val expanded = expr.transformUp { case r: RuntimeReplaceable => r.replacement }
+    val evaluable = expanded.transformUp {
+      case _: CurrentTimestampLike if queryNowMs.isDefined =>
+        Literal.create(queryNowMs.get * 1000L, TimestampType)
+    }
 
     val value =
       try {
@@ -254,5 +265,26 @@ case class IncrementalBetweenTimestamp(override val args: Seq[Expression])
       end,
       SparkFlussConf.SCAN_INCREMENTAL_END_TIMESTAMP.key())
     FlussOffsetInitializers.requireValidWindow(start, end, startMs, endMs)
+  }
+}
+
+/** Plan for a complete snapshot with commit timestamp strictly before the requested time. */
+case class SnapshotAtTimestamp(override val args: Seq[Expression])
+  extends FlussTableValueFunction(SNAPSHOT_AT_TIMESTAMP) {
+
+  override def parseArgs(argsWithoutTable: Seq[Expression]): Map[String, String] = {
+    require(
+      argsWithoutTable.size == 1,
+      s"$SNAPSHOT_AT_TIMESTAMP requires exactly two arguments: a table identifier and a timestamp.")
+    val queryNowMs = System.currentTimeMillis()
+    val key = SparkFlussConf.SCAN_AS_OF_TIMESTAMP.key()
+    val timestamp = FlussOffsetInitializers.parseTimestamp(
+      toTimestampOptionValue(SNAPSHOT_AT_TIMESTAMP, argsWithoutTable.head, Some(queryNowMs)),
+      key)
+    require(timestamp >= 0, s"$SNAPSHOT_AT_TIMESTAMP requires a non-negative epoch timestamp.")
+    require(
+      timestamp <= queryNowMs,
+      s"$SNAPSHOT_AT_TIMESTAMP timestamp $timestamp is in the future (query time $queryNowMs).")
+    Map(key -> timestamp.toString)
   }
 }

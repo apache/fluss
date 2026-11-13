@@ -66,6 +66,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
     private final LogScanner logScanner;
     private final long stoppingOffset;
+    private final TableBucket tableBucket;
     private boolean logScanFinished;
 
     private SortMergeReader currentSortMergeReader;
@@ -82,6 +83,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
         this.stoppingOffset = stoppingOffset;
+        this.tableBucket = tableBucket;
         ProjectionPlan projectionPlan =
                 ProjectionPlan.create(
                         table.getTableInfo().getRowType().getFieldCount(),
@@ -97,14 +99,16 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
 
+        this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
+        if (logScanFinished) {
+            return;
+        }
         if (tableBucket.getPartitionId() != null) {
             this.logScanner.subscribe(
                     tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
         } else {
             this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
         }
-
-        this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
     }
 
     @Nullable
@@ -179,6 +183,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     private void pollLogRecords(Duration timeout) {
         ScanRecords scanRecords = logScanner.poll(timeout);
         for (ScanRecord scanRecord : scanRecords) {
+            if (scanRecord.logOffset() >= stoppingOffset) {
+                logScanFinished = true;
+                break;
+            }
             boolean isDelete =
                     scanRecord.getChangeType() == ChangeType.DELETE
                             || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
@@ -192,6 +200,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                 logScanFinished = true;
                 break;
             }
+        }
+        Long consumedUpTo = scanRecords.consumedUpToOffset(tableBucket);
+        if (consumedUpTo != null && consumedUpTo >= stoppingOffset) {
+            logScanFinished = true;
         }
     }
 

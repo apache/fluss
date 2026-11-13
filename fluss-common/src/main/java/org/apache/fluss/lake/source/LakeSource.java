@@ -17,15 +17,22 @@
 
 package org.apache.fluss.lake.source;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.predicate.Predicate;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * A generic interface for lake data sources that defines how to plan splits and read data. Any data
@@ -100,6 +107,45 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
      * @return an independent copy of this lake source
      */
     LakeSource<Split> copy();
+
+    /**
+     * Finds the newest retained complete base whose replay interval is available for every bucket.
+     *
+     * @param tableInfo the Fluss table metadata fixed for this query
+     * @param earliestOffsets the inclusive earliest available log offset for each bucket
+     * @param targetOffsets the exclusive replay end offset for each bucket
+     * @return the compatible base, or empty if no complete retained base is available
+     * @throws UnsupportedOperationException if this source does not support historical selection
+     */
+    @Internal
+    default Optional<HistoricalSnapshot> findHistoricalSnapshot(
+            TableInfo tableInfo,
+            Map<TableBucket, Long> earliestOffsets,
+            Map<TableBucket, Long> targetOffsets)
+            throws IOException {
+        throw new UnsupportedOperationException(
+                "Historical snapshot selection is not supported by " + getClass().getName());
+    }
+
+    /** A fixed snapshot and the exclusive Fluss offsets of its complete readable state. */
+    @Internal
+    final class HistoricalSnapshot {
+        private final long snapshotId;
+        private final Map<TableBucket, Long> readableOffsets;
+
+        public HistoricalSnapshot(long snapshotId, Map<TableBucket, Long> readableOffsets) {
+            this.snapshotId = snapshotId;
+            this.readableOffsets = Collections.unmodifiableMap(new HashMap<>(readableOffsets));
+        }
+
+        public long getSnapshotId() {
+            return snapshotId;
+        }
+
+        public Map<TableBucket, Long> getReadableOffsets() {
+            return readableOffsets;
+        }
+    }
 
     /**
      * Context interface for planners, providing the snapshot id of the table in data-lake to plan
