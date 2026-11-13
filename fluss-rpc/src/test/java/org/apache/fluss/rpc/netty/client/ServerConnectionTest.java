@@ -38,8 +38,11 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.LimitScanRequest;
+import org.apache.fluss.rpc.messages.LimitScanResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -53,12 +56,21 @@ import org.apache.fluss.rpc.netty.client.ServerConnection.ConnectionState;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.AfterEach;
@@ -161,6 +173,101 @@ public class ServerConnectionTest {
                 .hasMessageContaining("Cannot send request to server");
         future = connection.close();
         assertThat(future.isDone()).isTrue();
+    }
+
+    @Test
+    void testCancelledRequestReleasesLateLazyResponse() throws Exception {
+        assertCancelledResponseReleasedOnce(
+                ApiKeys.LIMIT_SCAN,
+                new LimitScanRequest().setTableId(1).setBucketId(0).setLimit(1),
+                new LimitScanResponse().setRecords(new byte[64]));
+    }
+
+    @Test
+    void testCancelledRequestDoesNotReleaseEagerResponseTwice() throws Exception {
+        LookupRequest request = new LookupRequest().setTableId(1);
+        request.addBucketsReq().setBucketId(0);
+        assertCancelledResponseReleasedOnce(ApiKeys.LOOKUP, request, new LookupResponse());
+    }
+
+    private void assertCancelledResponseReleasedOnce(
+            ApiKeys apiKey, ApiMessage request, ApiMessage lateResponse) throws Exception {
+        nettyServer.close();
+        buildNettyServer(
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<LimitScanResponse> limitScan(
+                            LimitScanRequest request) {
+                        return new CompletableFuture<>();
+                    }
+
+                    @Override
+                    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+                        return new CompletableFuture<>();
+                    }
+                });
+        CompletableFuture<Channel> socket = new CompletableFuture<>();
+        CompletableFuture<Integer> requestId = new CompletableFuture<>();
+        bootstrap.handler(
+                new ChannelInitializer<SocketChannel>() {
+                    @Override
+                    protected void initChannel(SocketChannel channel) throws Exception {
+                        new ClientChannelInitializer(5000, false).initChannel(channel);
+                        channel.pipeline()
+                                .addLast(
+                                        new ChannelOutboundHandlerAdapter() {
+                                            @Override
+                                            public void write(
+                                                    ChannelHandlerContext context,
+                                                    Object message,
+                                                    ChannelPromise promise)
+                                                    throws Exception {
+                                                ByteBuf encoded = (ByteBuf) message;
+                                                if (encoded.getShort(4) == apiKey.id) {
+                                                    requestId.complete(encoded.getInt(8));
+                                                }
+                                                super.write(context, message, promise);
+                                            }
+                                        });
+                        socket.complete(channel);
+                    }
+                });
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, error) -> {});
+        ByteBuf buffer = Unpooled.buffer();
+        try {
+            CompletableFuture<ApiMessage> response = connection.send(apiKey, request);
+            int id = requestId.get(10, TimeUnit.SECONDS);
+            response.cancel(false);
+            buffer.writeInt(MessageCodec.RESPONSE_HEADER_LENGTH + lateResponse.totalSize());
+            buffer.writeByte(ResponseType.SUCCESS_RESPONSE.id);
+            buffer.writeInt(id);
+            lateResponse.writeTo(buffer);
+            // Retain an independent owner to detect a second release without relying on logging.
+            buffer.retain();
+            Channel channel = socket.get(10, TimeUnit.SECONDS);
+            channel.eventLoop()
+                    .submit(
+                            () -> {
+                                NettyClientHandler handler =
+                                        channel.pipeline().get(NettyClientHandler.class);
+                                handler.channelRead(channel.pipeline().context(handler), buffer);
+                                return null;
+                            })
+                    .get(10, TimeUnit.SECONDS);
+            assertThat(buffer.refCnt()).isOne();
+            assertThat(connection.isReady()).isTrue();
+        } finally {
+            connection.close().get();
+            if (buffer.refCnt() > 0) {
+                buffer.release(buffer.refCnt());
+            }
+        }
     }
 
     @Test
