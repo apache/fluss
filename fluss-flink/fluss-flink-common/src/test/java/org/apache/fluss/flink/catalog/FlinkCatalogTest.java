@@ -1279,6 +1279,19 @@ class FlinkCatalogTest {
     @Test
     void testBitmapFunctionsRegistered() throws Exception {
         List<String> functions = catalog.listFunctions(DEFAULT_DB);
+        for (String name :
+                Arrays.asList(
+                        "fluss_hll_build_agg",
+                        "fluss_hll_merge_agg",
+                        "fluss_hll_estimate",
+                        "fluss_kll_double_build_agg",
+                        "fluss_kll_double_merge_agg",
+                        "fluss_kll_double_quantile")) {
+            assertThat(functions).contains(name);
+            ObjectPath path = new ObjectPath(DEFAULT_DB, name);
+            assertThat(catalog.functionExists(path)).isTrue();
+            assertThat(Class.forName(catalog.getFunction(path).getClassName())).isNotNull();
+        }
 
         // aggregate functions
         assertThat(functions).contains("rb_build_agg", "rb_or_agg", "rb_and_agg", "rb_xor_agg");

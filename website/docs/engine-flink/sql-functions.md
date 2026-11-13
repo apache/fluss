@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 # SQL Functions
 
-Apache Fluss registers a set of built-in RoaringBitmap SQL functions in `FlussCatalog`. These are
+Apache Fluss registers built-in RoaringBitmap and DataSketches SQL functions in `FlussCatalog`. These are
 **Flink-side functions** that execute within the Flink query engine. They are distinct from the
 storage-level `rbm32` / `rbm64` aggregators, which run inside the Fluss TabletServer during write.
 
@@ -60,8 +60,51 @@ name, but that database must already exist and the current user must have permis
 </TabItem>
 </Tabs>
 
-All functions operate on `BYTES` columns containing standard 32-bit RoaringBitmap serialized data,
+The bitmap functions operate on `BYTES` columns containing standard 32-bit RoaringBitmap serialized data,
 the same wire format used by the `rbm32` storage-level aggregator.
+
+## DataSketches Functions
+
+These functions build or read serialized Apache DataSketches sketch bytes. The HLL functions use
+`lgK=12`; merging a lower-precision sketch can reduce the effective precision. KLL uses the library
+default `k=200`. Merge aggregates never increase the precision of an existing sketch.
+
+| Function | Input | Result |
+| --- | --- | --- |
+| `fluss_hll_build_agg(value)` | `BIGINT` or `STRING` | HLL `BYTES` |
+| `fluss_hll_merge_agg(sketch)` | HLL `BYTES` | Unioned HLL `BYTES` |
+| `fluss_hll_estimate(sketch)` | HLL `BYTES` | Approximate distinct count as `DOUBLE` |
+| `fluss_kll_double_build_agg(value)` | `DOUBLE` | KLL doubles `BYTES` |
+| `fluss_kll_double_merge_agg(sketch)` | KLL doubles `BYTES` | Merged KLL doubles `BYTES` |
+| `fluss_kll_double_quantile(sketch, rank)` | KLL doubles `BYTES`, rank in `[0, 1]` | Quantile as `DOUBLE` |
+
+Null inputs are ignored by aggregates. Empty aggregates and readers of empty sketches return null.
+Readers return null for null arguments. Malformed or wrong-family sketch bytes and invalid ranks
+fail the query. KLL follows DataSketches semantics: NaN input values are ignored.
+
+All sketch aggregates require append-only input. Retractions and updates cannot undo sketch
+contributions, so do not use these functions on retracting changelogs. Use completed windows to
+produce independent sketch batches for a Fluss aggregation table. Replaying a KLL batch counts its
+observations again; KLL merging is not idempotent.
+
+```sql
+USE CATALOG fluss_catalog;
+
+SELECT fluss_hll_estimate(fluss_hll_build_agg(user_id)) AS unique_users
+FROM user_events;
+
+SELECT fluss_kll_double_quantile(
+    fluss_kll_double_build_agg(CAST(latency_ms AS DOUBLE)), 0.95) AS p95
+FROM requests;
+
+-- Merge already stored HLL sketches across keys before reading the estimate.
+SELECT fluss_hll_estimate(fluss_hll_merge_agg(user_hll))
+FROM daily_user_metrics;
+```
+
+HLL output is compatible with the `hll_sketch` merge engine and Spark 3.5's DataSketches HLL
+functions. KLL output is serialized `KllDoublesSketch` data; a Fluss server must support
+`kll_double_sketch` before it can merge those values on write. Neither reader returns sketch bytes.
 
 ## Example: Windowed Bitmap Batches
 
