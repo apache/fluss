@@ -147,6 +147,39 @@ class ConsumerOffsetFetchAuthorizationITCase {
     }
 
     @Test
+    void testAllOffsetsOmitUnauthorizedSourceTables() throws Exception {
+        grant(DESCRIBE, Resource.group(GROUP_ID));
+        grant(DESCRIBE, Resource.table(FIRST_TABLE));
+        commitOffset(internalGateway, firstBucket, 10L);
+        commitOffset(internalGateway, secondBucket, 20L);
+
+        assertThat(fetchOffsets(clientGateway, allOffsetsRequest()))
+                .containsOnlyKeys(firstBucket)
+                .containsEntry(firstBucket, new ConsumerOffsetAndMetadata(10L, null));
+    }
+
+    @Test
+    void testAllOffsetsReturnsEmptyWhenCallerCannotDescribeAnySourceTable() throws Exception {
+        grant(DESCRIBE, Resource.group(GROUP_ID));
+        commitOffset(internalGateway, firstBucket, 10L);
+        commitOffset(internalGateway, secondBucket, 20L);
+
+        assertThat(fetchOffsets(clientGateway, allOffsetsRequest())).isEmpty();
+    }
+
+    @Test
+    void testAllOffsetsRequiresGroupDescribePermission() throws Exception {
+        grant(DESCRIBE, Resource.table(FIRST_TABLE));
+        commitOffset(internalGateway, firstBucket, 10L);
+
+        assertThatThrownBy(() -> clientGateway.getConsumerOffsets(allOffsetsRequest()).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining("DESCRIBE")
+                .hasMessageContaining(GROUP_ID);
+    }
+
+    @Test
     void testSelectedFetchRequiresSourceDescribePermission() throws Exception {
         grant(DESCRIBE, Resource.group(GROUP_ID));
         grant(DESCRIBE, Resource.table(FIRST_TABLE));
@@ -183,6 +216,10 @@ class ConsumerOffsetFetchAuthorizationITCase {
                 .createAcls(new CreateAclsRequest().addAllAcls(toPbAclInfos(bindings)))
                 .get();
         cluster.waitUntilAuthenticationSync(bindings, true);
+    }
+
+    private static GetConsumerOffsetsRequest allOffsetsRequest() {
+        return new GetConsumerOffsetsRequest().setGroupId(GROUP_ID).setAllOffsets(true);
     }
 
     private static GetConsumerOffsetsRequest selectedOffsetsRequest(TableBucket... buckets) {
