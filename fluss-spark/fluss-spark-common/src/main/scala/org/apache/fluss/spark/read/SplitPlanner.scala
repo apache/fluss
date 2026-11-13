@@ -68,6 +68,9 @@ sealed trait SplitPlanner extends AutoCloseable {
 
   def plan(): Array[InputPartition]
 
+  /** Partition values captured by the initial plan; accessing this map performs no RPCs. */
+  def partitionValuesById: Map[Long, Seq[String]]
+
   /**
    * Whether this planner will union its Fluss plan with a lake snapshot. Backed by the memoized
    * probe, so the answer is deterministic and stable across `plan()` invocations and repeated reads
@@ -135,6 +138,10 @@ abstract class AbstractSplitPlanner(
     admin0
   }
 
+  private var plannedPartitionValues: Map[Long, Seq[String]] = Map.empty
+
+  override def partitionValuesById: Map[Long, Seq[String]] = plannedPartitionValues
+
   protected lazy val partitionInfos: util.List[PartitionInfo] = {
     val infos = admin.listPartitionInfos(tablePath).get()
     // Fail fast if any partition's bucket count differs from the table-level count.
@@ -149,6 +156,10 @@ abstract class AbstractSplitPlanner(
               s"${info.getBucketCount} but the table-level count is $tableBucketCount.")
         }
     }
+    plannedPartitionValues = infos.asScala.map {
+      info =>
+        info.getPartitionId -> info.getResolvedPartitionSpec.getPartitionValues.asScala.toVector
+    }.toMap
     infos
   }
 
