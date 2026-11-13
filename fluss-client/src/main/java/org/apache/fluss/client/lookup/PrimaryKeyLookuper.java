@@ -59,6 +59,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
     private final boolean insertIfNotExists;
+    private final boolean historicalPartitionFallbackEnabled;
 
     /**
      * Missing past partition names already routed to the historical system partition.
@@ -80,7 +81,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             LookupClient lookupClient,
-            boolean insertIfNotExists) {
+            boolean insertIfNotExists,
+            boolean historicalPartitionFallbackEnabled) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         checkArgument(
                 tableInfo.hasPrimaryKey(),
@@ -88,6 +90,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
         this.insertIfNotExists = insertIfNotExists;
+        this.historicalPartitionFallbackEnabled = historicalPartitionFallbackEnabled;
         this.confirmedHistoricalPartitions = new HashSet<>();
 
         // the row type of the input lookup row
@@ -165,7 +168,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
                 Collections.singleton(
                         PhysicalTablePath.of(tableInfo.getTablePath(), originalPartitionName)));
-        if (!tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
+        if (!historicalPartitionFallbackEnabled
+                || !tableInfo.getTableConfig().isHistoricalPartitionEnabled()) {
             return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
         }
         // A missing current or future partition may still be created by auto-partitioning. Do not

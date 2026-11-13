@@ -139,6 +139,7 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlussDatabase;
 public class FlinkCatalog extends AbstractCatalog {
 
     public static final String LAKE_TABLE_SPLITTER = "$lake";
+    public static final String STREAM_TABLE_SUFFIX = "$stream";
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
     public static final String BUCKETS_TABLE_SUFFIX = "$buckets";
@@ -455,7 +456,7 @@ public class FlinkCatalog extends AbstractCatalog {
             return getVirtualBucketsTable(objectPath);
         }
 
-        TablePath tablePath = toTablePath(objectPath);
+        TablePath tablePath = toPhysicalTablePath(objectPath);
         try {
             TableInfo tableInfo;
             // table name contains $lake, means to read from datalake
@@ -1000,13 +1001,11 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     /**
-     * Converts an {@link ObjectPath} to a physical {@link TablePath}, stripping any virtual table
-     * suffix ({@code $changelog}, {@code $binlog}, or {@code $buckets}) if present. This is needed
-     * because virtual tables are resolved from their base table.
+     * Resolves the physical {@link TablePath} for a virtual table or a {@code $stream} read of the
+     * base table.
      */
     private TablePath toPhysicalTablePath(ObjectPath objectPath) {
         String tableName = objectPath.getObjectName();
-        // Strip virtual table suffixes to get the base physical table name
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
             return TablePath.of(objectPath.getDatabaseName(), tableName);
         } else if (tableName.endsWith(CHANGELOG_TABLE_SUFFIX)) {
@@ -1016,6 +1015,8 @@ public class FlinkCatalog extends AbstractCatalog {
             tableName = tableName.substring(0, tableName.length() - BINLOG_TABLE_SUFFIX.length());
         } else if (tableName.endsWith(BUCKETS_TABLE_SUFFIX)) {
             tableName = tableName.substring(0, tableName.length() - BUCKETS_TABLE_SUFFIX.length());
+        } else if (tableName.endsWith(STREAM_TABLE_SUFFIX)) {
+            tableName = tableName.substring(0, tableName.length() - STREAM_TABLE_SUFFIX.length());
         }
         return TablePath.of(objectPath.getDatabaseName(), tableName);
     }
@@ -1023,6 +1024,11 @@ public class FlinkCatalog extends AbstractCatalog {
     /** Returns whether the given path refers to a read-only Fluss virtual table. */
     private static boolean isVirtualTable(ObjectPath objectPath) {
         return isVirtualTableName(objectPath.getObjectName());
+    }
+
+    /** Returns whether the name explicitly selects the Fluss side of a table. */
+    static boolean isStreamTableName(String tableName) {
+        return !tableName.contains(LAKE_TABLE_SPLITTER) && tableName.endsWith(STREAM_TABLE_SUFFIX);
     }
 
     static boolean isVirtualTableName(String tableName) {

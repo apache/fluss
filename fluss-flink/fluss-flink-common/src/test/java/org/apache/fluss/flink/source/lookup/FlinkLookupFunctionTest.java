@@ -33,7 +33,8 @@ import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Collector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -42,6 +43,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -51,9 +53,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class FlinkLookupFunctionTest extends FlinkTestBase {
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testSyncLookupEval(boolean schemaNotMatch) throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table-" + schemaNotMatch);
+    @MethodSource("lookupOptions")
+    void testSyncLookupEval(boolean schemaNotMatch, boolean historicalPartitionFallbackEnabled)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_DB,
+                        "sync-lookup-table-"
+                                + schemaNotMatch
+                                + "-"
+                                + historicalPartitionFallbackEnabled);
         prepareData(tablePath, 3, schemaNotMatch);
 
         RowType flinkRowType =
@@ -66,7 +75,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         // no projection when job compiling, new column added after that.
                         null,
-                        false);
+                        false,
+                        historicalPartitionFallbackEnabled);
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -90,9 +100,16 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {true, false})
-    void testAsyncLookupEval(boolean schemaNotMatch) throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "async-lookup-table-" + schemaNotMatch);
+    @MethodSource("lookupOptions")
+    void testAsyncLookupEval(boolean schemaNotMatch, boolean historicalPartitionFallbackEnabled)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_DB,
+                        "async-lookup-table-"
+                                + schemaNotMatch
+                                + "-"
+                                + historicalPartitionFallbackEnabled);
         int rows = 3;
         prepareData(tablePath, rows, schemaNotMatch);
 
@@ -106,7 +123,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         // no projection when job compiling, new column added after that.
                         null,
-                        false);
+                        false,
+                        historicalPartitionFallbackEnabled);
         asyncLookupFunction.open(null);
 
         int[] rowKeys = new int[] {0, 1, 2, 3, 4, 3, 0};
@@ -159,7 +177,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         new int[] {1, 0},
-                        false);
+                        false,
+                        true);
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -206,7 +225,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         null,
-                        false);
+                        false,
+                        true);
         collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
         lookupFunction.open(null);
@@ -221,6 +241,14 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         assertThat(result)
                 .containsExactly("+I(0,name0)", "+I(1,name1)", "+I(2,name2)", "+I(3,name3)");
         lookupFunction.close();
+    }
+
+    private static Stream<Arguments> lookupOptions() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(false, true),
+                Arguments.of(true, false),
+                Arguments.of(true, true));
     }
 
     private void prepareData(TablePath tablePath, int rows, boolean schemaNotMatch)

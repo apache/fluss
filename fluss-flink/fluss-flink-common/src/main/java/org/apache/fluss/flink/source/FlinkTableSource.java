@@ -149,7 +149,7 @@ public class FlinkTableSource
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final int splitPerAssignmentBatchSize;
-    private final boolean isDataLakeEnabled;
+    private final boolean lakeUnionReadEnabled;
     private final LeaseContext leaseContext;
 
     @Nullable private final MergeEngineType mergeEngineType;
@@ -187,138 +187,7 @@ public class FlinkTableSource
     /** Custom partitioner prepared for the current lookup runtime provider. */
     @Nullable private InputDataPartitionerAdapter lookupInputPartitioner;
 
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
-            long scanPartitionDiscoveryIntervalMs,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
-                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                scanPartitionDiscoveryIntervalMs,
-                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext);
-    }
-
-    /**
-     * Creates a table source with the legacy default bounded options.
-     *
-     * @deprecated Use the constructor that explicitly accepts bounded options.
-     */
-    @Deprecated
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
-                FlinkConnectorOptionsUtils.BoundedOptions.unbounded(),
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext);
-    }
-
-    public FlinkTableSource(
-            TablePath tablePath,
-            Configuration flussConfig,
-            TableConfig tableConfig,
-            org.apache.flink.table.types.logical.RowType tableOutputType,
-            int[] primaryKeyIndexes,
-            int[] bucketKeyIndexes,
-            int[] partitionKeyIndexes,
-            boolean streaming,
-            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
-            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
-            boolean lookupAsync,
-            boolean insertIfNotExists,
-            @Nullable LookupCache cache,
-            long scanPartitionDiscoveryIntervalMs,
-            int splitPerAssignmentBatchSize,
-            boolean isDataLakeEnabled,
-            @Nullable MergeEngineType mergeEngineType,
-            Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
-        this(
-                tablePath,
-                flussConfig,
-                tableConfig,
-                tableOutputType,
-                primaryKeyIndexes,
-                bucketKeyIndexes,
-                partitionKeyIndexes,
-                streaming,
-                startupOptions,
-                boundedOptions,
-                lookupAsync,
-                insertIfNotExists,
-                cache,
-                cache == null
-                        ? LookupOptions.LookupCacheType.NONE
-                        : LookupOptions.LookupCacheType.PARTIAL,
-                scanPartitionDiscoveryIntervalMs,
-                splitPerAssignmentBatchSize,
-                isDataLakeEnabled,
-                mergeEngineType,
-                tableOptions,
-                leaseContext);
-    }
-
+    /** Creates a source with optional lake union reads. */
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
@@ -336,7 +205,7 @@ public class FlinkTableSource
             LookupOptions.LookupCacheType lookupCacheType,
             long scanPartitionDiscoveryIntervalMs,
             int splitPerAssignmentBatchSize,
-            boolean isDataLakeEnabled,
+            boolean lakeUnionReadEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
@@ -358,13 +227,13 @@ public class FlinkTableSource
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
-        this.isDataLakeEnabled = isDataLakeEnabled;
+        this.lakeUnionReadEnabled = lakeUnionReadEnabled;
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         // A FULL lookup reads Fluss snapshots and logs, without requiring a lake reader plugin.
         // Defer creating the lake source until this instance is actually used for a full scan.
-        if (isDataLakeEnabled && lookupCacheType != LookupOptions.LookupCacheType.FULL) {
+        if (lakeUnionReadEnabled && lookupCacheType != LookupOptions.LookupCacheType.FULL) {
             this.lakeSource =
                     checkNotNull(
                             createLakeSource(tablePath, tableOptions),
@@ -394,7 +263,7 @@ public class FlinkTableSource
         this.lookupCacheType = source.lookupCacheType;
         this.scanPartitionDiscoveryIntervalMs = source.scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = source.splitPerAssignmentBatchSize;
-        this.isDataLakeEnabled = source.isDataLakeEnabled;
+        this.lakeUnionReadEnabled = source.lakeUnionReadEnabled;
         this.leaseContext = source.leaseContext;
         this.mergeEngineType = source.mergeEngineType;
         this.tableConfig = source.tableConfig;
@@ -493,7 +362,8 @@ public class FlinkTableSource
                                 flussConfig,
                                 tableOutputType,
                                 primaryKeyIndexes,
-                                projectedFields);
+                                projectedFields,
+                                lakeUnionReadEnabled);
             } else if (limit > 0) {
                 results =
                         PushdownUtils.limitScan(
@@ -537,7 +407,7 @@ public class FlinkTableSource
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
-                enableLakeSource = isDataLakeEnabled;
+                enableLakeSource = lakeUnionReadEnabled;
                 if (enableLakeSource) {
                     initializeLakeSource();
                 }
@@ -664,7 +534,7 @@ public class FlinkTableSource
                                 FlinkConnectorOptions.ScanStartupMode.FULL));
             }
         }
-        if (isDataLakeEnabled
+        if (lakeUnionReadEnabled
                 && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -716,7 +586,8 @@ public class FlinkTableSource
                             tableOutputType,
                             lookupNormalizer,
                             projectedFields,
-                            insertIfNotExists);
+                            insertIfNotExists,
+                            lakeUnionReadEnabled);
             if (cache != null) {
                 return PartialCachingAsyncLookupProvider.of(asyncLookupFunction, cache);
             } else {
@@ -730,7 +601,8 @@ public class FlinkTableSource
                             tableOutputType,
                             lookupNormalizer,
                             projectedFields,
-                            insertIfNotExists);
+                            insertIfNotExists,
+                            lakeUnionReadEnabled);
             if (cache != null) {
                 return PartialCachingLookupProvider.of(lookupFunction, cache);
             } else {
@@ -911,7 +783,7 @@ public class FlinkTableSource
             // Lake pushdown only contributes extra accepted filters; see
             // pushdownLakeFilters(...) for why remainingFilters must stay unchanged.
             pushdownLakeFilters(filters, acceptedFilters);
-        } else if (isDataLakeEnabled) {
+        } else if (lakeUnionReadEnabled) {
             // Projection and filters may be pushed before the planner chooses lookup versus scan.
             deferredLakeFilters = new ArrayList<>(filters);
         }
@@ -1022,7 +894,7 @@ public class FlinkTableSource
                 // The count pushdown feature is not supported when the data lake is enabled.
                 // Otherwise, it'll cause miss count data in lake. But In the future, we can push
                 // down count into lake.
-                || isDataLakeEnabled
+                || lakeUnionReadEnabled
                 || (hasPrimaryKey() && tableConfig.getKvTTL().isPresent())) {
             return false;
         }
@@ -1100,7 +972,7 @@ public class FlinkTableSource
     }
 
     private boolean lookupCoversAllData(GenericRowData lookupRow) {
-        if (!isDataLakeEnabled || !isPartitioned()) {
+        if (!lakeUnionReadEnabled || !isPartitioned()) {
             return true;
         }
         // TODO: drop this gate once FIP-28 lets the lookup path read expired partitions from the

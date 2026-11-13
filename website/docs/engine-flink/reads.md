@@ -259,6 +259,53 @@ LIMIT 100;
 
 `$changelog` is available for Primary Key Tables and Log Tables, while `$binlog` is available only for Primary Key Tables. See [Virtual Tables](/table-design/virtual-tables.md#flink-runtime-modes) for schemas, startup modes, and detailed bounded-read semantics.
 
+### Fluss-Only Reads
+
+Append `$stream` to explicitly select the Fluss side of a table, including when lake integration is
+enabled. This read suffix preserves the base table's schema, primary key, partition keys, column
+metadata, and all table options, including lake properties. It is also available for tables without
+lake integration and does not require a lake reader plugin.
+
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+
+SELECT * FROM orders;          -- Lake + Fluss union scan for a lake-enabled table
+SELECT * FROM `orders$stream`; -- Fluss-only scan
+```
+
+For Primary Key Tables, a full batch scan of `$stream` follows
+`client.scanner.kv.batch-strategy`, regardless of lake integration. The default `snapshot-merge`
+strategy merges a Fluss KV snapshot with subsequent changelog records and supports resuming from
+its checkpointed position. `$stream` selects the Fluss data side; it does not override the scan strategy.
+
+KV TTL cleanup does not emit changelog deletes. A `snapshot-merge` scan using a pre-cleanup snapshot
+can therefore still return rows removed from live KV state by compaction. To read live KV state,
+explicitly select `server-scan`:
+
+```sql title="Flink SQL"
+SELECT * FROM `orders$stream`
+/*+ OPTIONS('client.scanner.kv.batch-strategy' = 'server-scan') */;
+```
+
+This scan includes expired rows whose KV TTL cleanup is pending and excludes rows removed by
+compaction. Each bucket is read at the point its scanner is opened; scans cannot resume after a
+failure. See [Server-Side Scan of Primary Key Tables](#server-side-scan-of-primary-key-tables).
+A lake union scan can also return rows that a `server-scan` of `$stream` no longer contains.
+Full-primary-key equality and pushed-down `LIMIT` queries may use Fluss lookup or live scans,
+regardless of the batch scan strategy; use full scans like the example above to compare the reads.
+
+For Log Tables, `$stream` reads records still retained in the Fluss log. It does not recover records
+from lake snapshots. Flink streaming runtime is also supported: normal startup modes apply, and
+`full` on a Primary Key Table reads a Fluss KV snapshot followed by changelog records. TTL cleanup
+does not retract rows from a running streaming query. Unlike `$changelog` and `$binlog`, `$stream`
+adds no change-event columns.
+
+Normal projection and filter expressions are supported. For partitioned tables, scans cover the
+current regular Fluss partitions; expired partitions and the historical system partition are not
+included. Lookup joins are supported and return no match for missing Fluss partitions, without
+falling back to lake storage. Writes and `lookup.insert-if-not-exists` are rejected; perform DDL
+operations on the base table.
+
 ### Server-Side Scan of Primary Key Tables
 
 A bounded read of a primary-key table merges the latest kv snapshot with the changelog range that
@@ -268,9 +315,10 @@ the tablet server instead, which avoids downloading snapshot files and replaying
 This is intended for interactive queries over small primary-key tables — the kind of full scan that
 backs a dashboard of a few thousand rows. It is not a general replacement for the default strategy.
 
-The option applies only to primary-key tables that have no lake snapshot to read from. On a
-lake-enabled primary-key table with a lake snapshot, a bounded read performs the lake + Fluss-log
-union read and this option is not consulted.
+For base primary-key tables, the option applies only when there is no lake snapshot to read from.
+On a lake-enabled primary-key table with a lake snapshot, a bounded read performs the lake + Fluss-log
+union read and this option is not consulted. The `$stream` view follows this option for full
+primary-key batch scans even when a lake snapshot exists, because it reads only the Fluss data side.
 
 #### Example
 
@@ -305,7 +353,7 @@ every bounded reader of that table, including jobs written later by other users.
 
 #### Trade-offs
 
-Both strategies return the current state of the table. They differ in guarantees and cost:
+The strategies differ in TTL visibility (as described above), guarantees, and cost:
 
 | | `snapshot-merge` (default) | `server-scan` |
 |---|---|---|

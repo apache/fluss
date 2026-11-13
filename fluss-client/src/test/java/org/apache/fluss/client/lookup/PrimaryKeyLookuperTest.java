@@ -99,7 +99,8 @@ class PrimaryKeyLookuperTest {
                             new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
                             metadataUpdater,
                             lookupClient,
-                            false);
+                            false,
+                            true);
             ProjectedRow reusedLookupKey =
                     ProjectedRow.from(new int[] {0, 1})
                             .replaceRow(GenericRow.of(1, BinaryString.fromString(PARTITION_A)));
@@ -141,6 +142,54 @@ class PrimaryKeyLookuperTest {
     }
 
     @Test
+    void testDisabledHistoricalPartitionFallbackReturnsEmptyForDeletedPartition() throws Exception {
+        TableInfo tableInfo = createTableInfo();
+        ControllableLookupGateway gateway = new ControllableLookupGateway();
+        TestingMetadataUpdater metadataUpdater =
+                TestingMetadataUpdater.builder(Collections.singletonMap(TABLE_PATH, tableInfo))
+                        .withTabletServerGateway(NODE1.id(), gateway)
+                        .build();
+        metadataUpdater.updateCluster(createCluster());
+
+        LookupClient lookupClient = new LookupClient(new Configuration(), metadataUpdater);
+        try {
+            Lookuper lookuper =
+                    new TableLookup(
+                                    tableInfo,
+                                    new TestingSchemaGetter(
+                                            tableInfo.getSchemaId(), tableInfo.getSchema()),
+                                    metadataUpdater,
+                                    lookupClient)
+                            .disableHistoricalPartitionFallback()
+                            .createLookuper();
+            GenericRow lookupKey = GenericRow.of(1, BinaryString.fromString(PARTITION_A));
+            CompletableFuture<LookupResult> resultFuture = lookuper.lookup(lookupKey);
+            PendingLookup normalLookup = gateway.pollLookup();
+            assertThat(normalLookup).isNotNull();
+            assertThat(normalLookup.request.getBucketsReqAt(0).getPartitionId())
+                    .isEqualTo(ACTIVE_PARTITION_ID);
+            normalLookup.respondWithError(new PartitionNotExistException("Partition expired."));
+
+            assertThat(resultFuture.get(5, TimeUnit.SECONDS).getRowList()).isEmpty();
+            assertThat(gateway.pendingLookups).isEmpty();
+            assertThat(metadataUpdater.getPartitionId(PARTITION_A_PATH)).isEmpty();
+
+            CompletableFuture<LookupResult> activeResult =
+                    lookuper.lookup(GenericRow.of(2, BinaryString.fromString(PARTITION_B)));
+            PendingLookup activeLookup = gateway.pollLookup();
+            assertThat(activeLookup).isNotNull();
+            assertThat(activeLookup.request.getBucketsReqAt(0).getPartitionId())
+                    .isEqualTo(OTHER_ACTIVE_PARTITION_ID);
+            assertThat(activeLookup.request.getBucketsReqAt(0).hasOriginalPartitionName())
+                    .isFalse();
+            activeLookup.respondEmpty();
+            assertThat(activeResult.get(5, TimeUnit.SECONDS).getRowList()).isEmpty();
+        } finally {
+            lookupClient.close(Duration.ofSeconds(5));
+        }
+    }
+
+    @Test
     void testRescaledPartitionMissingBucketCountFailsWithIllegalStateException() throws Exception {
         // A rescaled table cannot safely route a partition whose actual bucket count is missing.
         // Preserve the async API while exposing a diagnostic IllegalStateException as the cause.
@@ -163,7 +212,8 @@ class PrimaryKeyLookuperTest {
                                     rescaledTableInfo.getSchemaId(), rescaledTableInfo.getSchema()),
                             metadataUpdater,
                             lookupClient,
-                            false);
+                            false,
+                            true);
             ProjectedRow lookupKey =
                     ProjectedRow.from(new int[] {0, 1})
                             .replaceRow(GenericRow.of(1, BinaryString.fromString(PARTITION_A)));
