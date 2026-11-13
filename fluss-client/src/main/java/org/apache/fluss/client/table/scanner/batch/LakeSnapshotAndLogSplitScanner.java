@@ -33,6 +33,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.KeyValueRow;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nullable;
 
@@ -197,17 +198,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
     @Override
     public void close() throws IOException {
-        try {
-            if (logScanner != null) {
-                logScanner.close();
-            }
-            if (lakeRecordIterators != null) {
-                for (CloseableIterator<LogRecord> iterator : lakeRecordIterators) {
-                    iterator.close();
-                }
-            }
-        } catch (Exception e) {
-            throw new IOException("Failed to close resources", e);
-        }
+        IOUtils.closeQuietly(logScanner);
+        IOUtils.closeAllQuietly(lakeRecordIterators);
     }
 }
