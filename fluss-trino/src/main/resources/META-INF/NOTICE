@@ -1,0 +1,9 @@
+fluss-trino-connector
+Copyright 2024-2026 The Apache Software Foundation
+
+This project includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This project bundles the following dependency under the Apache Software License 2.0 (http://www.apache.org/licenses/LICENSE-2.0.txt)
+
+- org.apache.datasketches:datasketches-java:9.0.0
