@@ -15,10 +15,9 @@ Fluss provides a pluggable authorization framework that uses Access Control List
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
 | authorizer.type    | String  | default       | Specifies the type of authorizer to be used for access control. This value corresponds to the identifier of the authorization plugin. The default value is `default`, which indicates the built-in authorizer implementation. Custom authorizers can be implemented by providing a matching plugin identifier. |
 
-
 ## Core Components of ACLs
 
-Fluss uses an Access Control List (ACL) mechanism to enforce fine-grained permissions on resources such as clusters, databases, and tables. This allows administrators to define who (principals) can perform what actions (operations) on which objects (resources).
+Fluss uses an Access Control List (ACL) mechanism to enforce fine-grained permissions on resources such as clusters, databases, tables, and consumer groups. This allows administrators to define who (principals) can perform what actions (operations) on which objects (resources).
 
 Fluss ACLs are defined in the general format:
 ```
@@ -28,23 +27,25 @@ Principal {P} is Allowed Operation {O} From Host {H} on any Resource {R}.
 ### Resource
 In Fluss, a Resource represents an object to which access control can be applied. **Resources are organized in a hierarchical structure**, enabling fine-grained permission management as well as permission inheritance from higher-level scopes (e.g., database-level permissions apply to all tables within that database).
 
-There are three main types of resources:
+There are four main types of resources:
 
 | Resource Type | Resource Name Format Example | Description                                                                                                             |
-|---------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| Cluster       | cluster                      | The cluster resource represents the entire Fluss cluster and is used for cluster-wide permissions.                      |
-| Database      | default_db                   | A database resource represents a specific database within the Fluss cluster and is used for database-level permissions. |
-| Table         | default_db.default_table     | A table resource represents a specific table within a database and is used for table-level permissions.                 |
+|---------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| Cluster       | cluster                    | The cluster resource represents the entire Fluss cluster and is used for cluster-wide permissions.                      |
+| Database      | default_db                 | A database resource represents a specific database within the Fluss cluster and is used for database-level permissions. |
+| Table         | default_db.default_table   | A table resource represents a specific table within a database and is used for table-level permissions.                 |
+| Group         | default_group              | A consumer group identified by its groupId. Group permissions are scoped to consumer groups and inherit from Cluster.   |
 
 This hierarchy follows this pattern:
 ```text
 Cluster
- └── Database
-     └── Table
+ ├── Database
+ │   └── Table
+ └── Group
 ```
 
 ### Operation
-In Fluss, an OperationType defines the type of action a principal (user or role) is attempting to perform on a resource (cluster, database, or table).
+In Fluss, an OperationType defines the type of action a principal (user or role) is attempting to perform on a resource (cluster, database, table, or consumer group).
 
 | Operation Type | Description |
 |----------------| --- |
@@ -109,8 +110,8 @@ Below is a summary of the currently public protocols and their relationship with
 | INIT_WRITER | WRITE | Table | The user is authorized if it has `WRITE` permission on one of the requested tables. |
 | CREATE_PARTITION | WRITE | Table | |
 | DROP_PARTITION | WRITE | Table | |
-| CREATE_ACLS | ALL | Target resource | Requires `ALL` on the resource whose ACLs are being created. For table ACLs, the minimum authorization granularity is the database. |
-| DROP_ACLS | ALL | Target resource | Requires `ALL` on each matched resource. For table ACLs, the minimum authorization granularity is the database. |
+| CREATE_ACLS | ALL | Target resource | Requires `ALL` on the target resource. For table ACLs, `ALL` is checked on the database. |
+| DROP_ACLS | ALL | Target resource | Requires `ALL` on each matched resource. For table ACLs, `ALL` is checked on the database. All applicable checks precede any changes. |
 | LIST_ACLS | DESCRIBE | Target resource | Only ACLs on resources the user can `DESCRIBE` are returned. |
 | DESCRIBE_CLUSTER_CONFIGS | DESCRIBE | Cluster | |
 | ALTER_CLUSTER_CONFIGS | ALTER | Cluster | |
@@ -122,6 +123,9 @@ Below is a summary of the currently public protocols and their relationship with
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
+| FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |
+| COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. |
+| GET_CONSUMER_OFFSETS | DESCRIBE | Group and source Tables | Requires `DESCRIBE` on the consumer group and every explicitly requested source table. `allOffsets` requests omit source tables the caller cannot describe. |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
 | DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
@@ -131,7 +135,7 @@ Below is a summary of the currently public protocols and their relationship with
 | GET_FILESYSTEM_SECURITY_TOKEN | None | None | Currently no ACL is enforced for this protocol. |
 
 ## ACL Operation
-Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using the Flink CALL statement. This allows administrators and users to dynamically control access permissions for principals (users or roles) on various resources such as clusters, databases, and tables.
+Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using the Flink CALL statement. This allows administrators and users to dynamically control access permissions for principals (users or roles) on clusters, databases, tables, and consumer groups.
 
 ### Add ACL
 The general syntax is:
@@ -157,7 +161,7 @@ CALL [catalog].sys.add_acl(
 
 | Parameter  | Required | Description |
 |------------|----------|-------------|
-| resource   | Yes      | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). |
+| resource   | Yes      | The resource to apply the ACL to. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. Use `database:*`, `table:*`, or `group:*` to grant the operation on every resource of that type. |
 | permission | Yes      | The permission to grant to the principal on the resource. Currently only `ALLOW` is supported. |
 | principal  | Yes      | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). |
 | operation  | Yes      | The operation to allow for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ALL`). `ANY` is only for filters and should not be used when adding ACLs. |
@@ -186,7 +190,7 @@ CALL [catalog].sys.drop_acl(
 ```
 | Parameter  | Required | Description |
 |------------|----------|-------------|
-| resource   | No       | The resource to match (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If not specified, it matches all resources (same as `ANY`). |
+| resource   | No       | The resource to match. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. If not specified, it matches all resources (same as `ANY`). |
 | permission | No       | The permission to match (e.g., `ALLOW`, `ANY`). If not specified, it matches all permissions (same as `ANY`). |
 | principal  | No       | The principal to match (e.g., `User:alice`, `Role:admin`). If not specified, it matches all principals (same as `ANY`). |
 | operation  | No       | The operation to match (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If not specified, it matches all operations (same as `ANY`). |
@@ -216,7 +220,7 @@ CALL [catalog].sys.list_acl(
 ```
 | Parameter  | Required | Description |
 |------------|----------|-------------|
-| resource   | No       | The resource to match (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If not specified, it matches all resources (same as `ANY`). |
+| resource   | No       | The resource to match. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. If not specified, it matches all resources (same as `ANY`). |
 | permission | No       | The permission to match (e.g., `ALLOW`, `ANY`). If not specified, it matches all permissions (same as `ANY`). |
 | principal  | No       | The principal to match (e.g., `User:alice`, `Role:admin`). If not specified, it matches all principals (same as `ANY`). |
 | operation  | No       | The operation to match (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If not specified, it matches all operations (same as `ANY`). |

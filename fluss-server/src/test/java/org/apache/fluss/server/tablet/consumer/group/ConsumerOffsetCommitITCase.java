@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -248,7 +249,7 @@ class ConsumerOffsetCommitITCase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                GROUP_ID,
+                                GroupId.of(GROUP_ID),
                                 sourceBucket.getTableId(),
                                 sourceBucket.getPartitionId(),
                                 sourceBucket.getBucket());
@@ -277,9 +278,9 @@ class ConsumerOffsetCommitITCase {
                     assertThat(bucket.getValuesCount()).isEqualTo(1);
                     assertThat(bucket.getValueAt(0).hasValues()).isTrue();
                     InternalRow row = decoder.decodeValue(bucket.getValueAt(0).getValues()).row;
-                    assertThat(row.getString(0).toString()).isEqualTo(GROUP_ID);
-                    assertThat(row.getInt(1))
+                    assertThat(row.getInt(0))
                             .isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+                    assertThat(row.getString(1).toString()).isEqualTo(GROUP_ID);
                     assertThat(row.getLong(2)).isEqualTo(sourceBucket.getTableId());
                     assertThat(row.getLong(3))
                             .isEqualTo(ConsumerOffsetSchema.NON_PARTITIONED_PARTITION_ID);

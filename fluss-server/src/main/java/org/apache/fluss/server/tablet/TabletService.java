@@ -28,6 +28,7 @@ import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -162,6 +163,7 @@ import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -812,18 +814,34 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
             FindConsumerGroupOwnerRequest request) {
-        return groupManager
-                .findOwner(request.getGroupId(), currentListenerName())
-                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
+        // Copy request/session values before returning: the request buffer is released after this
+        // method and the current session is bound to the RPC worker thread.
+        try {
+            final GroupId groupId = GroupId.of(request.getGroupId());
+            final String listenerName = currentListenerName();
+            if (authorizer != null) {
+                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+            }
+
+            return groupManager
+                    .findOwner(groupId, listenerName)
+                    .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
+        } catch (ApiException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        String groupId = request.getGroupId();
+        final GroupId groupId;
         final Replica offsetsReplica;
         final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
         try {
+            groupId = GroupId.of(request.getGroupId());
+            if (authorizer != null) {
+                authorizer.authorize(currentSession(), READ, Resource.group(groupId));
+            }
             offsetsReplica = groupManager.validateGroupId(groupId);
             offsets = decodeCommitConsumerOffsetsRequest(request);
         } catch (ApiException e) {
@@ -850,10 +868,61 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
-        return response;
+        final GroupId groupId;
+        final Replica offsetsReplica;
+        final List<TableBucket> requestedBuckets;
+        try {
+            groupId = GroupId.of(request.getGroupId());
+            if (authorizer != null) {
+                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+            }
+            offsetsReplica = groupManager.validateGroupId(groupId);
+            requestedBuckets = decodeGetConsumerOffsetsRequest(request);
+        } catch (ApiException e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+
+        if (requestedBuckets != null && requestedBuckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new GetConsumerOffsetsResponse());
+        }
+
+        // The session is bound to the RPC thread; authorize all requested sources before reading.
+        if (authorizer != null && requestedBuckets != null) {
+            requestedBuckets.stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(DESCRIBE, tableId));
+        }
+
+        return groupManager
+                .handleGetConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(
+                        offsets ->
+                                requestedBuckets == null
+                                        ? filterOffsetsByAuthorizedTables(offsets)
+                                        : offsets)
+                .thenApply(ServerRpcMessageUtils::makeGetConsumerOffsetsResponse);
+    }
+
+    /**
+     * Filters all-offset results to source tables the current caller can describe. Unauthorized
+     * tables are omitted rather than causing the whole request to fail, so callers with partial
+     * table visibility still receive their authorized offsets.
+     */
+    private Map<TableBucket, ConsumerOffsetAndMetadata> filterOffsetsByAuthorizedTables(
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        if (authorizer == null) {
+            return offsets;
+        }
+
+        Set<Long> authorizedTableIds = filterAuthorizedTables(offsets.keySet(), DESCRIBE);
+        Map<TableBucket, ConsumerOffsetAndMetadata> visibleOffsets = new HashMap<>();
+        for (Map.Entry<TableBucket, ConsumerOffsetAndMetadata> entry : offsets.entrySet()) {
+            if (authorizedTableIds.contains(entry.getKey().getTableId())) {
+                visibleOffsets.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return visibleOffsets;
     }
 
     @Override

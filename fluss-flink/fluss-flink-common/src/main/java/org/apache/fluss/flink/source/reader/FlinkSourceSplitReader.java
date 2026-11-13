@@ -43,6 +43,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -68,11 +70,14 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.function.BiPredicate;
 
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_FILTER_UNCHANGED_ROW_ENABLED;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -95,6 +100,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Map<TableBucket, String> subscribedBuckets;
 
     @Nullable private final int[] projectedFields;
+    @Nullable private final BiPredicate<InternalRow, InternalRow> projectedRowEquals;
 
     private final FlinkSourceReaderMetrics flinkSourceReaderMetrics;
     private final Gauge<Long> recordsLagMetric;
@@ -140,6 +146,14 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
+        this.projectedRowEquals =
+                org.apache.flink.configuration.Configuration.fromMap(flussConf.toMap())
+                                        .get(SCAN_FILTER_UNCHANGED_ROW_ENABLED)
+                                && projectedFields != null
+                                && projectedFields.length
+                                        < table.getTableInfo().getRowType().getFieldCount()
+                        ? ProjectedRowEquality.create(sourceOutputType)
+                        : null;
 
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
@@ -512,7 +526,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     finishedSplits.add(splitId);
                 }
             }
-            splitRecords.put(splitId, toRecordAndPos(bucketScanRecords.iterator()));
+            splitRecords.put(
+                    splitId, toRecordAndPos(bucketScanRecords, stoppingOffset, projectedRowEquals));
         }
         Iterator<TableBucket> buckets = tableScanBuckets.iterator();
         Iterator<String> splitIterator =
@@ -566,24 +581,39 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         }
     }
 
-    private CloseableIterator<RecordAndPos> toRecordAndPos(
-            Iterator<ScanRecord> recordAndPosIterator) {
+    @VisibleForTesting
+    static CloseableIterator<RecordAndPos> toRecordAndPos(
+            List<ScanRecord> records,
+            long stoppingOffset,
+            @Nullable BiPredicate<InternalRow, InternalRow> projectedRowEquals) {
+        ListIterator<ScanRecord> iterator = records.listIterator();
         return new CloseableIterator<RecordAndPos>() {
 
             @Override
             public boolean hasNext() {
-                return recordAndPosIterator.hasNext();
+                return iterator.hasNext();
             }
 
             @Override
             public RecordAndPos next() {
-                return new RecordAndPos(recordAndPosIterator.next());
+                ScanRecord record = iterator.next();
+                if (projectedRowEquals != null
+                        && record.getChangeType() == ChangeType.UPDATE_BEFORE
+                        && iterator.hasNext()) {
+                    ScanRecord next = records.get(iterator.nextIndex());
+                    if (next.getChangeType() == ChangeType.UPDATE_AFTER
+                            && next.logOffset() == record.logOffset() + 1
+                            && next.logOffset() < stoppingOffset
+                            && projectedRowEquals.test(record.getRow(), next.getRow())) {
+                        // One marker makes filtering the pair and checkpointing its offset atomic.
+                        return RecordAndPos.filteredUpdate(iterator.next());
+                    }
+                }
+                return new RecordAndPos(record);
             }
 
             @Override
-            public void close() {
-                // do nothing
-            }
+            public void close() {}
         };
     }
 

@@ -304,7 +304,7 @@ mod bucket_rescale_test {
             ack.await.expect("upsert ack");
         }
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .create_lookuper()
@@ -448,7 +448,7 @@ mod bucket_rescale_test {
                 new_bucket_num
             );
 
-            let mut lookuper = table
+            let lookuper = table
                 .new_lookup()
                 .expect("lookup")
                 .create_lookuper()
@@ -498,7 +498,7 @@ mod bucket_rescale_test {
             ack.await.expect("upsert ack");
         }
 
-        let mut lookuper = table
+        let lookuper = table
             .new_lookup()
             .expect("lookup")
             .lookup_by(vec!["a".to_string(), "c".to_string()])

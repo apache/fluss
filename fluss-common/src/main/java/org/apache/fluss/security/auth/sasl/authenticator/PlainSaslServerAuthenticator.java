@@ -18,6 +18,7 @@
 package org.apache.fluss.security.auth.sasl.authenticator;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -25,6 +26,7 @@ import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.security.auth.sasl.jaas.JaasContext;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.security.auth.sasl.jaas.SaslServerFactory;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 
 import org.slf4j.Logger;
@@ -34,7 +36,8 @@ import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
 import java.util.Locale;
-import java.util.Map;
+
+import static org.apache.fluss.config.ConfigBuilder.key;
 
 /** A connection-local SASL/PLAIN server authenticator. */
 @Internal
@@ -42,13 +45,13 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     private static final Logger LOG = LoggerFactory.getLogger(PlainSaslServerAuthenticator.class);
     private static final String SERVER_AUTHENTICATOR_PREFIX = "security.sasl.";
 
-    private final Map<String, String> configs;
+    private final Configuration configuration;
     private SaslServer saslServer;
     private LoginManager loginManager;
 
-    /** Creates an authenticator using a snapshot of the supplied configuration. */
+    /** Creates an authenticator that reads credentials and proxy grants when initialized. */
     public PlainSaslServerAuthenticator(Configuration configuration) {
-        this.configs = configuration.toMap();
+        this.configuration = configuration;
     }
 
     @Override
@@ -68,10 +71,9 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
             SaslServer newSaslServer =
                     SaslServerFactory.createSaslServer(
                             PlainSaslServer.PLAIN_MECHANISM,
-                            context.ipAddress(),
-                            configs,
-                            acquiredLoginManager,
-                            contextConfig.configurationEntries());
+                            contextConfig.configurationEntries(),
+                            PlainSaslProxyAuthorization.loadForListener(
+                                    configuration, context.listenerName()));
             loginManager = acquiredLoginManager;
             saslServer = newSaslServer;
         } catch (Exception e) {
@@ -128,21 +130,18 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
                                 + JaasContext.SASL_JAAS_CONFIG,
                         listenerName.toLowerCase(Locale.ROOT),
                         PlainSaslServer.PLAIN_MECHANISM.toLowerCase(Locale.ROOT));
-        String dynamicJaasConfig = configs.get(listenerMechanismKey);
+        String dynamicJaasConfig =
+                configuration.get(key(listenerMechanismKey).stringType().noDefaultValue());
         if (dynamicJaasConfig != null && !dynamicJaasConfig.isEmpty()) {
             return dynamicJaasConfig;
         }
 
-        String globalMechanismKey =
-                SERVER_AUTHENTICATOR_PREFIX
-                        + PlainSaslServer.PLAIN_MECHANISM.toLowerCase(Locale.ROOT)
-                        + "."
-                        + JaasContext.SASL_JAAS_CONFIG;
+        String globalMechanismKey = ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG.key();
         LOG.debug(
                 "No listener-mechanism JAAS config found for key: '{}'. Falling back to mechanism-level config: '{}'",
                 listenerMechanismKey,
                 globalMechanismKey);
-        dynamicJaasConfig = configs.get(globalMechanismKey);
+        dynamicJaasConfig = configuration.get(ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG);
         if (dynamicJaasConfig == null || dynamicJaasConfig.isEmpty()) {
             LOG.warn(
                     "No mechanism-level JAAS config found for key: '{}'. Falling back to JVM option: -D{}",

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.security.auth.sasl.jaas;
 
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
 import org.apache.fluss.security.auth.sasl.plain.PlainSaslServer;
 import org.apache.fluss.security.auth.sasl.plain.PlainServerCallbackHandler;
 
@@ -27,7 +28,6 @@ import javax.security.auth.Subject;
 import javax.security.auth.login.AppConfigurationEntry;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslClient;
-import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
 import java.security.PrivilegedActionException;
@@ -35,6 +35,8 @@ import java.security.PrivilegedExceptionAction;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -44,19 +46,16 @@ import java.util.Map;
 public class SaslServerFactory {
     private static final Logger LOG = LoggerFactory.getLogger(SaslServerFactory.class);
 
+    /** Creates a PLAIN server using the listener's proxy authorization policy. */
     public static SaslServer createSaslServer(
             String mechanism,
-            String hostName,
-            Map<String, ?> props,
-            LoginManager loginManager,
-            List<AppConfigurationEntry> configurationEntries)
-            throws SaslException {
-
+            List<AppConfigurationEntry> configurationEntries,
+            PlainSaslProxyAuthorization authorization) {
         if (!PlainSaslServer.PLAIN_MECHANISM.equals(mechanism)) {
             throw new IllegalArgumentException("Unsupported mechanism: " + mechanism);
         }
 
-        AuthenticateCallbackHandler callbackHandler = new PlainServerCallbackHandler();
+        AuthenticateCallbackHandler callbackHandler = new PlainServerCallbackHandler(authorization);
         callbackHandler.configure(mechanism, configurationEntries);
         // Kafka and Fluss register PLAIN providers with the same JVM provider name. Construct
         // Fluss's server directly so callback types do not depend on provider registration order.
@@ -73,6 +72,8 @@ public class SaslServerFactory {
                         () -> {
                             String[] mechs = {mechanism};
                             String serviceName = loginManager.serviceName();
+                            String authorizationId =
+                                    (String) props.get(CLIENT_SASL_AUTHORIZATION_ID.key());
                             LOG.debug(
                                     "Creating SaslClient: service={};mechs={}",
                                     serviceName,
@@ -80,7 +81,9 @@ public class SaslServerFactory {
 
                             return Sasl.createSaslClient(
                                     mechs,
-                                    null,
+                                    authorizationId == null || authorizationId.isEmpty()
+                                            ? null
+                                            : authorizationId,
                                     serviceName,
                                     hostAddress,
                                     props,

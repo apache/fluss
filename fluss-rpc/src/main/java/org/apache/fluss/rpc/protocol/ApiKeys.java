@@ -87,8 +87,12 @@ public enum ApiKeys {
     DROP_PARTITION(1037, 0, 0, PUBLIC),
     AUTHENTICATE(1038, 0, 0, PUBLIC),
     CREATE_ACLS(1039, 0, 0, PUBLIC),
-    LIST_ACLS(1040, 0, 0, PUBLIC),
-    DROP_ACLS(1041, 0, 0, PUBLIC),
+    // Version 1: returns GROUP ACLs. Version 0 omits them so older clients can decode the
+    // response without encountering the unknown GROUP resource type.
+    LIST_ACLS(1040, 0, 1, PUBLIC),
+    // Version 1: returns GROUP ACLs in matching results. Version 0 omits them so older
+    // clients can decode the response without encountering the unknown GROUP resource type.
+    DROP_ACLS(1041, 0, 1, PUBLIC),
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE),
     CONTROLLED_SHUTDOWN(1043, 0, 0, PRIVATE),
     // Version 1: supports modifying the table distribution's bucket count.

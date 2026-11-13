@@ -30,9 +30,11 @@ on:
     paths:
       - 'website/**'
 
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
 jobs:
   test-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: ./website

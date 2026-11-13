@@ -17,6 +17,7 @@
 
 package org.apache.fluss.security.acl;
 
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TablePath;
 
 import java.util.Objects;
@@ -40,7 +41,11 @@ public class Resource {
     }
 
     public static Resource of(String resourceType, String resourceName) {
-        return new Resource(ResourceType.fromName(resourceType), resourceName);
+        ResourceType type = ResourceType.fromName(resourceType);
+        if (type == ResourceType.GROUP) {
+            return groupResource(resourceName);
+        }
+        return new Resource(type, resourceName);
     }
 
     public ResourceType getType() {
@@ -82,11 +87,43 @@ public class Resource {
         return new Resource(ResourceType.DATABASE, databaseName);
     }
 
+    /** Returns the wildcard database resource. */
+    public static Resource databaseWildcard() {
+        return new Resource(ResourceType.DATABASE, WILDCARD_RESOURCE);
+    }
+
     public static Resource table(String databaseName, String tableName) {
         return new Resource(ResourceType.TABLE, databaseName + "." + tableName);
     }
 
     public static Resource table(TablePath tablePath) {
         return table(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    /** Returns the wildcard table resource. */
+    public static Resource tableWildcard() {
+        return new Resource(ResourceType.TABLE, WILDCARD_RESOURCE);
+    }
+
+    /** Returns a consumer-group resource for a concrete group ID. */
+    public static Resource group(GroupId groupId) {
+        return new Resource(ResourceType.GROUP, groupId.getGroupId());
+    }
+
+    /** Returns a consumer-group resource for a concrete group ID. */
+    public static Resource group(String groupId) {
+        return group(GroupId.of(groupId));
+    }
+
+    /** Returns the wildcard consumer-group resource. */
+    public static Resource groupWildcard() {
+        return new Resource(ResourceType.GROUP, WILDCARD_RESOURCE);
+    }
+
+    private static Resource groupResource(String resourceName) {
+        if (WILDCARD_RESOURCE.equals(resourceName)) {
+            return groupWildcard();
+        }
+        return group(GroupId.of(resourceName));
     }
 }

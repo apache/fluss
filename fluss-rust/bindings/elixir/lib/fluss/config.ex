@@ -130,6 +130,10 @@ defmodule Fluss.Config do
   def set_bootstrap_servers(%__MODULE__{} = config, servers) when is_binary(servers),
     do: %{config | bootstrap_servers: servers}
 
+  @doc """
+  Sets the connection establishment timeout in milliseconds, including TCP connect,
+  API negotiation and SASL authentication.
+  """
   @spec set_connect_timeout_ms(t(), non_neg_integer()) :: t()
   def set_connect_timeout_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | connect_timeout_ms: ms}
@@ -155,26 +159,38 @@ defmodule Fluss.Config do
   def set_lookup_max_inflight_requests(%__MODULE__{} = config, n) when is_non_neg_integer(n),
     do: %{config | lookup_max_inflight_requests: n}
 
+  @doc """
+  Sets the maximum number of times a lookup is resent after a retriable error. Waiting for a
+  bucket's leader is not a retry, so this does not bound how long a lookup waits for one: it is
+  not a lookup timeout.
+  """
   @spec set_lookup_max_retries(t(), non_neg_integer()) :: t()
   def set_lookup_max_retries(%__MODULE__{} = config, n) when is_non_neg_integer(n),
     do: %{config | lookup_max_retries: n}
 
+  @doc """
+  Sets the send queue capacity; new lookups wait when it is full. Each bucket also holds up to
+  this many lookups while waiting for a leader. Additional lookups for that bucket fail immediately
+  with a buffer exhaustion error. Defaults to `25600`.
+  """
   @spec set_lookup_queue_size(t(), non_neg_integer()) :: t()
   def set_lookup_queue_size(%__MODULE__{} = config, size) when is_non_neg_integer(size),
     do: %{config | lookup_queue_size: size}
 
   @doc """
   Sets the initial delay in milliseconds before a lookup that failed with a retriable error is
-  resent. The delay doubles per retry up to `lookup_retry_max_backoff_ms`, with +/-20% jitter.
-  `0` resends immediately. Defaults to `100`.
+  resent, doubling with each retry of that lookup. Also the initial delay before a bucket without a
+  known leader is refreshed again, doubling with each refresh of that bucket and shared by its
+  lookups. Delays grow up to `lookup_retry_max_backoff_ms`, with +/-20% jitter. `0` resends and
+  refreshes immediately. Defaults to `100`.
   """
   @spec set_lookup_retry_backoff_ms(t(), non_neg_integer()) :: t()
   def set_lookup_retry_backoff_ms(%__MODULE__{} = config, ms) when is_non_neg_integer(ms),
     do: %{config | lookup_retry_backoff_ms: ms}
 
   @doc """
-  Sets the cap in milliseconds for the exponentially growing lookup retry delay. The +/-20% jitter
-  applies after the cap, so a delay can reach 20% above it. Must not be below
+  Sets the cap in milliseconds for the exponentially growing delays of `lookup_retry_backoff_ms`.
+  The +/-20% jitter applies after the cap, so a delay can reach 20% above it. Must not be below
   `lookup_retry_backoff_ms`. Defaults to `1000`.
   """
   @spec set_lookup_retry_max_backoff_ms(t(), non_neg_integer()) :: t()

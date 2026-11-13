@@ -18,9 +18,13 @@
 package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -96,7 +100,8 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         offsetsTableBucket =
                 new TableBucket(
                         OFFSETS_TABLE_ID,
-                        new ConsumerOffsetSchema().bucketFor(GROUP_ID, TEST_ROUTING_BUCKET_COUNT));
+                        new ConsumerOffsetSchema()
+                                .bucketFor(GroupId.of(GROUP_ID), TEST_ROUTING_BUCKET_COUNT));
         // Keep ZooKeeper independent of the cache to detect synchronous owner lookups.
         zkClient.registerLeaderAndIsr(
                 offsetsTableBucket,
@@ -112,10 +117,33 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    void testInvalidGroupId() {
-        assertThatThrownBy(() -> groupManager.validateGroupId(null))
-                .isInstanceOf(InvalidConsumerGroupIdException.class);
-        assertThatThrownBy(() -> groupManager.validateGroupId(""))
+    void testValueDecoderReuseBySchemaGetter() {
+        SchemaGetter first = new TestingSchemaGetter(1, ConsumerOffsetSchema.getTableSchema());
+        SchemaGetter second = new TestingSchemaGetter(1, ConsumerOffsetSchema.getTableSchema());
+
+        ValueDecoder firstDecoder = groupManager.getValueDecoder(first);
+        assertThat(groupManager.getValueDecoder(first)).isSameAs(firstDecoder);
+
+        ValueDecoder secondDecoder = groupManager.getValueDecoder(second);
+        assertThat(secondDecoder).isNotSameAs(firstDecoder);
+        assertThat(groupManager.getValueDecoder(second)).isSameAs(secondDecoder);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(
+            strings = {
+                "",
+                "__internal",
+                "default.consumer",
+                "default/consumer",
+                "default:consumer",
+                "消费组",
+                "default-*",
+                "a*b"
+            })
+    void testInvalidGroupId(String groupId) {
+        assertThatThrownBy(() -> GroupId.of(groupId))
                 .isInstanceOf(InvalidConsumerGroupIdException.class);
     }
 
@@ -212,14 +240,14 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
 
     private void assertCommitResult(Errors expectedError) throws Exception {
         if (expectedError != Errors.NONE) {
-            assertThatThrownBy(() -> groupManager.validateGroupId(GROUP_ID))
+            assertThatThrownBy(() -> groupManager.validateGroupId(GroupId.of(GROUP_ID)))
                     .isInstanceOf(expectedError.exception().getClass());
             return;
         }
         CompletableFuture<Map<TableBucket, Errors>> result =
                 groupManager.handleCommitConsumerOffsets(
-                        GROUP_ID,
-                        groupManager.validateGroupId(GROUP_ID),
+                        GroupId.of(GROUP_ID),
+                        groupManager.validateGroupId(GroupId.of(GROUP_ID)),
                         Collections.singletonMap(
                                 SOURCE_BUCKET, new ConsumerOffsetAndMetadata(10L, "")));
         assertThat(result)

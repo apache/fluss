@@ -37,10 +37,14 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
@@ -51,6 +55,8 @@ import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.apache.flink.table.api.ValidationException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -66,6 +72,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_FILTER_UNCHANGED_ROW_ENABLED;
 import static org.apache.fluss.flink.source.testutils.RecordAndPosAssert.assertThatRecordAndPos;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -74,6 +81,196 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link FlinkSourceSplitReader}. */
 class FlinkSourceSplitReaderTest extends FlinkTestBase {
+
+    @Test
+    void testFilterUnchangedUpdates() {
+        List<ScanRecord> records =
+                Arrays.asList(
+                        new ScanRecord(0, 100, ChangeType.INSERT, row(1, "v1")),
+                        new ScanRecord(1, 100, ChangeType.UPDATE_BEFORE, row(1, "v1")),
+                        new ScanRecord(2, 100, ChangeType.UPDATE_AFTER, row(1, "v1")),
+                        new ScanRecord(3, 100, ChangeType.UPDATE_BEFORE, row(1, "v1")),
+                        new ScanRecord(4, 100, ChangeType.UPDATE_AFTER, row(1, null)),
+                        new ScanRecord(5, 100, ChangeType.DELETE, row(1, null)),
+                        new ScanRecord(6, 100, ChangeType.UPDATE_BEFORE, row(2, null)),
+                        new ScanRecord(7, 100, ChangeType.UPDATE_AFTER, row(2, null)));
+        List<RecordAndPos> actual = new ArrayList<>();
+        try (CloseableIterator<RecordAndPos> iterator =
+                FlinkSourceSplitReader.toRecordAndPos(
+                        records,
+                        Long.MAX_VALUE,
+                        ProjectedRowEquality.create(
+                                RowType.of(DataTypes.INT(), DataTypes.STRING())))) {
+            iterator.forEachRemaining(actual::add);
+        }
+        assertThat(actual)
+                .containsExactly(
+                        new RecordAndPos(records.get(0)),
+                        RecordAndPos.filteredUpdate(records.get(2)),
+                        new RecordAndPos(records.get(3)),
+                        new RecordAndPos(records.get(4)),
+                        new RecordAndPos(records.get(5)),
+                        RecordAndPos.filteredUpdate(records.get(7)));
+
+        actual.clear();
+        try (CloseableIterator<RecordAndPos> iterator =
+                FlinkSourceSplitReader.toRecordAndPos(records, Long.MAX_VALUE, null)) {
+            iterator.forEachRemaining(actual::add);
+        }
+        assertThat(actual).allMatch(record -> !record.skipEmission());
+        assertThat(actual).extracting(RecordAndPos::record).containsExactlyElementsOf(records);
+    }
+
+    @Test
+    void testDoNotFilterIncompleteUpdates() {
+        ScanRecord before = new ScanRecord(0, 100, ChangeType.UPDATE_BEFORE, row(1));
+        ScanRecord after = new ScanRecord(1, 100, ChangeType.UPDATE_AFTER, row(1));
+        ScanRecord nonConsecutiveAfter = new ScanRecord(2, 100, ChangeType.UPDATE_AFTER, row(1));
+        for (List<ScanRecord> records :
+                Arrays.asList(
+                        Collections.singletonList(before),
+                        Collections.singletonList(after),
+                        Arrays.asList(before, nonConsecutiveAfter))) {
+            List<RecordAndPos> actual = new ArrayList<>();
+            try (CloseableIterator<RecordAndPos> iterator =
+                    FlinkSourceSplitReader.toRecordAndPos(
+                            records,
+                            Long.MAX_VALUE,
+                            ProjectedRowEquality.create(RowType.of(DataTypes.INT())))) {
+                iterator.forEachRemaining(actual::add);
+            }
+            assertThat(actual).allMatch(record -> !record.skipEmission());
+            assertThat(actual).extracting(RecordAndPos::record).containsExactlyElementsOf(records);
+        }
+
+        TableBucket bucket = new TableBucket(1, 0);
+        FlinkRecordsWithSplitIds splitRecords =
+                new FlinkRecordsWithSplitIds(
+                        "split",
+                        bucket,
+                        FlinkSourceSplitReader.toRecordAndPos(
+                                Arrays.asList(before, after),
+                                1,
+                                ProjectedRowEquality.create(RowType.of(DataTypes.INT()))));
+        splitRecords.setTableBucketStoppingOffset(bucket, 1);
+        assertThat(splitRecords.nextSplit()).isEqualTo("split");
+        assertThat(splitRecords.nextRecordFromSplit()).isEqualTo(new RecordAndPos(before));
+        assertThat(splitRecords.nextRecordFromSplit()).isNull();
+        splitRecords.recycle();
+    }
+
+    @Test
+    void testFilterUnchangedNestedValues() {
+        RowType projectedType =
+                RowType.of(
+                        DataTypes.BYTES(),
+                        DataTypes.ARRAY(DataTypes.INT()),
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.BYTES()),
+                        RowType.of(DataTypes.INT(), DataTypes.INT()));
+        List<ScanRecord> records =
+                Arrays.asList(
+                        new ScanRecord(
+                                0,
+                                100,
+                                ChangeType.UPDATE_BEFORE,
+                                row(
+                                        new byte[] {1, 2},
+                                        new GenericArray(new int[] {3, 4}),
+                                        GenericMap.of(
+                                                BinaryString.fromString("key"), new byte[] {5}),
+                                        row(6, null))),
+                        new ScanRecord(
+                                1,
+                                100,
+                                ChangeType.UPDATE_AFTER,
+                                row(
+                                        new byte[] {1, 2},
+                                        new GenericArray(new int[] {3, 4}),
+                                        GenericMap.of(
+                                                BinaryString.fromString("key"), new byte[] {5}),
+                                        row(6, null))));
+        try (CloseableIterator<RecordAndPos> iterator =
+                FlinkSourceSplitReader.toRecordAndPos(
+                        records, Long.MAX_VALUE, ProjectedRowEquality.create(projectedType))) {
+            assertThat(iterator.next()).isEqualTo(RecordAndPos.filteredUpdate(records.get(1)));
+            assertThat(iterator.hasNext()).isFalse();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false, 0", "false, 2", "false, 3", "true, 0", "true, 2", "true, 3"})
+    void testFilterUnchangedUpdatesFromConfiguration(boolean enabled, int projectedColumnCount)
+            throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "configured_projected_updates");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .primaryKey("id")
+                        .build();
+        long tableId =
+                createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(1).build());
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(row(1, "v1", 10), row(1, "v1", 20), row(1, "v1", 20)),
+                false);
+        Configuration sourceConf = new Configuration(clientConf);
+        sourceConf.setBoolean(SCAN_FILTER_UNCHANGED_ROW_ENABLED.key(), enabled);
+        int[] projectedFields =
+                projectedColumnCount == 0
+                        ? null
+                        : Arrays.copyOf(new int[] {0, 1, 2}, projectedColumnCount);
+        RowType sourceOutputType =
+                projectedFields == null
+                        ? schema.getRowType()
+                        : schema.getRowType().project(projectedFields);
+        LogSplit split = new LogSplit(new TableBucket(tableId, 0), null, 0L, 5L);
+        List<RecordAndPos> actual = new ArrayList<>();
+        try (FlinkSourceSplitReader splitReader =
+                new FlinkSourceSplitReader(
+                        sourceConf,
+                        tablePath,
+                        sourceOutputType,
+                        projectedFields,
+                        null,
+                        null,
+                        createMockSourceReaderMetrics())) {
+            splitReader.handleSplitsChanges(new SplitsAddition<>(Collections.singletonList(split)));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
+                        try {
+                            while (records.nextSplit() != null) {
+                                RecordAndPos record;
+                                while ((record = records.nextRecordFromSplit()) != null) {
+                                    actual.add(record);
+                                }
+                            }
+                            assertThat(records.finishedSplits()).contains(split.splitId());
+                        } finally {
+                            records.recycle();
+                        }
+                    });
+        }
+        if (enabled && projectedColumnCount == 2) {
+            assertThat(actual)
+                    .extracting(RecordAndPos::skipEmission)
+                    .containsExactly(false, true, true);
+            assertThat(actual)
+                    .extracting(record -> record.record().logOffset())
+                    .containsExactly(0L, 2L, 4L);
+        } else {
+            assertThat(actual).hasSize(5).allMatch(record -> !record.skipEmission());
+            assertThat(actual)
+                    .extracting(record -> record.record().logOffset())
+                    .containsExactly(0L, 1L, 2L, 3L, 4L);
+        }
+    }
 
     @Test
     void testSanityCheck() throws Exception {

@@ -116,7 +116,11 @@ match writer.append(&row) {
 | `FlussError::StorageException`               | 26   | Transient storage error                   |
 | `FlussError::NotEnoughReplicasAfterAppendException` | 28 | Wrote to server but with low ISR size |
 | `FlussError::NotEnoughReplicasException`     | 29   | Low ISR size at write time                |
-| `FlussError::LeaderNotAvailableException`    | 44   | No leader available for partition         |
+| `FlussError::LeaderNotAvailableException`    | 44   | No leader available for bucket            |
+| `FlussError::NotCoordinatorLeaderException`  | 65   | Coordinator is not the leader             |
+| `FlussError::DiskWriteLocked`                | 70   | Data disk reached the write limit         |
+| `FlussError::StorageBackpressureException`   | 72   | KV storage engine backpressure            |
+| `FlussError::HistoricalPartitionThrottled`   | 73   | Too many historical partition requests    |
 
 All other `Error` variants (e.g. `RowConvertError`, `IllegalArgument`, `UnsupportedOperation`) always return `false` from `is_retriable()`.
 

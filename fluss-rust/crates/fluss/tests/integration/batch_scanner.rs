@@ -25,7 +25,7 @@ mod batch_scanner_test {
         TableBucket, TableDescriptor, TablePath,
     };
     use fluss::record::NO_COMMIT_TIMESTAMP;
-    use fluss::row::GenericRow;
+    use fluss::row::{DataGetters, GenericRow, InternalRow};
     use futures::TryStreamExt;
     use std::collections::HashMap;
 
@@ -351,6 +351,167 @@ mod batch_scanner_test {
         assert_eq!(names.value(1), "bob");
         assert!(ages.is_null(0));
         assert!(ages.is_null(1));
+    }
+
+    /// Rows upserted before `ADD COLUMN` keep the old schema id in their KV
+    /// value. Both lookup and the KV batch scanner must fetch that schema via
+    /// `KvValueDecoder::ensure_decoders` and project it onto the current one.
+    #[tokio::test]
+    async fn lookup_and_batch_scanner_read_old_schema_kv_rows_after_add_column() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("admin");
+
+        let table_path = TablePath::new("fluss", "test_kv_old_schema_add_column");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("name", DataTypes::string())
+                    .primary_key(vec!["id"])
+                    .unwrap()
+                    .build()
+                    .expect("schema"),
+            )
+            // Single bucket so one BatchScanner sees every row.
+            .distributed_by(Some(1), vec!["id".to_string()])
+            .build()
+            .expect("descriptor");
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_ready(&admin, &table_path).await;
+
+        // Upsert rows under the original schema.
+        let old_table = connection.get_table(&table_path).await.expect("table");
+        let old_schema_id = old_table.get_table_info().get_schema_id();
+        let writer = old_table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+        for (id, name) in [(1, "alice"), (2, "bob")] {
+            let mut row = GenericRow::new(2);
+            row.set_field(0, id);
+            row.set_field(1, name);
+            writer.upsert(&row).expect("upsert old-schema row");
+        }
+        writer.flush().await.expect("flush");
+
+        let age_type_json = serde_json::to_vec(
+            &DataTypes::int()
+                .serialize_json()
+                .expect("serialize INT type"),
+        )
+        .expect("serialize data type JSON");
+        admin
+            .alter_table(
+                &table_path,
+                false,
+                AlterTableChanges {
+                    add_columns: vec![AddColumn {
+                        column_name: "age".to_string(),
+                        data_type_json: age_type_json,
+                        comment: None,
+                        position: ColumnPositionType::Last,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("add age column");
+
+        let table = connection
+            .get_table(&table_path)
+            .await
+            .expect("updated table");
+        let table_info = table.get_table_info();
+        assert_ne!(
+            table_info.get_schema_id(),
+            old_schema_id,
+            "ADD COLUMN must bump the schema id"
+        );
+
+        // One more row under the new schema, so the scan mixes both schema ids.
+        let writer = table
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer");
+        let mut row = GenericRow::new(3);
+        row.set_field(0, 3);
+        row.set_field(1, "carol");
+        row.set_field(2, 30);
+        writer.upsert(&row).expect("upsert new-schema row");
+        writer.flush().await.expect("flush");
+
+        let lookuper = table
+            .new_lookup()
+            .expect("lookup")
+            .create_lookuper()
+            .expect("lookuper");
+        for (id, name, age) in [(1, "alice", None), (2, "bob", None), (3, "carol", Some(30))] {
+            let mut key = GenericRow::new(3);
+            key.set_field(0, id);
+            let result = lookuper.lookup(&key).await.expect("lookup");
+            let row = result
+                .get_single_row()
+                .expect("decode looked-up row")
+                .expect("row should exist");
+            assert_eq!(row.get_field_count(), 3, "projected onto current schema");
+            assert_eq!(row.get_int(0).unwrap(), id);
+            assert_eq!(row.get_string(1).unwrap(), name);
+            match age {
+                None => assert!(row.is_null_at(2).unwrap(), "id {id}: age must be null"),
+                Some(age) => assert_eq!(row.get_int(2).unwrap(), age),
+            }
+        }
+
+        let mut scanner = table
+            .new_scan()
+            .limit(10)
+            .expect("limit")
+            .create_bucket_batch_scanner(TableBucket::new(table_info.table_id, 0))
+            .expect("create batch scanner");
+        let scan_batch = scanner
+            .next_batch()
+            .await
+            .expect("scan mixed-schema rows")
+            .expect("batch");
+        let batch = scan_batch.batch();
+        assert_eq!(batch.num_columns(), 3);
+        assert_eq!(batch.schema().field(2).name(), "age");
+        let ids = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column");
+        let names = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name column");
+        let ages = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("age column");
+        let mut seen: Vec<(i32, String, Option<i32>)> = (0..batch.num_rows())
+            .map(|i| {
+                (
+                    ids.value(i),
+                    names.value(i).to_string(),
+                    (!ages.is_null(i)).then(|| ages.value(i)),
+                )
+            })
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                (1, "alice".to_string(), None),
+                (2, "bob".to_string(), None),
+                (3, "carol".to_string(), Some(30)),
+            ]
+        );
     }
 
     /// Limit scan on a primary-key table: decodes the value-record batch and

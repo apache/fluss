@@ -351,6 +351,56 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
+    void testImpersonationUsesTargetAcls() throws Exception {
+        String targetUser = "tenant_a_guest";
+        Configuration serviceConf = FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT");
+        serviceConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+        serviceConf.set(ConfigOptions.CLIENT_SASL_JAAS_USERNAME, "proxy");
+        serviceConf.set(ConfigOptions.CLIENT_SASL_JAAS_PASSWORD, "password3");
+        Configuration proxyConf = new Configuration(serviceConf);
+        proxyConf.set(ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID, targetUser);
+        FlussPrincipal targetPrincipal = new FlussPrincipal(targetUser, "User");
+        FlussPrincipal servicePrincipal = new FlussPrincipal("proxy", "User");
+        try (Connection serviceConn = ConnectionFactory.createConnection(serviceConf);
+                Admin serviceAdmin = serviceConn.getAdmin();
+                Connection proxyConn = ConnectionFactory.createConnection(proxyConf);
+                Admin proxyAdmin = proxyConn.getAdmin()) {
+            List<AclBinding> serviceAcls =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            servicePrincipal,
+                                            WILD_CARD_HOST,
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(serviceAcls).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(serviceAcls, true);
+            assertThat(serviceAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                    .isEqualTo(DATA1_TABLE_PATH_PK);
+            assertThatThrownBy(() -> proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get())
+                    .cause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "Principal " + targetPrincipal + " have no authorization");
+
+            List<AclBinding> aclBindings =
+                    Collections.singletonList(
+                            new AclBinding(
+                                    Resource.table(DATA1_TABLE_PATH_PK),
+                                    new AccessControlEntry(
+                                            targetPrincipal,
+                                            WILD_CARD_HOST,
+                                            OperationType.DESCRIBE,
+                                            PermissionType.ALLOW)));
+            rootAdmin.createAcls(aclBindings).all().get();
+            FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+            assertThat(proxyAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get().getTablePath())
+                    .isEqualTo(DATA1_TABLE_PATH_PK);
+        }
+    }
+
+    @Test
     void testListDatabases() throws ExecutionException, InterruptedException {
         assertThat(guestAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(Collections.emptyList());
@@ -1525,7 +1575,10 @@ public class FlussAuthorizationITCase {
                 "security.sasl.plain.jaas.config",
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+                        + "    user_guest=\"password2\" "
+                        + "    user_proxy=\"password3\";");
+        conf.setString(
+                "security.sasl.listener.name.client.plain.proxy-users", "proxy:tenant_a_guest");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;

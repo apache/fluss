@@ -1993,7 +1993,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication. "
+                            "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
@@ -2002,9 +2002,18 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication. "
+                            "The password to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_SASL_AUTHORIZATION_ID =
+            key("client.security.sasl.authorization-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user to act as with SASL/PLAIN. If unset or empty, the authenticated "
+                                    + "account is used. A different user requires a server-side grant "
+                                    + "in 'security.sasl.listener.name.<listener>.plain.proxy-users'.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table

@@ -30,8 +30,9 @@ extern "C" fn cleanup_on_exit() {
     SHARED_CLUSTER.stop();
 }
 
+// Linux hands out ephemeral ports, and Docker random host ports, from 32768 up.
 static CLUSTER_PORT: LazyLock<u16> =
-    LazyLock::new(|| 20_000 + (std::process::id() % 20_000) as u16);
+    LazyLock::new(|| 20_000 + (std::process::id() % 12_000) as u16);
 
 // Preparation needs lake-enabled metadata, but no host access to lake files.
 static SHARED_CLUSTER: LazyLock<FlussTestingCluster> = LazyLock::new(|| {
