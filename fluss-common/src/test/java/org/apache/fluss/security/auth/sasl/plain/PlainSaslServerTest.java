@@ -290,6 +290,8 @@ public class PlainSaslServerTest {
         "proxy, proxyPassword, Alice.smith, true,",
         "proxy, proxyPassword, Alice.smith, false, is not allowed to act as",
         "alice, alicePassword, bob, true, is not allowed to act as",
+        "proxy2, proxy2Password, carol, true,",
+        "proxy2, proxy2Password, alice, true, is not allowed to act as",
         "proxy, alicePassword, bob, true, Invalid username or password"
     })
     void testProxyGrant(
@@ -406,10 +408,10 @@ public class PlainSaslServerTest {
         configuration.setString(
                 ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG,
                 PlainLoginModule.class.getName()
-                        + " required user_proxy=\"proxyPassword\" user_alice=\"alicePassword\";");
-        configuration.set(
-                proxyUsersOption("CLIENT"),
-                Collections.singletonMap(PROXY, "alice;alice.smith;bob"));
+                        + " required user_proxy=\"proxyPassword\" user_proxy2=\"proxy2Password\""
+                        + " user_alice=\"alicePassword\";");
+        configuration.setString(
+                proxyUsersOption("CLIENT").key(), "proxy:alice;alice.smith;bob,proxy2:carol");
         return configuration;
     }
 
