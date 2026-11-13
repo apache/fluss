@@ -126,6 +126,9 @@ Below is a summary of the currently public protocols and their relationship with
 | FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |
 | COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. |
 | GET_CONSUMER_OFFSETS | DESCRIBE | Group and source Tables | Requires `DESCRIBE` on the consumer group and every explicitly requested source table. `allOffsets` requests do not perform table-level ACL checks yet. |
+| DELETE_CONSUMER_OFFSETS | DROP and READ | Group and live source Tables | Requires `DROP` on the consumer group and `READ` on every live source table. Deleted source tables rely on group-level authorization; missing buckets are successful no-ops. |
+| LIST_CONSUMER_GROUPS | DESCRIBE | Cluster | Lists consumer groups owned by the receiving tablet server. This is not a cluster-wide listing. |
+| DELETE_CONSUMER_GROUPS | DROP | Group | Deletes consumer-group metadata only; committed offsets are not removed. |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
 | DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
