@@ -46,6 +46,7 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -206,6 +207,40 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         // then, let's verify the logs
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionIdAndAppendRows);
+    }
+
+    @Test
+    void testWriteToDroppedPartitionWhenEnabledDynamicPartition() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_write_to_dropped_partition");
+        Schema schema = createPartitionedTable(tablePath, true);
+        admin.createPartition(tablePath, newPartitionSpec("c", "dropped"), false).get();
+        long droppedPartitionId = admin.listPartitionInfos(tablePath).get().get(0).getPartitionId();
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        upsertWriter.upsert(row(1, "a", "dropped")).get(10, TimeUnit.SECONDS);
+
+        admin.dropPartition(tablePath, newPartitionSpec("c", "dropped"), false).get();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThatThrownBy(
+                                        () ->
+                                                upsertWriter
+                                                        .upsert(row(2, "b", "dropped"))
+                                                        .get(10, TimeUnit.SECONDS))
+                                .cause()
+                                .isInstanceOf(PartitionNotExistException.class)
+                                .hasMessageContaining("idempotence"));
+
+        upsertWriter.upsert(row(3, "c", "dropped")).get(1, TimeUnit.MINUTES);
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos).hasSize(1);
+        assertThat(partitionInfos.get(0).getPartitionId()).isNotEqualTo(droppedPartitionId);
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThat(lookuper.lookup(row(1, "dropped")).get().getSingletonRow()).isNull();
+        assertThatRow(lookuper.lookup(row(3, "dropped")).get().getSingletonRow())
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(3, "c", "dropped"));
     }
 
     @Test

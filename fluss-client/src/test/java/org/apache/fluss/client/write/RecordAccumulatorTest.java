@@ -647,6 +647,44 @@ class RecordAccumulatorTest {
     }
 
     @Test
+    void testAbortBatchesCountsOnlyBatchesItAborts() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
+        CompletableFuture<Exception> drainedFuture = new CompletableFuture<>();
+        CompletableFuture<Exception> queuedFuture = new CompletableFuture<>();
+        try {
+            bucketAssigner.setBucketId(0);
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, error) -> drainedFuture.complete(error),
+                    cluster);
+            WriteBatch drained =
+                    accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
+                            .get(node1.id())
+                            .get(0)
+                            .writeBatch();
+            accum.append(
+                    createRecord(row),
+                    (bucket, offset, error) -> queuedFuture.complete(error),
+                    cluster);
+            // A response completes the drained batch before the Sender deallocates it.
+            drained.complete();
+
+            assertThat(
+                            accum.abortBatches(
+                                    DATA1_PHYSICAL_TABLE_PATH, new RuntimeException("aborted")))
+                    .isOne();
+            assertThat(drainedFuture.get()).isNull();
+            assertThat(queuedFuture.get()).hasMessage("aborted");
+            assertThat(accum.hasIncomplete()).isFalse();
+        } finally {
+            accum.close();
+            accum.abortAllBatches(new RuntimeException("test cleanup"));
+            accum.destroyResources();
+        }
+    }
+
+    @Test
     void testAwaitFlushComplete() throws Exception {
         IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
         RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);

@@ -151,7 +151,16 @@ Below are the configuration items related to Fluss cluster and automatic partiti
 
 **Dynamic partitioning** is a feature that is enabled by default on client, allowing the client to automatically create partitions based on the data being written to the table. This feature is especially valuable when the set of partitions is not known in advance, eliminating the need for manual partition creation. It is also particularly useful when working with multi-field partitions, as auto-partitioning currently only supports single-field partitioning creation.
 
-Please note that dynamically created partitions are subject to the `max.partition.num` limit, and each partition's bucket count is subject to the `max.bucket.num` limit configured on the Fluss cluster.
+Please note that dynamically created partitions are subject to the `max.partition.num` limit, and each partition's bucket count is subject to the `max.bucket.num` limit configured on the Fluss cluster. If the coordinator rejects creating a partition as invalid according to the table's current settings, e.g. because it falls outside the auto-partition retention, the writes to that partition fail with `InvalidPartitionException`. If creating it fails for any other reason, e.g. because of the `max.partition.num` limit, the writer fails along with all of its pending writes, including those to other partitions.
+
+For a table without [historical partition access](#historical-partition-access), writes that are still pending when their partition is dropped re-create the partition if dynamic partitioning is enabled, and are then sent to it. If another client re-creates the partition first, they are sent to that partition. They fail instead, without affecting writes to other partitions:
+
+- with `PartitionNotExistException` if dynamic partitioning is disabled and no other client has re-created the partition;
+- with `PartitionNotExistException` if any of them may already have been sent to the dropped partition, and either idempotence is enabled, the default, or the request is still in flight;
+- with `InvalidPartitionException` if the coordinator rejects re-creating the partition as invalid, as described above;
+- with `BucketRescaleException` if they don't fit the bucket count of the re-created partition, e.g. because `bucket.num` was changed after the dropped partition was created. Retrying them with the same writer uses the new bucket count.
+
+Writing them again creates the partition only if dynamic partitioning is enabled and the partition is valid.
 
 ### Client Options
 | Option                                            | Type    | Required | Default              | Description                                                                                                                                                                   |
