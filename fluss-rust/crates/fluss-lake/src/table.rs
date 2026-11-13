@@ -355,6 +355,7 @@ impl FlussLakeScan {
                     &context,
                     ranges.get(descriptor.table_bucket()).copied(),
                     &scope,
+                    self.lake_only,
                 )?;
                 crate::FlussLakeReadSplit::try_new(info.clone(), descriptor.clone(), keys.clone())
                     .map_err(|error| FlussLakeError::InvalidReadContext(error.to_string()))
