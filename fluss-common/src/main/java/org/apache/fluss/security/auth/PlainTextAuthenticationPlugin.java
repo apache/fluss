@@ -21,6 +21,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
+import java.util.Collections;
+
 /** Authentication Plugin for PLAINTEXT which not need to do authentication. */
 public class PlainTextAuthenticationPlugin
         implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
@@ -73,8 +75,8 @@ public class PlainTextAuthenticationPlugin
         }
 
         @Override
-        public FlussPrincipal createPrincipal() {
-            return FlussPrincipal.ANONYMOUS;
+        public Iterable<FlussPrincipal> createPrincipals() {
+            return Collections.singletonList(FlussPrincipal.ANONYMOUS);
         }
 
         @Override

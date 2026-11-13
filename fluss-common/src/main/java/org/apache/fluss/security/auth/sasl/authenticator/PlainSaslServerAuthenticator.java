@@ -33,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 
+import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
 
@@ -99,8 +100,9 @@ public final class PlainSaslServerAuthenticator implements ServerAuthenticator {
     }
 
     @Override
-    public FlussPrincipal createPrincipal() {
-        return new FlussPrincipal(saslServer.getAuthorizationID(), "User");
+    public Iterable<FlussPrincipal> createPrincipals() {
+        return Collections.singletonList(
+                new FlussPrincipal(saslServer.getAuthorizationID(), "User"));
     }
 
     @Override

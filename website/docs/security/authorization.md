@@ -63,10 +63,10 @@ Fluss implements a permission inheritance model, where certain operations imply 
 * `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER` each imply `DESCRIBE`.
 
 ### Fluss Principal
-The FlussPrincipal is a core concept in the Fluss security architecture. It represents the identity of an authenticated entity (such as a user or service) and serves as the central bridge between authentication and authorization. Once a client successfully authenticates via a supported mechanism (e.g., SASL/PLAIN, Kerberos), a FlussPrincipal is created to represent that client's identity.
-This principal is then used throughout the system for access control decisions, linking who the user is with what they are allowed to do.
+The FlussPrincipal is a core concept in the Fluss security architecture. It represents the identity of an authenticated entity (such as a user or service) and serves as the central bridge between authentication and authorization. Once a client successfully authenticates via a supported mechanism (e.g., SASL/PLAIN, Kerberos), one or more principals represent that client's identity.
+These principals are then used throughout the system for access control decisions, linking who the user is with what they are allowed to do.
 
-The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. By default, the simple authorizer uses "User" as the principal type, but custom authorizers can extend this to support role-based or group-based access control lists (ACLs).
+The principal type indicates the category of the principal (e. g., "User", "Group", "Role"), while the name identifies the specific entity within that category. An authenticated session has a collection of principals, such as a user and its groups or roles. The default authorizer grants access if any principal matches an applicable ACL or a configured superuser. Principal order does not affect authorization. The first principal identifies the client for logging, user metrics, and resource ownership.
 Example usage:
 * `new FlussPrincipal("admin", "User")` – A standard user principal.
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.
@@ -233,3 +233,7 @@ Steps to Implement a Custom Authorization Logic:
 2.  **Server-Side Plugin Installation**:
     Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin directory: `<FLUSS_HOME>/plugins/<custom_auth_plugin>/`. The server will automatically load the plugin at startup.
 3. **Configure the Desired Protocol**: Set  `org.apache.fluss.server.authorizer.AuthorizationPlugin.identifier` as the value of `authorizer.type` in the Fluss server configuration file.
+
+### Custom Authentication Plugins
+
+`ServerAuthenticator.createPrincipals()` returns an `Iterable<FlussPrincipal>` containing all authenticated principals. The iterable must be non-null and non-empty, with no null elements. An authenticator that previously implemented `createPrincipal()` must implement `createPrincipals()` instead; single-identity mechanisms can return `Collections.singletonList(principal)`. There is no separate method for group or role principals.

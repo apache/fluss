@@ -27,6 +27,7 @@ import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.security.auth.ServerAuthenticationPlugin;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 
+import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static org.apache.fluss.config.ConfigBuilder.key;
@@ -190,8 +191,11 @@ public class MutualAuthenticationPlugin
         }
 
         @Override
-        public FlussPrincipal createPrincipal() {
-            return FlussPrincipal.ANONYMOUS;
+        public Iterable<FlussPrincipal> createPrincipals() {
+            return Arrays.asList(
+                    FlussPrincipal.ANONYMOUS,
+                    new FlussPrincipal("data-engineers", "Group"),
+                    new FlussPrincipal("table-reader", "Role"));
         }
 
         @Override

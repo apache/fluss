@@ -207,6 +207,77 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testAuthorizationWithMultiplePrincipals() throws Exception {
+        Resource resource = Resource.table("database1", "table1");
+        FlussPrincipal matchingGroup = new FlussPrincipal("data-engineers", "GROUP");
+        Session session =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(
+                                new FlussPrincipal("alice", "USER"),
+                                new FlussPrincipal("fluss-readers", "GROUP"),
+                                matchingGroup));
+
+        AclBinding groupAcl =
+                new AclBinding(
+                        resource,
+                        new AccessControlEntry(
+                                matchingGroup, "192.168.1.1", READ, PermissionType.ALLOW));
+        authorizer.addAcls(createRootUserSession(), Collections.singletonList(groupAcl));
+
+        assertThat(authorizer.isAuthorized(session, READ, resource)).isTrue();
+        assertThat(authorizer.listAcls(session, AclBindingFilter.ANY)).containsExactly(groupAcl);
+        Session reversedSession =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(matchingGroup, new FlussPrincipal("alice", "USER")));
+        assertThat(authorizer.isAuthorized(reversedSession, READ, resource)).isTrue();
+        assertThat(authorizer.listAcls(reversedSession, AclBindingFilter.ANY))
+                .containsExactly(groupAcl);
+
+        Session unrelatedSession =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(
+                                new FlussPrincipal("alice", "USER"),
+                                new FlussPrincipal("data-engineers", "USER")));
+        assertThat(authorizer.isAuthorized(unrelatedSession, READ, resource)).isFalse();
+    }
+
+    @Test
+    void testAnyPrincipalCanGrantSuperUser() throws Exception {
+        Resource resource = Resource.database("database1");
+        Session session =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(
+                                new FlussPrincipal("alice", "USER"),
+                                new FlussPrincipal(ROOT_USER, "USER")));
+        authorizer.addAcls(
+                createRootUserSession(),
+                Collections.singletonList(createAclBinding(resource, "another-user", "*", READ)));
+
+        assertThat(authorizer.isAuthorized(session, READ, resource)).isTrue();
+        assertThat(authorizer.listAcls(session, AclBindingFilter.ANY)).hasSize(1);
+        Session reversedSession =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(
+                                new FlussPrincipal(ROOT_USER, "USER"),
+                                new FlussPrincipal("alice", "USER")));
+        assertThat(authorizer.isAuthorized(reversedSession, READ, resource)).isTrue();
+        assertThat(authorizer.listAcls(reversedSession, AclBindingFilter.ANY)).hasSize(1);
+
+        Session differentTypeSession =
+                createSession(
+                        "192.168.1.1",
+                        Arrays.asList(
+                                new FlussPrincipal("alice", "USER"),
+                                new FlussPrincipal(ROOT_USER, "GROUP")));
+        assertThat(authorizer.isAuthorized(differentTypeSession, READ, resource)).isFalse();
+    }
+
+    @Test
     void testAclModificationRequiresAllPermission() throws Exception {
         Resource resource = Resource.database("database1");
         Session alterSession = createSession("alter-user", "192.168.1.1");
@@ -828,12 +899,13 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String userType, String username, String host) throws Exception {
-        return new Session(
-                (byte) 1,
-                "FLUSS",
-                false,
-                InetAddress.getByName(host),
-                new FlussPrincipal(username, userType));
+        return createSession(
+                host, Collections.singletonList(new FlussPrincipal(username, userType)));
+    }
+
+    private Session createSession(String host, Iterable<FlussPrincipal> principals)
+            throws Exception {
+        return new Session((byte) 1, "FLUSS", false, InetAddress.getByName(host), principals);
     }
 
     private AclBinding createAclBinding(
