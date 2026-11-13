@@ -28,6 +28,7 @@ import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -61,7 +62,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
- * Looks up a primary key by scanning the latest Paimon snapshot with a limit of one row.
+ * Looks up a primary key by scanning the requested Paimon snapshot, or the latest snapshot when no
+ * snapshot ID is provided, with a limit of one row.
  *
  * <p>Each scan is restricted to the requested partition, bucket, and complete primary key. It does
  * not create local lookup files. Lookups use independent readers and encoders and may run in
@@ -119,7 +121,7 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
 
     @Override
     public void requestRefresh() {
-        // Each lookup already plans a fresh scan of the latest snapshot.
+        // Each lookup plans a fresh scan, so there are no cached data files to refresh.
     }
 
     @Override
@@ -161,8 +163,19 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
 
     private @Nullable byte[] scanLookup(FileStoreTable table, byte[] key, LookupContext context)
             throws Exception {
+        FileStoreTable scanTable = table;
+        Long lakeSnapshotId = context.lakeSnapshotId();
+        if (lakeSnapshotId != null) {
+            // Paimon propagates the table's snapshot and manifest caches to this copy.
+            scanTable =
+                    scanTable.copy(
+                            Collections.singletonMap(
+                                    CoreOptions.SCAN_SNAPSHOT_ID.key(),
+                                    String.valueOf(lakeSnapshotId)));
+        }
         ReadBuilder readBuilder =
-                table.newReadBuilder()
+                scanTable
+                        .newReadBuilder()
                         .withFilter(createKeyPredicates(table, key, context))
                         .withPartitionFilter(createPartitionPredicate(table, context))
                         .withReadType(
