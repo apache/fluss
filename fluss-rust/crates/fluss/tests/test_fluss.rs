@@ -23,6 +23,7 @@ mod integration {
     mod admin;
     mod batch_scanner;
     mod bucket_rescale;
+    mod consumer_offsets;
     mod fluss_cluster;
     mod kv_changelog;
     #[cfg(feature = "kv-snapshot")]

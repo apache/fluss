@@ -120,6 +120,14 @@ rustler::atoms! {
     storage_backpressure_exception,
     historical_partition_throttled,
     invalid_bucket_routing,
+    invalid_consumer_group_id,
+    consumer_group_owner_loading,
+    consumer_group_owner_not_available,
+    not_consumer_group_owner,
+    consumer_group_id_not_found,
+    consumer_offset_metadata_too_large,
+    invalid_request,
+
     client_error,
 }
 
@@ -251,6 +259,13 @@ fn api_error_atom(code: i32) -> Atom {
         FlussError::StorageBackpressureException => storage_backpressure_exception(),
         FlussError::HistoricalPartitionThrottled => historical_partition_throttled(),
         FlussError::InvalidBucketRouting => invalid_bucket_routing(),
+        FlussError::InvalidConsumerGroupId => invalid_consumer_group_id(),
+        FlussError::ConsumerGroupOwnerLoading => consumer_group_owner_loading(),
+        FlussError::ConsumerGroupOwnerNotAvailable => consumer_group_owner_not_available(),
+        FlussError::NotConsumerGroupOwner => not_consumer_group_owner(),
+        FlussError::ConsumerGroupIdNotFound => consumer_group_id_not_found(),
+        FlussError::ConsumerOffsetMetadataTooLarge => consumer_offset_metadata_too_large(),
+        FlussError::InvalidRequest => invalid_request(),
     }
 }
 
