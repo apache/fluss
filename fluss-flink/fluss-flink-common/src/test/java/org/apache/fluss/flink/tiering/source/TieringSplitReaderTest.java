@@ -33,11 +33,15 @@ import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
+import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
@@ -539,6 +543,72 @@ class TieringSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testArrowLogTableUsesRecordBatchWriteWhenFactorySupportsIt() throws Exception {
+        RecordBatchCountingLakeTieringFactory lakeTieringFactory =
+                new RecordBatchCountingLakeTieringFactory(true);
+        TablePath tablePath = TablePath.of("fluss", "tiering_arrow_log_table_batch_write");
+
+        tierLogTableAndVerifyRows(tablePath, lakeTieringFactory);
+
+        assertThat(lakeTieringFactory.writers).isNotEmpty();
+        assertThat(lakeTieringFactory.writers)
+                .allSatisfy(
+                        writer -> {
+                            assertThat(writer.writtenRows).isZero();
+                            assertThat(writer.writtenBatchRows).isPositive();
+                        });
+    }
+
+    @Test
+    void testArrowLogTableWritesRowsWhenFactoryDoesNotSupportRecordBatchWrite() throws Exception {
+        RecordBatchCountingLakeTieringFactory lakeTieringFactory =
+                new RecordBatchCountingLakeTieringFactory(false);
+        TablePath tablePath = TablePath.of("fluss", "tiering_arrow_log_table_row_write");
+
+        tierLogTableAndVerifyRows(tablePath, lakeTieringFactory);
+
+        assertThat(lakeTieringFactory.writers).isNotEmpty();
+        assertThat(lakeTieringFactory.writers)
+                .allSatisfy(
+                        writer -> {
+                            assertThat(writer.writtenRows).isPositive();
+                            assertThat(writer.writtenBatchRows).isZero();
+                        });
+    }
+
+    private void tierLogTableAndVerifyRows(
+            TablePath tablePath, TestingLakeTieringFactory lakeTieringFactory) throws Exception {
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(connection, lakeTieringFactory)) {
+            List<FlinkTieringSplit> splits = new ArrayList<>();
+            Map<TableBucket, Integer> expectedRowCount = new HashMap<>();
+            for (Map.Entry<TableBucket, List<InternalRow>> entry : rows.entrySet()) {
+                TableBucket tableBucket = entry.getKey();
+                int rowCount = entry.getValue().size();
+                splits.add(
+                        createLogSplit(
+                                tablePath,
+                                tableId,
+                                tableBucket.getBucket(),
+                                EARLIEST_OFFSET,
+                                rowCount));
+                expectedRowCount.put(tableBucket, rowCount);
+            }
+            tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(splits));
+            verifyTieringRows(
+                    tieringSplitReader,
+                    tableId,
+                    expectedRowCount,
+                    splits.stream().map(FlinkTieringSplit::splitId).collect(Collectors.toSet()));
+        }
+    }
+
     private TieringSplitReader<TestingWriteResult> createTieringReader(Connection connection) {
         final TieringMetrics tieringMetrics =
                 new TieringMetrics(
@@ -688,6 +758,59 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 throw new IOException("complete called without any written records");
             }
             return new TestingWriteResult(writtenRecords);
+        }
+
+        @Override
+        public void close() throws IOException {}
+    }
+
+    /**
+     * A {@link TestingLakeTieringFactory} whose writers accept both rows and Arrow record batches,
+     * and that declares record batch support as configured.
+     */
+    private static class RecordBatchCountingLakeTieringFactory extends TestingLakeTieringFactory {
+
+        private final boolean supportsRecordBatchWrite;
+        private final List<RecordBatchCountingLakeWriter> writers = new ArrayList<>();
+
+        private RecordBatchCountingLakeTieringFactory(boolean supportsRecordBatchWrite) {
+            this.supportsRecordBatchWrite = supportsRecordBatchWrite;
+        }
+
+        @Override
+        public boolean supportsRecordBatchWrite(TableInfo tableInfo) {
+            return supportsRecordBatchWrite;
+        }
+
+        @Override
+        public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
+                throws IOException {
+            RecordBatchCountingLakeWriter writer = new RecordBatchCountingLakeWriter();
+            writers.add(writer);
+            return writer;
+        }
+    }
+
+    private static class RecordBatchCountingLakeWriter
+            implements LakeWriter<TestingWriteResult>, SupportsRecordBatchWrite {
+
+        private int writtenRows;
+        private int writtenBatchRows;
+
+        @Override
+        public void write(LogRecord record) throws IOException {
+            writtenRows++;
+        }
+
+        @Override
+        public void write(RecordBatch recordBatch) throws IOException {
+            writtenBatchRows +=
+                    ((ArrowRecordBatch) recordBatch).getArrowBatchData().getRecordCount();
+        }
+
+        @Override
+        public TestingWriteResult complete() throws IOException {
+            return new TestingWriteResult(writtenRows + writtenBatchRows);
         }
 
         @Override
