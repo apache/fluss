@@ -44,7 +44,7 @@ public final class SaslAuthenticatorFactory {
                 PlainSaslServer.PLAIN_MECHANISM,
                 new AuthenticatorCreators(
                         configuration -> new SaslClientAuthenticator(configuration),
-                        configuration -> new PlainSaslServerAuthenticator(configuration)));
+                        PlainSaslServerAuthenticator::new));
         AUTHENTICATOR_CREATORS = Collections.unmodifiableMap(creators);
     }
 

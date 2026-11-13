@@ -63,6 +63,50 @@ import static org.assertj.core.api.Assertions.assertThat;
 class KafkaProtocolPluginITCase extends KafkaServerTestBase {
 
     @Test
+    void testFlussProxyGrantsWithKafkaEnabled() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.KAFKA_ENABLED, true);
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "FLUSS:SASL,KAFKA:SASL");
+        conf.set(
+                ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG,
+                Collections.singletonList("PLAIN"));
+        conf.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "gateway:gateway-secret");
+        conf.setString("security.sasl.listener.name.fluss.plain.proxy-users", "gateway:alice");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_USERNAME, "gateway");
+        conf.set(ConfigOptions.CLIENT_SASL_JAAS_PASSWORD, "gateway-secret");
+        conf.set(ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID, "alice");
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        try (NettyServer server =
+                        new NettyServer(
+                                conf,
+                                Arrays.asList(
+                                        new Endpoint("localhost", 0, "FLUSS"),
+                                        new Endpoint("localhost", 0, "KAFKA")),
+                                createTabletService(),
+                                metricGroup,
+                                RequestsMetrics.createTabletServerRequestMetrics(metricGroup));
+                NettyClient client =
+                        new NettyClient(conf, TestingClientMetricGroup.newInstance())) {
+            server.start();
+            assertThat(server.getBindEndpoints())
+                    .extracting(Endpoint::getListenerName)
+                    .containsExactlyInAnyOrder("FLUSS", "KAFKA");
+            Endpoint fluss =
+                    server.getBindEndpoints().stream()
+                            .filter(endpoint -> "FLUSS".equals(endpoint.getListenerName()))
+                            .findFirst()
+                            .get();
+            client.sendRequest(
+                            new ServerNode(
+                                    1, fluss.getHost(), fluss.getPort(), ServerType.TABLET_SERVER),
+                            ApiKeys.FETCH_LOG,
+                            new FetchLogRequest().setFollowerServerId(-1).setMaxBytes(1024))
+                    .get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void testFlussAndKafkaListenersShareRequestMetrics() throws Exception {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KAFKA_ENABLED, true);

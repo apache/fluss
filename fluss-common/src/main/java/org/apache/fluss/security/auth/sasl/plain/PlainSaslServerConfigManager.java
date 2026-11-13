@@ -82,7 +82,7 @@ public final class PlainSaslServerConfigManager implements ServerReconfigurable 
      * Creates a manager from the initial server configuration.
      *
      * @param configuration initial server configuration
-     * @throws ConfigException if the configured credential map is invalid
+     * @throws ConfigException if the configured credentials are invalid
      */
     public PlainSaslServerConfigManager(Configuration configuration) throws ConfigException {
         checkNotNull(configuration, "configuration must not be null");

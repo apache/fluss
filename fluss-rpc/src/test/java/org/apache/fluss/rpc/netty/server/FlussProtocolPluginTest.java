@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -28,6 +29,8 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertif
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -114,6 +117,29 @@ class FlussProtocolPluginTest {
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
                 .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "CLIENT, CLIENT:SASL, operator:alice; ;bob, Empty proxy target",
+        "CLIENT, CLIENT:PLAINTEXT, operator:alice, matching SASL listener",
+        "OTHER, 'OTHER:SASL,CLIENT:SASL', operator:alice, found 0",
+        "CLIENT, client:SASL, operator:alice, found 0",
+        "'CLIENT,client', 'CLIENT:SASL,client:SASL', operator:alice, found 2"
+    })
+    void testRejectInvalidProxyGrantsAtStartup(
+            String listeners, String protocols, String grants, String error) {
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), protocols);
+        String proxyUsersKey = "security.sasl.listener.name.client.plain.proxy-users";
+        configuration.setString(proxyUsersKey, grants);
+        FlussProtocolPlugin plugin =
+                new FlussProtocolPlugin(
+                        ServerType.COORDINATOR, Arrays.asList(listeners.split(",")));
+        assertThatThrownBy(() -> plugin.setup(configuration))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(error)
+                .hasMessageContaining(proxyUsersKey);
     }
 
     private static FlussProtocolPlugin tlsPlugin() {

@@ -29,10 +29,11 @@ This mechanism is based on SASL (Simple Authentication and Security Layer) authe
 ### SASL Server-Side Configuration
 | Option                                                         | Type   | Default Value | Description                                                                                                                           |
 |----------------------------------------------------------------|--------|---------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only support PLAIN(which involves authentication using a username and password) now. |
+| security.sasl.enabled.mechanisms                               | List   | (none)        | Comma-separated list of enabled SASL mechanisms. PLAIN is the supported mechanism. |
 | `security.sasl.listener.name.{listenerName}.plain.jaas.config` | String | (none)        | JAAS configuration for a specific listener and PLAIN mechanism.                                                                       |
 | `security.sasl.plain.jaas.config`                              | String | (none)        | Global JAAS configuration for all listeners using the PLAIN mechanism.                                                                |
 | `security.sasl.plain.credentials`                              | Map    | (none)        | Map of users in `username:password` format, e.g. `admin:admin-secret,bob:bob-secret`. Syntactic sugar that generates the PLAIN JAAS config, and can be updated without a restart. |
+| `security.sasl.listener.name.{listenerName}.plain.proxy-users` | Map    | (none)        | Proxy grants for a Fluss protocol listener using SASL/PLAIN, keyed by the authenticated username. Use the lowercase listener name in the option key. |
 
 
 ⚠️ The system tries to load JAAS configurations in the following order:
@@ -92,7 +93,8 @@ Clients must specify the appropriate security protocol and authentication mechan
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
-| client.security.sasl.username    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
+| client.security.sasl.authorization-id | String | (none) | The user to act as with SASL/PLAIN. Unset or empty uses the authenticated account; another user requires a server-side proxy grant. |
+| client.security.sasl.username    | String | (none)        | The username to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.password    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
 | client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
 
@@ -111,6 +113,34 @@ CREATE CATALOG fluss_catalog WITH (
 );
 ```
 
+
+## Impersonation
+
+A service can use SASL/PLAIN with its own credentials to act as another user. For example, configure the `CLIENT` listener to allow `gateway` to act as `alice` or `bob`:
+
+```yaml title="conf/server.yaml"
+security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
+security.sasl.enabled.mechanisms: PLAIN
+security.sasl.plain.credentials: admin:admin-pass,gateway:gateway-pass
+security.sasl.listener.name.client.plain.proxy-users: gateway:alice;bob
+authorizer.enabled: true
+super.users: User:admin
+```
+
+On the client, authenticate as the service account and set the SASL authorization identity:
+
+```properties
+client.security.protocol=SASL
+client.security.sasl.username=gateway
+client.security.sasl.password=gateway-pass
+client.security.sasl.authorization-id=alice
+```
+
+Fluss verifies the service account's password and the grant during the handshake. ACL checks use the target user for the lifetime of that connection. An unset or empty authorization identity uses the authenticated account. The target only needs a principal in Fluss ACLs.
+
+Separate target usernames with semicolons and service accounts with commas. The service account must match the authenticated username exactly. Target names and `super.users` entries follow the ACL principal case setting (`security.acl.principal.ignore-case`): exact by default, case-insensitive when enabled. An explicit wildcard grant (`gateway:*`) permits any target other than a super user. Grant it only to a service that authenticates its callers and derives the authorization ID from the authenticated identity.
+
+Grants apply only to the configured listener and are validated at server startup. Dynamic updates to `security.sasl.plain.credentials` affect authentication on new connections. Use TLS to protect the service account password in transit.
 
 ## Extending Authentication Methods (For Developers)
 

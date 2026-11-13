@@ -22,11 +22,14 @@ import org.apache.fluss.exception.AuthenticationException;
 import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.callback.NameCallback;
+import javax.security.auth.callback.UnsupportedCallbackException;
+import javax.security.sasl.AuthorizeCallback;
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
 import javax.security.sasl.SaslServerFactory;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -91,12 +94,24 @@ public class PlainSaslServer implements SaslServer {
             throw new AuthenticationException(
                     "Authentication failed: Invalid username or password");
         }
+        String authorizedId = username;
         if (!authorizationIdFromClient.isEmpty() && !authorizationIdFromClient.equals(username)) {
-            throw new AuthenticationException(
-                    "Authentication failed: Client requested an authorization id that is different from username");
+            AuthorizeCallback authorizeCallback =
+                    new AuthorizeCallback(username, authorizationIdFromClient);
+            try {
+                callbackHandler.handle(new Callback[] {authorizeCallback});
+            } catch (IOException | UnsupportedCallbackException e) {
+                throw new AuthenticationException(
+                        "Authentication failed: authorization could not be verified", e);
+            }
+            if (!authorizeCallback.isAuthorized()) {
+                throw new AuthenticationException(
+                        "Authentication failed: requested authorization id is not allowed");
+            }
+            authorizedId = authorizeCallback.getAuthorizedID();
         }
 
-        this.authorizationId = username;
+        this.authorizationId = authorizedId;
 
         complete = true;
         return new byte[0];
