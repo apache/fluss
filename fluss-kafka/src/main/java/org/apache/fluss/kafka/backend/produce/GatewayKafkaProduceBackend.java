@@ -121,13 +121,30 @@ public final class GatewayKafkaProduceBackend implements KafkaProduceBackend {
                         continue;
                     }
                     try {
+                        // The default-database alias maps two topic names to one bucket (t and
+                        // fluss.t). Keying by bucket would silently overwrite the first name's
+                        // records and leave its future uncompleted, so reject the later name
+                        // before authorizing or converting it.
+                        if (batch.results.putIfAbsent(bucket, result) != null) {
+                            result.complete(
+                                    new PartitionResult(
+                                            partition.partitionId(),
+                                            Errors.INVALID_REQUEST,
+                                            -1L,
+                                            "Topic name "
+                                                    + topic.topicName()
+                                                    + " resolves to a partition of "
+                                                    + path
+                                                    + " already written by another topic name"
+                                                    + " in this request."));
+                            continue;
+                        }
                         service.authorizeTable(WRITE, path);
                         EncodedRecords converted =
                                 transcoder.transcode(
                                         partition.partitionId(), partition.records(), tableInfo);
                         batch.convertedRecords.add(converted);
                         batch.entriesPerBucket.put(bucket, converted.records());
-                        batch.results.put(bucket, result);
                     } catch (Exception failure) {
                         result.complete(failedPartition(partition.partitionId(), failure));
                     }
