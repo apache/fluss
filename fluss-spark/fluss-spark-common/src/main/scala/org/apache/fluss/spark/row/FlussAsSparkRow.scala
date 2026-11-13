@@ -28,7 +28,7 @@ import org.apache.spark.sql.types.{DataType => SparkDataType, Decimal => SparkDe
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 
 /** Wraps a Fluss [[FlussInternalRow]] as a Spark [[SparkInteralRow]]. */
-class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow {
+class FlussAsSparkRow(rowType: RowType) extends SparkInteralRow with SparkRowGetters {
 
   val fieldCount: Int = rowType.getFieldCount
 
