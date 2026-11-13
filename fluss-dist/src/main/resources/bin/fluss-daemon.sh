@@ -129,7 +129,7 @@ case $STARTSTOP in
 
         # when jdk version is 17 or above, need to add following option to make arrow works
         # see https://arrow.apache.org/docs/dev/java/install.html#java-compatibility
-        if is_jdk_version_ge_17 "$JAVA_RUN" ; then
+        if is_jdk_version_ge "$JAVA_RUN" 17 ; then
             JVM_ARGS="${JVM_ARGS} --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
         fi
 
