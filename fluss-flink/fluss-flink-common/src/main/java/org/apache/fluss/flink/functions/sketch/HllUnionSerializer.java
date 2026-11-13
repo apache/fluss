@@ -31,7 +31,8 @@ public final class HllUnionSerializer extends TypeSerializerSingleton<Union> {
     public static final HllUnionSerializer INSTANCE = new HllUnionSerializer();
     private static final long serialVersionUID = 1L;
 
-    private HllUnionSerializer() {}
+    /** Public constructor for Flink's RAW data type inference. */
+    public HllUnionSerializer() {}
 
     @Override
     public boolean isImmutableType() {

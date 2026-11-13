@@ -25,7 +25,12 @@ import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
 
 /** Unions serialized HLL sketches from append-only inputs at lgK 12 or lower. */
-@FunctionHint(accumulator = @DataTypeHint(value = "RAW", bridgedTo = Union.class))
+@FunctionHint(
+        accumulator =
+                @DataTypeHint(
+                        value = "RAW",
+                        bridgedTo = Union.class,
+                        rawSerializer = HllUnionSerializer.class))
 public class HllMergeAggFunction extends AggregateFunction<byte[], Union> {
     /** Sketch updates cannot be retracted; only append-only inputs are supported. */
     public void retract(Union acc, byte[] value) {

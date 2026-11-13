@@ -25,7 +25,12 @@ import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
 
 /** Merges serialized KLL doubles sketches on append-only inputs. */
-@FunctionHint(accumulator = @DataTypeHint(value = "RAW", bridgedTo = KllDoublesSketch.class))
+@FunctionHint(
+        accumulator =
+                @DataTypeHint(
+                        value = "RAW",
+                        bridgedTo = KllDoublesSketch.class,
+                        rawSerializer = KllDoublesSerializer.class))
 public class KllDoubleMergeAggFunction extends AggregateFunction<byte[], KllDoublesSketch> {
     /** Sketch updates cannot be retracted; only append-only inputs are supported. */
     public void retract(KllDoublesSketch acc, byte[] value) {

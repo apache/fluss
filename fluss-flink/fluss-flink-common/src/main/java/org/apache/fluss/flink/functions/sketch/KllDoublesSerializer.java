@@ -31,7 +31,8 @@ public final class KllDoublesSerializer extends TypeSerializerSingleton<KllDoubl
     public static final KllDoublesSerializer INSTANCE = new KllDoublesSerializer();
     private static final long serialVersionUID = 1L;
 
-    private KllDoublesSerializer() {}
+    /** Public constructor for Flink's RAW data type inference. */
+    public KllDoublesSerializer() {}
 
     @Override
     public boolean isImmutableType() {

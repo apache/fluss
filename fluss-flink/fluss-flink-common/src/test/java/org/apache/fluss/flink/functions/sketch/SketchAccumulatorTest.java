@@ -25,17 +25,118 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
+import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.internal.TableEnvironmentInternal;
+import org.apache.flink.table.catalog.DataTypeFactory;
+import org.apache.flink.table.functions.AggregateFunction;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.inference.CallContext;
+import org.apache.flink.table.types.logical.RawType;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Covers accumulator restore/copy contracts, type metadata and append-only restrictions. */
 class SketchAccumulatorTest {
+    @Test
+    void testSqlAccumulatorSerializers() {
+        DataTypeFactory factory =
+                ((TableEnvironmentInternal)
+                                TableEnvironment.create(EnvironmentSettings.inBatchMode()))
+                        .getCatalogManager()
+                        .getDataTypeFactory();
+        for (AggregateFunction<?, ?> function :
+                Arrays.asList(
+                        new HllBuildAggFunction(),
+                        new HllMergeAggFunction(),
+                        new KllDoubleBuildAggFunction(),
+                        new KllDoubleMergeAggFunction())) {
+            CallContext context = new AccumulatorCallContext(factory, function);
+            DataType type =
+                    function.getTypeInference(factory)
+                            .getAccumulatorTypeStrategy()
+                            .get()
+                            .inferType(context)
+                            .get();
+            assertThat(((RawType<?>) type.getLogicalType()).getTypeSerializer())
+                    .isEqualTo(
+                            function instanceof HllBuildAggFunction
+                                            || function instanceof HllMergeAggFunction
+                                    ? HllUnionSerializer.INSTANCE
+                                    : KllDoublesSerializer.INSTANCE);
+        }
+    }
+
+    private static class AccumulatorCallContext implements CallContext {
+        private final DataTypeFactory factory;
+        private final AggregateFunction<?, ?> function;
+
+        private AccumulatorCallContext(DataTypeFactory factory, AggregateFunction<?, ?> function) {
+            this.factory = factory;
+            this.function = function;
+        }
+
+        @Override
+        public DataTypeFactory getDataTypeFactory() {
+            return factory;
+        }
+
+        @Override
+        public AggregateFunction<?, ?> getFunctionDefinition() {
+            return function;
+        }
+
+        @Override
+        public boolean isArgumentLiteral(int pos) {
+            return false;
+        }
+
+        @Override
+        public boolean isArgumentNull(int pos) {
+            return false;
+        }
+
+        @Override
+        public <T> Optional<T> getArgumentValue(int pos, Class<T> clazz) {
+            return Optional.empty();
+        }
+
+        @Override
+        public String getName() {
+            return function.getClass().getSimpleName();
+        }
+
+        @Override
+        public List<DataType> getArgumentDataTypes() {
+            if (function instanceof HllBuildAggFunction) {
+                return Collections.singletonList(DataTypes.BIGINT());
+            }
+            if (function instanceof KllDoubleBuildAggFunction) {
+                return Collections.singletonList(DataTypes.DOUBLE());
+            }
+            return Collections.singletonList(DataTypes.BYTES());
+        }
+
+        @Override
+        public Optional<DataType> getOutputDataType() {
+            return Optional.empty();
+        }
+
+        @Override
+        public boolean isGroupedAggregation() {
+            return false;
+        }
+    }
+
     @Test
     void testSerializerContracts() throws Exception {
         Union hll = new Union(12);

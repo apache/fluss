@@ -24,7 +24,12 @@ import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
 
 /** Builds serialized KLL doubles sketches from DOUBLE values on append-only inputs. */
-@FunctionHint(accumulator = @DataTypeHint(value = "RAW", bridgedTo = KllDoublesSketch.class))
+@FunctionHint(
+        accumulator =
+                @DataTypeHint(
+                        value = "RAW",
+                        bridgedTo = KllDoublesSketch.class,
+                        rawSerializer = KllDoublesSerializer.class))
 public class KllDoubleBuildAggFunction extends AggregateFunction<byte[], KllDoublesSketch> {
     /** Sketch updates cannot be retracted; only append-only inputs are supported. */
     public void retract(KllDoublesSketch acc, Double value) {
