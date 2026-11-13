@@ -18,21 +18,32 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the high watermark persistence. */
@@ -169,6 +180,86 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         replicaManager.shutdown();
         assertThat(highWatermarkFor(tb1)).isEqualTo(20L);
         assertThat(highWatermarkFor(tb2)).isEqualTo(10L);
+    }
+
+    /**
+     * Reproducer for https://github.com/apache/fluss/issues/5190: after a crash the local high
+     * watermark is only the last checkpoint, so a follower without a leader must not truncate its
+     * log to it, as it is the only replica left in ISR and will be elected leader again.
+     */
+    @Test
+    void testFollowerWithoutLeaderKeepsLogAboveCheckpointedHighWatermark() throws Exception {
+        // Only explicit checkpoints below, so the checkpoint content is deterministic.
+        conf.set(ConfigOptions.LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL, Duration.ofHours(1));
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        List<Integer> onlyReplica = Collections.singletonList(TABLET_SERVER_ID);
+        OffsetCheckpointFile checkpointFile =
+                new OffsetCheckpointFile(new File(tempDir, HIGH_WATERMARK_CHECKPOINT_FILE_NAME));
+
+        makeLogTableAsLeader(tb.getBucket());
+        // The checkpoint thread runs once right after the first notifyLeaderAndIsr; wait for it
+        // so that it cannot overwrite the stale checkpoint prepared below.
+        waitUntil(
+                () -> checkpointFile.read().containsKey(tb),
+                Duration.ofMinutes(1),
+                "initial high watermark checkpoint is not written");
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        replicaManager.checkpointHighWatermarks();
+        // These rows are acknowledged (ISR is only this server) but written after the checkpoint.
+        replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        assertThat(replica.getLogTablet().getHighWatermark()).isEqualTo(20L);
+        assertThat(checkpointFile.read().get(tb)).isEqualTo(10L);
+
+        // Simulate a crash and restart: a new ReplicaManager restores the high watermark from the
+        // stale checkpoint, as the old one never got to checkpoint on shutdown.
+        ReplicaManager crashedReplicaManager = replicaManager;
+        replicaManager = buildReplicaManager(testCoordinatorGateway);
+        replicaManager.startup();
+        try {
+            // The coordinator kept this server as the only ISR member with NO_LEADER, so the
+            // restarted replica first becomes a follower without a leader.
+            makeLeaderAndFollower(
+                    Collections.singletonList(
+                            new NotifyLeaderAndIsrData(
+                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                    tb,
+                                    onlyReplica,
+                                    new LeaderAndIsr(
+                                            LeaderAndIsr.NO_LEADER,
+                                            INITIAL_LEADER_EPOCH + 1,
+                                            onlyReplica,
+                                            Collections.emptyList(),
+                                            INITIAL_COORDINATOR_EPOCH,
+                                            INITIAL_BUCKET_EPOCH + 1),
+                                    TEST_ROUTING_BUCKET_COUNT,
+                                    0L)));
+            LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+            assertThat(logTablet.getHighWatermark()).isEqualTo(10L);
+            assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
+
+            // Then the same replica is elected leader and must still serve all acknowledged rows.
+            makeLeaderAndFollower(
+                    Collections.singletonList(
+                            new NotifyLeaderAndIsrData(
+                                    PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                    tb,
+                                    onlyReplica,
+                                    new LeaderAndIsr(
+                                            TABLET_SERVER_ID,
+                                            INITIAL_LEADER_EPOCH + 2,
+                                            onlyReplica,
+                                            Collections.emptyList(),
+                                            INITIAL_COORDINATOR_EPOCH,
+                                            INITIAL_BUCKET_EPOCH + 2),
+                                    TEST_ROUTING_BUCKET_COUNT,
+                                    0L)));
+            assertThat(logTablet.localLogEndOffset()).isEqualTo(20L);
+            assertThat(logTablet.getHighWatermark()).isEqualTo(20L);
+        } finally {
+            crashedReplicaManager.shutdown();
+        }
     }
 
     private long highWatermarkFor(TableBucket tableBucket) throws Exception {

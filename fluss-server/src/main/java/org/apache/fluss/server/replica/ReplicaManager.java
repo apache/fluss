@@ -1545,7 +1545,7 @@ public class ReplicaManager implements ServerReconfigurable {
      * <pre>
      *      1. Mark the replicas as followers so that no more data can be added from the producer clients.
      *      2. Stop fetchers for these replicas so that no more data can be added by the replica fetcher threads.
-     *      3. Truncate the log and checkpoint offsets for these replicas.
+     *      3. Truncate the log and checkpoint offsets for these replicas, except replicas without a leader, which have nothing to fetch from.
      *      4. Clear the delayed produce in the purgatory.
      *      5. If the server is not shutting down,add the fetcher to the new leaders.
      * </pre>
@@ -2471,6 +2471,18 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private void truncateToHighWatermark(List<Replica> replicas) {
         for (Replica replica : replicas) {
+            Integer leaderId = replica.getLeaderId();
+            if (leaderId != null && leaderId == LeaderAndIsr.NO_LEADER) {
+                // Without a leader there is nothing to fetch the truncated records back from, and
+                // after a crash the local high watermark is only the last checkpoint, so truncating
+                // could drop acknowledged records. This replica is kept in ISR as the last one and
+                // will be elected leader. It is truncated once it follows a real leader.
+                LOG.info(
+                        "Skip truncating follower replica {} of table bucket {} without leader.",
+                        serverId,
+                        replica.getTableBucket());
+                continue;
+            }
             long highWatermark = replica.getLogTablet().getHighWatermark();
             LOG.info(
                     "Truncating the logEndOffset for replica id {} of table bucket {} to local "
