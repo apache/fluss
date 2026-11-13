@@ -227,7 +227,13 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request);
 
-    /** Delete consumer groups and all of their committed offsets. */
+    /**
+     * Delete consumer-group metadata. Committed offsets are not removed by this request.
+     *
+     * <p>This is not a cluster-wide request. Callers must route each group to the tablet server
+     * that owns the group's consumer-offsets bucket; groups not owned by this server are reported
+     * with {@code NOT_CONSUMER_GROUP_OWNER}.
+     */
     @RPC(api = ApiKeys.DELETE_CONSUMER_GROUPS)
     CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
             DeleteConsumerGroupsRequest request);
