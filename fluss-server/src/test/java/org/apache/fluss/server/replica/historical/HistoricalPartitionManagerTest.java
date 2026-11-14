@@ -98,6 +98,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -109,6 +110,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -1072,6 +1075,74 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                     ChangeType.UPDATE_AFTER,
                                     new Object[] {1, "us", ORIGINAL_PARTITION, "v2"})),
                     schemaGetter(tableInfo));
+        }
+    }
+
+    @Test
+    void testShutdownCancelsLakeLookupWithoutDamagingWal() throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader();
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        CountDownLatch lookupStarted = new CountDownLatch(1);
+        CountDownLatch finishLookup = new CountDownLatch(1);
+        try {
+            long logEndOffset;
+            CompletableFuture<PutKvResultForBucket> request;
+            try (HistoricalPartitionManager manager =
+                    new HistoricalPartitionManager(
+                            new HistoricalPartitionTaskExecutor(lookupConfiguration(), executor),
+                            lakeLookupManager)) {
+                // Open the WAL first so a later interrupted write would damage the shared channel.
+                writeBatch(
+                        manager,
+                        replica,
+                        ORIGINAL_PARTITION,
+                        batch(
+                                tableInfo.getRowType(),
+                                upsert(2, "eu", ORIGINAL_PARTITION, "existing")));
+                logEndOffset = replica.getLogTablet().localLogEndOffset();
+                lakeLookupManager.setLookupHook(
+                        () -> {
+                            lookupStarted.countDown();
+                            try {
+                                finishLookup.await();
+                            } catch (InterruptedException e) {
+                                // Model a lookup that returns normally with the interrupt flag set.
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+
+                request =
+                        manager.putKv(
+                                replica,
+                                new PutKvDataForBucket(
+                                        TABLE_BUCKET,
+                                        batch(
+                                                tableInfo.getRowType(),
+                                                upsert(1, "us", ORIGINAL_PARTITION, "v1")),
+                                        ORIGINAL_PARTITION),
+                                null,
+                                MergeMode.DEFAULT,
+                                1);
+                assertThat(lookupStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            }
+
+            // Wait for actual termination: the old shutdown cancelled the request future
+            // before the interrupted task finished attempting its WAL write.
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            replica.getLogTablet().flush(true);
+            assertThat(request.get(10, TimeUnit.SECONDS).failed()).isTrue();
+            assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(logEndOffset);
+
+            logManager.shutdown();
+            logManager = null;
+            assertThat(new File(tempDir, ".fluss_cleanshutdown")).exists();
+        } finally {
+            finishLookup.countDown();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
         }
     }
 
