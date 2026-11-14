@@ -412,9 +412,21 @@ class TableDescriptorTest {
                         Arrays.deepToString(
                                 AggFunctionType.HLL_SKETCH.getSupportedDataTypeRoots()));
 
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.KLL_DOUBLE_SKETCH, params)
+                                        .validateDataType(DataTypes.DOUBLE()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of")
+                .hasMessageContaining(
+                        Arrays.deepToString(
+                                AggFunctionType.KLL_DOUBLE_SKETCH.getSupportedDataTypeRoots()));
+
         // valid case
         AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
         AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
         AggFunctions.of(AggFunctionType.HLL_SKETCH, params).validateDataType(DataTypes.BYTES());
+        AggFunctions.of(AggFunctionType.KLL_DOUBLE_SKETCH, params)
+                .validateDataType(DataTypes.BYTES());
     }
 }

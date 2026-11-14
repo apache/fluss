@@ -1075,6 +1075,73 @@ double estimatedDistinctCount = HllSketch.heapify(bytes).getEstimate();
 </TabItem>
 </Tabs>
 
+### kll_double_sketch
+
+Aggregates serialized Apache DataSketches KLL doubles sketch values by merge. This is useful for
+maintaining approximate percentile or quantile state, such as latency, transaction amount, or model
+feature distributions.
+
+- **Supported Data Types**: `BYTES`
+- **Behavior**: Merges incoming KLL doubles sketches with the accumulator and stores serialized sketch bytes
+- **Null Handling**: Null values are ignored
+
+**Example:**
+<Tabs>
+<TabItem value="flink-sql" label="Flink SQL" default>
+
+```sql
+CREATE TABLE daily_latency_metrics (
+    metric_day STRING,
+    latency_kll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.latency_kll.agg' = 'kll_double_sketch'
+);
+```
+
+:::note
+`kll_double_sketch` expects values to be serialized Apache DataSketches KLL doubles sketches. It
+does not build sketches from raw `DOUBLE` values by itself. Users should insert serialized sketch
+bytes, and Fluss merges those sketches internally when rows with the same primary key are updated.
+Spark `approx_percentile` returns percentile values, not serialized KLL sketch bytes, so it cannot
+feed this merge engine. Flink/Spark SQL helper functions for building sketches and reading quantiles
+can be added separately.
+:::
+
+</TabItem>
+<TabItem value="java-client" label="Java Client">
+
+```java
+Schema schema = Schema.newBuilder()
+    .column("metric_day", DataTypes.STRING())
+    .column("latency_kll", DataTypes.BYTES(), AggFunctions.KLL_DOUBLE_SKETCH())
+    .primaryKey("metric_day")
+    .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize KLL sketches using the Apache DataSketches library
+// KllDoublesSketch sketch1 = KllDoublesSketch.newHeapInstance();
+// sketch1.update(10.0);
+// sketch1.update(20.0);
+// byte[] bytes1 = sketch1.toByteArray();
+//
+// KllDoublesSketch sketch2 = KllDoublesSketch.newHeapInstance();
+// sketch2.update(30.0);
+// byte[] bytes2 = sketch2.toByteArray();
+
+// Input: (2026-05-16, kll{10.0,20.0}), (2026-05-16, kll{30.0})
+// Result: (2026-05-16, kll{10.0,20.0,30.0}) -- merge of the two sketches
+// To query percentiles, read the BYTES value and heapify it as a KllDoublesSketch.
+```
+
+</TabItem>
+</Tabs>
+
 ### bool_and
 
 Evaluates whether all boolean values in a set are true (logical AND).

@@ -35,3 +35,4 @@ org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldHllSketchAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldLastNAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldCollectAggFactory
 org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldMergeMapAggFactory
+org.apache.fluss.server.kv.rowmerger.aggregate.factory.FieldKllDoubleSketchAggFactory
