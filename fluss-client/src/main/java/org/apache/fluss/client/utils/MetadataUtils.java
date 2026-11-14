@@ -98,6 +98,29 @@ public class MetadataUtils {
             @Nullable Collection<PhysicalTablePath> tablePartitions,
             @Nullable Collection<Long> tablePartitionIds)
             throws ExecutionException, InterruptedException, TimeoutException {
+        return sendMetadataRequestAndRebuildCluster(
+                gateway,
+                partialUpdate,
+                originCluster,
+                tablePaths,
+                tablePartitions,
+                tablePartitionIds,
+                TimeUnit.SECONDS.toNanos(30));
+    }
+
+    /** Refreshes metadata within the remaining request budget. */
+    public static Cluster sendMetadataRequestAndRebuildCluster(
+            AdminReadOnlyGateway gateway,
+            boolean partialUpdate,
+            Cluster originCluster,
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> tablePartitions,
+            @Nullable Collection<Long> tablePartitionIds,
+            long timeoutNanos)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        if (timeoutNanos <= 0) {
+            throw new TimeoutException("Metadata request deadline exceeded.");
+        }
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(
                         tablePaths, tablePartitions, tablePartitionIds);
@@ -140,6 +163,35 @@ public class MetadataUtils {
                                 newBucketCountEpochByTableId =
                                         new HashMap<>(originCluster.getBucketCountEpochByTableId());
 
+                                // A reused name must not retain partitions from the old table.
+                                for (Map.Entry<TablePath, Long> update :
+                                        newTableMetadata.tablePathToTableId.entrySet()) {
+                                    TablePath path = update.getKey();
+                                    Long oldId = newTablePathToTableId.get(path);
+                                    if (oldId == null || oldId.equals(update.getValue())) {
+                                        continue;
+                                    }
+                                    newBucketLocations
+                                            .keySet()
+                                            .removeIf(p -> p.getTablePath().equals(path));
+                                    newPartitionIdByPath
+                                            .entrySet()
+                                            .removeIf(
+                                                    entry -> {
+                                                        if (entry.getKey()
+                                                                .getTablePath()
+                                                                .equals(path)) {
+                                                            newBucketCountByTableOrPartition.remove(
+                                                                    TableOrPartition.ofPartition(
+                                                                            entry.getValue()));
+                                                            return true;
+                                                        }
+                                                        return false;
+                                                    });
+                                    newBucketCountByTableOrPartition.remove(
+                                            TableOrPartition.ofTable(oldId));
+                                    newBucketCountEpochByTableId.remove(oldId);
+                                }
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
@@ -169,9 +221,7 @@ public class MetadataUtils {
                                     newBucketCountByTableOrPartition,
                                     newBucketCountEpochByTableId);
                         })
-                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
-        // RpcClient, it will let the get() block forever. So we
-        // time out here
+                .get(timeoutNanos, TimeUnit.NANOSECONDS);
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(
@@ -194,6 +244,11 @@ public class MetadataUtils {
                             new TablePath(
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
+                    if (cluster != null
+                            && cluster.getTableId(tablePath).orElse(tableId) > tableId) {
+                        throw new StaleMetadataException(
+                                "Received metadata for an old instance of table " + tablePath);
+                    }
                     newTablePathToTableId.put(tablePath, tableId);
                     newTablePathByTableId.put(tableId, tablePath);
 
@@ -271,10 +326,13 @@ public class MetadataUtils {
                     if (tablePath == null) {
                         tablePath =
                                 cluster == null ? null : cluster.getTablePath(tableId).orElse(null);
-                    }
-                    if (tablePath == null) {
-                        throw new StaleMetadataException(
-                                "Parent table metadata is unavailable for " + tableId);
+                        if (tablePath == null
+                                || newTablePathToTableId.getOrDefault(tablePath, tableId)
+                                        != tableId) {
+                            throw new StaleMetadataException(
+                                    "Partition metadata refers to an unknown or replaced table: "
+                                            + tableId);
+                        }
                     }
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());

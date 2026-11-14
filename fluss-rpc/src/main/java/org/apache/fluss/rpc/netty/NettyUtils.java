@@ -32,6 +32,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.unix.Errors;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 /** Utils of netty. */
 public class NettyUtils {
@@ -70,10 +71,19 @@ public class NettyUtils {
         }
     }
 
+    /**
+     * Shuts down the given event loop group without a quiet period, closing all of its channels.
+     *
+     * <p>Netty's default 2 second quiet period keeps accepting tasks that other threads submit
+     * after the shutdown started, and delays every shutdown by at least 2 seconds. Without it, the
+     * group terminates as soon as its pending tasks have run, and later submissions are rejected
+     * with a {@link java.util.concurrent.RejectedExecutionException}. Callers must therefore only
+     * shut down a group once nothing submits work to it anymore, or tolerate the rejection.
+     */
     public static CompletableFuture<Void> shutdownGroup(EventLoopGroup group) {
         CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
         if (group != null) {
-            group.shutdownGracefully()
+            group.shutdownGracefully(0, 10, TimeUnit.SECONDS)
                     .addListener(
                             finished -> {
                                 if (finished.isSuccess()) {
