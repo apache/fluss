@@ -53,6 +53,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.RebalanceTaskZNodeData;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -1916,6 +1917,39 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<RebalanceTask> getRebalanceTask() throws Exception {
         String path = RebalanceZNode.path();
         return getOrEmpty(path).map(RebalanceZNode::decode);
+    }
+
+    /** Gets the rebalance znode data together with the ZK version captured by the same read. */
+    public Optional<VersionedData<RebalanceTaskZNodeData>> getRebalanceTaskDataWithVersion()
+            throws Exception {
+        Stat stat = new Stat();
+        Optional<byte[]> bytes = getDataWithStat(RebalanceZNode.path(), stat);
+        return bytes.map(RebalanceZNode::decodeData)
+                .map(data -> new VersionedData<>(data, stat.getVersion()));
+    }
+
+    /**
+     * Creates or updates the rebalance znode using both coordinator-epoch fencing and znode CAS.
+     */
+    public void upsertRebalanceTaskData(
+            RebalanceTaskZNodeData data,
+            int expectedRebalanceZkVersion,
+            int expectedCoordinatorEpochZkVersion)
+            throws Exception {
+        String path = RebalanceZNode.path();
+        byte[] encoded = RebalanceZNode.encode(data);
+        if (expectedRebalanceZkVersion == ZkVersion.UNKNOWN_VERSION.getVersion()) {
+            createRecursiveWithEpochCheck(path, encoded, expectedCoordinatorEpochZkVersion, true);
+            return;
+        }
+        CuratorOp operation =
+                zkClient.transactionOp()
+                        .setData()
+                        .withVersion(expectedRebalanceZkVersion)
+                        .forPath(path, encoded);
+        zkClient.transaction()
+                .forOperations(
+                        wrapRequestWithEpochCheck(operation, expectedCoordinatorEpochZkVersion));
     }
 
     /** Deletes the rebalance task from ZooKeeper. Only for testing propose now */

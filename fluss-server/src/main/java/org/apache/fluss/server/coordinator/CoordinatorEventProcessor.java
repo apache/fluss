@@ -60,7 +60,6 @@ import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
-import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -93,6 +92,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalancePersistenceCompleteEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
@@ -237,7 +237,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
         this.rebalanceManager =
                 new RebalanceManager(
-                        this, zooKeeperClient, coordinatorEventManager, clock, conf, scheduler);
+                        this,
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        clock,
+                        conf,
+                        scheduler,
+                        ioExecutor);
         CoordinatorRequestBatch replicaRequestBatch =
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager,
@@ -363,7 +369,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         rebalanceManager.startup();
     }
 
+    /** Starts loading the persisted rebalance task without blocking coordinator startup. */
+    public void startRebalanceRecovery() {
+        rebalanceManager.startRecovery();
+    }
+
     public void shutdown() {
+        rebalanceManager.stopRecovery();
         clearOfflineLeaderRetryTask();
         // Cancel periodic event producers before stopping the event loop.
         rebalanceManager.stopTimeoutChecker();
@@ -809,27 +821,36 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     () -> processRemoveServerTagByRack(removeServerTagByRackEvent));
         } else if (event instanceof RebalanceEvent) {
             RebalanceEvent rebalanceEvent = (RebalanceEvent) event;
-            completeFromCallable(
-                    rebalanceEvent.getRespCallback(), () -> processRebalance(rebalanceEvent));
+            try {
+                processRebalance(rebalanceEvent);
+            } catch (Throwable t) {
+                rebalanceEvent.getRespCallback().completeExceptionally(t);
+            }
         } else if (event instanceof RecoverRebalanceEvent) {
             RebalanceTask rebalanceTask = ((RecoverRebalanceEvent) event).getRebalanceTask();
             assignmentPersistenceByBucket.clear();
-            rebalanceManager.recoverRebalance(rebalanceTask);
+            boolean recovered = rebalanceManager.recoverRebalance(rebalanceTask);
             // The coordinator context was rebuilt from ZooKeeper before recovery was submitted,
             // so its current assignments are already confirmed without another per-bucket read.
-            for (TableBucket tableBucket : rebalanceTask.getExecutePlan().keySet()) {
-                if (rebalanceManager.getRebalancePlanForBucket(tableBucket) != null
-                        && !coordinatorContext.getAssignment(tableBucket).isEmpty()) {
-                    assignmentPersistenceByBucket.put(
-                            tableBucket,
-                            new ArrayList<>(coordinatorContext.getAssignment(tableBucket)));
+            if (recovered) {
+                for (TableBucket tableBucket : rebalanceTask.getExecutePlan().keySet()) {
+                    if (rebalanceManager.getRebalancePlanForBucket(tableBucket) != null
+                            && !coordinatorContext.getAssignment(tableBucket).isEmpty()) {
+                        assignmentPersistenceByBucket.put(
+                                tableBucket,
+                                new ArrayList<>(coordinatorContext.getAssignment(tableBucket)));
+                    }
                 }
             }
         } else if (event instanceof CancelRebalanceEvent) {
             CancelRebalanceEvent cancelRebalanceEvent = (CancelRebalanceEvent) event;
-            completeFromCallable(
-                    cancelRebalanceEvent.getRespCallback(),
-                    () -> processCancelRebalance(cancelRebalanceEvent));
+            try {
+                processCancelRebalance(cancelRebalanceEvent);
+            } catch (Throwable t) {
+                cancelRebalanceEvent.getRespCallback().completeExceptionally(t);
+            }
+        } else if (event instanceof RebalancePersistenceCompleteEvent) {
+            ((RebalancePersistenceCompleteEvent) event).complete();
         } else if (event instanceof CheckRebalanceTimeoutEvent) {
             rebalanceManager.checkTimeout();
         } else if (event instanceof ReconcileRebalanceTaskEvent) {
@@ -1686,7 +1707,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 coordinatorContext.getServerTags());
     }
 
-    private RebalanceResponse processRebalance(RebalanceEvent rebalanceEvent) {
+    private void processRebalance(RebalanceEvent rebalanceEvent) {
         // Recovery may still be loading or queued behind this request. Persisting a new task before
         // the recovered task is applied would let the delayed recovery overwrite the local state.
         checkRebalanceRecoveryComplete();
@@ -1704,12 +1725,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             // 1. generate rebalance plan.
             rebalanceTask =
                     rebalanceManager.generateRebalanceTask(rebalanceEvent.getGoalsByPriority());
-
-            // 2. execute rebalance plan.
-            Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
-            assignmentPersistenceByBucket.clear();
-            zooKeeperClient.registerRebalanceTask(rebalanceTask);
-            rebalanceManager.registerRebalance(rebalanceTask.getRebalanceId(), executePlan);
         } catch (Exception e) {
             throw new RebalanceFailureException(
                     String.format(
@@ -1718,19 +1733,50 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     e);
         }
 
-        LOG.info(
-                "Generate Rebalance plan rebalance id {} with {} ms.",
-                rebalanceTask.getRebalanceId(),
-                System.currentTimeMillis() - startTime);
-        return makeRebalanceResponse(rebalanceTask.getRebalanceId());
+        // Persist before exposing the task locally. Remote storage and ZooKeeper I/O run on the
+        // coordinator I/O executor; the completion is applied by the event thread.
+        rebalanceManager.persistRebalanceTask(
+                rebalanceTask,
+                failure -> {
+                    if (failure != null) {
+                        rebalanceEvent
+                                .getRespCallback()
+                                .completeExceptionally(
+                                        new RebalanceFailureException(
+                                                "Failed to persist and execute rebalance plan.",
+                                                failure));
+                        return;
+                    }
+                    try {
+                        assignmentPersistenceByBucket.clear();
+                        rebalanceManager.registerRebalance(
+                                rebalanceTask.getRebalanceId(), rebalanceTask.getExecutePlan());
+                        LOG.info(
+                                "Generate Rebalance plan rebalance id {} with {} ms.",
+                                rebalanceTask.getRebalanceId(),
+                                System.currentTimeMillis() - startTime);
+                        rebalanceEvent
+                                .getRespCallback()
+                                .complete(makeRebalanceResponse(rebalanceTask.getRebalanceId()));
+                    } catch (Throwable t) {
+                        rebalanceEvent.getRespCallback().completeExceptionally(t);
+                    }
+                });
     }
 
-    private CancelRebalanceResponse processCancelRebalance(
-            CancelRebalanceEvent cancelRebalanceEvent) {
+    private void processCancelRebalance(CancelRebalanceEvent cancelRebalanceEvent) {
         checkRebalanceRecoveryComplete();
-        CancelRebalanceResponse response = new CancelRebalanceResponse();
-        rebalanceManager.cancelRebalance(cancelRebalanceEvent.getRabalanceId());
-        return response;
+        rebalanceManager.cancelRebalance(
+                cancelRebalanceEvent.getRabalanceId(),
+                failure -> {
+                    if (failure == null) {
+                        cancelRebalanceEvent
+                                .getRespCallback()
+                                .complete(new CancelRebalanceResponse());
+                    } else {
+                        cancelRebalanceEvent.getRespCallback().completeExceptionally(failure);
+                    }
+                });
     }
 
     private ListRebalanceProgressResponse processListRebalanceProgress(

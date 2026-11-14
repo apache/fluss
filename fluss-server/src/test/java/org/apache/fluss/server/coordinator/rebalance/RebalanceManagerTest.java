@@ -27,6 +27,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -35,6 +36,7 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RebalancePersistenceCompleteEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
 import org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionGoal;
@@ -46,7 +48,9 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.server.zk.data.RebalanceTaskZNodeData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -72,8 +76,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -425,7 +432,7 @@ public class RebalanceManagerTest {
         rebalanceManager.registerRebalance("cancel-test", plans(tb1, tb2));
         RebalanceExecutionKey runningAttempt = rebalanceManager.getExecutionKey(tb1);
 
-        rebalanceManager.cancelRebalance("cancel-test");
+        cancelRebalance("cancel-test");
 
         RebalanceTask storedTask = zookeeperClient.getRebalanceTask().get();
         assertThat(storedTask.getRebalanceStatus()).isEqualTo(REBALANCING);
@@ -452,7 +459,7 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testCancelAcceptsCommittedWriteWhenClientReportsFailure() throws Exception {
+    void testCancelAcceptsCommittedWriteWhenRetryReportsBadVersion() throws Exception {
         rebalanceManager.close();
         try (TestingZooKeeperClient testingClient = new TestingZooKeeperClient()) {
             rebalanceManager = createManager(new Configuration(), testingClient);
@@ -462,9 +469,9 @@ public class RebalanceManagerTest {
             String rebalanceId = "ambiguous-cancellation-write";
             testingClient.registerRebalanceTask(new RebalanceTask(rebalanceId, NOT_STARTED, plan));
             rebalanceManager.registerRebalance(rebalanceId, plan);
-            testingClient.failNextCancellationAfterCommit();
+            testingClient.failNextCancellationAfterCommitWithBadVersion();
 
-            rebalanceManager.cancelRebalance(rebalanceId);
+            cancelRebalance(rebalanceId);
 
             assertThat(testingClient.getRebalanceTask().get().isCancelRequested()).isTrue();
             assertThat(rebalanceManager.isCancelRequested()).isTrue();
@@ -473,6 +480,75 @@ public class RebalanceManagerTest {
                     .extracting(RebalancePlanForBucket::getTableBucket)
                     .containsExactly(running);
         }
+    }
+
+    @Test
+    void testCancelRechecksOriginAfterAsyncPersistence() throws Exception {
+        rebalanceManager.close();
+        ManuallyTriggeredScheduledExecutorService ioExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        rebalanceManager = createManager(new Configuration(), zookeeperClient, ioExecutor);
+        TableBucket running = new TableBucket(1L, 0);
+        TableBucket pending = new TableBucket(1L, 1);
+        String rebalanceId = "cancel-origin-recheck";
+        rebalanceManager.registerRebalance(rebalanceId, plans(running, pending));
+        RebalanceExecutionKey runningAttempt = rebalanceManager.getExecutionKey(running);
+        AtomicBoolean cancellationCompleted = new AtomicBoolean();
+        AtomicReference<Throwable> cancellationFailure = new AtomicReference<>();
+
+        rebalanceManager.cancelRebalance(
+                rebalanceId,
+                failure -> {
+                    cancellationFailure.set(failure);
+                    cancellationCompleted.set(true);
+                });
+        rebalanceManager.finishRebalanceTask(runningAttempt, COMPLETED);
+        RebalanceExecutionKey newlyAdmittedAttempt = rebalanceManager.getExecutionKey(pending);
+
+        assertThat(newlyAdmittedAttempt).isNotNull();
+        assertThat(statuses(rebalanceManager).get(pending)).isEqualTo(REBALANCING);
+
+        ioExecutor.triggerAll();
+
+        assertThat(cancellationCompleted).isTrue();
+        assertThat(cancellationFailure).hasNullValue();
+        assertThat(rebalanceManager.isCancelRequested()).isTrue();
+        assertThat(statuses(rebalanceManager).get(pending)).isEqualTo(REBALANCING);
+        assertThat(rebalanceManager.getExecutionKey(pending)).isEqualTo(newlyAdmittedAttempt);
+
+        rebalanceManager.finishRebalanceTask(newlyAdmittedAttempt, COMPLETED);
+        ioExecutor.triggerAll();
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(CANCELED);
+    }
+
+    @Test
+    void testSecondCancelWhilePersistenceIsInProgressReturnsRebalanceFailure() throws Exception {
+        rebalanceManager.close();
+        ManuallyTriggeredScheduledExecutorService ioExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        rebalanceManager = createManager(new Configuration(), zookeeperClient, ioExecutor);
+        String rebalanceId = "concurrent-cancel";
+        rebalanceManager.registerRebalance(rebalanceId, plans(new TableBucket(1L, 0)));
+        AtomicBoolean firstCancellationCompleted = new AtomicBoolean();
+        AtomicReference<Throwable> firstCancellationFailure = new AtomicReference<>();
+        AtomicReference<Throwable> secondCancellationFailure = new AtomicReference<>();
+
+        rebalanceManager.cancelRebalance(
+                rebalanceId,
+                failure -> {
+                    firstCancellationFailure.set(failure);
+                    firstCancellationCompleted.set(true);
+                });
+        rebalanceManager.cancelRebalance(rebalanceId, secondCancellationFailure::set);
+
+        assertThat(firstCancellationCompleted).isFalse();
+        assertThat(secondCancellationFailure.get())
+                .isInstanceOf(RebalanceFailureException.class)
+                .hasMessageContaining("still being persisted");
+
+        ioExecutor.triggerAll();
+        assertThat(firstCancellationCompleted).isTrue();
+        assertThat(firstCancellationFailure).hasNullValue();
     }
 
     @Test
@@ -504,7 +580,7 @@ public class RebalanceManagerTest {
         RebalanceExecutionKey attempt = rebalanceManager.getExecutionKey(tableBucket);
         assertThat(rebalanceManager.timeoutRebalanceTask(attempt)).isTrue();
 
-        rebalanceManager.cancelRebalance("cancel-drain-failure");
+        cancelRebalance("cancel-drain-failure");
         assertThat(rebalanceManager.prepareReconciliation(attempt)).isNotNull();
         clock.advanceTime(Duration.ofMillis(2));
         assertThat(rebalanceManager.prepareReconciliation(attempt)).isNull();
@@ -960,7 +1036,7 @@ public class RebalanceManagerTest {
         rebalanceExecutor.originBuckets.add(tb1);
         rebalanceManager.registerRebalance("cancel-at-origin-test", plans(tb1, tb2));
 
-        rebalanceManager.cancelRebalance("cancel-at-origin-test");
+        cancelRebalance("cancel-at-origin-test");
 
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(CANCELED);
         assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
@@ -988,7 +1064,7 @@ public class RebalanceManagerTest {
                     .isEqualTo(NOT_STARTED);
 
             timeoutChecker.triggerPeriodicScheduledTasks();
-            assertThat(eventManager.events.get(0)).isInstanceOf(CheckRebalanceTimeoutEvent.class);
+            assertThat(eventManager.events).anyMatch(CheckRebalanceTimeoutEvent.class::isInstance);
             rebalanceManager.checkTimeout();
 
             assertThat(testingClient.getRebalanceTask().get().getRebalanceStatus())
@@ -1002,11 +1078,94 @@ public class RebalanceManagerTest {
         }
     }
 
+    @Test
+    void testPersistenceRunsAsynchronouslyAndFencesRequests() throws Exception {
+        rebalanceManager.close();
+        ManuallyTriggeredScheduledExecutorService ioExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        rebalanceManager = createManager(new Configuration(), zookeeperClient, ioExecutor);
+        RebalanceTask task =
+                new RebalanceTask("async-persistence", NOT_STARTED, plans(new TableBucket(1L, 0)));
+        AtomicBoolean completed = new AtomicBoolean();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        rebalanceManager.persistRebalanceTask(
+                task,
+                persistenceFailure -> {
+                    failure.set(persistenceFailure);
+                    completed.set(true);
+                });
+
+        assertThat(completed).isFalse();
+        assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
+        assertThat(rebalanceManager.getRebalanceId()).isEqualTo("async-persistence");
+        assertThat(zookeeperClient.getRebalanceTask()).isEmpty();
+        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress(null))
+                .isInstanceOf(RebalanceFailureException.class)
+                .hasMessageContaining("persistence is still in progress");
+        AtomicReference<Throwable> cancellationFailure = new AtomicReference<>();
+        rebalanceManager.cancelRebalance(null, cancellationFailure::set);
+        assertThat(cancellationFailure.get()).isInstanceOf(RebalanceFailureException.class);
+
+        ioExecutor.triggerAll();
+
+        assertThat(completed).isTrue();
+        assertThat(failure).hasNullValue();
+        assertThat(zookeeperClient.getRebalanceTask()).contains(task);
+        assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
+    }
+
+    @Test
+    void testNewPersistenceFencesRequestsAfterFinalRecovery() throws Exception {
+        rebalanceManager.close();
+        ManuallyTriggeredScheduledExecutorService ioExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        rebalanceManager = createManager(new Configuration(), zookeeperClient, ioExecutor);
+        TableBucket completedBucket = new TableBucket(1L, 0);
+        assertThat(
+                        rebalanceManager.recoverRebalance(
+                                new RebalanceTask(
+                                        "completed-rebalance", COMPLETED, plans(completedBucket))))
+                .isTrue();
+
+        String newRebalanceId = "pending-rebalance";
+        Map<TableBucket, RebalancePlanForBucket> newPlan = plans(new TableBucket(2L, 0));
+        RebalanceTask newTask = new RebalanceTask(newRebalanceId, NOT_STARTED, newPlan);
+        AtomicReference<Throwable> persistenceFailure = new AtomicReference<>();
+        rebalanceManager.persistRebalanceTask(
+                newTask,
+                failure -> {
+                    persistenceFailure.set(failure);
+                    if (failure == null) {
+                        rebalanceManager.registerRebalance(newRebalanceId, newPlan);
+                    }
+                });
+
+        assertThat(rebalanceManager.getRebalanceId()).isEqualTo(newRebalanceId);
+        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress(null))
+                .isInstanceOf(RebalanceFailureException.class)
+                .hasMessageContaining("persistence is still in progress");
+        AtomicReference<Throwable> cancellationFailure = new AtomicReference<>();
+        rebalanceManager.cancelRebalance(null, cancellationFailure::set);
+        assertThat(cancellationFailure.get()).isInstanceOf(RebalanceFailureException.class);
+
+        ioExecutor.triggerAll();
+
+        assertThat(persistenceFailure).hasNullValue();
+        assertThat(rebalanceManager.getRebalanceId()).isEqualTo(newRebalanceId);
+        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(REBALANCING);
+    }
+
     private RebalanceManager createManager(Configuration conf) {
         return createManager(conf, zookeeperClient);
     }
 
     private RebalanceManager createManager(Configuration conf, ZooKeeperClient client) {
+        return createManager(conf, client, Runnable::run);
+    }
+
+    private RebalanceManager createManager(
+            Configuration conf, ZooKeeperClient client, Executor ioExecutor) {
         timeoutChecker = new ManuallyTriggeredScheduledExecutorService();
         RebalanceManager manager =
                 new RebalanceManager(
@@ -1015,14 +1174,32 @@ public class RebalanceManagerTest {
                         eventManager,
                         clock,
                         conf,
-                        new TestingScheduler(timeoutChecker));
+                        new TestingScheduler(timeoutChecker),
+                        ioExecutor);
         manager.startup();
+        try {
+            if (!manager.loadPersistedRebalanceTask().isPresent()) {
+                manager.completeEmptyRecovery();
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to initialize rebalance recovery for test.", e);
+        }
         return manager;
     }
 
     private void configureManager(Configuration conf) {
         rebalanceManager.close();
         rebalanceManager = createManager(conf);
+    }
+
+    private void cancelRebalance(String rebalanceId) {
+        rebalanceManager.cancelRebalance(
+                rebalanceId,
+                failure -> {
+                    if (failure != null) {
+                        throw new RuntimeException(failure);
+                    }
+                });
     }
 
     private void reconfigureMaxInflightTasks(int maxInflightTasks) {
@@ -1054,7 +1231,7 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testStartupFencesNewRebalanceUntilRecoveryEventRuns() throws Exception {
+    void testStartupFencesNewRebalanceUntilExplicitRecovery() throws Exception {
         TableBucket tableBucket = new TableBucket(1L, 0);
         RebalanceTask storedTask =
                 new RebalanceTask("startup-recovery-test", REBALANCING, plans(tableBucket));
@@ -1071,12 +1248,11 @@ public class RebalanceManagerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("startup recovery");
         assertThat(timeoutChecker.getActivePeriodicScheduledTask()).hasSize(1);
-        assertThat(eventManager.events).hasSize(1);
-        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
-        assertThat(recoveryEvent.getRebalanceTask()).isEqualTo(storedTask);
+        assertThat(eventManager.events).isEmpty();
 
         rebalanceExecutor.originBuckets.add(tableBucket);
-        rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask());
+        RebalanceTask loadedTask = rebalanceManager.loadPersistedRebalanceTask().get();
+        rebalanceManager.recoverRebalance(loadedTask);
         assertThat(rebalanceManager.isRecoveryPending()).isFalse();
         assertThat(rebalanceManager.getRebalanceId()).isEqualTo("startup-recovery-test");
         assertThat(rebalanceExecutor.executedPlans).hasSize(1);
@@ -1097,8 +1273,8 @@ public class RebalanceManagerTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("startup recovery");
 
-        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
-        rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask());
+        RebalanceTask loadedTask = rebalanceManager.loadPersistedRebalanceTask().get();
+        rebalanceManager.recoverRebalance(loadedTask);
         assertThat(rebalanceManager.isRecoveryPending()).isFalse();
         assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
 
@@ -1109,18 +1285,15 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testRecoveryFailureKeepsNewRebalanceFenced() throws Exception {
+    void testRecoveryFailureIsRetriedWhileNewRebalanceRemainsFenced() throws Exception {
         TableBucket recoveredBucket = new TableBucket(1L, 0);
         zookeeperClient.registerRebalanceTask(
                 new RebalanceTask("failed-recovery", REBALANCING, plans(recoveredBucket)));
         configureManager(new Configuration());
         rebalanceExecutor.failOriginCheck = true;
 
-        RecoverRebalanceEvent recoveryEvent = (RecoverRebalanceEvent) eventManager.events.get(0);
-        assertThatThrownBy(
-                        () -> rebalanceManager.recoverRebalance(recoveryEvent.getRebalanceTask()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("origin check failed");
+        RebalanceTask loadedTask = rebalanceManager.loadPersistedRebalanceTask().get();
+        assertThat(rebalanceManager.recoverRebalance(loadedTask)).isFalse();
 
         assertThat(rebalanceManager.isRecoveryPending()).isTrue();
         assertThat(rebalanceManager.hasInProgressRebalance()).isTrue();
@@ -1130,6 +1303,17 @@ public class RebalanceManagerTest {
                                         "too-early", plans(new TableBucket(2L, 0))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("startup recovery");
+
+        rebalanceExecutor.failOriginCheck = false;
+        timeoutChecker.triggerNonPeriodicScheduledTask();
+        RecoverRebalanceEvent retryEvent =
+                (RecoverRebalanceEvent)
+                        eventManager.events.stream()
+                                .filter(RecoverRebalanceEvent.class::isInstance)
+                                .findFirst()
+                                .get();
+        assertThat(rebalanceManager.recoverRebalance(retryEvent.getRebalanceTask())).isTrue();
+        assertThat(rebalanceManager.isRecoveryPending()).isFalse();
     }
 
     private static Map<TableBucket, RebalancePlanForBucket> plans(TableBucket... tableBuckets) {
@@ -1217,7 +1401,7 @@ public class RebalanceManagerTest {
     private static final class TestingZooKeeperClient extends ZooKeeperClient {
 
         private boolean failNextFinalWrite;
-        private boolean failNextCancellationAfterCommit;
+        private boolean failNextCancellationAfterCommitWithBadVersion;
 
         private TestingZooKeeperClient() {
             super(createCuratorFrameworkWrapper(), createConfiguration());
@@ -1227,26 +1411,33 @@ public class RebalanceManagerTest {
             failNextFinalWrite = true;
         }
 
-        private void failNextCancellationAfterCommit() {
-            failNextCancellationAfterCommit = true;
+        private void failNextCancellationAfterCommitWithBadVersion() {
+            failNextCancellationAfterCommitWithBadVersion = true;
         }
 
         @Override
-        public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
+        public void upsertRebalanceTaskData(
+                RebalanceTaskZNodeData data,
+                int expectedRebalanceZkVersion,
+                int expectedCoordinatorEpochZkVersion)
+                throws Exception {
+            RebalanceTask rebalanceTask = data.getInlineTask();
             if (failNextFinalWrite
                     && RebalanceStatus.FINAL_STATUSES.contains(
                             rebalanceTask.getRebalanceStatus())) {
                 failNextFinalWrite = false;
                 throw new RuntimeException("Expected finalization failure");
             }
-            if (failNextCancellationAfterCommit
+            if (failNextCancellationAfterCommitWithBadVersion
                     && rebalanceTask.getRebalanceStatus() == REBALANCING
                     && rebalanceTask.isCancelRequested()) {
-                failNextCancellationAfterCommit = false;
-                super.registerRebalanceTask(rebalanceTask);
-                throw new RuntimeException("Expected ambiguous cancellation write");
+                failNextCancellationAfterCommitWithBadVersion = false;
+                super.upsertRebalanceTaskData(
+                        data, expectedRebalanceZkVersion, expectedCoordinatorEpochZkVersion);
+                throw new KeeperException.BadVersionException();
             }
-            super.registerRebalanceTask(rebalanceTask);
+            super.upsertRebalanceTaskData(
+                    data, expectedRebalanceZkVersion, expectedCoordinatorEpochZkVersion);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {
@@ -1277,6 +1468,9 @@ public class RebalanceManagerTest {
         @Override
         public void put(CoordinatorEvent event) {
             events.add(event);
+            if (event instanceof RebalancePersistenceCompleteEvent) {
+                ((RebalancePersistenceCompleteEvent) event).complete();
+            }
         }
     }
 }

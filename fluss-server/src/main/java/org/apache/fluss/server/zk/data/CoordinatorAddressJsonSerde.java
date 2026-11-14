@@ -26,7 +26,11 @@ import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 /** Json serializer and deserializer for {@link CoordinatorAddress}. */
 @Internal
@@ -35,12 +39,13 @@ public class CoordinatorAddressJsonSerde
 
     public static final CoordinatorAddressJsonSerde INSTANCE = new CoordinatorAddressJsonSerde();
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     private static final String ID = "id";
     private static final String HOST = "host";
     private static final String PORT = "port";
     private static final String LISTENERS = "listeners";
+    private static final String SUPPORTED_FEATURES = "supported_features";
 
     private static void writeVersion(JsonGenerator generator) throws IOException {
         generator.writeNumberField(VERSION_KEY, VERSION);
@@ -54,6 +59,11 @@ public class CoordinatorAddressJsonSerde
         generator.writeStringField(ID, coordinatorAddress.getId());
         generator.writeStringField(
                 LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
+        generator.writeArrayFieldStart(SUPPORTED_FEATURES);
+        for (String feature : new TreeSet<>(coordinatorAddress.getSupportedFeatures())) {
+            generator.writeString(feature);
+        }
+        generator.writeEndArray();
         generator.writeEndObject();
     }
 
@@ -62,13 +72,21 @@ public class CoordinatorAddressJsonSerde
         int version = node.get(VERSION_KEY).asInt();
         String id = node.get(ID).asText();
         List<Endpoint> endpoints;
+        Set<String> supportedFeatures = new HashSet<>();
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
             endpoints = Collections.singletonList(new Endpoint(host, port, "CLIENT"));
         } else {
             endpoints = Endpoint.fromListenersString(node.get(LISTENERS).asText());
+            JsonNode features = node.get(SUPPORTED_FEATURES);
+            if (features != null) {
+                Iterator<JsonNode> elements = features.elements();
+                while (elements.hasNext()) {
+                    supportedFeatures.add(elements.next().asText());
+                }
+            }
         }
-        return new CoordinatorAddress(id, endpoints);
+        return new CoordinatorAddress(id, endpoints, supportedFeatures);
     }
 }

@@ -27,6 +27,10 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Collections;
+
+import static org.apache.fluss.server.zk.data.CoordinatorAddress.REMOTE_REBALANCE_TASK_FEATURE;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link org.apache.fluss.server.zk.data.CoordinatorAddressJsonSerde}. */
 public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<CoordinatorAddress> {
@@ -42,14 +46,15 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
                         "1",
                         Arrays.asList(
                                 new Endpoint("localhost", 1001, "CLIENT"),
-                                new Endpoint("127.0.0.1", 9124, "FLUSS")));
+                                new Endpoint("127.0.0.1", 9124, "FLUSS")),
+                        Collections.singleton(REMOTE_REBALANCE_TASK_FEATURE));
         return new CoordinatorAddress[] {coordinatorAddress};
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\"}"
+            "{\"version\":3,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001,FLUSS://127.0.0.1:9124\",\"supported_features\":[\"remote_rebalance_task\"]}"
         };
     }
 
@@ -66,6 +71,22 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
         CoordinatorAddress expectedCoordinator =
                 new CoordinatorAddress(
                         "1", Endpoint.fromListenersString("CLIENT://localhost:1001"));
-        assertEquals(coordinatorAddress, expectedCoordinator);
+        assertThat(coordinatorAddress).isEqualTo(expectedCoordinator);
+    }
+
+    @Test
+    void testCompatibilityWithVersion2WithoutFeatures() throws IOException {
+        JsonNode jsonInVersion2 =
+                new ObjectMapper()
+                        .readTree(
+                                "{\"version\":2,\"id\":\"1\",\"listeners\":\"CLIENT://localhost:1001\"}"
+                                        .getBytes(StandardCharsets.UTF_8));
+
+        CoordinatorAddress coordinatorAddress =
+                CoordinatorAddressJsonSerde.INSTANCE.deserialize(jsonInVersion2);
+
+        assertThat(coordinatorAddress.getSupportedFeatures()).isEmpty();
+        assertThat(coordinatorAddress.getEndpoints())
+                .isEqualTo(Endpoint.fromListenersString("CLIENT://localhost:1001"));
     }
 }
