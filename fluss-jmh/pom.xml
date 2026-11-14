@@ -33,6 +33,12 @@
     <dependencies>
         <dependency>
             <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-kafka</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
         </dependency>
