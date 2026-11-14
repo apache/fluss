@@ -37,7 +37,7 @@ metadata.
 
 | Port | Protocol | Purpose |
 | --- | --- | --- |
-| 8080 | HTTP | REST API (default bind `127.0.0.1` in the binary distribution, `0.0.0.0` in the container image) |
+| 8080 | HTTP or HTTPS | REST API (default bind `127.0.0.1` in the binary distribution, `0.0.0.0` in the container image) |
 | 9095 | HTTP | Prometheus metrics endpoint |
 
 ## Get the Gateway
@@ -87,6 +87,11 @@ The most relevant deployment options:
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `gateway.rest.listen` | `127.0.0.1:8080` | REST bind address. The container image sets `0.0.0.0:8080` through `FLUSS_GATEWAY__REST__LISTEN` |
+| `gateway.rest.tls.profile` | unset | Named TLS profile used by the REST listener; unset keeps plaintext HTTP |
+| `gateway.tls.profiles` | unset | Comma-separated names of shared TLS identities |
+| `gateway.tls.profile.<id>.certificate-file` | — | PEM certificate chain for one profile |
+| `gateway.tls.profile.<id>.private-key-file` | — | Matching PEM private key |
+| `gateway.tls.profile.<id>.handshake-timeout` | `5s` | Maximum duration of one TLS handshake |
 | `gateway.rest.request-timeout` | `30s` | Server-side deadline for one REST request |
 | `gateway.rest.write.max-request-bytes` | `32MiB` | Maximum request body size |
 | `gateway.rest.write.max-rows` | `10000` | Maximum rows per write batch |
@@ -113,6 +118,32 @@ Do not bake service credentials into an image or commit them to a packaged
 `FLUSS_GATEWAY__*` variables from the runtime's secret store.
 
 :::
+
+### Enable HTTPS on the REST listener
+
+Mount the certificate chain and matching private key as files readable by the Gateway
+process, then add the following keys to `gateway.yaml`:
+
+```yaml
+gateway.tls.profiles: public
+gateway.tls.profile.public.certificate-file: /etc/fluss/tls/server.pem
+gateway.tls.profile.public.private-key-file: /etc/fluss/tls/server.key
+gateway.tls.profile.public.handshake-timeout: 5s
+gateway.rest.tls.profile: public
+```
+
+The equivalent environment names are `FLUSS_GATEWAY__TLS__PROFILES`,
+`FLUSS_GATEWAY__TLS__PROFILE__PUBLIC__CERTIFICATE_FILE`,
+`FLUSS_GATEWAY__TLS__PROFILE__PUBLIC__PRIVATE_KEY_FILE`,
+`FLUSS_GATEWAY__TLS__PROFILE__PUBLIC__HANDSHAKE_TIMEOUT`, and
+`FLUSS_GATEWAY__REST__TLS__PROFILE`. The Gateway validates every declared
+profile before opening its listeners. REST negotiates HTTP/1.1 over TLS;
+metrics remain plaintext on their separate listener. A future protocol
+listener can select a different profile without changing the REST identity.
+
+When using the container image, replace its default HTTP health probe with an
+HTTPS probe that trusts your certificate, or use a separate trusted health
+endpoint. Mount certificates read-only and do not put a private key in the image.
 
 ## Run the binary distribution
 
@@ -268,7 +299,9 @@ The 1.0 preview implements only `trust` mode (see
 [Security](../gateway/index.md#security)). Before exposing a Gateway beyond a trusted
 network boundary:
 
-- Terminate TLS at an authenticated ingress or load balancer.
+- Enable the REST listener's TLS profile or terminate TLS at an authenticated
+  ingress or load balancer. TLS encrypts transport; the `trust` authentication
+  mode still grants access to every caller that can reach the listener.
 - Restrict access to the REST port (8080) and the Prometheus port (9095) with
   network policies or firewall rules.
 - With SASL/PLAIN cluster connections, grant the shared service account only

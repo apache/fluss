@@ -31,6 +31,8 @@ use crate::config::GatewayConfig;
 use crate::error::{GatewayError, panic_message};
 use crate::observability;
 use crate::protocol::rest;
+use crate::tls::{ConnectionMetadata, TlsListener, TlsProfiles};
+use axum::Extension;
 use axum::Router;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -45,6 +47,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -276,6 +279,14 @@ async fn start_internal(
     config: GatewayConfig,
     backend: Arc<NativeFlussBackend>,
 ) -> Result<RunningGateway, RunError> {
+    // Fail on unreadable, malformed, or mismatched certificate material before binding any port.
+    let tls_profiles = TlsProfiles::load(&config.tls_profiles)?;
+    let rest_tls = config
+        .server
+        .rest
+        .tls_profile
+        .as_deref()
+        .and_then(|name| tls_profiles.listener(name, &[b"http/1.1"]));
     log::debug!("effective configuration: {}", config.redacted_debug());
     for warning in config.warnings() {
         log::warn!("{warning}");
@@ -327,6 +338,7 @@ async fn start_internal(
         serve(
             listener,
             router,
+            rest_tls,
             header_read_timeout,
             connection_drain,
             shutdown.clone(),
@@ -340,6 +352,7 @@ async fn start_internal(
             serve(
                 listener,
                 metrics_router(handle),
+                None,
                 header_read_timeout,
                 connection_drain,
                 shutdown.clone(),
@@ -424,6 +437,7 @@ async fn bind_listener(
 async fn serve(
     listener: tokio::net::TcpListener,
     router: Router,
+    tls: Option<TlsListener>,
     header_read_timeout: Duration,
     connection_drain: Duration,
     shutdown: CancellationToken,
@@ -431,34 +445,46 @@ async fn serve(
     let graceful = hyper_util::server::graceful::GracefulShutdown::new();
     let mut connections = JoinSet::new();
     loop {
-        let socket = tokio::select! {
+        let (socket, peer_addr) = tokio::select! {
             biased;
             _ = shutdown.cancelled() => break,
             socket = accept_with_retry(&listener) => socket,
         };
         // `axum::serve` sets TCP_NODELAY on accepted sockets; keep that behaviour.
         let _ = socket.set_nodelay(true);
-        let mut builder = http1::Builder::new();
-        // The header read timeout runs on hyper's background timer, so one must be installed first.
-        builder
-            .timer(TokioTimer::new())
-            .header_read_timeout(header_read_timeout);
-        let service = TowerToHyperService::new(router.clone());
-        // The non-upgradeable connection is what `graceful.watch` accepts; the gateway has no
-        // upgrade-based protocol.
-        let connection = graceful.watch(builder.serve_connection(TokioIo::new(socket), service));
+        let watcher = graceful.watcher();
+        let router = router.clone();
+        let tls = tls.clone();
+        let connection_shutdown = shutdown.clone();
         connections.spawn(async move {
-            if let Err(error) = connection.await {
-                // A client speaking HTTP/2 is a misconfiguration on the other side, not per-
-                // connection noise, and neither end can see it from a dropped connection alone.
-                if error.is_parse_version_h2() {
-                    log::warn!(
-                        "rejected an HTTP/2 connection preface: this listener serves HTTP/1.1 \
-                         only, so clients and ingresses must not be configured for h2c"
-                    );
-                } else {
-                    log::debug!("connection ended with an error: {error}");
+            if let Some(tls) = tls {
+                let handshake = tokio::select! {
+                    _ = connection_shutdown.cancelled() => return,
+                    result = tls.accept(socket) => result,
+                };
+                match handshake {
+                    Ok(stream) => {
+                        let metadata = ConnectionMetadata::secure(peer_addr, &stream);
+                        serve_http_connection(
+                            stream,
+                            router,
+                            metadata,
+                            header_read_timeout,
+                            watcher,
+                        )
+                        .await;
+                    }
+                    Err(error) => log::debug!("TLS handshake failed: {error}"),
                 }
+            } else {
+                serve_http_connection(
+                    socket,
+                    router,
+                    ConnectionMetadata::plaintext(peer_addr),
+                    header_read_timeout,
+                    watcher,
+                )
+                .await;
             }
         });
         // Reap finished connections so owning them does not grow the set without bound.
@@ -478,15 +504,44 @@ async fn serve(
     Ok(())
 }
 
+async fn serve_http_connection<I>(
+    io: I,
+    router: Router,
+    metadata: ConnectionMetadata,
+    header_read_timeout: Duration,
+    watcher: hyper_util::server::graceful::Watcher,
+) where
+    I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut builder = http1::Builder::new();
+    builder
+        .timer(TokioTimer::new())
+        .header_read_timeout(header_read_timeout);
+    let service = TowerToHyperService::new(router.layer(Extension(metadata)));
+    let connection = watcher.watch(builder.serve_connection(TokioIo::new(io), service));
+    if let Err(error) = connection.await {
+        if error.is_parse_version_h2() {
+            log::warn!(
+                "rejected an HTTP/2 connection preface: this listener serves HTTP/1.1 only, \
+                 so clients and ingresses must not be configured for h2c"
+            );
+        } else {
+            log::debug!("connection ended with an error: {error}");
+        }
+    }
+}
+
 /// Accepts one connection, absorbing the accept errors that must not end the listener.
 ///
 /// The retry loop lives inside this future, as it does in `axum::serve`'s `Listener::accept`, so a
 /// signal arriving during the backoff cancels the wait rather than having to outlast it; both
 /// awaited operations are cancellation-safe.
-async fn accept_with_retry(listener: &tokio::net::TcpListener) -> tokio::net::TcpStream {
+async fn accept_with_retry(
+    listener: &tokio::net::TcpListener,
+) -> (tokio::net::TcpStream, std::net::SocketAddr) {
     loop {
         match listener.accept().await {
-            Ok((socket, _remote)) => return socket,
+            Ok((socket, remote)) => return (socket, remote),
             Err(error) => handle_accept_error(error).await,
         }
     }
@@ -909,6 +964,7 @@ mod tests {
             serve(
                 listener,
                 router,
+                None,
                 Duration::from_secs(5),
                 connection_drain_budget(shutdown_timeout),
                 shutdown.clone(),
