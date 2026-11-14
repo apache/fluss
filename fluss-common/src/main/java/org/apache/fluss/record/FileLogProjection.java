@@ -73,7 +73,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffse
 import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Column projection util on Arrow format {@link FileLogRecords}. */
 public class FileLogProjection {
@@ -121,10 +120,8 @@ public class FileLogProjection {
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
             int[] selectedFieldPositions) {
-        // Empty projection is currently not supported on the server side: the Arrow metadata length
-        // estimate disagrees with the serialized length for a zero-field schema, which would
-        // cause the client to retry indefinitely. Fail fast with a clear, non-retriable error
-        // instead.
+        // Reject empty user projections, but allow a nonempty projection to select no stored
+        // columns from a historical batch. Such a batch still carries its row count and offsets.
         if (selectedFieldPositions != null && selectedFieldPositions.length == 0) {
             throw new InvalidColumnProjectionException(
                     "Empty projection is not supported. "
@@ -310,23 +307,19 @@ public class FileLogProjection {
                         currentProjection.bufferCount);
         long arrowBodyLength = projectedArrowBatch.bodyLength();
 
-        int newBatchSizeInBytes =
-                recordBatchHeaderSize
-                        + changeTypeBytes
-                        + currentProjection.arrowMetadataLength
-                        + (int) arrowBodyLength;
-
-        if (newBatchSizeInBytes > maxBytes) {
-            return -1;
-        }
-
-        // create new arrow batch metadata which already projected
+        // A projection can contain no stored columns while still containing rows. Its
+        // zero-length body has a different FlatBuffer layout from the metadata estimate.
         byte[] headerMetadata =
                 serializeArrowRecordBatchMetadata(
                         projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
-        checkState(
-                headerMetadata.length == currentProjection.arrowMetadataLength,
-                "Invalid metadata length");
+        int newBatchSizeInBytes =
+                recordBatchHeaderSize
+                        + changeTypeBytes
+                        + headerMetadata.length
+                        + (int) arrowBodyLength;
+        if (newBatchSizeInBytes > maxBytes) {
+            return -1;
+        }
 
         // update and copy log batch header
         logHeaderBuffer.position(LENGTH_OFFSET);
@@ -477,20 +470,23 @@ public class FileLogProjection {
             if (magic == LOG_MAGIC_VALUE_V0 && size < V0_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v0 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v0 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V0_RECORD_BATCH_HEADER_SIZE, size, position));
             } else if (magic == LOG_MAGIC_VALUE_V1 && size < V1_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v1 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v1 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V1_RECORD_BATCH_HEADER_SIZE, size, position));
             } else if (magic == LOG_MAGIC_VALUE_V2 && size < V2_RECORD_BATCH_HEADER_SIZE) {
                 throw new EOFException(
                         String.format(
-                                "Failed to read v2 log header from file channel `%s`. Expected to read %d bytes, "
-                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                "Failed to read v2 log header from file channel `%s`. Expected to"
+                                        + " read %d bytes, but reached end of file after reading %d"
+                                        + " bytes. Started read from position %d.",
                                 channel, V2_RECORD_BATCH_HEADER_SIZE, size, position));
             }
         }
@@ -517,8 +513,19 @@ public class FileLogProjection {
         RowType rowType = schema.getRowType();
 
         // initialize the projection util information
+        // Added columns are valid requests even when absent from a historical batch. The
+        // client reconstructs the target schema; the server only sends stored columns.
+        int fieldCount = rowType.getFieldCount();
+        int validationFieldCount = fieldCount;
+        if (Arrays.stream(selectedFieldPositions).anyMatch(p -> p >= fieldCount)) {
+            validationFieldCount =
+                    schemaGetter.getLatestSchemaInfo().getSchema().getRowType().getFieldCount();
+        }
+        toBitSet(validationFieldCount, selectedFieldPositions);
+        int[] existingFields =
+                Arrays.stream(selectedFieldPositions).filter(p -> p < fieldCount).toArray();
         Schema arrowSchema = ArrowUtils.toArrowSchema(rowType);
-        BitSet selection = toBitSet(arrowSchema.getFields().size(), selectedFieldPositions);
+        BitSet selection = toBitSet(arrowSchema.getFields().size(), existingFields);
         List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
         flattenFields(arrowSchema.getFields(), selection, flattenedFields);
         int totalFieldNodes = flattenedFields.size();
@@ -541,17 +548,12 @@ public class FileLogProjection {
             bufferIndex += bufferLayoutCount[i];
         }
 
-        Schema projectedArrowSchema =
-                ArrowUtils.toArrowSchema(rowType.project(selectedFieldPositions));
         ArrowBodyCompression bodyCompression =
                 CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
-        int metadataLength =
-                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
         return new ProjectionInfo(
                 nodesProjection,
                 buffersProjection,
                 bufferIndex,
-                metadataLength,
                 bodyCompression,
                 selectedFieldPositions);
     }
@@ -561,7 +563,6 @@ public class FileLogProjection {
         final BitSet nodesProjection;
         final BitSet buffersProjection;
         final int bufferCount;
-        final int arrowMetadataLength;
         final ArrowBodyCompression bodyCompression;
         final int[] selectedFieldPositions;
 
@@ -569,13 +570,11 @@ public class FileLogProjection {
                 BitSet nodesProjection,
                 BitSet buffersProjection,
                 int bufferCount,
-                int arrowMetadataLength,
                 ArrowBodyCompression bodyCompression,
                 int[] selectedFieldPositions) {
             this.nodesProjection = nodesProjection;
             this.buffersProjection = buffersProjection;
             this.bufferCount = bufferCount;
-            this.arrowMetadataLength = arrowMetadataLength;
             this.bodyCompression = bodyCompression;
             this.selectedFieldPositions = selectedFieldPositions;
         }

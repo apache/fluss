@@ -564,6 +564,117 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedScanAcrossSchemaEvolution(boolean arrowBatches) throws Exception {
+        TablePath path = TablePath.of("test_db_1", "projected_schema_evolution_" + arrowBatches);
+        createTable(
+                path,
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build(),
+                false);
+        try (Table table = conn.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+            for (int i = 0; i < 3; i++) {
+                writer.append(row(i, "value-" + i));
+            }
+            writer.flush();
+        }
+        admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+        try (Table table = conn.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+            for (int i = 3; i < 6; i++) {
+                writer.append(row(i, "value-" + i, "extra-" + i));
+            }
+            writer.flush();
+            // Include reordered columns, a nonzero source index, and an all-missing projection.
+            for (int[] projection : new int[][] {{0, 2}, {2, 0}, {1, 2}, {2}}) {
+                for (int startOffset : new int[] {0, 1}) {
+                    try (LogScannerImpl scanner =
+                            (LogScannerImpl)
+                                    table.newScan().project(projection).createLogScanner()) {
+                        scanner.subscribe(0, startOffset);
+                        long nextOffset = startOffset;
+                        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+                        while (nextOffset < 6) {
+                            assertThat(System.nanoTime())
+                                    .as("Projected scan must advance")
+                                    .isLessThan(deadline);
+                            if (arrowBatches) {
+                                try (ArrowScanRecords records =
+                                        scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                                    for (ArrowBatchData batch : records) {
+                                        try (ArrowBatchData b = batch) {
+                                            assertThat(b.getVectorSchemaRoot().getFieldVectors())
+                                                    .hasSize(projection.length);
+                                            for (int r = 0; r < b.getRecordCount(); r++) {
+                                                assertThat(b.getBaseLogOffset() + r)
+                                                        .isEqualTo(nextOffset);
+                                                for (int c = 0; c < projection.length; c++) {
+                                                    Object value =
+                                                            b.getVectorSchemaRoot()
+                                                                    .getVector(c)
+                                                                    .getObject(r);
+                                                    assertThat(
+                                                                    value == null
+                                                                            ? null
+                                                                            : value.toString())
+                                                            .isEqualTo(
+                                                                    projectedValue(
+                                                                            projection[c],
+                                                                            nextOffset));
+                                                }
+                                                nextOffset++;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                                    assertThat(record.logOffset()).isEqualTo(nextOffset);
+                                    InternalRow value = record.getRow();
+                                    assertThat(value.getFieldCount()).isEqualTo(projection.length);
+                                    for (int c = 0; c < projection.length; c++) {
+                                        String actual =
+                                                value.isNullAt(c)
+                                                        ? null
+                                                        : projection[c] == 0
+                                                                ? Integer.toString(value.getInt(c))
+                                                                : value.getString(c).toString();
+                                        assertThat(actual)
+                                                .isEqualTo(
+                                                        projectedValue(projection[c], nextOffset));
+                                    }
+                                    nextOffset++;
+                                }
+                            }
+                        }
+                        assertThat(nextOffset).isEqualTo(6);
+                    }
+                }
+            }
+        }
+    }
+
+    private static String projectedValue(int column, long offset) {
+        if (column == 0) {
+            return Long.toString(offset);
+        }
+        return column == 1 ? "value-" + offset : offset < 3 ? null : "extra-" + offset;
+    }
+
     private void pollAndVerifyArrowBatches(
             LogScannerImpl scanner, int expectedRecords, int minExpectedOffset) {
         int count = 0;

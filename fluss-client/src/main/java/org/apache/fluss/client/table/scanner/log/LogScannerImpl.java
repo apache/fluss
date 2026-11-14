@@ -190,7 +190,8 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
     }
 
     /**
-     * Polls Arrow record batches for internal callers.
+     * Polls Arrow record batches for internal callers, applying the scan's projection and target
+     * schema to each batch.
      *
      * <p>This method is intentionally kept off the public {@link Scan} API surface for now.
      */
@@ -203,10 +204,6 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
         if (!isLogTable) {
             throw new UnsupportedOperationException(
                     "Arrow record batch polling is only supported for log tables. CDC scanning is not supported.");
-        }
-        if (hasProjection) {
-            throw new UnsupportedOperationException(
-                    "Arrow record batch polling does not support projection. Please create the scanner without projection.");
         }
 
         acquireAndEnsureOpen();
