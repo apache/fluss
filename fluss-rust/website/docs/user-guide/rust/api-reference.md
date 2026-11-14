@@ -29,6 +29,7 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
+| `scanner_log_check_crc`               | `bool`          | `true`             | Check the CRC of fetched log batches, so a corrupted batch fails the scan. Batches the server projected are not checked |
 | `lookup_queue_size`                   | `usize`         | `25600`            | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
 | `lookup_max_batch_size`               | `usize`         | `128`              | Maximum number of lookups merged into one request                                    |
 | `lookup_batch_timeout_ms`             | `u64`           | `100`              | Maximum time in ms a lookup waits for its batch to fill                              |

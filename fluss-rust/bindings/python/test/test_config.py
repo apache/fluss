@@ -77,6 +77,18 @@ def test_writer_dynamic_create_partition_configuration():
         fluss.Config({"writer.dynamic-create-partition.enabled": "yes"})
 
 
+def test_scanner_log_check_crc_configuration():
+    assert fluss.Config().scanner_log_check_crc is True
+
+    config = fluss.Config({"scanner.log.check-crc": "false"})
+    assert config.scanner_log_check_crc is False
+    config.scanner_log_check_crc = True
+    assert config.scanner_log_check_crc is True
+
+    with pytest.raises(fluss.FlussError, match="expected 'true' or 'false'"):
+        fluss.Config({"scanner.log.check-crc": "yes"})
+
+
 def test_lookup_configuration():
     config = fluss.Config(
         {
