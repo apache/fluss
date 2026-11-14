@@ -783,17 +783,13 @@ public final class RecordAccumulator {
             // it will allocate memory from heap
             return writerBufferPool.allocatePages(pagesPerBatch);
         } else {
-            int estimatedSizeInBytes = writeRecord.getEstimatedSizeInBytes();
-            if (estimatedSizeInBytes > batchSize) {
-                // for row-orient log/kv batch, the pre-allocated memory shouldn't
-                // smaller than the record size
-                int pages =
-                        MathUtils.ceilDiv(
-                                writeRecord.getEstimatedSizeInBytes(), writerBufferPool.pageSize());
-                return writerBufferPool.allocatePages(pages);
-            } else {
-                return writerBufferPool.allocatePages(pagesPerBatch);
-            }
+            int pagesForRecord =
+                    MathUtils.ceilDiv(
+                            writeRecord.getEstimatedSizeInBytes(), writerBufferPool.pageSize());
+            // for row-orient log/kv batch, the pre-allocated memory shouldn't
+            // smaller than the record size
+            int pages = Math.max(pagesPerBatch, pagesForRecord);
+            return writerBufferPool.allocatePages(pages);
         }
     }
 
@@ -1090,7 +1086,17 @@ public final class RecordAccumulator {
                             schemaId,
                             isHistoricalPartition);
 
-            batch.tryAppend(writeRecord, callback);
+            if (!batch.tryAppend(writeRecord, callback)) {
+                batch.abortRecordAppends();
+                throw new FlussRuntimeException(
+                        String.format(
+                                "Newly created write batch rejected its first record for bucket %s of table %s; "
+                                        + "pre-allocated capacity (%d bytes) is smaller than the record (%d bytes).",
+                                bucketId,
+                                physicalTablePath,
+                                outputView.getPreAllocatedSize(),
+                                writeRecord.getEstimatedSizeInBytes()));
+            }
             deque.addLast(batch);
             incomplete.add(batch);
             return new RecordAppendResult(deque.size() > 1 || batch.isClosed(), true);
