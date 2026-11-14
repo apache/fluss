@@ -483,7 +483,11 @@ public class FlinkTableSource
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
         // handle single row filter scan
-        if (singleRowFilter != null || limit > 0 || selectRowCount) {
+        boolean readLakeInFullMode =
+                isDataLakeEnabled
+                        && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL;
+        boolean useFlussOnlyLimitScan = limit > 0 && !readLakeInFullMode;
+        if (singleRowFilter != null || useFlussOnlyLimitScan || selectRowCount) {
             Collection<RowData> results;
             if (singleRowFilter != null) {
                 results =
@@ -494,7 +498,7 @@ public class FlinkTableSource
                                 tableOutputType,
                                 primaryKeyIndexes,
                                 projectedFields);
-            } else if (limit > 0) {
+            } else if (useFlussOnlyLimitScan) {
                 results =
                         PushdownUtils.limitScan(
                                 tablePath, flussConfig, tableOutputType, projectedFields, limit);
@@ -527,7 +531,6 @@ public class FlinkTableSource
             flussRowType = flussRowType.project(projectedFields);
         }
         OffsetsInitializer offsetsInitializer;
-        boolean enableLakeSource = false;
         switch (startupOptions.startupMode) {
             case EARLIEST:
                 offsetsInitializer = OffsetsInitializer.earliest();
@@ -537,8 +540,7 @@ public class FlinkTableSource
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
-                enableLakeSource = isDataLakeEnabled;
-                if (enableLakeSource) {
+                if (readLakeInFullMode) {
                     initializeLakeSource();
                 }
                 break;
@@ -572,7 +574,7 @@ public class FlinkTableSource
                                 (org.apache.flink.table.types.logical.RowType) producedDataType),
                         streaming,
                         partitionFilters,
-                        enableLakeSource ? lakeSource : null,
+                        readLakeInFullMode ? lakeSource : null,
                         leaseContext);
 
         if (!streaming) {
