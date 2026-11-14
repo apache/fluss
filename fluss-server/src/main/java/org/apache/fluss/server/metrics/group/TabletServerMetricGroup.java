@@ -29,8 +29,15 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
+import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
+
+import io.github.fluss_contrib.rocksdb.HistogramType;
+import io.github.fluss_contrib.rocksdb.TickerType;
+
+import javax.annotation.Nullable;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -77,6 +84,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    @Nullable private volatile RocksDBStatisticsRegistry rocksDBStatisticsRegistry;
 
     /** Suppliers for shared block cache usage, set by KvManager when shared cache is enabled. */
     private volatile LongSupplier sharedBlockCacheUsageSupplier = () -> 0L;
@@ -157,11 +166,79 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         registerServerRocksDBMetrics();
     }
 
+    /** Supplies native metric totals retained by the Statistics owner. */
+    public void setRocksDBStatistics(RocksDBStatisticsRegistry statisticsRegistry) {
+        this.rocksDBStatisticsRegistry = checkNotNull(statisticsRegistry);
+    }
+
     /**
-     * Register server-level RocksDB aggregated metrics. These metrics aggregate memory usage from
-     * all tables.
+     * Registers native RocksDB read counters, shared-cache counters and aggregated memory gauges.
      */
     private void registerServerRocksDBMetrics() {
+        String[] operations = {"get", "multiGet"};
+        HistogramType[] histograms = {HistogramType.DB_GET, HistogramType.DB_MULTIGET};
+        for (int i = 0; i < operations.length; i++) {
+            MetricGroup group = addGroup("operation", operations[i]);
+            HistogramType histogram = histograms[i];
+            group.counter(
+                    MetricNames.ROCKSDB_NATIVE_READ_COUNT_TOTAL,
+                    new SimpleCounter() {
+                        @Override
+                        public long getCount() {
+                            RocksDBStatisticsRegistry registry = rocksDBStatisticsRegistry;
+                            return registry == null ? 0L : registry.getNativeReadCount(histogram);
+                        }
+                    });
+            group.counter(
+                    MetricNames.ROCKSDB_NATIVE_READ_TIME_US_TOTAL,
+                    new SimpleCounter() {
+                        @Override
+                        public long getCount() {
+                            RocksDBStatisticsRegistry registry = rocksDBStatisticsRegistry;
+                            return registry == null
+                                    ? 0L
+                                    : registry.getNativeReadTimeMicros(histogram);
+                        }
+                    });
+        }
+        String[] blockTypes = {"data", "index", "filter"};
+        TickerType[] hits = {
+            TickerType.BLOCK_CACHE_DATA_HIT,
+            TickerType.BLOCK_CACHE_INDEX_HIT,
+            TickerType.BLOCK_CACHE_FILTER_HIT
+        };
+        TickerType[] misses = {
+            TickerType.BLOCK_CACHE_DATA_MISS,
+            TickerType.BLOCK_CACHE_INDEX_MISS,
+            TickerType.BLOCK_CACHE_FILTER_MISS
+        };
+        for (int i = 0; i < blockTypes.length; i++) {
+            MetricGroup group = addGroup("block_type", blockTypes[i]);
+            TickerType hit = hits[i];
+            TickerType miss = misses[i];
+            group.counter(
+                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_HITS_TOTAL,
+                    new SimpleCounter() {
+                        @Override
+                        public long getCount() {
+                            RocksDBStatisticsRegistry registry = rocksDBStatisticsRegistry;
+                            return registry == null
+                                    ? 0L
+                                    : registry.getSharedBlockCacheTickerCount(hit);
+                        }
+                    });
+            group.counter(
+                    MetricNames.ROCKSDB_SHARED_BLOCK_CACHE_MISSES_TOTAL,
+                    new SimpleCounter() {
+                        @Override
+                        public long getCount() {
+                            RocksDBStatisticsRegistry registry = rocksDBStatisticsRegistry;
+                            return registry == null
+                                    ? 0L
+                                    : registry.getSharedBlockCacheTickerCount(miss);
+                        }
+                    });
+        }
         // Total memory usage across all RocksDB instances in this server.
         // When shared block cache is enabled, per-tablet stats exclude block cache,
         // so we add the shared block cache usage once separately.
