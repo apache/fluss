@@ -821,9 +821,10 @@ public class ReplicaManager implements ServerReconfigurable {
                 System.currentTimeMillis() - startTime);
 
         // maybe do delay write operation to write cdc log to be replicated to other follower
-        // replicas.
+        // replicas. Register it before waking fetches waiting for the new cdc log.
         maybeAddDelayedWrite(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+        completeDelayedFetches(kvPutResult);
     }
 
     /** Puts records to historical partition leaders. */
@@ -875,6 +876,10 @@ public class ReplicaManager implements ServerReconfigurable {
                                                                     new ArrayList<>(results));
                                                         }
                                                     });
+                                            completeDelayedFetches(
+                                                    Collections.singletonMap(
+                                                            putData.tableBucket(),
+                                                            completedResult));
                                         }));
     }
 
@@ -2238,10 +2243,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
     }
 
-    private void completeDelayedFetches(Map<TableBucket, ProduceLogResultForBucket> appendResults) {
-        appendResults.forEach(
-                (tableBucket, appendResult) -> {
-                    if (appendResult.succeeded()) {
+    private void completeDelayedFetches(
+            Map<TableBucket, ? extends WriteResultForBucket> writeResults) {
+        writeResults.forEach(
+                (tableBucket, writeResult) -> {
+                    if (writeResult.succeeded()) {
                         try {
                             delayedFetchLogManager.checkAndComplete(
                                     new DelayedTableBucketKey(tableBucket));

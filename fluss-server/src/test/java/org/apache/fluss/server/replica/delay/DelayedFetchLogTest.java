@@ -21,6 +21,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogOffsetMetadata;
@@ -44,7 +47,12 @@ import java.util.function.Consumer;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -286,6 +294,62 @@ public class DelayedFetchLogTest extends ReplicaTestBase {
                         new ProduceLogResultForBucket(firstBucket, 0L, DATA1.size()),
                         new ProduceLogResultForBucket(secondBucket, 0L, DATA1.size()));
         assertThat(replicaManager.getDelayedWriteManager().numDelayed()).isZero();
+    }
+
+    @Test
+    void testKvPutCompletesDelayedFetches() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        int followerId = 2;
+        List<Integer> replicas = Arrays.asList(TABLET_SERVER_ID, followerId);
+        makeKvTableAsLeader(
+                tableBucket, DATA1_TABLE_PATH_PK, replicas, replicas, INITIAL_LEADER_EPOCH, false);
+        Replica leader = replicaManager.getReplicaOrException(tableBucket);
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> followerFetch =
+                fetchLog(tableBucket, followerId, 0L, 1);
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> consumerFetch =
+                fetchLog(tableBucket, -1, 0L, 1);
+        assertThat(followerFetch).isNotDone();
+        assertThat(consumerFetch).isNotDone();
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isEqualTo(2);
+
+        CompletableFuture<List<PutKvResultForBucket>> putResponse = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                (int) Duration.ofMinutes(3).toMillis(),
+                -1,
+                Collections.singletonMap(tableBucket, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
+                MergeMode.DEFAULT,
+                ApiKeys.PUT_KV.highestSupportedVersion,
+                putResponse::complete);
+
+        // The cdc log appended by the put wakes the follower fetch without waiting for max wait.
+        long logEndOffset = leader.getLocalLogEndOffset();
+        assertThat(logEndOffset).isPositive();
+        assertThat(followerFetch).isDone();
+        FetchLogResultForBucket followerResult = followerFetch.join().get(tableBucket);
+        assertThat(followerResult.succeeded()).isTrue();
+        assertThat(followerResult.records().sizeInBytes()).isPositive();
+        assertThat(putResponse).isNotDone();
+        assertThat(consumerFetch).isNotDone();
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isOne();
+
+        // For KV tables the high watermark only advances after the asynchronous KV flush, which
+        // then completes the delayed write and the consumer fetch.
+        acknowledgeFetchedRecords(tableBucket, followerId, logEndOffset);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(leader.getLogHighWatermark()).isEqualTo(logEndOffset);
+                    assertThat(putResponse).isDone();
+                    assertThat(consumerFetch).isDone();
+                });
+        assertThat(putResponse.join())
+                .containsExactly(new PutKvResultForBucket(tableBucket, logEndOffset));
+        assertThat(consumerFetch.join().get(tableBucket).getHighWatermark())
+                .isEqualTo(logEndOffset);
+        assertThat(replicaManager.getDelayedWriteManager().numDelayed()).isZero();
+        assertThat(replicaManager.getDelayedFetchLogManager().numDelayed()).isZero();
     }
 
     @Test
