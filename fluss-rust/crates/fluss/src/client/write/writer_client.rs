@@ -25,7 +25,7 @@ use crate::client::write::bucket_assigner::{
     BucketAssigner, HashBucketAssigner, RoundRobinBucketAssigner, StickyBucketAssigner,
 };
 use crate::client::write::sender::Sender;
-use crate::client::{RecordAccumulator, ResultHandle, WriteRecord};
+use crate::client::{MemoryPermit, RecordAccumulator, ResultHandle, WriteRecord};
 use crate::cluster::Cluster;
 use crate::config::Config;
 use crate::config::NoKeyAssigner;
@@ -36,7 +36,7 @@ use dashmap::DashMap;
 use log::warn;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -119,6 +119,29 @@ impl WriterClient {
                 message: format!("invalid writer ack '{acks}': {e}"),
             })
         }
+    }
+
+    /// Reserves `size` bytes of writer buffer memory, waiting at most until `deadline`.
+    pub(crate) fn reserve_memory(
+        &self,
+        size: usize,
+        deadline: Option<Instant>,
+    ) -> Result<MemoryPermit> {
+        self.accumulate.reserve_memory(size, deadline)
+    }
+
+    /// Total writer buffer memory in bytes.
+    pub(crate) fn buffer_total_bytes(&self) -> usize {
+        self.accumulate.buffer_total_bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn buffer_available_bytes(&self) -> usize {
+        self.accumulate.buffer_available_bytes()
+    }
+
+    pub(crate) fn writer_batch_size(&self) -> usize {
+        self.config.writer_batch_size as usize
     }
 
     pub fn send(&self, record: &WriteRecord<'_>) -> Result<ResultHandle> {

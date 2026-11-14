@@ -17,7 +17,10 @@
 
 use crate::bucketing::BucketingFunction;
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
-use crate::client::{ResultHandle, WriteRecord, WriteResultFuture, WriterClient};
+use crate::client::{
+    MemoryPermit, ResultHandle, WriteRecord, WriteResultFuture, WriterClient,
+    prebuilt_batch_alloc_size,
+};
 use crate::error::Error::{IllegalArgument, UnexpectedError};
 use crate::error::Result;
 use crate::metadata::{PhysicalTablePath, TableInfo, TablePath};
@@ -220,7 +223,7 @@ impl AppendWriter {
         if self.partition_getter.is_none() && self.bucket_router.is_none() {
             let path = Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)));
             return self
-                .send_arrow_batch(batch, &path, None, None, deadline)
+                .send_arrow_batch(batch, &path, None, None, deadline, None)
                 .map(WriteResultFuture::new);
         }
         if u32::try_from(batch.num_rows()).is_err() {
@@ -237,7 +240,7 @@ impl AppendWriter {
             0,
             None,
         )?;
-        let mut handles = Vec::new();
+        let mut parts = Vec::new();
         if let Some(getter) = &self.partition_getter {
             let first_partition = getter.get_partition(&row)?;
             let mut matches_first = BooleanBuffer::new_set(batch.num_rows());
@@ -255,14 +258,7 @@ impl AppendWriter {
                     Arc::clone(&self.table_path),
                     Some(first_partition),
                 ));
-                self.enqueue_partition_batch(
-                    &batch,
-                    &path,
-                    None,
-                    &mut row,
-                    deadline,
-                    &mut handles,
-                )?;
+                self.enqueue_partition_batch(&batch, &path, None, &mut row, &mut parts)?;
             } else {
                 let mut partitions = HashMap::<String, Vec<u32>>::new();
                 let mut first_indices = Vec::new();
@@ -290,20 +286,56 @@ impl AppendWriter {
                         &path,
                         Some(&indices),
                         &mut row,
-                        deadline,
-                        &mut handles,
+                        &mut parts,
                     )?;
                 }
             }
         } else {
             let path = Arc::new(PhysicalTablePath::of(Arc::clone(&self.table_path)));
-            self.enqueue_partition_batch(&batch, &path, None, &mut row, deadline, &mut handles)?;
+            self.enqueue_partition_batch(&batch, &path, None, &mut row, &mut parts)?;
         }
+        let mut handles = self.send_parts(parts, deadline)?;
         if handles.len() == 1 {
             Ok(WriteResultFuture::new(handles.pop().unwrap()))
         } else {
             Ok(WriteResultFuture::join(handles))
         }
+    }
+
+    /// Queues every part of a split batch, reserving their buffer memory together first so
+    /// that running out of it fails the whole batch before any part is queued. A caller
+    /// retrying that error then doesn't write the queued parts twice.
+    fn send_parts(
+        &self,
+        parts: Vec<BatchPart>,
+        deadline: Option<Instant>,
+    ) -> Result<Vec<ResultHandle>> {
+        let batch_size = self.writer_client.writer_batch_size();
+        let sizes: Vec<usize> = parts
+            .iter()
+            .map(|part| prebuilt_batch_alloc_size(&part.batch, batch_size))
+            .collect();
+        let total: usize = sizes.iter().sum();
+        // A batch too large for the whole buffer can't be reserved at once; its parts wait
+        // for memory one by one as before.
+        let mut reserved = if parts.len() > 1 && total <= self.writer_client.buffer_total_bytes() {
+            Some(self.writer_client.reserve_memory(total, deadline)?)
+        } else {
+            None
+        };
+        let mut handles = Vec::with_capacity(parts.len());
+        for (part, size) in parts.into_iter().zip(sizes) {
+            let permit = reserved.as_mut().map(|permit| permit.split(size));
+            handles.push(self.send_arrow_batch(
+                part.batch,
+                &part.path,
+                part.bucket_key,
+                part.bucket_count,
+                deadline,
+                permit,
+            )?);
+        }
+        Ok(handles)
     }
 
     fn enqueue_partition_batch(
@@ -312,15 +344,19 @@ impl AppendWriter {
         path: &Arc<PhysicalTablePath>,
         partition_indices: Option<&[u32]>,
         row: &mut ColumnarRow,
-        deadline: Option<Instant>,
-        handles: &mut Vec<ResultHandle>,
+        parts: &mut Vec<BatchPart>,
     ) -> Result<()> {
         let Some(router) = self.bucket_router.as_ref() else {
             let batch = match partition_indices {
                 Some(indices) => take_rows(batch, indices)?,
                 None => batch.clone(),
             };
-            handles.push(self.send_arrow_batch(batch, path, None, None, deadline)?);
+            parts.push(BatchPart {
+                batch,
+                path: Arc::clone(path),
+                bucket_key: None,
+                bucket_count: None,
+            });
             return Ok(());
         };
 
@@ -342,14 +378,12 @@ impl AppendWriter {
         }
 
         for (indices, rep_key) in groups.into_values() {
-            let sub_batch = take_rows(batch, &indices)?;
-            handles.push(self.send_arrow_batch(
-                sub_batch,
-                path,
-                Some(rep_key),
-                Some(num_buckets),
-                deadline,
-            )?);
+            parts.push(BatchPart {
+                batch: take_rows(batch, &indices)?,
+                path: Arc::clone(path),
+                bucket_key: Some(rep_key),
+                bucket_count: Some(num_buckets),
+            });
         }
         Ok(())
     }
@@ -361,6 +395,7 @@ impl AppendWriter {
         bucket_key: Option<Bytes>,
         bucket_count: Option<i32>,
         deadline: Option<Instant>,
+        reserved_memory: Option<MemoryPermit>,
     ) -> Result<ResultHandle> {
         let record = WriteRecord::for_append_record_batch(
             Arc::clone(&self.table_info),
@@ -369,7 +404,8 @@ impl AppendWriter {
             batch,
         )
         .with_bucket_key(bucket_key)
-        .with_submit_deadline(deadline);
+        .with_submit_deadline(deadline)
+        .with_reserved_memory(reserved_memory);
         match bucket_count {
             Some(bucket_count) => self
                 .writer_client
@@ -381,6 +417,14 @@ impl AppendWriter {
     pub async fn flush(&self) -> Result<()> {
         self.writer_client.flush().await
     }
+}
+
+/// One partition and bucket's rows of a split Arrow batch, routed but not queued yet.
+struct BatchPart {
+    batch: RecordBatch,
+    path: Arc<PhysicalTablePath>,
+    bucket_key: Option<Bytes>,
+    bucket_count: Option<i32>,
 }
 
 fn take_rows(batch: &RecordBatch, indices: &[u32]) -> Result<RecordBatch> {
@@ -469,6 +513,82 @@ mod tests {
             }
             client.close(Duration::from_secs(1)).await?;
         }
+        Ok(())
+    }
+
+    fn bucketed_writer(
+        buckets: i32,
+        config: Config,
+    ) -> Result<(Arc<WriterClient>, AppendWriter, Arc<TableInfo>)> {
+        let table_path = TablePath::new("db", "t");
+        let descriptor = TableDescriptor::builder()
+            .schema(Schema::builder().column("id", DataTypes::int()).build()?)
+            .distributed_by(Some(buckets), vec!["id".to_string()])
+            .build()?;
+        let table_info = Arc::new(TableInfo::of(table_path.clone(), 1, 1, descriptor, 0, 0));
+        let metadata = Arc::new(Metadata::new_for_test(Arc::new(build_cluster(
+            &table_path,
+            1,
+            buckets,
+        ))));
+        let admin = Arc::new(FlussAdmin::new(
+            Arc::new(RpcClient::new()),
+            metadata.clone(),
+        ));
+        let client = Arc::new(WriterClient::new(config, metadata, admin)?);
+        let writer =
+            TableAppend::new(table_path, table_info.clone(), client.clone()).create_writer()?;
+        Ok((client, writer, table_info))
+    }
+
+    fn int_batch(table_info: &TableInfo, rows: i32) -> Result<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            crate::record::to_arrow_schema(table_info.row_type())?,
+            vec![Arc::new(Int32Array::from((0..rows).collect::<Vec<i32>>()))],
+        )?)
+    }
+
+    #[tokio::test]
+    async fn split_batch_parts_reserve_their_size_not_a_full_batch() -> Result<()> {
+        // 33 parts of a full 2 MiB batch each would not fit the default 64 MiB buffer.
+        let config = Config {
+            writer_buffer_wait_timeout_ms: 0,
+            ..Config::default()
+        };
+        let (client, writer, table_info) = bucketed_writer(33, config)?;
+        let available = client.buffer_available_bytes();
+        writer.append_arrow_batch(int_batch(&table_info, 10_000)?)?;
+        let reserved = available - client.buffer_available_bytes();
+        assert!(
+            reserved < 33 * Config::default().writer_batch_size as usize,
+            "split parts reserved {reserved} bytes"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn split_batch_is_queued_whole_or_not_at_all() -> Result<()> {
+        let config = Config {
+            writer_buffer_wait_timeout_ms: 0,
+            ..Config::default()
+        };
+        let (client, writer, table_info) = bucketed_writer(33, config)?;
+        let batch = int_batch(&table_info, 100_000)?;
+        // Leave room for some of the parts but not all of them.
+        let free = 100 * 1024;
+        let held = client.reserve_memory(client.buffer_available_bytes() - free, None)?;
+        let error = writer
+            .append_arrow_batch(batch.clone())
+            .expect_err("buffer is too small for the whole batch");
+        assert!(
+            matches!(error, crate::error::Error::BufferExhausted { .. }),
+            "unexpected error {error}"
+        );
+        // Nothing was queued, so retrying writes every row exactly once.
+        assert_eq!(client.buffer_available_bytes(), free);
+
+        drop(held);
+        writer.append_arrow_batch(batch)?;
         Ok(())
     }
 }
