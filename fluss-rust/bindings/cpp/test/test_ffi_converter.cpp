@@ -106,6 +106,13 @@ TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
     EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
 }
 
+TEST(FfiConverterTest, LookupPendingOperationsConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_max_pending_operations, 25600u);
+    config.lookup_max_pending_operations = 64;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).lookup_max_pending_operations, 64u);
+}
+
 TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {
     fluss::Configuration config;
     EXPECT_TRUE(config.writer_dynamic_create_partition_enabled);

@@ -76,6 +76,55 @@ not apply to `CreateBucketBatchScanner()`.
   [C++ API reference](../../website/docs/user-guide/cpp/api-reference.md) and
   [log-table examples](../../website/docs/user-guide/cpp/example/log-tables.md).
 
+For fan-out key lookups, `Lookuper::LookupAsync` and `Lookuper::Poll` return
+completed requests in completion order without requiring one pending handle per
+request:
+
+```cpp
+std::vector<fluss::LookupCompletion> completed;
+size_t next = 0;
+size_t submitted = 0;
+while (next < keys.size() || submitted != 0) {
+    while (next < keys.size()) {
+        auto result = lookuper.LookupAsync(keys[next], next);
+        if (result.Ok()) {
+            ++next;
+            ++submitted;
+        } else if (result.error_code == fluss::ErrorCode::QUEUE_FULL) {
+            break;
+        } else {
+            ++next;
+        }
+    }
+    if (submitted != 0) {
+        auto poll_result = lookuper.Poll(1000, completed, 128);
+        if (!poll_result.Ok()) {
+            throw std::runtime_error(poll_result.error_message);
+        }
+        // Poll replaces `completed`, so process this batch before polling again.
+        for (const auto& completion : completed) {
+            if (!completion.result.Ok()) {
+                throw std::runtime_error(completion.result.error_message);
+            }
+        }
+        submitted -= completed.size();
+    }
+}
+```
+
+Each completion carries the caller's request ID, a per-lookup `Result`, and the
+lookup result. `PrefixLookuper::PrefixLookupAsync` and its `Poll` overload
+provide the same behavior for prefix lookups.
+The number of outstanding asynchronous lookups is controlled by
+`Configuration::lookup_max_pending_operations`, independently of the core
+lookup batching queue `lookup_queue_size`. When async capacity is full,
+`LookupAsync` returns `ErrorCode::QUEUE_FULL`; callers should poll and retry that
+submission before submitting more work.
+Each completion retains its capacity permit until the caller consumes it.
+`Poll` replaces its output vector and returns at most the caller-selected number
+of completions per call (1024 by default). `lookup_max_pending_operations`
+controls each lookuper's async capacity independently of `lookup_queue_size`.
+
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared
 worker, serially in dispatch order and off the I/O threads. `WriteCompletion.result`
 is the write outcome; copy it before passing it to another worker.

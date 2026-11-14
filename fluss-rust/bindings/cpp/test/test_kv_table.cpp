@@ -17,14 +17,15 @@
  * under the License.
  */
 
+#include <arrow/api.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <string>
 #include <thread>
 #include <vector>
-
-#include <arrow/api.h>
 
 #include "test_utils.h"
 
@@ -148,8 +149,8 @@ TEST_F(KvTableTest, UpsertDeleteAndLookup) {
         key.SetInt32(0, id);
         fluss::LookupResult result;
         ASSERT_OK(lookuper.Lookup(key, result));
-        ASSERT_TRUE(result.Found()) << "Record " << id
-                                    << " should still exist after deleting record 1";
+        ASSERT_TRUE(result.Found())
+            << "Record " << id << " should still exist after deleting record 1";
     }
 
     // Lookup non-existent key
@@ -242,8 +243,7 @@ TEST_F(KvTableTest, LookupWithNestedArray) {
 
     auto schema = fluss::Schema::NewBuilder()
                       .AddColumn("id", DataType::Int())
-                      .AddColumn("matrix",
-                                 DataType::Array(DataType::Array(DataType::Int())))
+                      .AddColumn("matrix", DataType::Array(DataType::Array(DataType::Int())))
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -332,9 +332,8 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
             .AddColumn("arr_row", DataType::Array(row_seq_label))
             .AddColumn("r_deep",
                        DataType::Row({{"inner", DataType::Row({{"n", DataType::Int()}})}}))
-            .AddColumn("r_with_arr",
-                       DataType::Row({{"f_int", DataType::Int()},
-                                      {"f_arr", DataType::Array(DataType::Int())}}))
+            .AddColumn("r_with_arr", DataType::Row({{"f_int", DataType::Int()},
+                                                    {"f_arr", DataType::Array(DataType::Int())}}))
             // r_rich: every scalar type + an array field in one ROW.
             .AddColumn("r_rich", DataType::Row({
                                      {"f_bool", DataType::Boolean()},
@@ -409,8 +408,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         }
         // map<string, array<int>> — value array fits the flat ctor.
         {
-            fluss::MapWriter m(1, DataType::String(),
-                               DataType::Array(DataType::Int()));
+            fluss::MapWriter m(1, DataType::String(), DataType::Array(DataType::Int()));
             m.SetKeyString("k");
             fluss::ArrayWriter v(2, DataType::Int());
             v.SetInt32(0, 10);
@@ -656,13 +654,12 @@ TEST_F(KvTableTest, MapWithTimestampValuesNtzAndLtz) {
 
     fluss::TablePath table_path("fluss", "test_map_timestamp_values_cpp");
 
-    auto schema =
-        fluss::Schema::NewBuilder()
-            .AddColumn("id", DataType::Int())
-            .AddColumn("mn", DataType::Map(DataType::String(), DataType::Timestamp(6)))
-            .AddColumn("ml", DataType::Map(DataType::String(), DataType::TimestampLtz(6)))
-            .SetPrimaryKeys({"id"})
-            .Build();
+    auto schema = fluss::Schema::NewBuilder()
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("mn", DataType::Map(DataType::String(), DataType::Timestamp(6)))
+                      .AddColumn("ml", DataType::Map(DataType::String(), DataType::TimestampLtz(6)))
+                      .SetPrimaryKeys({"id"})
+                      .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -759,8 +756,7 @@ TEST_F(KvTableTest, NativeNestedBuilderNoArrow) {
         for (int i = 0; i < 2; i++) {
             fluss::GenericRow ev(2);
             ev.SetInt32(0, i);
-            fluss::MapWriter attrs(static_cast<size_t>(i + 1), DataType::String(),
-                                   DataType::Int());
+            fluss::MapWriter attrs(static_cast<size_t>(i + 1), DataType::String(), DataType::Int());
             attrs.SetKeyString("a");
             attrs.SetValueInt32(i * 10);
             attrs.Commit();
@@ -819,8 +815,8 @@ TEST_F(KvTableTest, ComplexTypesPartialUpdate) {
             .AddColumn("id", DataType::Int())
             .AddColumn("name", DataType::String())
             .AddColumn("score", DataType::BigInt())
-            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
-                                                {"label", DataType::String()}}))
+            .AddColumn("nested",
+                       DataType::Row({{"seq", DataType::Int()}, {"label", DataType::String()}}))
             .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
             .AddColumn("tags", DataType::Array(DataType::String()))
             .SetPrimaryKeys({"id"})
@@ -939,8 +935,8 @@ TEST_F(KvTableTest, PartitionedComplexTypes) {
         fluss::Schema::NewBuilder()
             .AddColumn("region", DataType::String())
             .AddColumn("user_id", DataType::Int())
-            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
-                                                {"label", DataType::String()}}))
+            .AddColumn("nested",
+                       DataType::Row({{"seq", DataType::Int()}, {"label", DataType::String()}}))
             .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
             .SetPrimaryKeys({"region", "user_id"})
             .Build();
@@ -1521,10 +1517,8 @@ TEST_F(KvTableTest, PrefixLookupPartitioned) {
         std::string d;
     };
     std::vector<TestData> test_data = {
-        {"US", 1, "aaaaaaaaa", 1, "us-1"},
-        {"US", 1, "aaaaaaaaa", 2, "us-2"},
-        {"US", 2, "aaaaaaaaa", 3, "us-3"},
-        {"EU", 1, "aaaaaaaaa", 4, "eu-1"},
+        {"US", 1, "aaaaaaaaa", 1, "us-1"}, {"US", 1, "aaaaaaaaa", 2, "us-2"},
+        {"US", 2, "aaaaaaaaa", 3, "us-3"}, {"EU", 1, "aaaaaaaaa", 4, "eu-1"},
         {"EU", 1, "bbbbbbbbb", 5, "eu-2"},
     };
 
@@ -1805,8 +1799,10 @@ TEST_F(KvTableTest, PartitionedTableUpsertAndLookup) {
         std::string name;
         int64_t score;
     };
-    std::vector<TestData> test_data = {{"US", 1, "Gustave", 100}, {"US", 2, "Lune", 200},
-                                       {"EU", 1, "Sciel", 150},   {"EU", 2, "Maelle", 250},
+    std::vector<TestData> test_data = {{"US", 1, "Gustave", 100},
+                                       {"US", 2, "Lune", 200},
+                                       {"EU", 1, "Sciel", 150},
+                                       {"EU", 2, "Maelle", 250},
                                        {"APAC", 1, "Noco", 300}};
 
     for (const auto& d : test_data) {
@@ -1961,9 +1957,9 @@ TEST_F(KvTableTest, AllSupportedDatatypes) {
     std::string col_char = "hello";
     std::string col_string = "world of fluss rust client";
     std::string col_decimal = "123.45";
-    auto col_date = fluss::Date::FromDays(20476);           // 2026-01-23
-    auto col_time = fluss::Time::FromMillis(36827000);       // 10:13:47
-    auto col_timestamp = fluss::Timestamp::FromMillis(1769163227123);      // 2026-01-23 10:13:47.123
+    auto col_date = fluss::Date::FromDays(20476);                      // 2026-01-23
+    auto col_time = fluss::Time::FromMillis(36827000);                 // 10:13:47
+    auto col_timestamp = fluss::Timestamp::FromMillis(1769163227123);  // 2026-01-23 10:13:47.123
     auto col_timestamp_ltz = fluss::Timestamp::FromMillis(1769163227123);
     std::vector<uint8_t> col_bytes = {'b', 'i', 'n', 'a', 'r', 'y', ' ', 'd', 'a', 't', 'a'};
     std::vector<uint8_t> col_binary = {'f', 'i', 'x', 'e', 'd', ' ', 'b', 'i', 'n', 'a',
@@ -2018,8 +2014,10 @@ TEST_F(KvTableTest, AllSupportedDatatypes) {
         EXPECT_EQ(result.GetString(8), col_char) << "col_char mismatch";
         EXPECT_EQ(result.GetString(9), col_string) << "col_string mismatch";
         EXPECT_EQ(result.GetDecimalString(10), col_decimal) << "col_decimal mismatch";
-        EXPECT_EQ(result.GetDate(11).days_since_epoch, col_date.days_since_epoch) << "col_date mismatch";
-        EXPECT_EQ(result.GetTime(12).millis_since_midnight, col_time.millis_since_midnight) << "col_time mismatch";
+        EXPECT_EQ(result.GetDate(11).days_since_epoch, col_date.days_since_epoch)
+            << "col_date mismatch";
+        EXPECT_EQ(result.GetTime(12).millis_since_midnight, col_time.millis_since_midnight)
+            << "col_time mismatch";
         EXPECT_EQ(result.GetTimestamp(13).epoch_millis, col_timestamp.epoch_millis)
             << "col_timestamp mismatch";
         EXPECT_EQ(result.GetTimestamp(14).epoch_millis, col_timestamp_ltz.epoch_millis)
@@ -2123,6 +2121,13 @@ void ConnectSlowLookups(fluss::Connection& out, uint64_t batch_timeout_ms) {
     ASSERT_OK(fluss::Connection::Create(config, out));
 }
 
+void ConnectPollingLookups(fluss::Connection& out, size_t max_pending_operations) {
+    fluss::Configuration config;
+    config.bootstrap_servers = fluss_test::FlussTestEnvironment::Instance()->GetBootstrapServers();
+    config.lookup_max_pending_operations = max_pending_operations;
+    ASSERT_OK(fluss::Connection::Create(config, out));
+}
+
 }  // namespace
 
 TEST_F(KvTableTest, OneThreadKeepsManyLookupsInFlight) {
@@ -2205,6 +2210,167 @@ TEST_F(KvTableTest, WaitingForALookupWithATimeout) {
     ASSERT_TRUE(pending_rows.Available());
     ASSERT_OK(pending_rows.Wait(rows));
     EXPECT_EQ(rows.Size(), 2u);
+
+    ASSERT_OK(admin().DropTable(path, false));
+}
+
+TEST_F(KvTableTest, PollsAsyncLookupsByRequestId) {
+    fluss::TablePath path("fluss", "test_lookup_poll_cpp");
+    CreateSequenceTable(admin(), connection(), path);
+    fluss::Table table;
+    ASSERT_OK(connection().GetTable(path, table));
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    constexpr int32_t kKeys = 8;
+    std::vector<fluss::LookupCompletion> lookup_completions;
+    std::vector<fluss::PrefixLookupCompletion> prefix_completions;
+    std::vector<fluss::LookupCompletion> lookup_batch;
+    std::vector<fluss::PrefixLookupCompletion> prefix_batch;
+
+    ASSERT_OK(lookuper.LookupAsync(Key(0, 0), 0));
+    ASSERT_OK(lookuper.Poll(5000, lookup_batch, 1));
+    ASSERT_EQ(lookup_batch.size(), 1u);
+    lookup_completions.insert(
+        lookup_completions.end(),
+        std::make_move_iterator(lookup_batch.begin()),
+        std::make_move_iterator(lookup_batch.end()));
+
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_batch, 1));
+    ASSERT_EQ(prefix_batch.size(), 1u);
+    prefix_completions.insert(
+        prefix_completions.end(),
+        std::make_move_iterator(prefix_batch.begin()),
+        std::make_move_iterator(prefix_batch.end()));
+
+    for (int32_t id = 1; id < kKeys; ++id) {
+        ASSERT_OK(lookuper.LookupAsync(Key(id, 0), static_cast<uint64_t>(id)));
+        ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(id), static_cast<uint64_t>(id)));
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (lookup_completions.size() < kKeys || prefix_completions.size() < kKeys) {
+        ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+            << "Timed out waiting for asynchronous lookup completions";
+        if (lookup_completions.size() < kKeys) {
+            ASSERT_OK(lookuper.Poll(5000, lookup_batch));
+            lookup_completions.insert(
+                lookup_completions.end(),
+                std::make_move_iterator(lookup_batch.begin()),
+                std::make_move_iterator(lookup_batch.end()));
+        }
+        if (prefix_completions.size() < kKeys) {
+            ASSERT_OK(prefix_lookuper.Poll(5000, prefix_batch));
+            prefix_completions.insert(
+                prefix_completions.end(),
+                std::make_move_iterator(prefix_batch.begin()),
+                std::make_move_iterator(prefix_batch.end()));
+        }
+    }
+
+    std::vector<bool> lookup_ids(kKeys, false);
+    for (const auto& completion : lookup_completions) {
+        ASSERT_TRUE(completion.result.Ok());
+        ASSERT_TRUE(completion.lookup.Found());
+        ASSERT_LT(completion.request_id, static_cast<uint64_t>(kKeys));
+        ASSERT_FALSE(lookup_ids[completion.request_id]);
+        lookup_ids[completion.request_id] = true;
+        EXPECT_EQ(completion.lookup.GetInt32("id"), static_cast<int32_t>(completion.request_id));
+    }
+    EXPECT_TRUE(std::all_of(lookup_ids.begin(), lookup_ids.end(), [](bool found) { return found; }));
+
+    std::vector<bool> prefix_ids(kKeys, false);
+    for (const auto& completion : prefix_completions) {
+        ASSERT_TRUE(completion.result.Ok());
+        EXPECT_EQ(completion.lookup.Size(), 2u);
+        ASSERT_LT(completion.request_id, static_cast<uint64_t>(kKeys));
+        ASSERT_FALSE(prefix_ids[completion.request_id]);
+        prefix_ids[completion.request_id] = true;
+        EXPECT_EQ(completion.lookup.GetRow(0).GetInt32("id"),
+                  static_cast<int32_t>(completion.request_id));
+    }
+    EXPECT_TRUE(std::all_of(prefix_ids.begin(), prefix_ids.end(), [](bool found) { return found; }));
+
+    ASSERT_OK(admin().DropTable(path, false));
+}
+
+TEST_F(KvTableTest, PollAsyncLookupCapacityAndBatchLimit) {
+    fluss::TablePath path("fluss", "test_lookup_poll_capacity_cpp");
+    CreateSequenceTable(admin(), connection(), path);
+
+    fluss::Connection polling_connection;
+    ConnectPollingLookups(polling_connection, 4);
+    fluss::Table table;
+    ASSERT_OK(polling_connection.GetTable(path, table));
+
+    fluss::Lookuper lookuper;
+    ASSERT_OK(table.NewLookup().CreateLookuper(lookuper));
+    fluss::PrefixLookuper prefix_lookuper;
+    ASSERT_OK(table.NewPrefixLookup({"id"}, prefix_lookuper));
+
+    std::vector<fluss::LookupCompletion> completions;
+    std::vector<fluss::PrefixLookupCompletion> prefix_completions;
+
+    // Poll(-1) must not wait when this lookuper has no outstanding work.
+    const auto idle_start = std::chrono::steady_clock::now();
+    ASSERT_OK(lookuper.Poll(-1, completions));
+    EXPECT_LT(std::chrono::steady_clock::now() - idle_start, std::chrono::seconds(1));
+
+    ASSERT_OK(lookuper.LookupAsync(Key(0, 0), 0));
+    ASSERT_OK(lookuper.Poll(5000, completions, 1));
+    ASSERT_EQ(completions.size(), 1u);
+
+    // A completed result keeps its permit until the completion is destroyed.
+    ASSERT_OK(lookuper.LookupAsync(Key(1, 0), 1));
+    ASSERT_OK(lookuper.LookupAsync(Key(2, 0), 2));
+    ASSERT_OK(lookuper.LookupAsync(Key(3, 0), 3));
+    auto queue_full = lookuper.LookupAsync(Key(4, 0), 4);
+    EXPECT_EQ(queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
+    EXPECT_FALSE(queue_full.Ok());
+    EXPECT_TRUE(queue_full.IsRetriable());
+
+    // Poll replaces the output and drains no more than max_results.
+    ASSERT_OK(lookuper.Poll(5000, completions, 1));
+    ASSERT_EQ(completions.size(), 1u);
+    completions.clear();
+    ASSERT_OK(lookuper.LookupAsync(Key(4, 0), 4));
+
+    // Invalid key values fail during submission rather than becoming async
+    // completions.
+    fluss::GenericRow invalid_key(3);
+    invalid_key.SetString(0, "not an integer");
+    auto invalid_result = lookuper.LookupAsync(invalid_key, 5);
+    EXPECT_FALSE(invalid_result.Ok());
+    EXPECT_EQ(invalid_result.error_code, fluss::ErrorCode::CLIENT_ERROR);
+
+    fluss::GenericRow null_key(3);
+    null_key.SetNull(0);
+    invalid_result = lookuper.LookupAsync(null_key, 6);
+    EXPECT_FALSE(invalid_result.Ok());
+    EXPECT_EQ(invalid_result.error_code, fluss::ErrorCode::CLIENT_ERROR);
+
+    // Prefix lookups have the same independent capacity and polling semantics.
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(0), 0));
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(1), 1));
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(2), 2));
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(3), 3));
+    auto prefix_queue_full = prefix_lookuper.PrefixLookupAsync(Prefix(4), 4);
+    EXPECT_EQ(prefix_queue_full.error_code, fluss::ErrorCode::QUEUE_FULL);
+    EXPECT_FALSE(prefix_queue_full.Ok());
+    EXPECT_TRUE(prefix_queue_full.IsRetriable());
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
+    ASSERT_EQ(prefix_completions.size(), 1u);
+    EXPECT_LT(prefix_completions[0].request_id, 4u);
+
+    // Poll replaces the output and honors the caller-selected batch size.
+    prefix_completions.clear();
+    ASSERT_OK(prefix_lookuper.PrefixLookupAsync(Prefix(4), 4));
+    ASSERT_OK(prefix_lookuper.Poll(5000, prefix_completions, 1));
+    ASSERT_EQ(prefix_completions.size(), 1u);
+    EXPECT_LT(prefix_completions[0].request_id, 5u);
 
     ASSERT_OK(admin().DropTable(path, false));
 }
