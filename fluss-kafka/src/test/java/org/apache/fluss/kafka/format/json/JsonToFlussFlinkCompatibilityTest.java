@@ -34,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.util.stream.Stream;
@@ -41,7 +42,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Covers scalar coercion rules from Flink 1.20 JsonToRowDataConverters. */
+/** Covers scalar coercion rules from Flink 1.20 tree and streaming JSON converters. */
 class JsonToFlussFlinkCompatibilityTest {
     private static final ObjectMapper MAPPER =
             new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
@@ -88,6 +89,18 @@ class JsonToFlussFlinkCompatibilityTest {
                 Arguments.of(DataTypes.FLOAT(), "\"-0.0\"", -0.0F),
                 Arguments.of(DataTypes.DOUBLE(), "\" -2.5e2 \"", -250D),
                 Arguments.of(DataTypes.DOUBLE(), "\"-0.0\"", -0.0D));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.0", "0.0", "12e0", "1.5"})
+    void testStreamingTinyIntAndSmallIntRejectFloatingPointTokens(String json) {
+        // Flink's streaming converter parses non-integer tokens as text for these types.
+        for (DataType type : new DataType[] {DataTypes.TINYINT(), DataTypes.SMALLINT()}) {
+            assertThatThrownBy(() -> convert(ConversionPath.STREAMING, type, json))
+                    .as(type.asSummaryString())
+                    .isInstanceOf(KafkaRecordEncodingException.class)
+                    .hasMessageContaining("$.field");
+        }
     }
 
     @Test

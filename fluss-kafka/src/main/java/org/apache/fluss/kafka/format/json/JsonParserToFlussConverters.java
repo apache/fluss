@@ -685,13 +685,16 @@ final class JsonParserToFlussConverters {
         return parser.getText();
     }
 
-    private static byte[] decodeBase64(JsonParser parser, String path, DataType dataType) {
+    private static byte[] decodeBase64(JsonParser parser, String path, DataType dataType)
+            throws IOException {
         requireToken(
                 parser,
                 JsonToken.VALUE_STRING,
                 path,
                 dataType,
                 "expected a Base64 string or binary value");
+        // Validate JSON before catching conversion errors and retain the complete text for rescue.
+        parser.getText();
         try {
             return parser.getBinaryValue();
         } catch (IOException | IllegalArgumentException e) {
