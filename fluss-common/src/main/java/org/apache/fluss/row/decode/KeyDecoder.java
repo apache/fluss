@@ -63,7 +63,9 @@ public interface KeyDecoder {
         }
 
         if (kvFormatVersion == 1 || (kvFormatVersion == 2 && isDefaultBucketKey)) {
-            if (lakeFormat == null || lakeFormat == DataLakeFormat.LANCE) {
+            if (lakeFormat == null
+                    || lakeFormat == DataLakeFormat.LANCE
+                    || lakeFormat == DataLakeFormat.DELTA) {
                 return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
             }
             if (lakeFormat == DataLakeFormat.PAIMON) {

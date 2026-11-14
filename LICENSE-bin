@@ -743,6 +743,18 @@ License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.
 
 ------------------------------------------------------------------------------------
 
+This product bundles Delta Lake Kernel.
+Project URL: https://github.com/delta-io/delta
+License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.0.txt
+
+------------------------------------------------------------------------------------
+
+This product bundles Unity Catalog.
+Project URL: https://github.com/unitycatalog/unitycatalog
+License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.0.txt
+
+------------------------------------------------------------------------------------
+
 This product bundles Apache Arrow.
 Project URL: https://arrow.apache.org
 License: Apache License, Version 2.0 - http://www.apache.org/licenses/LICENSE-2.0.txt
