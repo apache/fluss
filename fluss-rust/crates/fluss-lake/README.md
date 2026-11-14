@@ -16,9 +16,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# UnionRead source boundaries
+# Bounded UnionRead
 
-`fluss-lake` captures reusable boundaries for Fluss-only and lake-plus-log reads without opening a lake catalog or reading lake files. The default planner and reader are delivered separately.
+`fluss-lake` captures reusable source boundaries and plans bounded Fluss-only or lake-plus-log reads. Supply a `LakeSource` for lake planning. Default lake backends and combined execution are added separately.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -38,7 +38,7 @@ let scoped = table.capture_read_context_with_partition_scope(&col("region").ge("
 
 ## Partition scope
 
-The explicit scope is a core `Predicate` over partition columns. Conditions are evaluated against partition values before offset queries. Safe STRING equalities also narrow the Admin listing; ranges and disjunctions are evaluated locally. The predicate must be exactly encodable by the existing Fluss predicate protocol. Unsupported expressions fail before capture rather than being rounded or silently dropped. Automatic extraction of safe partition conditions from a query filter belongs to the subsequent planner.
+The explicit scope is a core `Predicate` over partition columns. Conditions are evaluated against partition values before offset queries. Safe STRING equalities also narrow the Admin listing; ranges and disjunctions are evaluated locally. The predicate must be exactly encodable by the existing Fluss predicate protocol. Unsupported expressions fail before capture rather than being rounded or silently dropped. The planner extracts safe string equalities from the query filter before capturing boundaries; the full predicate remains for exact evaluation.
 
 Lake planning must apply the same scope, including to lake-only expired partitions. An empty log-range list does not imply an empty lake selection. Scans sharing a scoped context must stay within it; use table-wide capture when sharing across different selections.
 
@@ -68,24 +68,35 @@ For cached metadata, `FlussLakeReadContext::from_protobuf(message, live_table, c
 
 `PbUnionReadContext`, `PbUnionReadLake` and `PbUnionReadLogRange` are defined in the canonical `FlussApi.proto` and generated for Java and Rust. Rust exposes them through `fluss::protocol`. The message includes the schema ID, not a serialized Rust schema, and reuses `PbPredicate` with stable field IDs for the partition scope. Java coordinators can use existing snapshot/offset APIs or connector planning and populate this contract. No new Java capture helper or C ABI is included here.
 
-The protocol starts at version 1. Optional additive fields are compatible only when ignoring them preserves the read semantics. Unknown optional fields are accepted; unknown versions, coverage kinds and baseline kinds are rejected. Incompatible semantics require a new version. Rolling upgrades must keep producers within the version and semantic kinds supported by all consumers. Shared historical logs and KV snapshots need explicit future semantics; they cannot be introduced as optional hints that old consumers silently ignore.
+The protocol starts at version 1. Optional additive fields are compatible only when ignoring them preserves the read semantics. Unknown optional fields are accepted; unknown versions, coverage kinds and baseline kinds are rejected. Incompatible semantics require a new version. Rolling upgrades must keep producers within the version and semantic kinds supported by all consumers. KV snapshots use baseline kind 2 and require `kv_snapshot_id`; older consumers reject that kind. Shared historical logs likewise need an explicit semantic kind rather than an optional hint that older consumers silently ignore.
 
-`coverage = 0` means complete captured partitions; `coverage = 1` means one bucket. Neither implies that the live log ranges enumerate every partition in the lake. The engine owns message transport, scheduling and runtime credentials.
+`coverage = 0` means complete captured partitions; `coverage = 1` means one bucket; `coverage = 2` means a lake-only snapshot with no captured log ranges. Log ranges do not enumerate every partition in the lake. The engine owns message transport, scheduling and runtime credentials.
 
 ## PK correctness and retained data
 
 | Baseline | Read requirement |
 | --- | --- |
 | `Lake` | Pinned lake snapshot plus its matching log seam. A seam of zero is valid. |
+| `KvSnapshot { snapshot_id }` | Specified persisted bucket snapshot plus its matching log seam. |
 | `None`, Append table | Start at the captured earliest retained offset. |
 | `None`, PK table | Complete log history from offset zero. Truncated history fails with `DataUnavailable`, even if the retained range is empty. |
 
-Without a baseline, retained PK changes cannot recover keys whose last update has expired. KV snapshot fallback remains future work. Boundary capture preserves merge-engine metadata; the subsequent default executor targets deduplicate semantics, while other merge engines require explicit executor support.
+Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; opening the snapshot and reconciling rows belong to the subsequent PK executor. Boundary capture preserves merge-engine metadata; the subsequent default executor targets deduplicate semantics, while other merge engines require explicit executor support.
 
-Call `validate_available()` for required ranges after safe pruning. It detects a lake seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
+Call `validate_available()` for required ranges after safe pruning. It detects a baseline seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
+
+KV capture queries metadata only and does not require the `kv-snapshot` feature or RocksDB. The context holds no lease. A worker must open the specified snapshot and verify its log seam; if it has expired, the attempt fails. Engines that need to protect queued tasks must hold a core snapshot lease until download completes. Snapshot leases do not protect the log tail.
 
 ## Follow-ups
 
 Streaming discovery, progress and checkpointing require a future API; this context describes bounded reads. Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
 
 Tables with `table.datalake.historical-partition.enabled=true` are rejected during boundary capture and import: writes to expired partitions can remain in the shared `__historical__` log before tiering and are missing from ordinary partition ranges and the lake snapshot. Shared historical-log support is tracked in [#5001](https://github.com/apache/fluss/issues/5001). Expired partitions already present in a lake snapshot remain supported when this option is disabled.
+
+## Default planning and lake sources
+
+`table.new_scan().with_lake_source(source).plan().await?` captures bounded inputs and plans tasks. `plan_with_context(&context)` reuses previously captured boundaries. This layer provides the planner and lake-source contracts; the default backend and execution reader are added separately.
+
+Append lake tasks and bucket log tails are independent. PK tasks group a complete lake or KV baseline and log tail by partition and bucket. The source must reconcile lake versions and deletion vectors before returning a PK baseline. Partition and bucket pruning is conservative; execution must apply the exact filter after reconciliation.
+
+Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.

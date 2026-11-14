@@ -54,6 +54,14 @@ pub enum FlussLakeError {
         source: Box<ClientError>,
     },
 
+    /// Merge engine is unsupported by default PK tail reconciliation.
+    #[error("unsupported merge engine: {0}")]
+    UnsupportedMergeEngine(String),
+
+    /// Backend or execution failure outside the classified categories.
+    #[error("UnionRead internal error: {0}")]
+    Internal(String),
+
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
     InvalidReadContext(String),
