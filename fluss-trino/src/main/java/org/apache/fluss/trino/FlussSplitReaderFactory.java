@@ -18,7 +18,7 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.Scan;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -26,16 +26,16 @@ final class FlussSplitReaderFactory {
 
     private FlussSplitReaderFactory() {}
 
-    static FlussSplitReader create(Table table, FlussSplit split) {
-        checkNotNull(table, "table is null");
+    static FlussSplitReader create(Scan scan, FlussSplit split) {
+        checkNotNull(scan, "scan is null");
         checkNotNull(split, "split is null");
 
         switch (split.getScanType()) {
             case LOG:
                 return new FlussLogSplitReader(
-                        table, split.getBucket(), split.getRequiredLogRange());
+                        scan, split.getBucket(), split.getRequiredLogRange());
             case KV:
-                return new FlussKvSplitReader(table, split.getBucket());
+                return new FlussKvSplitReader(scan, split.getBucket());
             default:
                 throw new IllegalArgumentException(
                         "Unsupported Fluss scan type: " + split.getScanType());

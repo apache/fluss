@@ -22,7 +22,6 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.DataTypeRoot;
 
 import io.airlift.slice.Slice;
-import io.trino.spi.predicate.Domain;
 import io.trino.spi.type.Type;
 
 import java.nio.ByteBuffer;
@@ -48,13 +47,7 @@ final class FlussPredicateValues {
      * Converts only verified Trino representations. Unsupported types do not participate in
      * pruning.
      */
-    static Optional<Object> toFlussValue(DataTypeRoot type, Domain domain) {
-        if (!domain.isSingleValue()) {
-            return Optional.empty();
-        }
-        Type trinoType = domain.getType();
-        Object value = domain.getSingleValue();
-
+    static Optional<Object> toFlussValue(DataTypeRoot type, Type trinoType, Object value) {
         switch (type) {
             case BOOLEAN:
                 return trinoType.equals(BOOLEAN) && value instanceof Boolean

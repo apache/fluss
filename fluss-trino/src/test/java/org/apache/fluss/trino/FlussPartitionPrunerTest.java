@@ -18,7 +18,9 @@
 
 package org.apache.fluss.trino;
 
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -34,9 +36,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -72,6 +76,40 @@ final class FlussPartitionPrunerTest {
     @MethodSource("unsupportedValues")
     void testUnsupportedTypesAndMismatchedDomains(DataType type, Domain domain) {
         assertThat(extractValue(type, domain)).isEmpty();
+    }
+
+    @Test
+    void testDateRangeRetainsPartitionsWithUnrecognizedValues() {
+        List<PartitionInfo> partitions =
+                Arrays.asList(
+                        datePartition(1, "2026-09-30"),
+                        datePartition(2, "2026-10-01"),
+                        datePartition(3, "2026-11-01"),
+                        datePartition(4, "2026-02-30"),
+                        datePartition(5, "999999999-10-01"));
+        Domain range =
+                Domain.create(
+                        ValueSet.ofRanges(
+                                Range.range(
+                                        DATE,
+                                        LocalDate.of(2026, 10, 1).toEpochDay(),
+                                        true,
+                                        LocalDate.of(2026, 11, 1).toEpochDay(),
+                                        false)),
+                        false);
+        assertThat(
+                        FlussPartitionPruner.prunePartitions(
+                                partitionedTable(DataTypes.DATE()),
+                                TupleDomain.withColumnDomains(
+                                        Collections.singletonMap(
+                                                new FlussColumnHandle("p", 1), range)),
+                                partitions))
+                .extracting(PartitionInfo::getPartitionId)
+                .containsExactly(2L, 4L, 5L);
+    }
+
+    private static PartitionInfo datePartition(long id, String value) {
+        return new PartitionInfo(id, ResolvedPartitionSpec.fromPartitionValue("p", value), null, 1);
     }
 
     @Test

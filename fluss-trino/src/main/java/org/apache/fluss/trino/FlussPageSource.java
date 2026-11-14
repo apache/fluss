@@ -19,8 +19,11 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.Scan;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 
 import io.trino.spi.Page;
@@ -34,6 +37,7 @@ import io.trino.spi.connector.SourcePage;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.OptionalLong;
 
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
@@ -64,6 +68,7 @@ final class FlussPageSource implements ConnectorPageSource {
     private final FlussTableHandle handle;
     private final FlussSplit split;
     private final List<FlussColumnHandle> columns;
+    private final int domainCompactionThreshold;
     private final MemoryContext memory;
 
     private Table table;
@@ -81,11 +86,13 @@ final class FlussPageSource implements ConnectorPageSource {
             FlussTableHandle handle,
             FlussSplit split,
             List<FlussColumnHandle> columns,
+            int domainCompactionThreshold,
             MemoryContext memory) {
         this.clients = checkNotNull(clients, "clients is null");
         this.handle = checkNotNull(handle, "handle is null");
         this.split = checkNotNull(split, "split is null");
         this.columns = ImmutableList.copyOf(checkNotNull(columns, "columns is null"));
+        this.domainCompactionThreshold = domainCompactionThreshold;
         this.memory = checkNotNull(memory, "memory is null");
     }
 
@@ -284,9 +291,27 @@ final class FlussPageSource implements ConnectorPageSource {
         validateTable(handle, tableInfo);
         validateSplit(split, tableInfo);
 
-        decoder = new FlussRowDecoder(tableInfo.getSchema(), columns);
+        // Arrow log projection uses field positions against each batch's schema. After schema
+        // evolution newly added positions may be absent in older batches.
+        // Read full rows so the client can map historical schemas before selecting output columns.
+        boolean arrowLog =
+                split.getScanType() == FlussScanType.LOG
+                        && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW;
+        boolean projectionEnabled = !arrowLog || tableInfo.getSchemaId() == 1;
+        decoder = new FlussRowDecoder(tableInfo.getSchema(), columns, projectionEnabled);
 
-        reader = FlussSplitReaderFactory.create(table, split);
+        // Column handles (including residual-filter inputs) retain original schema ordinals.
+        // The decoder source indexes follow the selected scanner layout.
+        Scan scan = table.newScan();
+        if (arrowLog && projectionEnabled) {
+            Optional<Predicate> predicate =
+                    FlussLogPredicateConverter.convert(
+                            tableInfo, handle.getConstraint(), domainCompactionThreshold);
+            if (predicate.isPresent()) {
+                scan = scan.filter(predicate.get());
+            }
+        }
+        reader = FlussSplitReaderFactory.create(scan.project(decoder.getProjectedColumns()), split);
     }
 
     private FlussSplitReader.PollResult pollReader() {

@@ -33,10 +33,12 @@ binary.
 | Non-partitioned and partitioned Primary Key Table reads | Supported, using bucket snapshots |
 | Lakehouse table reads | Not supported; metadata remains available |
 | Writes, DDL, lookup and Union Read | Not supported |
+| Top-level column projection | Supported for Log and Primary Key scans through the Fluss Client API |
 | Predicate capture and transport | Supported for Trino column domains; filters remain evaluated by Trino |
-| Partition pruning | Supported for single-value equality constraints on STRING, BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns |
-| Bucket pruning | Supported for non-Hudi tables when every bucket-key column has a single non-null equality constraint of a supported type |
-| Row filtering, aggregation, limit, range/IN pruning and PK lookup pushdown | Not implemented |
+| Partition pruning | Equality, IN and ranges on STRING, BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns |
+| Bucket pruning | Equality and finite IN on complete bucket keys for supported layouts |
+| Arrow Log batch pruning | Equality, IN and ranges on supported statistics columns in tables with the initial schema |
+| Row filtering, aggregation, limit and PK lookup pushdown | Not implemented |
 | Task retries / fault-tolerant execution | Not supported |
 | SASL authentication on JDK 25 | Not supported; configuration properties are retained |
 
@@ -50,7 +52,8 @@ For partitioned tables, single-value equality constraints on STRING, BOOLEAN,
 TINYINT, SMALLINT, INTEGER, BIGINT and DATE partition columns are used to
 restrict bucket discovery through Fluss's partition-aware Admin API. Multiple
 partition keys can be constrained independently, including partial partition
-specifications.
+specifications. The connector evaluates exact IN and range domains against
+the returned partition values before planning buckets and offsets.
 Unsupported predicates and partition types conservatively fall back to scanning
 all relevant buckets. The connector does not enforce row-level predicates, so
 all remaining filters continue to be evaluated by Trino.
@@ -60,9 +63,10 @@ requests during split planning.
 Bucket pruning applies to both Log and Primary Key tables with explicit or
 default bucket keys. Supported bucket-key types are STRING, BYTES, BOOLEAN,
 TINYINT, SMALLINT, INTEGER, BIGINT and DATE. All bucket-key columns must be
-constrained; ranges, multiple values and nullable domains fall back to scanning
-all candidate buckets. Fluss's own key encoders and bucketing functions determine
-the selected bucket, using each physical partition's bucket count. Partition
+constrained by non-null equality or finite IN predicates with at most 256
+complete key combinations. Ranges and larger or unsupported key sets fall back
+to scanning all candidate buckets. Fluss's key encoders and bucketing functions
+determine the selected buckets using each physical partition's bucket count. Partition
 pruning and bucket pruning can be combined. Default primary-key bucketing does
 not require equality predicates on partition columns.
 
@@ -198,6 +202,17 @@ connector supports executing `CREATE TABLE`.
 ## Read semantics
 
 ### Log Tables
+
+Arrow Log reads with the initial schema can skip record batches using min/max
+statistics. Configure `table.statistics.columns` before writing to collect
+statistics for filter columns. The connector uses the same scalar types as
+partition pruning, and Trino evaluates the original SQL predicate on the
+remaining rows. Evolved Arrow tables use the full-row scan path.
+
+Set `fluss.domain_compaction_threshold` to a positive integer to control when
+Trino simplifies a column domain for Arrow batch pruning (default 256). This
+setting can widen a domain, so additional batches may be read. Partition and
+bucket selection continue to use the original domains.
 
 For non-partitioned tables, planning performs two sequential bulk Admin API
 lookups: earliest offsets, then latest offsets, each covering the selected

@@ -29,23 +29,28 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.predicate.Domain;
 import io.trino.spi.predicate.TupleDomain;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.TreeSet;
 
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
 import static org.apache.fluss.trino.FlussPredicateValues.toFlussValue;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Extracts safe equality predicates for physical bucket pruning. */
+/** Routes a bounded set of complete bucket keys through the writer's bucket calculator. */
 final class FlussBucketPruner {
 
-    private final BucketCalculator calculator;
-    private final byte[] encodedKey;
+    private static final int MAX_BUCKET_KEY_COMBINATIONS = 256;
 
-    private FlussBucketPruner(BucketCalculator calculator, byte[] encodedKey) {
+    private final BucketCalculator calculator;
+    private final List<byte[]> encodedKeys;
+
+    private FlussBucketPruner(BucketCalculator calculator, List<byte[]> encodedKeys) {
         this.calculator = checkNotNull(calculator, "calculator is null");
-        this.encodedKey = checkNotNull(encodedKey, "encodedKey is null");
+        this.encodedKeys = encodedKeys;
     }
 
     /** Returns empty when a complete and safely encodable bucket key cannot be obtained. */
@@ -71,7 +76,8 @@ final class FlussBucketPruner {
         Map<FlussColumnHandle, Domain> domains = constraint.getDomains().get();
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();
 
-        GenericRow row = new GenericRow(bucketKeys.size());
+        List<List<Object>> keyValues = new ArrayList<>();
+        int combinations = 1;
 
         for (int i = 0; i < bucketKeys.size(); i++) {
             String name = bucketKeys.get(i);
@@ -86,30 +92,55 @@ final class FlussBucketPruner {
             }
 
             Domain domain = domains.get(new FlussColumnHandle(name, fieldIndex));
-            if (domain == null || !domain.isSingleValue()) {
+            if (domain == null || domain.isNullAllowed() || !domain.getValues().isDiscreteSet()) {
                 return Optional.empty();
             }
 
-            Optional<Object> value = toFlussValue(column.getDataType().getTypeRoot(), domain);
-            if (!value.isPresent()) {
+            List<Object> literals = domain.getValues().getDiscreteSet();
+            if (literals.isEmpty()
+                    || combinations > MAX_BUCKET_KEY_COMBINATIONS / literals.size()) {
                 return Optional.empty();
             }
+            combinations *= literals.size();
 
-            row.setField(i, value.get());
+            List<Object> values = new ArrayList<>(literals.size());
+            for (Object literal : literals) {
+                Optional<Object> value =
+                        toFlussValue(column.getDataType().getTypeRoot(), domain.getType(), literal);
+                if (!value.isPresent()) {
+                    return Optional.empty();
+                }
+                values.add(value.get());
+            }
+            keyValues.add(values);
         }
 
         BucketCalculator calculator = BucketCalculator.forBucketKeyRow(tableInfo);
-        byte[] encodedKey = calculator.encodeKey(row);
-
-        return Optional.of(new FlussBucketPruner(calculator, encodedKey));
+        List<byte[]> encodedKeys = new ArrayList<>(combinations);
+        GenericRow row = new GenericRow(bucketKeys.size());
+        for (int key = 0; key < combinations; key++) {
+            // Enumerate the Cartesian product of bucket-key values.
+            int remaining = key;
+            for (int i = keyValues.size() - 1; i >= 0; i--) {
+                List<Object> values = keyValues.get(i);
+                row.setField(i, values.get(remaining % values.size()));
+                remaining /= values.size();
+            }
+            encodedKeys.add(calculator.encodeKey(row));
+        }
+        return Optional.of(new FlussBucketPruner(calculator, encodedKeys));
     }
 
-    int getBucketId(int bucketCount) {
+    List<Integer> getBucketIds(int bucketCount) {
         if (bucketCount <= 0) {
             throw new TrinoException(FLUSS_SPLIT_ERROR, "Invalid bucket count: " + bucketCount);
         }
         try {
-            return calculator.getBucketId(encodedKey, bucketCount);
+            Set<Integer> buckets = new TreeSet<>();
+            for (byte[] encodedKey : encodedKeys) {
+                buckets.add(calculator.getBucketId(encodedKey, bucketCount));
+            }
+            return new ArrayList<>(buckets);
         } catch (IllegalArgumentException e) {
             throw new TrinoException(FLUSS_SPLIT_ERROR, e.getMessage(), e);
         }

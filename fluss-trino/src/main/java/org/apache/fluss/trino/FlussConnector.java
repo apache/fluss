@@ -78,6 +78,11 @@ public class FlussConnector implements Connector {
     }
 
     @Override
+    public List<PropertyMetadata<?>> getSessionProperties() {
+        return FlussSessionProperties.getSessionProperties();
+    }
+
+    @Override
     public List<PropertyMetadata<?>> getTableProperties() {
         return FlussTableProperties.getTableProperties();
     }

@@ -48,6 +48,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 import java.util.stream.Stream;
 
 import static io.airlift.slice.Slices.utf8Slice;
@@ -132,7 +136,7 @@ class FlussBucketPrunerTest {
 
         int expected = BucketingFunction.of(null).bucketing(writerKey, 8);
 
-        assertThat(pruner.getBucketId(8)).isEqualTo(expected);
+        assertThat(pruner.getBucketIds(8)).containsExactly(expected);
     }
 
     @Test
@@ -165,7 +169,7 @@ class FlussBucketPrunerTest {
 
         byte[] key = primary.encodeKey(lookupRow);
         int expected = BucketingFunction.of(null).bucketing(key, 8);
-        assertThat(pruner.getBucketId(8)).isEqualTo(expected);
+        assertThat(pruner.getBucketIds(8)).containsExactly(expected);
     }
 
     @Test
@@ -202,8 +206,10 @@ class FlussBucketPrunerTest {
                                 table.getTableConfig(),
                                 true)
                         .encodeKey(lookupRow);
-        assertThat(pruner.getBucketId(4)).isEqualTo(BucketingFunction.of(null).bucketing(key, 4));
-        assertThat(pruner.getBucketId(8)).isEqualTo(BucketingFunction.of(null).bucketing(key, 8));
+        assertThat(pruner.getBucketIds(4))
+                .containsExactly(BucketingFunction.of(null).bucketing(key, 4));
+        assertThat(pruner.getBucketIds(8))
+                .containsExactly(BucketingFunction.of(null).bucketing(key, 8));
     }
 
     @Test
@@ -229,8 +235,10 @@ class FlussBucketPrunerTest {
         byte[] key =
                 KeyEncoder.ofBucketKeyEncoder(table.getRowType(), table.getBucketKeys(), null)
                         .encodeKey(writerRow);
-        assertThat(pruner.getBucketId(4)).isEqualTo(BucketingFunction.of(null).bucketing(key, 4));
-        assertThat(pruner.getBucketId(8)).isEqualTo(BucketingFunction.of(null).bucketing(key, 8));
+        assertThat(pruner.getBucketIds(4))
+                .containsExactly(BucketingFunction.of(null).bucketing(key, 4));
+        assertThat(pruner.getBucketIds(8))
+                .containsExactly(BucketingFunction.of(null).bucketing(key, 8));
     }
 
     @Test
@@ -260,8 +268,8 @@ class FlussBucketPrunerTest {
                                                 new FlussColumnHandle("b", 1),
                                                 Domain.singleValue(BIGINT, 2L)))))
                 .isEmpty();
-        assertThat(
-                        FlussBucketPruner.create(
+        FlussBucketPruner pruner =
+                FlussBucketPruner.create(
                                 table,
                                 TupleDomain.withColumnDomains(
                                         ImmutableMap.of(
@@ -269,8 +277,49 @@ class FlussBucketPrunerTest {
                                                 Domain.multipleValues(
                                                         INTEGER, Arrays.asList(1L, 2L)),
                                                 new FlussColumnHandle("b", 1),
-                                                Domain.singleValue(INTEGER, 2L)))))
-                .isEmpty();
+                                                Domain.multipleValues(
+                                                        INTEGER, Arrays.asList(10L, 20L)))))
+                        .get();
+        BucketCalculator calculator = BucketCalculator.forBucketKeyRow(table);
+        for (int count : Arrays.asList(1, 8, 100_000_000)) {
+            Set<Integer> expected = new TreeSet<>();
+            for (int a : Arrays.asList(1, 2)) {
+                for (int b : Arrays.asList(10, 20)) {
+                    expected.add(
+                            calculator.getBucketId(
+                                    calculator.encodeKey(GenericRow.of(a, b)), count));
+                }
+            }
+            assertThat(pruner.getBucketIds(count)).containsExactlyElementsOf(expected);
+        }
+    }
+
+    @Test
+    void testBucketCombinationLimit() {
+        TableInfo table =
+                table(
+                        Schema.newBuilder()
+                                .column("a", DataTypes.INT())
+                                .column("b", DataTypes.INT())
+                                .build(),
+                        Arrays.asList("a", "b"),
+                        Collections.emptyList(),
+                        8);
+        List<Long> left = LongStream.range(0, 16).boxed().collect(Collectors.toList());
+        for (int size : Arrays.asList(16, 17)) {
+            List<Long> right = LongStream.range(0, size).boxed().collect(Collectors.toList());
+            assertThat(
+                            FlussBucketPruner.create(
+                                            table,
+                                            TupleDomain.withColumnDomains(
+                                                    ImmutableMap.of(
+                                                            new FlussColumnHandle("a", 0),
+                                                            Domain.multipleValues(INTEGER, left),
+                                                            new FlussColumnHandle("b", 1),
+                                                            Domain.multipleValues(INTEGER, right))))
+                                    .isPresent())
+                    .isEqualTo(size == 16);
+        }
     }
 
     @ParameterizedTest
@@ -287,7 +336,7 @@ class FlussBucketPrunerTest {
                                                 new FlussColumnHandle("id", 0),
                                                 Domain.singleValue(INTEGER, 5L))))
                         .orElseThrow(() -> new AssertionError("Expected bucket pruning"));
-        assertThatThrownBy(() -> pruner.getBucketId(count))
+        assertThatThrownBy(() -> pruner.getBucketIds(count))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Invalid bucket count");
     }
@@ -395,7 +444,7 @@ class FlussBucketPrunerTest {
     }
 
     @Test
-    void testUnsafeAndNonSingletonDomainsDoNotPrune() {
+    void testUnsafeAndNonDiscreteDomainsDoNotPrune() {
         TableInfo table =
                 table(
                         Schema.newBuilder().column("key", DataTypes.STRING()).build(),
@@ -408,8 +457,6 @@ class FlussBucketPrunerTest {
                         Domain.notNull(VARCHAR),
                         Domain.onlyNull(VARCHAR),
                         Domain.singleValue(VARCHAR, utf8Slice("a"), true),
-                        Domain.multipleValues(
-                                VARCHAR, Arrays.asList(utf8Slice("a"), utf8Slice("b"))),
                         Domain.create(
                                 ValueSet.ofRanges(Range.greaterThan(VARCHAR, utf8Slice("a"))),
                                 false),
@@ -545,7 +592,7 @@ class FlussBucketPrunerTest {
         int bucketCount = table.isPartitioned() ? 7 : table.getNumBuckets();
         int expected = writerCalculator.getBucketId(writerCalculator.encodeKey(row), bucketCount);
 
-        assertThat(pruner.getBucketId(bucketCount)).isEqualTo(expected);
+        assertThat(pruner.getBucketIds(bucketCount)).containsExactly(expected);
     }
 
     private static Stream<Arguments> supportedValues() {

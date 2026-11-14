@@ -28,12 +28,9 @@ import org.apache.fluss.types.DataTypes;
 
 import io.airlift.slice.Slices;
 import io.trino.spi.predicate.Domain;
-import io.trino.spi.predicate.Range;
 import io.trino.spi.predicate.TupleDomain;
-import io.trino.spi.predicate.ValueSet;
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Optional;
 
@@ -53,32 +50,24 @@ class TestFlussPredicateValues {
 
     @Test
     void testSupportedIntegralValues() {
-        assertThat(toFlussValue(DataTypeRoot.TINYINT, Domain.singleValue(TINYINT, 127L)))
-                .contains((byte) 127);
-        assertThat(toFlussValue(DataTypeRoot.SMALLINT, Domain.singleValue(SMALLINT, -32768L)))
-                .contains((short) -32768);
-        assertThat(toFlussValue(DataTypeRoot.INTEGER, Domain.singleValue(INTEGER, 123L)))
-                .contains(123);
-        assertThat(toFlussValue(DataTypeRoot.BIGINT, Domain.singleValue(BIGINT, Long.MAX_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.TINYINT, TINYINT, 127L)).contains((byte) 127);
+        assertThat(toFlussValue(DataTypeRoot.SMALLINT, SMALLINT, -32768L)).contains((short) -32768);
+        assertThat(toFlussValue(DataTypeRoot.INTEGER, INTEGER, 123L)).contains(123);
+        assertThat(toFlussValue(DataTypeRoot.BIGINT, BIGINT, Long.MAX_VALUE))
                 .contains(Long.MAX_VALUE);
-        assertThat(toFlussValue(DataTypeRoot.DATE, Domain.singleValue(DATE, 20_000L)))
-                .contains(20_000);
+        assertThat(toFlussValue(DataTypeRoot.DATE, DATE, 20_000L)).contains(20_000);
     }
 
     @Test
     void testBooleanValues() {
-        assertThat(toFlussValue(DataTypeRoot.BOOLEAN, Domain.singleValue(BOOLEAN, true)))
-                .contains(true);
-        assertThat(toFlussValue(DataTypeRoot.BOOLEAN, Domain.singleValue(BOOLEAN, false)))
-                .contains(false);
+        assertThat(toFlussValue(DataTypeRoot.BOOLEAN, BOOLEAN, true)).contains(true);
+        assertThat(toFlussValue(DataTypeRoot.BOOLEAN, BOOLEAN, false)).contains(false);
     }
 
     @Test
     void testLosslessStringConversion() {
         Optional<Object> value =
-                toFlussValue(
-                        DataTypeRoot.STRING,
-                        Domain.singleValue(VARCHAR, Slices.utf8Slice("Fluss-中文-🙂")));
+                toFlussValue(DataTypeRoot.STRING, VARCHAR, Slices.utf8Slice("Fluss-中文-🙂"));
         assertThat(value).isPresent();
         assertThat(value.get().toString()).isEqualTo("Fluss-中文-🙂");
     }
@@ -86,10 +75,7 @@ class TestFlussPredicateValues {
     @Test
     void testInvalidUtf8FallsBack() {
         byte[] invalidUtf8 = {(byte) 0xC3, (byte) 0x28};
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.STRING,
-                                Domain.singleValue(VARCHAR, Slices.wrappedBuffer(invalidUtf8))))
+        assertThat(toFlussValue(DataTypeRoot.STRING, VARCHAR, Slices.wrappedBuffer(invalidUtf8)))
                 .isEmpty();
     }
 
@@ -97,88 +83,47 @@ class TestFlussPredicateValues {
     void testBytesPreserveBinaryContents() {
         byte[] bytes = {0, 1, (byte) 0x80, (byte) 0xFF};
         Optional<Object> converted =
-                toFlussValue(
-                        DataTypeRoot.BYTES,
-                        Domain.singleValue(VARBINARY, Slices.wrappedBuffer(bytes)));
+                toFlussValue(DataTypeRoot.BYTES, VARBINARY, Slices.wrappedBuffer(bytes));
         assertThat(converted).isPresent();
         assertThat((byte[]) converted.get()).containsExactly(bytes);
     }
 
     @Test
     void testTypeMismatchFallsBack() {
-        assertThat(toFlussValue(DataTypeRoot.INTEGER, Domain.singleValue(BIGINT, 123L))).isEmpty();
-        assertThat(toFlussValue(DataTypeRoot.BIGINT, Domain.singleValue(INTEGER, 123L))).isEmpty();
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.STRING,
-                                Domain.singleValue(VARBINARY, Slices.utf8Slice("123"))))
-                .isEmpty();
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.BYTES,
-                                Domain.singleValue(VARCHAR, Slices.utf8Slice("123"))))
-                .isEmpty();
+        assertThat(toFlussValue(DataTypeRoot.INTEGER, BIGINT, 123L)).isEmpty();
+        assertThat(toFlussValue(DataTypeRoot.BIGINT, INTEGER, 123L)).isEmpty();
+        assertThat(toFlussValue(DataTypeRoot.STRING, VARBINARY, Slices.utf8Slice("123"))).isEmpty();
+        assertThat(toFlussValue(DataTypeRoot.BYTES, VARCHAR, Slices.utf8Slice("123"))).isEmpty();
     }
 
     @Test
-    void testUnsupportedAndNonSingleDomainsFallBack() {
-        assertThat(toFlussValue(DataTypeRoot.INTEGER, Domain.onlyNull(INTEGER))).isEmpty();
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.INTEGER,
-                                Domain.multipleValues(INTEGER, Arrays.asList(1L, 2L))))
-                .isEmpty();
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.INTEGER,
-                                Domain.create(
-                                        ValueSet.ofRanges(Range.greaterThan(INTEGER, 10L)), false)))
-                .isEmpty();
+    void testUnsupportedValuesFallBack() {
+        assertThat(toFlussValue(DataTypeRoot.INTEGER, INTEGER, null)).isEmpty();
         assertThat(
                         toFlussValue(
                                 DataTypeRoot.FLOAT,
-                                Domain.singleValue(
-                                        io.trino.spi.type.RealType.REAL,
-                                        (long) Float.floatToRawIntBits(1.5f))))
+                                io.trino.spi.type.RealType.REAL,
+                                (long) Float.floatToRawIntBits(1.5f)))
                 .isEmpty();
     }
 
     @Test
     void testIntegralBoundaryValues() {
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.TINYINT,
-                                Domain.singleValue(TINYINT, (long) Byte.MIN_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.TINYINT, TINYINT, (long) Byte.MIN_VALUE))
                 .contains(Byte.MIN_VALUE);
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.TINYINT,
-                                Domain.singleValue(TINYINT, (long) Byte.MAX_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.TINYINT, TINYINT, (long) Byte.MAX_VALUE))
                 .contains(Byte.MAX_VALUE);
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.SMALLINT,
-                                Domain.singleValue(SMALLINT, (long) Short.MIN_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.SMALLINT, SMALLINT, (long) Short.MIN_VALUE))
                 .contains(Short.MIN_VALUE);
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.SMALLINT,
-                                Domain.singleValue(SMALLINT, (long) Short.MAX_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.SMALLINT, SMALLINT, (long) Short.MAX_VALUE))
                 .contains(Short.MAX_VALUE);
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.INTEGER,
-                                Domain.singleValue(INTEGER, (long) Integer.MIN_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.INTEGER, INTEGER, (long) Integer.MIN_VALUE))
                 .contains(Integer.MIN_VALUE);
-        assertThat(
-                        toFlussValue(
-                                DataTypeRoot.INTEGER,
-                                Domain.singleValue(INTEGER, (long) Integer.MAX_VALUE)))
+        assertThat(toFlussValue(DataTypeRoot.INTEGER, INTEGER, (long) Integer.MAX_VALUE))
                 .contains(Integer.MAX_VALUE);
 
-        assertThat(toFlussValue(DataTypeRoot.DATE, Domain.singleValue(DATE, -1L))).contains(-1);
-        assertThat(toFlussValue(DataTypeRoot.DATE, Domain.singleValue(DATE, 20_000L)))
-                .contains(20_000);
+        assertThat(toFlussValue(DataTypeRoot.DATE, DATE, -1L)).contains(-1);
+        assertThat(toFlussValue(DataTypeRoot.DATE, DATE, 20_000L)).contains(20_000);
     }
 
     @Test
