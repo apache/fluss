@@ -77,6 +77,16 @@ class LogSegmentRuleTest {
     }
 
     @Test
+    void keepsInactiveSegmentWhenMtimeIsUnavailable() {
+        FileMeta file =
+                file("/log/db/t-1/0/" + SEGMENT_ID + "/00000000000000000000.log", Long.MAX_VALUE);
+
+        Decision decision = rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS);
+
+        assertThat(decision).isEqualTo(Decision.MTIME_UNAVAILABLE);
+    }
+
+    @Test
     void skipUnknownExtension() {
         FileMeta file =
                 file(
