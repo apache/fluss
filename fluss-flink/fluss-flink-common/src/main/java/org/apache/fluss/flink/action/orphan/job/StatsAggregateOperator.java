@@ -18,12 +18,14 @@
 package org.apache.fluss.flink.action.orphan.job;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
+import org.apache.fluss.flink.action.orphan.audit.ResultAuditLogger;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+
+import java.util.Collections;
 
 /**
  * Stage 3 of the orphan files cleanup job. Runs at parallelism=1 to aggregate per-subtask {@link
@@ -42,51 +44,61 @@ public final class StatsAggregateOperator extends AbstractStreamOperator<CleanSt
     private static final long serialVersionUID = 2L;
 
     private final boolean dryRun;
+    private final ResultAuditLogger resultAudit;
+    private transient RuleSummary rules;
+    private transient long tasksCompleted;
 
-    private transient long scanned;
-    private transient long deleted;
-    private transient long emptyDirsRemoved;
-    private transient long deleteFailures;
-    private transient long bytesReclaimed;
+    private transient CleanupCounters counters;
+    private transient ScopeCoverageStats scopeCoverage;
+    private transient long scopeSummaryMarkers;
 
     public StatsAggregateOperator(boolean dryRun) {
+        this(dryRun, new ResultAuditLogger(Collections.emptyMap()));
+    }
+
+    public StatsAggregateOperator(boolean dryRun, ResultAuditLogger resultAudit) {
+        this.resultAudit = resultAudit;
         this.dryRun = dryRun;
     }
 
     @Override
     public void open() throws Exception {
         super.open();
-        scanned = 0L;
-        deleted = 0L;
-        emptyDirsRemoved = 0L;
-        deleteFailures = 0L;
-        bytesReclaimed = 0L;
+        counters = CleanupCounters.empty();
+        rules = new RuleSummary();
+        tasksCompleted = 0;
+        scopeCoverage = ScopeCoverageStats.empty();
+        scopeSummaryMarkers = 0L;
     }
 
     @Override
     public void processElement(StreamRecord<CleanStats> element) {
-        CleanStats stats = element.getValue();
-        scanned += stats.scanned();
-        deleted += stats.deleted();
-        emptyDirsRemoved += stats.emptyDirsRemoved();
-        deleteFailures += stats.deleteFailures();
-        bytesReclaimed += stats.bytesReclaimed();
+        rules.add(element.getValue().rules());
+        if (!element.getValue().isScopeSummary()) {
+            tasksCompleted++;
+        }
+        counters = counters.add(element.getValue().counters());
+        scopeCoverage.add(element.getValue().scopeCoverage());
+        if (element.getValue().isScopeSummary()) {
+            scopeSummaryMarkers++;
+        }
     }
 
     @Override
     public void endInput() {
-        AuditLogger audit = new AuditLogger();
-        CleanStats finalStats =
-                new CleanStats(scanned, deleted, emptyDirsRemoved, deleteFailures, bytesReclaimed);
+        validateScopeSummaryMarkers(scopeSummaryMarkers);
+        CleanStats finalStats = new CleanStats(counters, scopeCoverage);
 
-        audit.logSummary(
-                scanned,
-                deleted - emptyDirsRemoved,
-                emptyDirsRemoved,
-                deleteFailures,
-                bytesReclaimed,
-                dryRun);
+        resultAudit.summary(counters, scopeCoverage, rules, tasksCompleted, dryRun);
+        finalStats.rules().add(rules);
 
         output.collect(new StreamRecord<>(finalStats));
+    }
+
+    static void validateScopeSummaryMarkers(long markers) {
+        if (markers != 1L) {
+            throw new IllegalStateException(
+                    "Expected exactly one scope summary marker, but received " + markers);
+        }
     }
 }
