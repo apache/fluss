@@ -114,3 +114,15 @@ def test_storage_backpressure_error_is_retriable():
     assert fluss.ErrorCode.INVALID_BUCKET_ROUTING == 74
     error = fluss.FlussError("backpressure", 72)
     assert error.is_retriable
+
+
+def test_scanner_log_check_crc():
+    config = fluss.Config()
+    assert config.scanner_log_check_crc is True
+    config.scanner_log_check_crc = False
+    assert config.scanner_log_check_crc is False
+    for value, expected in [("true", True), ("false", False)]:
+        configured = fluss.Config({"scanner.log.check-crc": value})
+        assert configured.scanner_log_check_crc is expected
+    with pytest.raises(fluss.FlussError, match="Invalid value 'invalid'"):
+        fluss.Config({"scanner.log.check-crc": "invalid"})

@@ -1400,6 +1400,7 @@ struct LogFetcher {
     /// Encoded filter sent on every fetch request, paired with the schema id it
     /// was compiled against so the server can resolve its field ids.
     filter: Option<(PbPredicate, i32)>,
+    check_crc: bool,
     max_poll_records: usize,
     fetch_max_bytes: i32,
     fetch_min_bytes: i32,
@@ -1408,6 +1409,7 @@ struct LogFetcher {
 }
 
 struct FetchResponseContext {
+    check_crc: bool,
     metadata: Arc<Metadata>,
     log_fetch_buffer: Arc<LogFetchBuffer>,
     log_scanner_status: Arc<LogScannerStatus>,
@@ -1521,6 +1523,7 @@ impl LogFetcher {
             metadata_refresh_task: Mutex::new(None),
             metrics,
             filter: filter.map(|predicate| (predicate, table_info.get_schema_id())),
+            check_crc: config.scanner_log_check_crc,
             max_poll_records: config.scanner_log_max_poll_records,
             fetch_max_bytes: config.scanner_log_fetch_max_bytes,
             fetch_min_bytes: config.scanner_log_fetch_min_bytes,
@@ -1732,6 +1735,7 @@ impl LogFetcher {
             let log_fetch_buffer = self.log_fetch_buffer.clone();
             let log_scanner_status = self.log_scanner_status.clone();
             let resolver = Arc::clone(&self.resolver);
+            let check_crc = self.check_crc;
             let remote_log_downloader = Arc::clone(&self.remote_log_downloader);
             let nodes_with_pending = self.nodes_with_pending_fetch_requests.clone();
             let metadata = self.metadata.clone();
@@ -1790,6 +1794,7 @@ impl LogFetcher {
                 // — not tablet-server lookup or connection acquisition, which is matching Java's bebaviour
                 // Building it here also skips the allocation on the early-return error paths above.
                 let response_context = FetchResponseContext {
+                    check_crc,
                     metadata: metadata.clone(),
                     log_fetch_buffer,
                     log_scanner_status,
@@ -1818,6 +1823,7 @@ impl LogFetcher {
         context: FetchResponseContext,
     ) {
         let FetchResponseContext {
+            check_crc,
             metadata,
             log_fetch_buffer,
             log_scanner_status,
@@ -1936,6 +1942,7 @@ impl LogFetcher {
                         Arc::clone(&resolver),
                         &table_bucket,
                         remote_fetch_info,
+                        check_crc,
                         fetch_offset,
                         high_watermark,
                     );
@@ -1965,6 +1972,7 @@ impl LogFetcher {
                         fetch_offset,
                         high_watermark,
                     )
+                    .with_check_crc(check_crc)
                     .with_filtered_end_offset(filtered_end_offset);
                     log_fetch_buffer.add(Box::new(completed_fetch));
                 }
@@ -1991,12 +1999,14 @@ impl LogFetcher {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn pending_remote_fetches(
         remote_log_downloader: Arc<RemoteLogDownloader>,
         log_fetch_buffer: Arc<LogFetchBuffer>,
         resolver: Arc<ReadContextResolver>,
         table_bucket: &TableBucket,
         remote_fetch_info: RemoteLogFetchInfo,
+        check_crc: bool,
         fetch_offset: i64,
         high_watermark: i64,
     ) {
@@ -2031,7 +2041,8 @@ impl LogFetcher {
                 current_fetch_offset,
                 high_watermark,
                 Arc::clone(&resolver),
-            );
+            )
+            .with_check_crc(check_crc);
             // Add to pending fetches in buffer (similar to Java's logFetchBuffer.pend)
             log_fetch_buffer.pend(Box::new(pending_fetch));
         }
@@ -3153,6 +3164,41 @@ mod tests {
             }
             assert!(fetcher.resolver.resolve(1, true).is_some());
             assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
+            if fixed_schema && fields == [0] && compression == "NONE" {
+                // The unselected historical name column still belongs to the CRC domain.
+                let mut corrupt = data.clone();
+                let name = corrupt
+                    .windows(5)
+                    .position(|bytes| bytes == b"alice")
+                    .unwrap();
+                corrupt[name] = b'A';
+                for check_crc in [true, false] {
+                    change_subscription(&inner, batch_mode, None).await?;
+                    assert!(poll_test_offsets(&inner, batch_mode).await?.is_empty());
+                    change_subscription(&inner, batch_mode, Some(0)).await?;
+                    let path = directory.path().join("corrupt.log");
+                    std::fs::write(&path, &corrupt)?;
+                    fetcher.log_fetch_buffer.add(Box::new(
+                        DefaultCompletedFetch::new(
+                            bucket.clone(),
+                            LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?,
+                            corrupt.len(),
+                            fetcher.resolver.clone(),
+                            true,
+                            0,
+                            2,
+                        )
+                        .with_check_crc(check_crc),
+                    ));
+                    let result = poll_test_offsets(&inner, batch_mode).await;
+                    if check_crc {
+                        assert!(result.unwrap_err().to_string().contains("CRC mismatch"));
+                        assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(0));
+                    } else {
+                        assert_eq!(result?, vec![0, 1]);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -3310,6 +3356,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_polls_respect_crc_configuration_and_server_projection() -> Result<()> {
+        use crate::client::table::remote_log::{
+            FetchResult as DownloadResult, RemoteLogDownloadRequest, RemoteLogFetcher,
+        };
+        use std::path::PathBuf;
+        use std::pin::Pin;
+
+        struct FileFetcher(PathBuf);
+        impl RemoteLogFetcher for FileFetcher {
+            fn fetch(
+                &self,
+                _: &RemoteLogDownloadRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<DownloadResult>> + Send>> {
+                let file_path = self.0.clone();
+                Box::pin(async move {
+                    Ok(DownloadResult {
+                        file_size: std::fs::metadata(&file_path)?.len() as usize,
+                        file_path,
+                    })
+                })
+            }
+        }
+
+        for batch_mode in [false, true] {
+            for file_backed in [false, true] {
+                for check_crc in [false, true] {
+                    for projected in [false, true] {
+                        let path = TablePath::new("db", "tbl");
+                        let info = build_table_info(path.clone(), 1, 1);
+                        let metadata =
+                            Arc::new(Metadata::new_for_test(build_cluster_arc(&path, 1, 1)));
+                        let config = Config {
+                            scanner_log_check_crc: check_crc,
+                            ..Config::default()
+                        };
+                        let inner = Arc::new(LogScannerInner::new(
+                            &info,
+                            metadata.clone(),
+                            Arc::new(RpcClient::new()),
+                            &config,
+                            projected.then_some(vec![0]),
+                            false,
+                            None,
+                            test_admin(&metadata),
+                        )?);
+                        let fetcher = &inner.log_fetcher;
+                        let bucket = TableBucket::new(1, 0);
+                        inner
+                            .log_scanner_status
+                            .assign_scan_bucket(bucket.clone(), 0);
+                        fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+                        let mut data = build_records(&info, Arc::new(path.clone()))?;
+                        // A server projection retains the original CRC; even an explicit
+                        // full-column projection must use that exemption.
+                        data[crate::record::CRC_OFFSET] ^= 1;
+                        let directory = tempfile::tempdir()?;
+                        if file_backed {
+                            let file = directory.path().join("crc.log");
+                            std::fs::write(&file, &data)?;
+                            let downloader = Arc::new(RemoteLogDownloader::new_with_fetcher(
+                                Arc::new(FileFetcher(file)),
+                                1,
+                                1,
+                                test_scanner_metrics(&path),
+                            )?);
+                            LogFetcher::pending_remote_fetches(
+                                downloader,
+                                fetcher.log_fetch_buffer.clone(),
+                                fetcher.resolver.clone(),
+                                &bucket,
+                                RemoteLogFetchInfo {
+                                    remote_log_tablet_dir: "unused".to_string(),
+                                    partition_name: None,
+                                    first_start_pos: 0,
+                                    remote_log_segments: vec![RemoteLogSegment {
+                                        segment_id: "crc".to_string(),
+                                        start_offset: 0,
+                                        end_offset: 1,
+                                        size_in_bytes: data.len() as i32,
+                                        table_bucket: bucket.clone(),
+                                        max_timestamp: 0,
+                                    }],
+                                },
+                                fetcher.check_crc,
+                                0,
+                                1,
+                            );
+                            tokio::time::timeout(
+                                Duration::from_secs(5),
+                                fetcher
+                                    .log_fetch_buffer
+                                    .await_not_empty(Duration::from_secs(5)),
+                            )
+                            .await
+                            .unwrap()?;
+                        } else {
+                            let mut response = filtered_response(None, Some(1));
+                            response.tables_resp[0].buckets_resp[0].records = Some(data);
+                            LogFetcher::handle_fetch_response(
+                                response,
+                                test_response_context(fetcher, &metadata),
+                            )
+                            .await;
+                        }
+                        let result = poll_test_offsets(&inner, batch_mode).await;
+                        if check_crc && (file_backed || !projected) {
+                            assert!(result.unwrap_err().to_string().contains("CRC mismatch"));
+                            assert_eq!(
+                                inner.log_scanner_status.get_bucket_offset(&bucket),
+                                Some(0)
+                            );
+                        } else {
+                            assert_eq!(result?, vec![0]);
+                            assert_eq!(
+                                inner.log_scanner_status.get_bucket_offset(&bucket),
+                                Some(1)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn public_polls_retain_decode_errors_until_the_subscription_changes() -> Result<()> {
         for batch_mode in [false, true] {
             for preceding_data in [false, true] {
@@ -3317,13 +3489,15 @@ mod tests {
                     .into_iter()
                     .filter(|same| preceding_data || !same)
                 {
-                    for (unsubscribe, file_backed, count_mismatch) in [
-                        (false, false, false),
-                        (true, false, false),
-                        (false, true, false),
-                        (true, true, false),
-                        (false, false, true),
-                        (false, true, true),
+                    for (unsubscribe, file_backed, count_mismatch, crc_mismatch) in [
+                        (false, false, false, false),
+                        (true, false, false, false),
+                        (false, true, false, false),
+                        (true, true, false, false),
+                        (false, false, true, false),
+                        (false, true, true, false),
+                        (false, false, false, true),
+                        (false, true, false, true),
                     ] {
                         let (inner, table_info, data) = scanner_fixture(true)?;
                         let fetcher = &inner.log_fetcher;
@@ -3334,7 +3508,10 @@ mod tests {
                         let bad_offset = i64::from(preceding_data);
                         let mut bad = data.clone();
                         bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
-                        let expected_error = if count_mismatch {
+                        let expected_error = if crc_mismatch {
+                            bad[crate::record::CRC_OFFSET] ^= 1;
+                            "CRC mismatch"
+                        } else if count_mismatch {
                             use crate::record::{
                                 CRC_OFFSET, RECORDS_COUNT_OFFSET, SCHEMA_ID_OFFSET,
                             };
@@ -3345,6 +3522,9 @@ mod tests {
                             "Arrow row count"
                         } else {
                             bad[RECORDS_OFFSET..].fill(0);
+                            let crc = crc32c::crc32c(&bad[crate::record::SCHEMA_ID_OFFSET..]);
+                            bad[crate::record::CRC_OFFSET..crate::record::CRC_OFFSET + 4]
+                                .copy_from_slice(&crc.to_le_bytes());
                             "Invalid continuation marker"
                         };
                         let directory = tempfile::tempdir()?;
@@ -4106,6 +4286,9 @@ mod tests {
             let schema_id = table_info.get_schema_id() as i16 + 1;
             unknown_schema[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2]
                 .copy_from_slice(&schema_id.to_le_bytes());
+            let crc = crc32c::crc32c(&unknown_schema[crate::record::SCHEMA_ID_OFFSET..]);
+            unknown_schema[crate::record::CRC_OFFSET..crate::record::CRC_OFFSET + 4]
+                .copy_from_slice(&crc.to_le_bytes());
             let add = |bytes: Vec<u8>, offset| {
                 fetcher
                     .log_fetch_buffer
@@ -4273,6 +4456,9 @@ mod tests {
             let mut bad = good.clone();
             bad[..8].copy_from_slice(&5_i64.to_le_bytes());
             bad[RECORDS_OFFSET..].fill(0);
+            let crc = crc32c::crc32c(&bad[crate::record::SCHEMA_ID_OFFSET..]);
+            bad[crate::record::CRC_OFFSET..crate::record::CRC_OFFSET + 4]
+                .copy_from_slice(&crc.to_le_bytes());
             for (bucket, bytes, offset) in
                 [(good_bucket.clone(), good, 0), (bad_bucket.clone(), bad, 5)]
             {
@@ -4692,6 +4878,7 @@ mod tests {
         metadata: &Arc<Metadata>,
     ) -> FetchResponseContext {
         FetchResponseContext {
+            check_crc: fetcher.check_crc,
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -4742,6 +4929,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            check_crc: fetcher.check_crc,
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -4802,6 +4990,7 @@ mod tests {
         };
 
         let response_context = FetchResponseContext {
+            check_crc: fetcher.check_crc,
             metadata: metadata.clone(),
             log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
             log_scanner_status: fetcher.log_scanner_status.clone(),
@@ -5152,6 +5341,7 @@ mod tests {
                 };
                 let expected_bytes = response.encoded_len() as f64;
                 let response_context = FetchResponseContext {
+                    check_crc: fetcher.check_crc,
                     metadata: metadata.clone(),
                     log_fetch_buffer: fetcher.log_fetch_buffer.clone(),
                     log_scanner_status: fetcher.log_scanner_status.clone(),

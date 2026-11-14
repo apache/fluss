@@ -108,6 +108,11 @@ impl Config {
                                 ))
                             })?;
                     }
+                    "scanner.log.check-crc" => {
+                        config.scanner_log_check_crc = value.parse::<bool>().map_err(|e| {
+                            FlussError::new_err(format!("Invalid value '{value}' for '{key}': {e}"))
+                        })?;
+                    }
                     "scanner.io.tmpdir" => {
                         config.scanner_io_tmp_dir = Some(value);
                     }
@@ -414,6 +419,17 @@ impl Config {
     #[setter]
     fn set_scanner_io_tmp_dir(&mut self, path: Option<String>) {
         self.inner.scanner_io_tmp_dir = path;
+    }
+
+    /// Check log batch CRCs, except for batches projected by the server.
+    #[getter]
+    fn scanner_log_check_crc(&self) -> bool {
+        self.inner.scanner_log_check_crc
+    }
+
+    #[setter]
+    fn set_scanner_log_check_crc(&mut self, enabled: bool) {
+        self.inner.scanner_log_check_crc = enabled;
     }
 
     /// Get the scanner log max poll records

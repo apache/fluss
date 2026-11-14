@@ -393,6 +393,7 @@ pub struct DefaultCompletedFetch {
     log_record_batch: LogRecordsBatches,
     resolver: Arc<ReadContextResolver>,
     is_remote: bool,
+    check_crc: bool,
     next_fetch_offset: i64,
     /// Offset the server scanned up to while pruning batches by their
     /// statistics, or [`NO_FILTERED_END_OFFSET`] when it sent no filtered range.
@@ -437,6 +438,7 @@ impl DefaultCompletedFetch {
             log_record_batch,
             resolver,
             is_remote,
+            check_crc: true,
             next_fetch_offset: fetch_offset,
             filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark,
@@ -454,6 +456,21 @@ impl DefaultCompletedFetch {
         }
     }
 
+    pub(crate) fn with_check_crc(mut self, check_crc: bool) -> Self {
+        self.check_crc = check_crc;
+        self
+    }
+
+    fn validate_batch(&self, batch: LogRecordBatch) -> Result<LogRecordBatch> {
+        // Schema resolution reads fixed header fields even when CRCs are skipped.
+        batch.ensure_header_complete()?;
+        let server_projected = !self.is_remote && self.resolver.projected_fields().is_some();
+        if self.check_crc && !server_projected {
+            batch.ensure_valid()?;
+        }
+        Ok(batch)
+    }
+
     pub(crate) fn from_error(
         table_bucket: TableBucket,
         error: Error,
@@ -468,6 +485,7 @@ impl DefaultCompletedFetch {
             log_record_batch: LogRecordsBatches::new(Vec::new()),
             resolver,
             is_remote: false,
+            check_crc: true,
             next_fetch_offset: fetch_offset,
             filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark: -1,
@@ -500,6 +518,7 @@ impl DefaultCompletedFetch {
             log_record_batch: LogRecordsBatches::new(Vec::new()),
             resolver,
             is_remote: false,
+            check_crc: true,
             next_fetch_offset: fetch_offset,
             filtered_end_offset: NO_FILTERED_END_OFFSET,
             high_watermark: -1,
@@ -555,7 +574,7 @@ impl DefaultCompletedFetch {
                         self.drain();
                         return Ok(FetchStep::End);
                     };
-                    self.pending_record_batch = Some(batch_result?);
+                    self.pending_record_batch = Some(self.validate_batch(batch_result?)?);
                 }
 
                 let batch = self
@@ -643,7 +662,7 @@ impl DefaultCompletedFetch {
                     self.drain();
                     return Ok(FetchStep::End);
                 };
-                self.pending_record_batch = Some(log_batch_result?);
+                self.pending_record_batch = Some(self.validate_batch(log_batch_result?)?);
             }
 
             let log_batch = self
@@ -991,6 +1010,7 @@ pub struct RemotePendingFetch {
     fetch_offset: i64,
     high_watermark: i64,
     resolver: Arc<ReadContextResolver>,
+    check_crc: bool,
 }
 
 impl RemotePendingFetch {
@@ -1009,7 +1029,13 @@ impl RemotePendingFetch {
             fetch_offset,
             high_watermark,
             resolver,
+            check_crc: true,
         }
+    }
+
+    pub(crate) fn with_check_crc(mut self, check_crc: bool) -> Self {
+        self.check_crc = check_crc;
+        self
     }
 }
 
@@ -1068,7 +1094,8 @@ impl PendingFetch for RemotePendingFetch {
             true, // is_remote
             self.fetch_offset,
             self.high_watermark,
-        );
+        )
+        .with_check_crc(self.check_crc);
 
         // Wrap it with RemoteCompletedFetch to hold the permit
         // Permit manages the prefetch slot (releases semaphore and notifies coordinator) when dropped;
@@ -1143,6 +1170,9 @@ mod tests {
         let mut corrupted = data.clone();
         corrupted[..8].copy_from_slice(&1_i64.to_le_bytes());
         corrupted[RECORDS_OFFSET..].fill(0);
+        let crc = crc32c::crc32c(&corrupted[crate::record::SCHEMA_ID_OFFSET..]);
+        corrupted[crate::record::CRC_OFFSET..crate::record::CRC_OFFSET + 4]
+            .copy_from_slice(&crc.to_le_bytes());
         data.extend(corrupted);
 
         let mut fetch = DefaultCompletedFetch::new(
@@ -2074,6 +2104,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn corrupt_schema_id_is_rejected_before_schema_resolution() -> Result<()> {
+        let (_, mut bytes) = crate::test_utils::build_append_only_batch(&[(1, "a")]);
+        bytes[crate::record::SCHEMA_ID_OFFSET..crate::record::SCHEMA_ID_OFFSET + 2]
+            .copy_from_slice(&99_i16.to_le_bytes());
+        for batch_mode in [false, true] {
+            let mut fetch = DefaultCompletedFetch::new(
+                TableBucket::new(1, 0),
+                LogRecordsBatches::new(bytes.clone()),
+                bytes.len(),
+                test_resolver()?,
+                true,
+                0,
+                1,
+            );
+            let error = if batch_mode {
+                fetch
+                    .fetch_batches(1)
+                    .err()
+                    .expect("CRC error, not SchemaRequired")
+            } else {
+                fetch
+                    .fetch_records(1)
+                    .err()
+                    .expect("CRC error, not SchemaRequired")
+            };
+            assert!(error.to_string().contains("CRC mismatch"));
+            assert_eq!(fetch.next_fetch_offset(), 0);
+        }
+        Ok(())
+    }
+
     /// A `-U`/`+U` pair must not be split across polls: even when `max_records`
     /// falls between them, `fetch_records` pulls the matching `+U` so the batch
     /// ends on a complete pair (mirrors Java `CompletedFetch.fetchRecords`).
@@ -2114,6 +2176,9 @@ mod tests {
         data[ATTRIBUTES_OFFSET] &= !APPEND_ONLY_FLAG_MASK;
         let new_len = ((data.len() - LOG_OVERHEAD) as i32).to_le_bytes();
         data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_len);
+        let crc = crc32c::crc32c(&data[crate::record::SCHEMA_ID_OFFSET..]);
+        data[crate::record::CRC_OFFSET..crate::record::CRC_OFFSET + 4]
+            .copy_from_slice(&crc.to_le_bytes());
 
         let read_context = Arc::new(ReadContext::new(
             to_arrow_schema(&row_type)?,

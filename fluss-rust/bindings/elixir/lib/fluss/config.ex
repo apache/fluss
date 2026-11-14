@@ -50,6 +50,7 @@ defmodule Fluss.Config do
             scanner_log_fetch_max_bytes_for_bucket: nil,
             scanner_log_fetch_min_bytes: nil,
             scanner_log_fetch_wait_max_time_ms: nil,
+            scanner_log_check_crc: nil,
             scanner_log_max_poll_records: nil,
             scanner_remote_log_prefetch_num: nil,
             scanner_remote_log_read_concurrency: nil,
@@ -91,6 +92,7 @@ defmodule Fluss.Config do
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
           scanner_log_fetch_min_bytes: non_neg_integer() | nil,
           scanner_log_fetch_wait_max_time_ms: non_neg_integer() | nil,
+          scanner_log_check_crc: boolean() | nil,
           scanner_log_max_poll_records: non_neg_integer() | nil,
           scanner_remote_log_prefetch_num: non_neg_integer() | nil,
           scanner_remote_log_read_concurrency: non_neg_integer() | nil,
@@ -226,6 +228,11 @@ defmodule Fluss.Config do
   def set_scanner_log_fetch_wait_max_time_ms(%__MODULE__{} = config, wait_ms)
       when is_non_neg_integer(wait_ms),
       do: %{config | scanner_log_fetch_wait_max_time_ms: wait_ms}
+
+  @doc "Sets log batch CRC checking (default: true); server-projected batches are exempt."
+  @spec set_scanner_log_check_crc(t(), boolean()) :: t()
+  def set_scanner_log_check_crc(%__MODULE__{} = config, enabled) when is_boolean(enabled),
+    do: %{config | scanner_log_check_crc: enabled}
 
   @spec set_scanner_log_max_poll_records(t(), non_neg_integer()) :: t()
   def set_scanner_log_max_poll_records(%__MODULE__{} = config, num) when is_non_neg_integer(num),

@@ -25,6 +25,7 @@ Complete API reference for the Fluss Python client.
 | `remote_file_download_thread_num`     | `remote-file.download-thread-num`     | Get/set number of threads for remote log downloads                                      |
 | `scanner_remote_log_read_concurrency` | `scanner.remote-log.read-concurrency` | Get/set streaming read concurrency within a remote log file                             |
 | `scanner_io_tmp_dir`                  | `scanner.io.tmpdir`                  | Parent for remote log downloads; `None` uses the OS temporary directory plus `/fluss`                |
+| `scanner_log_check_crc`               | `scanner.log.check-crc`               | Check log batch CRCs; server-projected batches are exempt (default: `True`)             |
 | `scanner_log_max_poll_records`        | `scanner.log.max-poll-records`        | Get/set max number of records returned in a single poll()                               |
 | `scanner_log_fetch_max_bytes`         | `scanner.log.fetch.max-bytes`         | Get/set maximum bytes per fetch response for LogScanner                                 |
 | `scanner_log_fetch_min_bytes`         | `scanner.log.fetch.min-bytes`         | Get/set minimum bytes the server must accumulate before returning a fetch response      |

@@ -46,6 +46,7 @@ pub struct NifConfig {
     pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
     pub scanner_log_fetch_min_bytes: Option<i32>,
     pub scanner_log_fetch_wait_max_time_ms: Option<i32>,
+    pub scanner_log_check_crc: Option<bool>,
     pub scanner_log_max_poll_records: Option<u64>,
     pub scanner_remote_log_prefetch_num: Option<u64>,
     pub scanner_remote_log_read_concurrency: Option<u64>,
@@ -76,6 +77,7 @@ impl NifConfig {
         let mut config = Config {
             bootstrap_servers: self.bootstrap_servers,
             scanner_io_tmp_dir: self.scanner_io_tmp_dir,
+            scanner_log_check_crc: self.scanner_log_check_crc.unwrap_or(true),
             ..Config::default()
         };
         if let Some(timeout) = self.connect_timeout_ms {
@@ -214,6 +216,7 @@ mod tests {
             lookup_retry_max_backoff_ms: None,
             remote_file_download_thread_num: None,
             scanner_io_tmp_dir: None,
+            scanner_log_check_crc: None,
             scanner_log_fetch_max_bytes: None,
             scanner_log_fetch_max_bytes_for_bucket: None,
             scanner_log_fetch_min_bytes: None,
@@ -295,6 +298,15 @@ mod tests {
             let core = config.into_core();
             assert_eq!(core.scanner_io_tmp_dir.as_deref(), directory);
             assert_eq!(core.bootstrap_servers, "localhost:9123");
+        }
+    }
+
+    #[test]
+    fn scanner_crc_configuration_preserves_defaults_and_overrides() {
+        for (value, expected) in [(None, true), (Some(true), true), (Some(false), false)] {
+            let mut config = default_config();
+            config.scanner_log_check_crc = value;
+            assert_eq!(config.into_core().scanner_log_check_crc, expected);
         }
     }
 }

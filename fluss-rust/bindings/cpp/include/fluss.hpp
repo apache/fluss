@@ -1656,6 +1656,8 @@ struct Configuration {
     size_t scanner_remote_log_read_concurrency{4};
     // Parent directory for downloaded remote logs; empty uses the OS temporary directory plus `/fluss`
     std::string scanner_io_tmp_dir;
+    // Check log batch CRCs, except for batches projected by the server.
+    bool scanner_log_check_crc{true};
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     // Maximum bytes per fetch response for LogScanner (16 MB)
