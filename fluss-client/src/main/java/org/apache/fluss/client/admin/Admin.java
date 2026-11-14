@@ -626,6 +626,8 @@ public interface Admin extends AutoCloseable {
      * @param tablePath the table path of the table.
      * @param buckets the buckets to fetch offset.
      * @param offsetSpec the offset spec to fetch.
+     * @throws IllegalArgumentException if the table is partitioned or a bucket is outside the known
+     *     bucket range.
      */
     ListOffsetsResult listOffsets(
             TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec);
@@ -635,10 +637,11 @@ public interface Admin extends AutoCloseable {
      * end offset as well as the offset matching a timestamp in buckets.
      *
      * @param tablePath the table path of the table.
-     * @param partitionName the partition name of the partition,see {@link
-     *     ResolvedPartitionSpec#getPartitionName} * for the format of the partition name.
+     * @param partitionName the partition name. See {@link ResolvedPartitionSpec#getPartitionName}
+     *     for its format.
      * @param buckets the buckets to fetch offset.
      * @param offsetSpec the offset spec to fetch.
+     * @throws IllegalArgumentException if a bucket is outside the partition's known bucket range.
      */
     ListOffsetsResult listOffsets(
             TablePath tablePath,

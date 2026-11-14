@@ -26,8 +26,10 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -41,6 +43,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -62,6 +65,104 @@ import static org.assertj.core.api.Assertions.tuple;
  * 3000-line limit per file. Add new FlussAdmin integration tests here.
  */
 class FlussAdmin2ITCase extends ClientToServerITCaseBase {
+
+    @Test
+    void testListOffsetsWithInvalidBuckets() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "list_offsets_invalid_buckets");
+        long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
+        waitAllReplicasReady(tableId, 3);
+
+        assertThat(
+                        admin.listOffsets(
+                                        tablePath,
+                                        Arrays.asList(0, 1, 2),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get())
+                .containsOnlyKeys(0, 1, 2);
+        for (int bucket : Arrays.asList(3, 99, -1)) {
+            assertThatThrownBy(
+                            () ->
+                                    admin.listOffsets(
+                                            tablePath,
+                                            Arrays.asList(0, bucket),
+                                            new OffsetSpec.LatestSpec()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage(
+                            "Bucket %d does not exist in %s, which has 3 buckets.",
+                            bucket, tablePath);
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 4})
+    void testListOffsetsWithPartitionedTable(int newBucketCount) throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db", "list_offsets_partitioned_table_" + newBucketCount);
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(2, "id")
+                        .partitionedBy("pt")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor, false);
+        assertThatThrownBy(
+                        () ->
+                                admin.listOffsets(
+                                        tablePath,
+                                        Collections.singletonList(0),
+                                        new OffsetSpec.LatestSpec()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Table %s is a partitioned table, please specify a partition name "
+                                + "to list offsets.",
+                        tablePath);
+
+        admin.createPartition(tablePath, newPartitionSpec("pt", "old"), false).get();
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.modifyBucketCount(newBucketCount)),
+                        false)
+                .get();
+        admin.createPartition(tablePath, newPartitionSpec("pt", "new"), false).get();
+        Map<String, Long> partitionIds =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 2);
+
+        for (String partitionName : Arrays.asList("old", "new")) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(
+                    tableId, partitionIds.get(partitionName));
+            int bucketCount = partitionName.equals("old") ? 2 : newBucketCount;
+            assertThat(
+                            admin.listOffsets(
+                                            tablePath,
+                                            partitionName,
+                                            Arrays.asList(0, bucketCount - 1),
+                                            new OffsetSpec.LatestSpec())
+                                    .all()
+                                    .get())
+                    .containsEntry(0, 0L)
+                    .containsEntry(bucketCount - 1, 0L);
+            for (int bucket : Arrays.asList(-1, bucketCount, 99)) {
+                assertThatThrownBy(
+                                () ->
+                                        admin.listOffsets(
+                                                tablePath,
+                                                partitionName,
+                                                Arrays.asList(0, bucket),
+                                                new OffsetSpec.LatestSpec()))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessage(
+                                "Bucket %d does not exist in %s, which has %d buckets.",
+                                bucket,
+                                PhysicalTablePath.of(tablePath, partitionName),
+                                bucketCount);
+            }
+        }
+    }
 
     @Test
     void testListPartitionInfos() throws Exception {
