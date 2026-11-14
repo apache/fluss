@@ -1034,7 +1034,8 @@ public class ClientRpcMessageUtils {
                 node.getPort(),
                 type,
                 node.hasRack() ? node.getRack() : null,
-                node.hasServerTag() ? toServerTag(node.getServerTag()) : null);
+                node.hasServerTag() ? toServerTag(node.getServerTag()) : null,
+                node.hasSoftwareVersion() ? node.getSoftwareVersion() : null);
     }
 
     @Nullable

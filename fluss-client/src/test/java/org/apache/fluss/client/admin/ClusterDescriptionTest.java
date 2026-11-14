@@ -49,6 +49,7 @@ class ClusterDescriptionTest {
                 .setHost("ts-2")
                 .setPort(9125)
                 .setRack("rack-2")
+                .setSoftwareVersion("1.1-vendor.2")
                 .setServerTag(ServerTag.PERMANENT_OFFLINE.value);
         response.addTabletServer().setNodeId(0).setHost("ts-0").setPort(9124);
         response.addTabletServer().setNodeId(3).setHost("ts-3").setPort(9126).setServerTag(42);
@@ -80,6 +81,8 @@ class ClusterDescriptionTest {
         assertThat(taggedNode.host()).isEqualTo("ts-2");
         assertThat(taggedNode.port()).isEqualTo(9125);
         assertThat(taggedNode.rack()).isEqualTo("rack-2");
+        assertThat(taggedNode.softwareVersion()).isEqualTo("1.1-vendor.2");
+        assertThat(description.getTabletServers().get(0).softwareVersion()).isNull();
         assertThat(taggedNode.serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
         assertThat(description.getTabletServers().get(0).serverTag()).isNull();
         assertThat(description.getTabletServers().get(3).serverTag()).isNull();
@@ -157,6 +160,21 @@ class ClusterDescriptionTest {
                         Collections.emptyMap());
 
         assertThat(description).isNotEqualTo(taggedDescription);
+    }
+
+    @Test
+    void testSoftwareVersionChangesSnapshotButPreservesNodeIdentity() {
+        DescribeClusterResponse response = new DescribeClusterResponse();
+        response.addTabletServer().setNodeId(1).setHost("ts-1").setPort(9124);
+        ClusterDescription before = ClientRpcMessageUtils.toClusterDescription(response);
+        response.getTabletServersList().get(0).setSoftwareVersion("1.1.0");
+        ClusterDescription after = ClientRpcMessageUtils.toClusterDescription(response);
+
+        assertThat(before.getTabletServers()).isEqualTo(after.getTabletServers());
+        assertThat(before).isNotEqualTo(after);
+        assertThat(after)
+                .isEqualTo(ClientRpcMessageUtils.toClusterDescription(response))
+                .hasSameHashCodeAs(ClientRpcMessageUtils.toClusterDescription(response));
     }
 
     @Test

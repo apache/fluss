@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.Schema;
@@ -33,11 +34,14 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -49,6 +53,7 @@ import java.util.Map;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -241,6 +246,38 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
                                 .allMatch(FlussAdmin2ITCase::isServerGreen),
                 Duration.ofMinutes(1),
                 "All tablet servers should become green again after server restart");
+    }
+
+    @Test
+    void testTabletServerVersionsDuringRollingUpgrade() throws Exception {
+        String jarVersion = TabletServer.class.getPackage().getImplementationVersion();
+        Configuration config = new Configuration();
+        config.set(ConfigOptions.TABLET_SERVER_SOFTWARE_VERSION, " 1.1.0-vendor.2 ");
+        FLUSS_CLUSTER_EXTENSION.restartTabletServer(0, config);
+        try {
+            assertTabletServerVersions("1.1.0-vendor.2", jarVersion);
+            restartCoordinatorServer(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+            assertTabletServerVersions("1.1.0-vendor.2", jarVersion);
+            assertThat(admin.getServerNodes().get())
+                    .allMatch(node -> node.softwareVersion() == null);
+        } finally {
+            config.set(ConfigOptions.TABLET_SERVER_SOFTWARE_VERSION, "  ");
+            FLUSS_CLUSTER_EXTENSION.restartTabletServer(0, config);
+        }
+        assertTabletServerVersions(jarVersion, jarVersion);
+    }
+
+    private void assertTabletServerVersions(
+            @Nullable String version0, @Nullable String otherVersion) {
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(admin.describeCluster().get().getTabletServers().values())
+                                .extracting(ServerNode::id, ServerNode::softwareVersion)
+                                .containsExactly(
+                                        tuple(0, version0),
+                                        tuple(1, otherVersion),
+                                        tuple(2, otherVersion)));
     }
 
     @ParameterizedTest

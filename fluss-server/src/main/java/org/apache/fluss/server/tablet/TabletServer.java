@@ -84,6 +84,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static org.apache.fluss.utils.StringUtils.isNullOrWhitespaceOnly;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
@@ -390,6 +391,16 @@ public class TabletServer extends ServerBase {
         return terminationFuture;
     }
 
+    @Nullable
+    private String resolveSoftwareVersion() {
+        String version = conf.get(ConfigOptions.TABLET_SERVER_SOFTWARE_VERSION);
+        if (isNullOrWhitespaceOnly(version)) {
+            Package serverPackage = TabletServer.class.getPackage();
+            version = serverPackage == null ? null : serverPackage.getImplementationVersion();
+        }
+        return isNullOrWhitespaceOnly(version) ? null : version.trim();
+    }
+
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
@@ -399,7 +410,8 @@ public class TabletServer extends ServerBase {
                         rack,
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
                         startTime,
-                        tabletServerResource);
+                        tabletServerResource,
+                        resolveSoftwareVersion());
 
         while (true) {
             try {

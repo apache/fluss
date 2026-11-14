@@ -20,7 +20,6 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
@@ -50,7 +49,6 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -247,14 +245,7 @@ public final class ConsumerGroupManager {
                                                     "Group owner node "
                                                             + leaderId
                                                             + " is not registered in ZooKeeper"));
-            ServerNode owner =
-                    new ServerInfo(
-                                    leaderId,
-                                    registration.getRack(),
-                                    registration.getEndpoints(),
-                                    ServerType.TABLET_SERVER,
-                                    registration.getResource())
-                            .node(listenerName);
+            ServerNode owner = registration.toServerInfo(leaderId).node(listenerName);
             if (owner == null) {
                 throw new ConsumerGroupOwnerNotAvailableException(
                         "Group owner node "

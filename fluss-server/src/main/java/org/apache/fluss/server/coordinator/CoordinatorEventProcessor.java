@@ -419,13 +419,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 zooKeeperClient.getTabletServers(currentServers);
         for (int server : currentServers) {
             TabletServerRegistration registration = tabletServerRegistrations.get(server);
-            ServerInfo serverInfo =
-                    new ServerInfo(
-                            server,
-                            registration.getRack(),
-                            registration.getEndpoints(),
-                            ServerType.TABLET_SERVER,
-                            registration.getResource());
+            ServerInfo serverInfo = registration.toServerInfo(server);
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
