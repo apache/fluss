@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.lance.tiering;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitResult;
@@ -75,10 +76,18 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
             throws IOException {
         Map<String, String> properties = new HashMap<>(context.snapshotProperties());
         properties.put(committerName, FLUSS_LAKE_TIERING_COMMIT_USER);
-        long snapshotId =
-                LanceDatasetAdapter.commitAppend(config, committable.committable(), properties);
-        // Lance does not provide cumulative table stats API yet; leave stats as -1 (unknown).
-        return LakeCommitResult.committedIsReadable(snapshotId);
+        try {
+            long snapshotId =
+                    LanceDatasetAdapter.commitAppend(config, committable.committable(), properties);
+            // Lance does not provide cumulative table stats API yet; leave stats as -1 (unknown).
+            return LakeCommitResult.committedIsReadable(snapshotId);
+        } catch (RuntimeException e) {
+            // Wrap Lance JNI/runtime errors as IOException so that the caller (tiering
+            // orchestrator) can uniformly retry / abort. The original cause is preserved so that
+            // operators can distinguish e.g. concurrent-append conflicts from IO errors.
+            throw new IOException(
+                    "Failed to commit Lance snapshot for " + config.getDatasetUri(), e);
+        }
     }
 
     @Override
@@ -131,12 +140,31 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
                     }
                 }
             }
+        } catch (IllegalArgumentException e) {
+            // Dataset.open raises IllegalArgumentException when the dataset does not exist yet.
+            return null;
         }
         return null;
     }
 
+    @VisibleForTesting
+    RootAllocator getAllocator() {
+        return allocator;
+    }
+
     @Override
     public void close() throws Exception {
-        allocator.close();
+        // Close the allocator regardless of any exception thrown by earlier stages: if any child
+        // resource had leaked, allocator.close() would surface a "memory leaked" error which we
+        // still want to propagate, but we must not skip the close itself.
+        try {
+            allocator.close();
+        } catch (IllegalStateException leakError) {
+            // Rethrow as a checked failure with an actionable message, keeping the original stack.
+            throw new IOException(
+                    "LanceLakeCommitter allocator reported leaked memory on close: "
+                            + leakError.getMessage(),
+                    leakError);
+        }
     }
 }
