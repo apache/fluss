@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.fs.FsPath;
@@ -28,6 +29,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
@@ -40,6 +42,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvFlushScheduler;
@@ -67,6 +70,9 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -76,8 +82,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -94,6 +102,8 @@ import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA2;
@@ -124,6 +134,76 @@ final class ReplicaTest extends ReplicaTestBase {
     // TODO add more tests to cover partition table
 
     private TestingHoldableKvFlushScheduler holdableKvFlushScheduler;
+
+    @ParameterizedTest
+    @CsvSource({"false, 1", "false, 2", "true, 1", "true, 2"})
+    void testTableMinInSyncReplicas(boolean primaryKey, int minInSyncReplicas) throws Exception {
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
+        Replica replica = makeReplicaWithMinInSyncReplicas(primaryKey, minInSyncReplicas);
+
+        for (int globalMinInSyncReplicas : new int[] {2, 1, 3}) {
+            conf.set(
+                    ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, globalMinInSyncReplicas);
+            assertThat(replica.isUnderMinIsr()).isEqualTo(minInSyncReplicas > 1);
+            assertThat(replica.isAtMinIsr()).isEqualTo(minInSyncReplicas == 1);
+            if (minInSyncReplicas == 1) {
+                appendWithAllAcks(replica);
+            } else {
+                assertThatThrownBy(() -> appendWithAllAcks(replica))
+                        .isInstanceOf(NotEnoughReplicasException.class);
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testInheritedMinInSyncReplicas(boolean primaryKey) throws Exception {
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
+        Replica replica;
+        if (primaryKey) {
+            replica =
+                    makeKvReplica(
+                            DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+            makeKvReplicaAsLeader(replica);
+        } else {
+            replica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+            makeLogReplicaAsLeader(replica);
+        }
+
+        assertThat(replica.isUnderMinIsr()).isTrue();
+        assertThat(replica.isAtMinIsr()).isFalse();
+        assertThatThrownBy(() -> appendWithAllAcks(replica))
+                .isInstanceOf(NotEnoughReplicasException.class);
+
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+        assertThat(replica.isUnderMinIsr()).isFalse();
+        assertThat(replica.isAtMinIsr()).isTrue();
+        appendWithAllAcks(replica);
+
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
+        assertThat(replica.isUnderMinIsr()).isTrue();
+        assertThatThrownBy(() -> appendWithAllAcks(replica))
+                .isInstanceOf(NotEnoughReplicasException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void testTableMinInSyncReplicasForHighWatermarkAndAcks(int minInSyncReplicas) throws Exception {
+        conf.set(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
+        Replica replica = makeReplicaWithMinInSyncReplicas(false, minInSyncReplicas);
+        LogAppendInfo append = replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        long requiredOffset = append.lastOffset() + 1;
+
+        if (minInSyncReplicas == 1) {
+            assertThat(replica.getLogTablet().getHighWatermark()).isEqualTo(requiredOffset);
+            assertThat(replica.checkEnoughReplicasReachOffset(requiredOffset))
+                    .isEqualTo(Tuple2.of(true, Errors.NONE));
+        } else {
+            assertThat(replica.getLogTablet().getHighWatermark()).isZero();
+            assertThat(replica.checkEnoughReplicasReachOffset(requiredOffset))
+                    .isEqualTo(Tuple2.of(false, Errors.NONE));
+        }
+    }
 
     @Override
     protected KvFlushScheduler createTestKvFlushScheduler(Configuration conf) {
@@ -1398,6 +1478,45 @@ final class ReplicaTest extends ReplicaTestBase {
         // flush to make data visible
         flushAndWait(kvTablet, replica.getLocalLogEndOffset());
         return logAppendInfo;
+    }
+
+    private Replica makeReplicaWithMinInSyncReplicas(boolean primaryKey, int minInSyncReplicas)
+            throws Exception {
+        TableInfo tableInfo = primaryKey ? DATA1_TABLE_INFO_PK : DATA1_TABLE_INFO;
+        Map<String, String> properties = new HashMap<>(tableInfo.getProperties().toMap());
+        properties.put(
+                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(), String.valueOf(minInSyncReplicas));
+        TableInfo initialTableInfo =
+                TableInfo.of(
+                        tableInfo.getTablePath(),
+                        tableInfo.getTableId(),
+                        tableInfo.getSchemaId(),
+                        tableInfo.toTableDescriptor().withProperties(properties),
+                        tableInfo.getRemoteDataDir(),
+                        tableInfo.getCreatedTime(),
+                        tableInfo.getModifiedTime());
+        Replica replica =
+                makeReplica(
+                        PhysicalTablePath.of(tableInfo.getTablePath()),
+                        new TableBucket(tableInfo.getTableId(), 1),
+                        primaryKey,
+                        null,
+                        initialTableInfo);
+        if (primaryKey) {
+            makeKvReplicaAsLeader(replica);
+        } else {
+            makeLogReplicaAsLeader(replica);
+        }
+        return replica;
+    }
+
+    private void appendWithAllAcks(Replica replica) throws Exception {
+        if (replica.isKvTable()) {
+            replica.putRecordsToLeader(
+                    genKvRecordBatch(new Object[] {1, "a"}), null, MergeMode.DEFAULT, -1);
+        } else {
+            replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), -1);
+        }
     }
 
     private LogAppendInfo putRecordsToLeader(Replica replica, KvRecordBatch kvRecords)
