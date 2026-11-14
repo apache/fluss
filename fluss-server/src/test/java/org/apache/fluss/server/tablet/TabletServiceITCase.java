@@ -149,7 +149,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class TabletServiceITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+            FlussClusterExtension.builder()
+                    .setNumOfTabletServers(3)
+                    .setClusterConf(
+                            new Configuration().set(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER, true))
+                    .build();
 
     @Test
     void testFindConsumerGroupOwner() throws Exception {

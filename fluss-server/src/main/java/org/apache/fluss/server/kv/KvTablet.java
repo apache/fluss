@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
@@ -49,6 +50,7 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBPrefixBloomUtils;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
@@ -75,6 +77,7 @@ import org.apache.fluss.utils.clock.SystemClock;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.PrefixLayout;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
@@ -284,12 +287,8 @@ public final class KvTablet {
     }
 
     /**
-     * Creates a kv tablet with a dedicated {@link KvFlushScheduler} that is closed together with
-     * the tablet. Production code must use {@link #create(PhysicalTablePath, TableBucket,
-     * LogTablet, File, Configuration, TabletServerMetricGroup, BufferAllocator, MemorySegmentPool,
-     * KvFormat, RowMerger, ArrowCompressionInfo, SchemaGetter, ChangelogImage, RateLimiter, Cache,
-     * KvFlushScheduler, Runnable, AutoIncrementManager, Clock, TableConfig)} with the shared
-     * scheduler owned by {@link KvManager}.
+     * Creates a test tablet with a dedicated flush scheduler. Production tablets are created by
+     * {@link KvManager} with a shared scheduler and persisted table metadata.
      */
     @VisibleForTesting
     public static KvTablet create(
@@ -332,7 +331,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 SystemClock.getInstance(),
-                new TableConfig(new Configuration()));
+                new TableConfig(new Configuration()),
+                null);
     }
 
     static KvTablet create(
@@ -357,34 +357,55 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableInfo tableInfo)
             throws IOException {
-        return create(
-                tablePath,
+        TableConfig tableConfig = tableInfo.getTableConfig();
+        PrefixLayout prefixLayout = null;
+        if (serverConf.get(ConfigOptions.KV_USE_PREFIX_BLOOM_FILTER)) {
+            if (HISTORICAL_PARTITION_VALUE.equals(tablePath.getPartitionName())) {
+                LOG.info(
+                        "Prefix Bloom filters disabled for historical KV tablet {} of {}: unsupported partition-name key envelope.",
+                        tableBucket,
+                        tablePath);
+            } else {
+                prefixLayout = RocksDBPrefixBloomUtils.createPrefixLayout(tableInfo);
+            }
+        }
+        KvTablet tablet =
+                create(
+                        tablePath,
+                        tableBucket,
+                        logTablet,
+                        kvTabletDir,
+                        serverConf,
+                        serverMetricGroup,
+                        arrowBufferAllocator,
+                        memorySegmentPool,
+                        kvFormat,
+                        rowMerger,
+                        arrowCompressionInfo,
+                        schemaGetter,
+                        changelogImage,
+                        sharedRateLimiter,
+                        sharedBlockCache,
+                        sharedWriteBufferManager,
+                        statisticsRegistry,
+                        kvFlushScheduler,
+                        false,
+                        flushCompleteListener,
+                        autoIncrementManager,
+                        clock,
+                        tableConfig,
+                        prefixLayout);
+        LOG.info(
+                "Opened KV tablet {} of {} with prefix Bloom filters {}.",
                 tableBucket,
-                logTablet,
-                kvTabletDir,
-                serverConf,
-                serverMetricGroup,
-                arrowBufferAllocator,
-                memorySegmentPool,
-                kvFormat,
-                rowMerger,
-                arrowCompressionInfo,
-                schemaGetter,
-                changelogImage,
-                sharedRateLimiter,
-                sharedBlockCache,
-                sharedWriteBufferManager,
-                statisticsRegistry,
-                kvFlushScheduler,
-                false,
-                flushCompleteListener,
-                autoIncrementManager,
-                clock,
-                tableConfig);
+                tablePath,
+                prefixLayout == null ? "disabled" : "enabled");
+        return tablet;
     }
 
+    @VisibleForTesting
     public static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -430,7 +451,8 @@ public final class KvTablet {
                 flushCompleteListener,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static KvTablet create(
@@ -456,7 +478,8 @@ public final class KvTablet {
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
             Clock clock,
-            TableConfig tableConfig)
+            TableConfig tableConfig,
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         checkNotNull(tableConfig, "tableConfig must not be null.");
         boolean historicalPartition =
@@ -499,7 +522,8 @@ public final class KvTablet {
                         sharedWriteBufferManager,
                         statisticsRegistry,
                         tableBucket.getTableId(),
-                        compactionFilterFactory);
+                        compactionFilterFactory,
+                        prefixLayout);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -543,6 +567,7 @@ public final class KvTablet {
                 tableConfig.isUpsertSkipUnchanged());
     }
 
+    @VisibleForTesting
     public static KvTablet create(
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -585,7 +610,8 @@ public final class KvTablet {
                 null,
                 autoIncrementManager,
                 clock,
-                tableConfig);
+                tableConfig,
+                null);
     }
 
     private static RocksDBKv buildRocksDBKv(
@@ -598,7 +624,8 @@ public final class KvTablet {
             long tableId,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory)
+                            compactionFilterFactory,
+            @Nullable PrefixLayout prefixLayout)
             throws IOException {
         @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
         boolean resourcesOwnedByBuilder = false;
@@ -610,7 +637,8 @@ public final class KvTablet {
                             true,
                             sharedRateLimiter,
                             sharedBlockCache,
-                            sharedWriteBufferManager);
+                            sharedWriteBufferManager,
+                            prefixLayout);
             if (statisticsRegistry != null) {
                 rocksDBResourceContainer.useSharedStatistics(statisticsRegistry.acquire(tableId));
             }
