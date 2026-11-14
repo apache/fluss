@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchFormat;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
@@ -51,6 +53,7 @@ import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.annotation.Nullable;
@@ -58,6 +61,8 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.Arrays;
@@ -65,6 +70,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutorService;
@@ -720,6 +726,152 @@ final class LogManagerTest extends LogTestBase {
         assertThat(logManager.getLog(tableBucket2)).isPresent();
         assertThat(logManager.getLog(tableBucket2).get().getDataDir())
                 .isEqualTo(dataDir2.getAbsoluteFile());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "true,true"})
+    void testCheckpointSnapshotCannotOverwriteNewerTruncation(boolean periodic, boolean restart)
+            throws Exception {
+        initTableBuckets(null);
+        LogTablet first = getOrCreateLog(tablePath1, null, tableBucket1);
+        LogTablet second = getOrCreateLog(tablePath2, null, tableBucket2);
+        for (LogTablet log : Arrays.asList(first, second)) {
+            for (int i = 0; i < 3; i++) {
+                log.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+            }
+            log.flush(true);
+            assertThat(log.getRecoveryPoint()).isEqualTo(30);
+        }
+        CountDownLatch snapshotCaptured = new CountDownLatch(1);
+        CountDownLatch releaseSnapshot = new CountDownLatch(1);
+        CompletableFuture<Void> olderResult = new CompletableFuture<>();
+        CompletableFuture<Void> newerResult = new CompletableFuture<>();
+        Thread older =
+                checkpointThread(
+                        olderResult,
+                        () -> {
+                            if (periodic) {
+                                logManager.checkpointRecoveryOffsets();
+                            } else {
+                                logManager.truncateTo(tableBucket1, 10);
+                            }
+                        });
+        long target = restart ? 0 : 10;
+        Thread newer =
+                checkpointThread(newerResult, () -> logManager.truncateTo(tableBucket2, target));
+        logManager.beforeRecoveryCheckpointWrite =
+                offsets -> {
+                    if (Thread.currentThread() == older) {
+                        assertThat(offsets).containsEntry(tableBucket2, 30L);
+                        snapshotCaptured.countDown();
+                        awaitCheckpointLatch(releaseSnapshot);
+                    }
+                };
+        try {
+            older.start();
+            assertThat(snapshotCaptured.await(10, TimeUnit.SECONDS)).isTrue();
+            newer.start();
+            waitUntil(
+                    () -> second.getRecoveryPoint() == target,
+                    Duration.ofSeconds(10),
+                    "Newer truncation did not change the real recovery point");
+            waitUntil(
+                    () ->
+                            newerResult.isDone()
+                                    || (newer.getState() == Thread.State.BLOCKED
+                                            && Arrays.stream(newer.getStackTrace())
+                                                    .anyMatch(
+                                                            frame ->
+                                                                    frame.getClassName()
+                                                                                    .equals(
+                                                                                            LogManager
+                                                                                                    .class
+                                                                                                    .getName())
+                                                                            && frame.getMethodName()
+                                                                                    .equals(
+                                                                                            "checkpointRecoveryOffsets"))),
+                    Duration.ofSeconds(10),
+                    "Newer checkpoint neither finished nor waited on the directory lock");
+        } finally {
+            releaseSnapshot.countDown();
+            older.join(10000);
+            newer.join(10000);
+            logManager.beforeRecoveryCheckpointWrite = null;
+        }
+        olderResult.get(10, TimeUnit.SECONDS);
+        newerResult.get(10, TimeUnit.SECONDS);
+        if (restart) {
+            verifyCrashRecoveryChecksCorruptRetainedSegment(first, second);
+        } else {
+            assertThat(
+                            new OffsetCheckpointFile(
+                                            new File(tempDir, "recovery-point-offset-checkpoint"))
+                                    .read())
+                    .containsEntry(tableBucket1, periodic ? 30L : 10L)
+                    .containsEntry(tableBucket2, target);
+        }
+    }
+
+    private void verifyCrashRecoveryChecksCorruptRetainedSegment(LogTablet first, LogTablet second)
+            throws Exception {
+        second.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        File damagedFile = second.activeLogSegment().getFileLogRecords().file();
+        LogRecordBatch batch =
+                second.activeLogSegment().getFileLogRecords().batches().iterator().next();
+        int crcOffset = LogRecordBatchFormat.crcOffset(batch.magic());
+        second.roll(Optional.empty());
+        second.appendAsLeader(genMemoryLogRecordsByObject(ANOTHER_DATA1));
+        assertThat(second.getRecoveryPoint()).isZero();
+        assertThat(second.logSegments()).hasSize(2);
+        // Model an unclean stop without allowing shutdown to replace the raced checkpoint.
+        for (LogTablet log : Arrays.asList(first, second)) {
+            Field localLog = LogTablet.class.getDeclaredField("localLog");
+            localLog.setAccessible(true);
+            ((LocalLog) localLog.get(log)).closeHandlers();
+        }
+        logManager = null;
+        assertThat(new File(tempDir, CLEAN_SHUTDOWN_FILE)).doesNotExist();
+        try (RandomAccessFile file = new RandomAccessFile(damagedFile, "rw")) {
+            file.seek(crcOffset);
+            int crcByte = file.readUnsignedByte();
+            file.seek(crcOffset);
+            file.writeByte(crcByte ^ 1);
+        }
+        localDiskManager.close();
+        localDiskManager = LocalDiskManager.create(conf);
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        logManager.startup();
+        LogTablet recovered = logManager.getLog(tableBucket2).get();
+        assertThat(recovered.localLogEndOffset()).isZero();
+        assertThat(readLog(recovered).getRecords().batches()).isEmpty();
+    }
+
+    private static Thread checkpointThread(CompletableFuture<Void> result, Runnable action) {
+        return new Thread(
+                () -> {
+                    try {
+                        action.run();
+                        result.complete(null);
+                    } catch (Throwable failure) {
+                        result.completeExceptionally(failure);
+                    }
+                });
+    }
+
+    private static void awaitCheckpointLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
     }
 
     private LogTablet getOrCreateLog(
