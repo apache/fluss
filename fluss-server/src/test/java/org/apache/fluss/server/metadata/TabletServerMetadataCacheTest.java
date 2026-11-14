@@ -1118,6 +1118,90 @@ public class TabletServerMetadataCacheTest {
         assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
     }
 
+    @Test
+    void testDelayedDeletionOfOldTableRemovesRecreatedTable() {
+        TablePath path = DATA1_TABLE_PATH;
+        long oldTableId = DATA1_TABLE_ID;
+        long newTableId = oldTableId + 1;
+
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.singletonList(
+                                new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata)),
+                        Collections.emptyList()));
+
+        assertThat(serverMetadataCache.getTablePath(oldTableId)).contains(path);
+
+        System.err.printf(
+                "[REPRO][OLD] oldId=%d, path=%s, mappings=%s%n",
+                oldTableId, path, serverMetadataCache.getSnapshot().getTableIdByPath());
+
+        TableInfo newTableInfo =
+                TableInfo.of(
+                        path,
+                        newTableId,
+                        DATA1_TABLE_INFO.getSchemaId(),
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        200L,
+                        200L);
+
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        Collections.singletonList(
+                                new TableMetadata(newTableInfo, initialBucketMetadata)),
+                        Collections.emptyList()));
+
+        assertThat(serverMetadataCache.getTablePath(newTableId)).contains(path);
+
+        System.err.printf(
+                "[REPRO][NEW] oldId=%d, newId=%d, path=%s, " + "newTablePath=%s, mappings=%s%n",
+                oldTableId,
+                newTableId,
+                path,
+                serverMetadataCache.getTablePath(newTableId),
+                serverMetadataCache.getSnapshot().getTableIdByPath());
+
+        TableInfo oldDeletion =
+                TableInfo.of(
+                        path,
+                        DELETED_TABLE_ID,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        -1L,
+                        -1L);
+
+        Set<Long> removedIds =
+                serverMetadataCache.updateClusterMetadata(
+                        new ClusterMetadata(
+                                coordinatorServer,
+                                aliveTableServers,
+                                Collections.singletonList(
+                                        new TableMetadata(oldDeletion, Collections.emptyList())),
+                                Collections.emptyList()));
+
+        System.err.printf(
+                "[REPRO][DELETE] oldId=%d, newId=%d, removedIds=%s, "
+                        + "newTablePath=%s, mappings=%s%n",
+                oldTableId,
+                newTableId,
+                removedIds,
+                serverMetadataCache.getTablePath(newTableId),
+                serverMetadataCache.getSnapshot().getTableIdByPath());
+        assertThat(removedIds)
+                .as(
+                        "Deleting old table %s must not delete recreated table %s",
+                        oldTableId, newTableId)
+                .doesNotContain(newTableId);
+        assertThat(removedIds).contains(newTableId);
+        assertThat(serverMetadataCache.getTablePath(newTableId)).contains(path);
+    }
+
     private static final class TestingMetadataManager extends MetadataManager {
 
         private final Map<TablePath, TableInfo> tableInfoMap = new HashMap<>();
