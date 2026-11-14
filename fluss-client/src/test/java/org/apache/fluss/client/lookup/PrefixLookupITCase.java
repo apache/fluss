@@ -21,22 +21,31 @@ import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ScannerExpiredException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +54,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -57,11 +67,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -73,7 +85,15 @@ class PrefixLookupITCase {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+            FlussClusterExtension.builder()
+                    .setNumOfTabletServers(3)
+                    .setClusterConf(
+                            new Configuration()
+                                    .set(ConfigOptions.KV_SCANNER_TTL, Duration.ofSeconds(2))
+                                    .set(
+                                            ConfigOptions.KV_SCANNER_EXPIRATION_INTERVAL,
+                                            Duration.ofMillis(100)))
+                    .build();
 
     private Connection conn;
     private Admin admin;
@@ -195,6 +215,69 @@ class PrefixLookupITCase {
             assertPrefixLookups(table, rows, "a", "b", "p");
             assertPrefixLookups(table, rows, "p", "a", "b", "c");
             assertThat(lookup(table, Arrays.asList("a", "b", "p"), 1L, "a", "p3")).isEmpty();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLookupAfterScannerExpiry(boolean prefixLookup) throws Exception {
+        String name = prefixLookup ? "expiry_prefix" : "expiry_pk";
+        TablePath path = TablePath.of(DATABASE, name);
+        try (Table initial = createTable(name, null, CURRENT_KV_FORMAT_VERSION, true, "a")) {
+            write(initial, rows("p1"));
+        }
+        admin.alterTable(
+                        path,
+                        Collections.singletonList(TableChange.modifyBucketCount(NUM_BUCKETS + 1)),
+                        false)
+                .get();
+        conn.getConfiguration()
+                .setString(ConfigOptions.CLIENT_SCANNER_KV_FETCH_MAX_BYTES.key(), "1b");
+        try (Table table = conn.getTable(path)) {
+            TableInfo info = table.getTableInfo();
+            long partitionId =
+                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(path, 2).get("p1");
+            BucketCalculator calculator = BucketCalculator.forBucketKeyRow(info);
+            int bucketId = calculator.getBucketId(calculator.encodeKey(row(1L)), NUM_BUCKETS);
+            TableBucket bucket = new TableBucket(info.getTableId(), partitionId, bucketId);
+            try (BatchScanner scanner = table.newScan().createBatchScanner(bucket)) {
+                try (CloseableIterator<InternalRow> first =
+                        scanner.pollBatch(Duration.ofSeconds(30))) {
+                    assertThat(first.hasNext()).isTrue();
+                }
+                // The scanner holds its RocksDB lease until the server expires the idle session.
+                ResourceGuard guard =
+                        FLUSS_CLUSTER_EXTENSION
+                                .waitAndGetLeaderReplica(bucket)
+                                .getKvTablet()
+                                .getRocksDBKv()
+                                .getResourceGuard();
+                waitUntil(
+                        () -> guard.getLeaseCount() == 0,
+                        Duration.ofSeconds(30),
+                        "Scanner did not expire");
+                assertThatThrownBy(() -> BatchScanUtils.collectRows(scanner))
+                        .rootCause()
+                        .isInstanceOfAny(
+                                ScannerExpiredException.class, UnknownScannerIdException.class);
+            }
+
+            if (prefixLookup) {
+                Lookuper lookuper = table.newLookup().lookupBy("a", "b", "c", "p").createLookuper();
+                assertThat(
+                                lookuper.lookup(row(1L, "a", 1L, "p1"))
+                                        .get(30, TimeUnit.SECONDS)
+                                        .getRowList())
+                        .extracting(r -> r.getString(4).toString())
+                        .containsExactlyInAnyOrder("1-a-1-1", "1-a-1-2");
+            } else {
+                Lookuper lookuper = table.newLookup().createLookuper();
+                InternalRow found =
+                        lookuper.lookup(row(1L, "a", 1L, 1L, "p1"))
+                                .get(30, TimeUnit.SECONDS)
+                                .getSingletonRow();
+                assertThat(found.getString(4).toString()).isEqualTo("1-a-1-1");
+            }
         }
     }
 

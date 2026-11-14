@@ -33,13 +33,17 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.concurrent.FutureUtils.completedExceptionally;
 
 /**
  * A client that lookups value of keys from server.
@@ -65,6 +69,11 @@ public class LookupClient {
 
     private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
+    private final Set<CompletableFuture<?>> pendingPartitionRouting = new HashSet<>();
+    private CompletableFuture<Void> lastPartitionRouting = CompletableFuture.completedFuture(null);
+    private volatile Thread partitionRoutingThread;
+    private boolean closing;
+    private volatile boolean partitionRoutingClosed;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         ExponentialBackoff retryBackoff = createRetryBackoff(conf);
@@ -154,22 +163,89 @@ public class LookupClient {
         return prefixLookup.future();
     }
 
+    synchronized CompletableFuture<LookupResult> resolvePartitionLookup(
+            Supplier<CompletableFuture<LookupResult>> resolveAndSend) {
+        // An accepted lookup may need to resolve the historical partition during close.
+        if (partitionRoutingClosed
+                || (closing && Thread.currentThread() != partitionRoutingThread)) {
+            return completedExceptionally(
+                    new IllegalStateException("The lookup client is closed."));
+        }
+        // Serialize cache misses so later lookups can use the first refresh. Data requests
+        // can batch as soon as routing finishes, without waiting for earlier data responses.
+        CompletableFuture<CompletableFuture<LookupResult>> routed =
+                lastPartitionRouting.thenApplyAsync(
+                        ignored -> {
+                            if (partitionRoutingClosed) {
+                                throw new IllegalStateException("The lookup client is closed.");
+                            }
+                            partitionRoutingThread = Thread.currentThread();
+                            try {
+                                return resolveAndSend.get();
+                            } finally {
+                                partitionRoutingThread = null;
+                            }
+                        });
+        pendingPartitionRouting.add(routed);
+        lastPartitionRouting =
+                routed.handle(
+                        (result, error) -> {
+                            synchronized (this) {
+                                pendingPartitionRouting.remove(routed);
+                                if (pendingPartitionRouting.isEmpty()) {
+                                    notifyAll();
+                                }
+                            }
+                            return null;
+                        });
+        // Aborting routing on close must not run user completion callbacks on the closing thread.
+        return lastPartitionRouting.thenComposeAsync(ignored -> routed.join());
+    }
+
+    private long initiateClose(long timeoutMs) {
+        long startNanos = System.nanoTime();
+        long remainingMs = timeoutMs;
+        CompletableFuture<?>[] abandoned;
+        synchronized (this) {
+            closing = true;
+            while (!pendingPartitionRouting.isEmpty() && remainingMs > 0) {
+                try {
+                    wait(remainingMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                remainingMs =
+                        Math.max(
+                                0L,
+                                timeoutMs
+                                        - TimeUnit.NANOSECONDS.toMillis(
+                                                System.nanoTime() - startNanos));
+            }
+            partitionRoutingClosed = true;
+            abandoned = pendingPartitionRouting.toArray(new CompletableFuture<?>[0]);
+        }
+        lookupSender.initiateClose();
+        for (CompletableFuture<?> routing : abandoned) {
+            routing.completeExceptionally(
+                    new IllegalStateException("The lookup client is closed."));
+        }
+        return remainingMs;
+    }
+
+    /** Closes the sender after draining pending partition routing or reaching the timeout. */
     public void close(Duration timeout) {
         LOG.info("Closing lookup client and lookup sender.");
-
-        if (lookupSender != null) {
-            lookupSender.initiateClose();
-        }
+        long remainingMs = initiateClose(Math.max(0L, timeout.toMillis()));
 
         if (lookupSenderThreadPool != null) {
             lookupSenderThreadPool.shutdown();
             try {
-                if (!lookupSenderThreadPool.awaitTermination(
-                        timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                if (!lookupSenderThreadPool.awaitTermination(remainingMs, TimeUnit.MILLISECONDS)) {
                     lookupSenderThreadPool.shutdownNow();
 
                     if (!lookupSenderThreadPool.awaitTermination(
-                            timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                            remainingMs, TimeUnit.MILLISECONDS)) {
                         LOG.error("Failed to shutdown lookup client.");
                     }
                 }

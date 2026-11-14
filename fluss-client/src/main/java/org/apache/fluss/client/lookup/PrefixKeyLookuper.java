@@ -20,8 +20,6 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
-import org.apache.fluss.exception.InvalidBucketRoutingException;
-import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -244,24 +242,27 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         ? prefixKeyBytes
                         : bucketKeyEncoder.encodeKey(prefixKey);
 
-        Long partitionId = null;
-        int bucketCount = numBuckets;
         if (partitionGetter != null) {
-            try {
-                PartitionRoutingInfo routing =
-                        resolvePartitionRouting(partitionGetter.getPartition(prefixKey));
-                partitionId = routing.getPartitionId();
-                bucketCount = routing.getBucketCount();
-            } catch (PartitionNotExistException e) {
-                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
-            } catch (InvalidBucketRoutingException e) {
-                CompletableFuture<LookupResult> failed = new CompletableFuture<>();
-                failed.completeExceptionally(e);
-                return failed;
-            }
+            return lookupPartition(
+                    partitionGetter.getPartition(prefixKey),
+                    routing ->
+                            lookupBucket(
+                                    prefixKeyBytes,
+                                    bucketKeyBytes,
+                                    routing.getPartitionId(),
+                                    routing.getBucketCount()),
+                    missing ->
+                            CompletableFuture.completedFuture(
+                                    new LookupResult(Collections.emptyList())));
         }
+        return lookupBucket(prefixKeyBytes, bucketKeyBytes, null, numBuckets);
+    }
 
-        // Compute bucket ID after partition resolution — needs per-partition bucket count
+    private CompletableFuture<LookupResult> lookupBucket(
+            byte[] prefixKeyBytes,
+            byte[] bucketKeyBytes,
+            @Nullable Long partitionId,
+            int bucketCount) {
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, bucketCount);
 
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
