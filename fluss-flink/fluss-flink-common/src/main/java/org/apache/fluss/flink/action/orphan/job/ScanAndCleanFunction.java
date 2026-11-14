@@ -26,12 +26,14 @@ import org.apache.fluss.flink.action.orphan.rule.Decision;
 import org.apache.fluss.flink.action.orphan.rule.FileMeta;
 import org.apache.fluss.flink.action.orphan.rule.FileRule;
 import org.apache.fluss.flink.action.orphan.rule.RuleDispatcher;
+import org.apache.fluss.flink.adapter.ProcessFunctionAdapter;
+import org.apache.fluss.flink.adapter.RuntimeContextAdapter;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
 
-import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,7 +62,7 @@ import java.util.Map;
  * processing within each subtask guarantees no concurrent throttler access.
  */
 @Internal
-public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, CleanStats> {
+public final class ScanAndCleanFunction extends ProcessFunctionAdapter<CleanTask, CleanStats> {
 
     private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(ScanAndCleanFunction.class);
@@ -78,15 +80,14 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
     }
 
     @Override
-    public void open(org.apache.flink.api.common.functions.OpenContext openContext)
-            throws Exception {
-        super.open(openContext);
+    protected void doOpen() throws Exception {
         if (!extraConfigs.isEmpty()) {
             FileSystem.initialize(Configuration.fromMap(extraConfigs), null);
         }
         audit = new AuditLogger();
-        int parallelism = getRuntimeContext().getTaskInfo().getNumberOfParallelSubtasks();
-        int subtaskIndex = getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();
+        StreamingRuntimeContext ctx = (StreamingRuntimeContext) getRuntimeContext();
+        int parallelism = RuntimeContextAdapter.getNumberOfParallelSubtasks(ctx);
+        int subtaskIndex = RuntimeContextAdapter.getIndexOfThisSubtask(ctx);
         // Distribute the configured rate as base + 1 extra for the first `remainder` subtasks.
         // Flink does not provide a cross-JVM limiter here, so this is a best-effort job-level
         // target. Each subtask gets at least 1/s; if parallelism exceeds the configured rate, the
