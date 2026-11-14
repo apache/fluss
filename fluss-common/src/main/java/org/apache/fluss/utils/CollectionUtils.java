@@ -18,6 +18,8 @@
 package org.apache.fluss.utils;
 
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -25,6 +27,18 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public class CollectionUtils {
     /** The default load factor for hash maps create with this util class. */
     static final float HASH_MAP_DEFAULT_LOAD_FACTOR = 0.75f;
+
+    /** Returns the elements that occur more than once. */
+    public static <T> Set<T> findDuplicates(Iterable<T> elements) {
+        Set<T> seen = new HashSet<>();
+        Set<T> duplicates = new HashSet<>();
+        for (T element : elements) {
+            if (!seen.add(element)) {
+                duplicates.add(element);
+            }
+        }
+        return duplicates;
+    }
 
     /**
      * Creates a new {@link HashMap} of the expected size, i.e. a hash map that will not rehash if

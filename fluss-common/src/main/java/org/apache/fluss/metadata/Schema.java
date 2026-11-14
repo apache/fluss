@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.utils.CollectionUtils.findDuplicates;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -751,13 +752,12 @@ public final class Schema implements Serializable {
         List<String> columnNames =
                 columns.stream().map(Column::getName).collect(Collectors.toList());
 
-        Set<String> duplicateColumns = duplicate(columnNames);
+        Set<String> duplicateColumns = findDuplicates(columnNames);
         checkState(
                 duplicateColumns.isEmpty(),
                 "Table column %s must not contain duplicate fields. Found: %s",
                 columnNames,
                 duplicateColumns);
-        Set<String> allFields = new HashSet<>(columnNames);
 
         if (primaryKey == null) {
             checkState(
@@ -767,12 +767,13 @@ public final class Schema implements Serializable {
         }
 
         List<String> primaryKeyNames = primaryKey.getColumnNames();
-        duplicateColumns = duplicate(primaryKeyNames);
+        duplicateColumns = findDuplicates(primaryKeyNames);
         checkState(
                 duplicateColumns.isEmpty(),
                 "Primary key constraint %s must not contain duplicate columns. Found: %s",
                 primaryKey,
                 duplicateColumns);
+        Set<String> allFields = new HashSet<>(columnNames);
         checkState(
                 allFields.containsAll(primaryKeyNames),
                 "Table column %s should include all primary key constraint %s",
@@ -827,12 +828,6 @@ public final class Schema implements Serializable {
         }
 
         return Collections.unmodifiableList(newColumns);
-    }
-
-    private static Set<String> duplicate(List<String> names) {
-        return names.stream()
-                .filter(name -> Collections.frequency(names, name) > 1)
-                .collect(Collectors.toSet());
     }
 
     public static RowType getKeyRowType(Schema schema, int[] keyIndexes) {

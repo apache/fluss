@@ -583,6 +583,21 @@ public class DataTypesTest {
     }
 
     @Test
+    void testRowTypeFieldNameValidation() {
+        DataField a = new DataField("a", DataTypes.INT());
+        DataField b = new DataField("b", DataTypes.INT());
+        assertThatThrownBy(() -> new RowType(Arrays.asList(a, b, b, a, b)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageMatching(
+                        "Field names must be unique\\. Found duplicates: \\[(a, b|b, a)\\]");
+
+        DataField blank = new DataField(" \t", DataTypes.INT());
+        assertThatThrownBy(() -> new RowType(Arrays.asList(a, a, blank)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Field names must contain at least one non-whitespace character.");
+    }
+
+    @Test
     void testRowType() {
         RowType rowType =
                 new RowType(
