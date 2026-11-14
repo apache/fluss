@@ -272,6 +272,7 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
         private final DistributionMode distributionMode;
         private final FlussSerializationSchema<InputT> flussSerializationSchema;
         private final boolean enableUndoRecovery;
+        private boolean ignoreNulls;
         @Nullable private final String producerId;
 
         /**
@@ -313,6 +314,11 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
             this.producerId = producerId;
         }
 
+        UpsertSinkWriterBuilder<InputT> withIgnoreNulls(boolean ignoreNulls) {
+            this.ignoreNulls = ignoreNulls;
+            return this;
+        }
+
         @Override
         public UpsertSinkWriter<InputT> createWriter(
                 MailboxExecutor mailboxExecutor, int subtaskIndex) {
@@ -331,7 +337,8 @@ class FlinkSink<InputT> extends SinkAdapter<InputT> {
                     targetColumnIndexes,
                     mailboxExecutor,
                     flussSerializationSchema,
-                    offsetReporter);
+                    offsetReporter,
+                    ignoreNulls);
         }
 
         @Override

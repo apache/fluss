@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.flink.catalog.FlinkTableFactory;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -44,6 +45,9 @@ import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.apache.flink.table.factories.DynamicTableSinkFactory;
+import org.apache.flink.table.factories.DynamicTableSourceFactory;
+import org.apache.flink.table.module.Module;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
@@ -67,6 +71,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -551,6 +556,91 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         "+I[3, 3503, coco, null]", "+I[4, 3504, jerry, 4]",
                         "+I[5, 3505, piggy, 5]", "+I[6, 3506, stave, 6]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @ParameterizedTest
+    @MultiVersionTest
+    @ValueSource(booleans = {false, true})
+    void testIgnoreNullsUpsertsAndExplicitUpdate(boolean skipUnchanged) throws Exception {
+        disableSinkRequireOnConflict();
+        String tableName = "ignore_nulls_" + skipUnchanged;
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (id INT, name STRING, city STRING, PRIMARY KEY (id) NOT ENFORCED) WITH ("
+                        + "'table.upsert.skip-unchanged'='"
+                        + skipUnchanged
+                        + "')");
+        env.setParallelism(1);
+        tEnv.createTemporaryView(
+                "ignore_nulls_input",
+                tEnv.fromChangelogStream(
+                        env.fromCollection(
+                                Arrays.asList(
+                                        Row.ofKind(RowKind.INSERT, 1, "Alice", "Hangzhou"),
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 1, null, "Shanghai")),
+                                Types.ROW(Types.INT, Types.STRING, Types.STRING))));
+        tEnv.executeSql(
+                        "INSERT INTO "
+                                + tableName
+                                + " /*+ OPTIONS('sink.ignore-nulls'='true') */ SELECT * FROM ignore_nulls_input")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, Alice, Shanghai]"),
+                true);
+        FlinkTableFactory factory =
+                (FlinkTableFactory) tBatchEnv.getCatalog(CATALOG_NAME).get().getFactory().get();
+        tBatchEnv.loadModule(
+                "fluss_tables",
+                new Module() {
+                    @Override
+                    public Optional<DynamicTableSourceFactory> getTableSourceFactory() {
+                        return Optional.of(factory);
+                    }
+
+                    @Override
+                    public Optional<DynamicTableSinkFactory> getTableSinkFactory() {
+                        return Optional.of(factory);
+                    }
+                });
+        tBatchEnv.executeSql(
+                "CREATE TEMPORARY TABLE "
+                        + tableName
+                        + " (id INT, name STRING, city STRING, PRIMARY KEY (id) NOT ENFORCED) WITH ("
+                        + "'connector'='fluss', 'bootstrap.servers'='"
+                        + FLUSS_CLUSTER_EXTENSION.getBootstrapServers()
+                        + "', 'bucket.num'='3', 'bucket.key'='id', 'sink.ignore-nulls'='true')");
+        tBatchEnv
+                .executeSql("UPDATE " + tableName + " SET name = CAST(NULL AS STRING) WHERE id = 1")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, null, Shanghai]"),
+                true);
+        tEnv.executeSql(
+                        "INSERT INTO "
+                                + tableName
+                                + " /*+ OPTIONS('sink.ignore-nulls'='true') */ (id, city) VALUES (1, CAST(NULL AS STRING))")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, null, Shanghai]"),
+                true);
+        tEnv.executeSql(
+                        "INSERT INTO "
+                                + tableName
+                                + " VALUES (1, CAST(NULL AS STRING), CAST(NULL AS STRING))")
+                .await();
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect(),
+                Collections.singletonList("+I[1, null, null]"),
+                true);
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE id = 1").await();
+        try (CloseableIterator<Row> rows =
+                tBatchEnv.executeSql("SELECT * FROM " + tableName).collect()) {
+            assertThat(rows.hasNext()).isFalse();
+        }
     }
 
     @Test

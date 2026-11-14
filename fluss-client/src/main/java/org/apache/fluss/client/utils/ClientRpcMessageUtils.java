@@ -190,6 +190,7 @@ public class ClientRpcMessageUtils {
         KvWriteBatch firstBatch = (KvWriteBatch) readyWriteBatches.get(0).writeBatch();
         int[] targetColumns = firstBatch.getTargetColumns();
         MergeMode mergeMode = firstBatch.getMergeMode();
+        boolean ignoreNulls = firstBatch.isIgnoreNulls();
         for (int i = 1; i < readyWriteBatches.size(); i++) {
             KvWriteBatch currentBatch = (KvWriteBatch) readyWriteBatches.get(i).writeBatch();
             int[] currentBatchTargetColumns = currentBatch.getTargetColumns();
@@ -201,6 +202,9 @@ public class ClientRpcMessageUtils {
                                 Arrays.toString(targetColumns),
                                 Arrays.toString(currentBatchTargetColumns)));
             }
+            checkArgument(
+                    currentBatch.isIgnoreNulls() == ignoreNulls,
+                    "All write batches in a request must have the same NULL assignment policy.");
             // Validate mergeMode consistency across batches
             if (currentBatch.getMergeMode() != mergeMode) {
                 throw new IllegalStateException(
@@ -215,6 +219,9 @@ public class ClientRpcMessageUtils {
         }
         // Set mergeMode in the request - this is the proper way to pass mergeMode to server
         request.setAggMode(mergeMode.getProtoValue());
+        if (ignoreNulls) {
+            request.setIgnoreNulls(true);
+        }
 
         readyWriteBatches.forEach(
                 readyBatch -> {
