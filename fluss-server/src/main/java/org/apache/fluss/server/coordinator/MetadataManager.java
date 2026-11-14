@@ -49,6 +49,8 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -61,6 +63,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionUtils;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
@@ -347,6 +351,35 @@ public class MetadataManager {
                             tablePath, partitionFilter),
                     e);
         }
+    }
+
+    /** Lists matching regular partitions, reading registrations only for matching names. */
+    public Map<String, PartitionRegistration> listPartitionsByPredicate(
+            TableInfo tableInfo, RowType partitionRowType, Predicate predicate) {
+        TablePath tablePath = tableInfo.getTablePath();
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
+        List<String> matchingNames = new ArrayList<>();
+        for (String name : getPartitions(tablePath)) {
+            if (PartitionUtils.HISTORICAL_PARTITION_VALUE.equals(name)) {
+                continue;
+            }
+            GenericRow row;
+            try {
+                ResolvedPartitionSpec spec =
+                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, name);
+                row = PartitionUtils.toPartitionRow(spec.getPartitionValues(), partitionRowType);
+            } catch (RuntimeException e) {
+                throw new FlussRuntimeException(
+                        String.format(
+                                "Failed to parse partition '%s' of table '%s' as %s.",
+                                name, tablePath, partitionRowType),
+                        e);
+            }
+            if (predicate.test(row)) {
+                matchingNames.add(name);
+            }
+        }
+        return getPartitionRegistrations(tablePath, matchingNames);
     }
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)

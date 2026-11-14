@@ -34,8 +34,6 @@ import org.apache.fluss.utils.{ExceptionUtils, Preconditions}
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
-import java.util
-
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
@@ -109,7 +107,8 @@ sealed trait UpsertSplitPlanner extends SplitPlanner
 abstract class AbstractSplitPlanner(
     override val tablePath: TablePath,
     override val tableInfo: TableInfo,
-    override val flussConfig: Configuration)
+    override val flussConfig: Configuration,
+    partitionPruningPredicate: Option[FlussPredicate])
   extends SplitPlanner {
 
   // Fluss client connection scoped to plan()-time metadata RPCs (partition/offset/kv-snapshot
@@ -135,12 +134,15 @@ abstract class AbstractSplitPlanner(
     admin0
   }
 
-  protected lazy val partitionInfos: util.List[PartitionInfo] = {
-    val infos = admin.listPartitionInfos(tablePath).get()
+  protected lazy val partitionInfos: Seq[PartitionInfo] = {
+    val infos = (partitionPruningPredicate match {
+      case Some(predicate) => admin.listPartitionInfosByPredicate(tableInfo, predicate).get()
+      case None => admin.listPartitionInfos(tablePath).get()
+    }).asScala.toSeq
     // Fail fast if any partition's bucket count differs from the table-level count.
     // Per-partition bucket count rescale (ALTER bucket.num) is not yet supported in Spark.
     val tableBucketCount = tableInfo.getNumBuckets
-    infos.asScala.foreach {
+    infos.foreach {
       info =>
         if (info.getBucketCount != tableBucketCount) {
           throw new UnsupportedOperationException(
@@ -266,7 +268,7 @@ class AppendPlanner(
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
     override val flussConfig: Configuration)
-  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
+  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig, partitionPredicate)
   with AppendSplitPlanner {
 
   override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined && !incrementalMode
@@ -382,11 +384,7 @@ class AppendPlanner(
     }
 
     if (tableInfo.isPartitioned) {
-      val matching = SparkPartitionPredicate.filterPartitions(
-        tableInfo,
-        partitionInfos.asScala.toSeq,
-        partitionPredicate)
-      matching
+      partitionInfos
         .map {
           partitionInfo =>
             val partitionName = partitionInfo.getPartitionName
@@ -489,15 +487,8 @@ class AppendPlanner(
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
 
-    val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
-      tableInfo,
-      partitionInfos.asScala.toSeq,
-      partitionPredicate)
-
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
-    filteredPartitionInfos.foreach {
-      pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
-    }
+    partitionInfos.foreach { pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartitionBuffered(lakeSplits)
     var lakeSplitPartitionId = -1L
@@ -631,7 +622,7 @@ class UpsertPlanner(
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
     override val flussConfig: Configuration)
-  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
+  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig, partitionPredicate)
   with UpsertSplitPlanner {
 
   override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined && !incrementalMode
@@ -679,11 +670,7 @@ class UpsertPlanner(
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     if (tableInfo.isPartitioned) {
-      val matching = SparkPartitionPredicate.filterPartitions(
-        tableInfo,
-        partitionInfos.asScala.toSeq,
-        partitionPredicate)
-      matching.flatMap {
+      partitionInfos.flatMap {
         partitionInfo =>
           val partitionName = partitionInfo.getPartitionName
           val kvSnapshots = admin.getLatestKvSnapshots(tablePath, partitionName).get()
@@ -752,11 +739,7 @@ class UpsertPlanner(
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     if (tableInfo.isPartitioned) {
-      val matching = SparkPartitionPredicate.filterPartitions(
-        tableInfo,
-        partitionInfos.asScala.toSeq,
-        partitionPredicate)
-      matching.flatMap {
+      partitionInfos.flatMap {
         partitionInfo =>
           createIncrementalUpsertPartitions(
             partitionInfo.getPartitionName,
@@ -872,15 +855,8 @@ class UpsertPlanner(
     val tableId = tableInfo.getTableId
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
-    val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
-      tableInfo,
-      partitionInfos.asScala.toSeq,
-      partitionPredicate)
-
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
-    filteredPartitionInfos.foreach {
-      pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
-    }
+    partitionInfos.foreach { pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
 
