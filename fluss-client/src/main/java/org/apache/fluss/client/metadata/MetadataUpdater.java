@@ -140,7 +140,8 @@ public class MetadataUpdater {
     }
 
     public @Nullable ServerNode getRandomTabletServer() {
-        return cluster.getRandomTabletServer();
+        return getOneAvailableTabletServerNode(
+                cluster, Collections.emptySet(), rpcClient::isBackingOff);
     }
 
     public CoordinatorGateway newCoordinatorServerClient() {
@@ -247,7 +248,8 @@ public class MetadataUpdater {
             @Nullable Collection<Long> tablePartitionIds)
             throws PartitionNotExistException {
         ServerNode serverNode =
-                getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
+                getOneAvailableTabletServerNode(
+                        cluster, unavailableTabletServerIds, rpcClient::isBackingOff);
         try {
             synchronized (this) {
                 if (serverNode == null) {
@@ -304,16 +306,15 @@ public class MetadataUpdater {
      * re-initializes the cluster from the bootstrap servers. The loop is therefore bounded by the
      * number of known servers (at most N attempts + 1 bootstrap) and always converges.
      *
-     * <p>No additional backoff is introduced here on purpose: each failed attempt already pays a
-     * connection timeout, and the terminal bootstrap path ({@link
-     * #tryToInitializeClusterWithRetries}) carries its own exponential backoff. Keeping this method
-     * a plain "loop until available or bootstrap" avoids over-engineering and stacking redundant
-     * throttling layers.
+     * <p>Node selection prefers endpoints outside connection-layer reconnect backoff. If every
+     * nonexcluded endpoint is backing off, the RPC client schedules the connection attempt after
+     * that delay. This loop adds no separate retry policy.
      */
     public void refreshClusterUntilAvailable() {
         while (true) {
             ServerNode serverNode =
-                    getOneAvailableTabletServerNode(cluster, unavailableTabletServerIds);
+                    getOneAvailableTabletServerNode(
+                            cluster, unavailableTabletServerIds, rpcClient::isBackingOff);
             if (serverNode == null) {
                 // All known tablet servers are unavailable, re-initialize the cluster from the
                 // bootstrap servers as the terminal recovery step and stop.
@@ -332,7 +333,7 @@ public class MetadataUpdater {
                             sendMetadataRequestAndRebuildCluster(
                                     cluster, rpcClient, null, null, null, serverNode);
                 }
-                // Refresh succeeded against a live server, the cluster node list is now up to date.
+                // A metadata response does not reset connection-layer reconnect backoff.
                 unavailableTabletServerIds.removeIf(cluster.getAliveTabletServers()::containsKey);
                 return;
             } catch (Exception e) {
