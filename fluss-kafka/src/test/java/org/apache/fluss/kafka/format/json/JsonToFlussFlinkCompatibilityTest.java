@@ -64,15 +64,23 @@ class JsonToFlussFlinkCompatibilityTest {
                 Arguments.of(DataTypes.BOOLEAN(), "{}", false),
                 Arguments.of(DataTypes.TINYINT(), "\" -128 \"", Byte.MIN_VALUE),
                 Arguments.of(DataTypes.TINYINT(), "\"+127\"", Byte.MAX_VALUE),
+                Arguments.of(DataTypes.TINYINT(), "-128", Byte.MIN_VALUE),
+                Arguments.of(DataTypes.TINYINT(), "127", Byte.MAX_VALUE),
                 Arguments.of(DataTypes.SMALLINT(), "\" -32768 \"", Short.MIN_VALUE),
                 Arguments.of(DataTypes.SMALLINT(), "\"32767\"", Short.MAX_VALUE),
+                Arguments.of(DataTypes.SMALLINT(), "-32768", Short.MIN_VALUE),
+                Arguments.of(DataTypes.SMALLINT(), "32767", Short.MAX_VALUE),
                 Arguments.of(DataTypes.INT(), "\" -2147483648 \"", Integer.MIN_VALUE),
                 Arguments.of(DataTypes.INT(), "\"+2147483647\"", Integer.MAX_VALUE),
+                Arguments.of(DataTypes.INT(), "-2147483648", Integer.MIN_VALUE),
+                Arguments.of(DataTypes.INT(), "2147483647", Integer.MAX_VALUE),
                 Arguments.of(DataTypes.INT(), "112.013", 112),
                 Arguments.of(DataTypes.INT(), "-112.013", -112),
                 Arguments.of(DataTypes.INT(), "1.0", 1),
                 Arguments.of(DataTypes.BIGINT(), "\" -9223372036854775808 \"", Long.MIN_VALUE),
                 Arguments.of(DataTypes.BIGINT(), "\"9223372036854775807\"", Long.MAX_VALUE),
+                Arguments.of(DataTypes.BIGINT(), "-9223372036854775808", Long.MIN_VALUE),
+                Arguments.of(DataTypes.BIGINT(), "9223372036854775807", Long.MAX_VALUE),
                 Arguments.of(DataTypes.BIGINT(), "112.013", 112L),
                 Arguments.of(DataTypes.BIGINT(), "-112.013", -112L),
                 Arguments.of(DataTypes.FLOAT(), "\" 1.25e2 \"", 125F),
@@ -172,14 +180,22 @@ class JsonToFlussFlinkCompatibilityTest {
     private static Stream<Arguments> invalidScalarCoercions() {
         return Stream.of(
                 Arguments.of(DataTypes.TINYINT(), "\"128\""),
+                Arguments.of(DataTypes.TINYINT(), "-129"),
+                Arguments.of(DataTypes.TINYINT(), "128"),
                 Arguments.of(DataTypes.TINYINT(), "1.5"),
                 Arguments.of(DataTypes.SMALLINT(), "\"-32769\""),
+                Arguments.of(DataTypes.SMALLINT(), "-32769"),
+                Arguments.of(DataTypes.SMALLINT(), "32768"),
                 Arguments.of(DataTypes.SMALLINT(), "-1.5"),
                 Arguments.of(DataTypes.INT(), "\"2147483648\""),
+                Arguments.of(DataTypes.INT(), "-2147483649"),
+                Arguments.of(DataTypes.INT(), "2147483648"),
                 Arguments.of(DataTypes.INT(), "\"1.0\""),
                 Arguments.of(DataTypes.INT(), "2147483647.1"),
                 Arguments.of(DataTypes.INT(), "true"),
                 Arguments.of(DataTypes.BIGINT(), "\"9223372036854775808\""),
+                Arguments.of(DataTypes.BIGINT(), "-9223372036854775809"),
+                Arguments.of(DataTypes.BIGINT(), "9223372036854775808"),
                 Arguments.of(DataTypes.BIGINT(), "\"1.0\""),
                 Arguments.of(DataTypes.BIGINT(), "9223372036854775807.1"),
                 Arguments.of(DataTypes.FLOAT(), "\"not-a-number\""),
@@ -187,8 +203,10 @@ class JsonToFlussFlinkCompatibilityTest {
                 // Retain Fluss overflow errors rather than storing non-finite values or null.
                 Arguments.of(DataTypes.FLOAT(), "\"NaN\""),
                 Arguments.of(DataTypes.FLOAT(), "\"1e39\""),
+                Arguments.of(DataTypes.FLOAT(), "1e39"),
                 Arguments.of(DataTypes.DOUBLE(), "\"Infinity\""),
                 Arguments.of(DataTypes.DOUBLE(), "\"1e309\""),
+                Arguments.of(DataTypes.DOUBLE(), "1e309"),
                 Arguments.of(DataTypes.DECIMAL(5, 2), "\"999.995\""),
                 Arguments.of(DataTypes.DECIMAL(5, 2), "\"1e2147483647\""),
                 Arguments.of(DataTypes.DECIMAL(5, 2), "\" 12.34 \""),
@@ -203,8 +221,10 @@ class JsonToFlussFlinkCompatibilityTest {
         }
         try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
             parser.nextToken();
+            String fieldPath = "$.field";
             Object value =
-                    JsonParserToFlussConverters.create(type).convert(parser, "$.field", null);
+                    JsonParserToFlussConverters.create(type, fieldPath)
+                            .convert(parser, fieldPath, null);
             assertThat(parser.nextToken()).as("parser advancement").isNull();
             return value;
         }

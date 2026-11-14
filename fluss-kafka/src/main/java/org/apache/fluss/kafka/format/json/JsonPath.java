@@ -29,14 +29,18 @@ final class JsonPath {
     private JsonPath() {}
 
     static String field(String path, String fieldName) {
-        return append(path, "[\"" + escapeAndTruncate(fieldName) + "\"]");
+        return append(path, fieldSegment(fieldName));
+    }
+
+    static String fieldSegment(String fieldName) {
+        return "[\"" + escapeAndTruncate(fieldName) + "\"]";
     }
 
     static String index(String path, int index) {
         return append(path, "[" + index + "]");
     }
 
-    private static String append(String path, String segment) {
+    static String append(String path, String segment) {
         if (path.length() + segment.length() <= MAX_PATH_LENGTH) {
             return path + segment;
         }

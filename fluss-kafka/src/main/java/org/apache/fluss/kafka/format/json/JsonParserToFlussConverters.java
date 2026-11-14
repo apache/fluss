@@ -31,6 +31,7 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonToken;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.exc.InputCoercionException;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BinaryType;
@@ -238,17 +239,17 @@ final class JsonParserToFlussConverters {
         throw new IOException("Unexpected JSON token " + token + ".");
     }
 
-    static Converter create(DataType dataType) {
+    static Converter create(DataType dataType, String path) {
         try {
             KafkaTableSchema.validateJsonType(dataType);
         } catch (InvalidTableException e) {
             throw new KafkaTopicSchemaException(e.getMessage());
         }
-        return createValidated(dataType);
+        return createValidated(dataType, path);
     }
 
-    private static Converter createValidated(DataType dataType) {
-        NotNullConverter notNullConverter = createNotNull(dataType);
+    private static Converter createValidated(DataType dataType, @Nullable String fixedPath) {
+        NotNullConverter notNullConverter = createNotNull(dataType, fixedPath);
         return new Converter() {
             @Nullable
             @Override
@@ -261,7 +262,7 @@ final class JsonParserToFlussConverters {
                     return notNullConverter.convert(parser, path, rescue);
                 } catch (KafkaRecordEncodingException e) {
                     throw e;
-                } catch (ConversionException | NumberFormatException e) {
+                } catch (ConversionException | NumberFormatException | InputCoercionException e) {
                     if (rescue != null && dataType.isNullable()) {
                         rescue.accept(capture(parser));
                         return null;
@@ -290,14 +291,14 @@ final class JsonParserToFlussConverters {
         return null;
     }
 
-    private static NotNullConverter createNotNull(DataType dataType) {
+    private static NotNullConverter createNotNull(DataType dataType, @Nullable String fixedPath) {
         switch (dataType.getTypeRoot()) {
             case BOOLEAN:
                 return booleanConverter();
             case TINYINT:
-                return tinyIntConverter();
+                return tinyIntConverter(dataType);
             case SMALLINT:
-                return smallIntConverter();
+                return smallIntConverter(dataType);
             case INTEGER:
                 return intConverter(dataType);
             case BIGINT:
@@ -328,7 +329,7 @@ final class JsonParserToFlussConverters {
             case MAP:
                 return mapConverter((MapType) dataType);
             case ROW:
-                return rowConverter((RowType) dataType);
+                return rowConverter((RowType) dataType, fixedPath);
             default:
                 throw new KafkaTopicSchemaException(
                         "Kafka JSON format does not support Fluss type "
@@ -351,17 +352,43 @@ final class JsonParserToFlussConverters {
         };
     }
 
-    private static NotNullConverter tinyIntConverter() {
-        return (parser, path, rescue) -> Byte.parseByte(parser.getText().trim());
+    private static NotNullConverter tinyIntConverter(DataType dataType) {
+        return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() != JsonToken.VALUE_NUMBER_INT) {
+                return Byte.parseByte(parser.getText().trim());
+            }
+            int value = parser.getIntValue();
+            require(
+                    value >= Byte.MIN_VALUE && value <= Byte.MAX_VALUE,
+                    path,
+                    dataType,
+                    "value cannot be converted");
+            return (byte) value;
+        };
     }
 
-    private static NotNullConverter smallIntConverter() {
-        return (parser, path, rescue) -> Short.parseShort(parser.getText().trim());
+    private static NotNullConverter smallIntConverter(DataType dataType) {
+        return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() != JsonToken.VALUE_NUMBER_INT) {
+                return Short.parseShort(parser.getText().trim());
+            }
+            int value = parser.getIntValue();
+            require(
+                    value >= Short.MIN_VALUE && value <= Short.MAX_VALUE,
+                    path,
+                    dataType,
+                    "value cannot be converted");
+            return (short) value;
+        };
     }
 
     private static NotNullConverter intConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            if (!isNumber(parser.getCurrentToken())) {
+            JsonToken token = parser.getCurrentToken();
+            if (token == JsonToken.VALUE_NUMBER_INT) {
+                return parser.getIntValue();
+            }
+            if (token != JsonToken.VALUE_NUMBER_FLOAT) {
                 return Integer.parseInt(parser.getText().trim());
             }
             BigDecimal value = new BigDecimal(parser.getText());
@@ -376,7 +403,11 @@ final class JsonParserToFlussConverters {
 
     private static NotNullConverter bigIntConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            if (!isNumber(parser.getCurrentToken())) {
+            JsonToken token = parser.getCurrentToken();
+            if (token == JsonToken.VALUE_NUMBER_INT) {
+                return parser.getLongValue();
+            }
+            if (token != JsonToken.VALUE_NUMBER_FLOAT) {
                 return Long.parseLong(parser.getText().trim());
             }
             BigDecimal value = new BigDecimal(parser.getText());
@@ -391,18 +422,30 @@ final class JsonParserToFlussConverters {
 
     private static NotNullConverter floatConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            float value = Float.parseFloat(parser.getText().trim());
+            float value =
+                    isNumber(parser.getCurrentToken())
+                            ? parser.getFloatValue()
+                            : Float.parseFloat(parser.getText().trim());
             require(Float.isFinite(value), path, dataType, "non-finite or overflowing number");
-            return value;
+            return value == 0 && isNegativeIntegerZero(parser) ? -0.0F : value;
         };
     }
 
     private static NotNullConverter doubleConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            double value = Double.parseDouble(parser.getText().trim());
+            double value =
+                    isNumber(parser.getCurrentToken())
+                            ? parser.getDoubleValue()
+                            : Double.parseDouble(parser.getText().trim());
             require(Double.isFinite(value), path, dataType, "non-finite or overflowing number");
-            return value;
+            return value == 0 && isNegativeIntegerZero(parser) ? -0.0D : value;
         };
+    }
+
+    private static boolean isNegativeIntegerZero(JsonParser parser) throws IOException {
+        // Jackson converts integer -0 to positive zero before widening it to FLOAT or DOUBLE.
+        return parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT
+                && parser.getTextCharacters()[parser.getTextOffset()] == '-';
     }
 
     private static NotNullConverter decimalConverter(DecimalType dataType) {
@@ -525,7 +568,7 @@ final class JsonParserToFlussConverters {
     }
 
     private static NotNullConverter arrayConverter(ArrayType dataType) {
-        Converter elementConverter = createValidated(dataType.getElementType());
+        Converter elementConverter = createValidated(dataType.getElementType(), null);
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_ARRAY, path, dataType, "expected a JSON array");
             ArrayRescue rescued = rescue == null ? null : new ArrayRescue();
@@ -551,7 +594,7 @@ final class JsonParserToFlussConverters {
     }
 
     private static NotNullConverter mapConverter(MapType dataType) {
-        Converter valueConverter = createValidated(dataType.getValueType());
+        Converter valueConverter = createValidated(dataType.getValueType(), null);
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_OBJECT, path, dataType, "expected a JSON object");
             ObjectRescue rescued = rescue == null ? null : new ObjectRescue();
@@ -573,22 +616,26 @@ final class JsonParserToFlussConverters {
         };
     }
 
-    private static NotNullConverter rowConverter(RowType dataType) {
+    private static NotNullConverter rowConverter(RowType dataType, @Nullable String fixedPath) {
         List<DataField> fields = dataType.getFields();
-        String[] fieldNames = new String[fields.size()];
+        String[] fieldPaths = new String[fields.size()];
         Map<String, Integer> fieldPositions = new HashMap<>();
         Converter[] fieldConverters = new Converter[fields.size()];
         for (int i = 0; i < fields.size(); i++) {
             DataField field = fields.get(i);
-            fieldNames[i] = field.getName();
-            fieldPositions.put(field.getName(), i);
-            fieldConverters[i] = createValidated(field.getType());
+            String name = field.getName();
+            String segment = JsonPath.fieldSegment(name);
+            // Array indices and map keys are only known when decoding the record.
+            String childPath = fixedPath == null ? null : JsonPath.append(fixedPath, segment);
+            fieldPaths[i] = childPath == null ? segment : childPath;
+            fieldPositions.put(name, i);
+            fieldConverters[i] = createValidated(field.getType(), childPath);
         }
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_OBJECT, path, dataType, "expected a JSON object");
             ObjectRescue rescued = rescue == null ? null : new ObjectRescue();
-            GenericRow row = new GenericRow(fieldNames.length);
-            boolean[] present = new boolean[fieldNames.length];
+            GenericRow row = new GenericRow(fieldPaths.length);
+            boolean[] present = new boolean[fieldPaths.length];
             while (parser.nextToken() != JsonToken.END_OBJECT) {
                 String name = parser.getCurrentName();
                 parser.nextToken();
@@ -605,15 +652,20 @@ final class JsonParserToFlussConverters {
                         position,
                         fieldConverters[position].convert(
                                 parser,
-                                JsonPath.field(path, name),
+                                fixedPath == null
+                                        ? JsonPath.append(path, fieldPaths[position])
+                                        : fieldPaths[position],
                                 rescued == null ? null : value -> rescued.add(name, value)));
                 present[position] = true;
             }
-            for (int i = 0; i < fieldNames.length; i++) {
+            for (int i = 0; i < fieldPaths.length; i++) {
                 if (!present[i]) {
                     row.setField(
                             i,
-                            fieldConverters[i].convertMissing(JsonPath.field(path, fieldNames[i])));
+                            fieldConverters[i].convertMissing(
+                                    fixedPath == null
+                                            ? JsonPath.append(path, fieldPaths[i])
+                                            : fieldPaths[i]));
                 }
             }
             if (rescued != null && !rescued.isEmpty()) {

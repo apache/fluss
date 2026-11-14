@@ -148,17 +148,18 @@ class JsonKafkaRescueTest {
                 decoder(nested, true)
                         .decode(
                                 bytes(
-                                        "{\"ratio\":-1e400,\"id\":7,"
+                                        "{\"ratio\":-1e400,\"id\":2147483648,"
                                                 + "\"extra\":1e2147483648,\"details\":{\"known\":3}}"));
 
         GenericRow row =
                 nested
                         ? (GenericRow) decoded.valueFields()[0]
                         : GenericRow.of(decoded.valueFields());
-        assertThat(row.getInt(0)).isEqualTo(7);
+        assertThat(row.isNullAt(0)).isTrue();
         assertThat(row.getRow(1, 2).getInt(0)).isEqualTo(3);
         assertThat(row.isNullAt(4)).isTrue();
-        assertThat(decoded.rescue()).isEqualTo("{\"ratio\":-1e400,\"extra\":1e2147483648}");
+        assertThat(decoded.rescue())
+                .isEqualTo("{\"ratio\":-1e400,\"id\":2147483648,\"extra\":1e2147483648}");
     }
 
     @ParameterizedTest

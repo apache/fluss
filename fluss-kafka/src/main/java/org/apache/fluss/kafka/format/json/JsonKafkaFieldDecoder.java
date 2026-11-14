@@ -66,6 +66,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
     private final boolean rescueEnabled;
     private final boolean nested;
     private final Map<String, Integer> projectedFields = new HashMap<>();
+    private final String[] fieldPaths;
     private final JsonParserToFlussConverters.Converter[] converters;
 
     /** Creates a decoder from the schema validated by the shared Kafka table contract. */
@@ -82,10 +83,14 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
         } else {
             projection = schema.valueProjection();
         }
+        fieldPaths = new String[projection.size()];
         converters = new JsonParserToFlussConverters.Converter[projection.size()];
         for (int i = 0; i < projection.size(); i++) {
-            projectedFields.put(projection.nameAt(i), i);
-            converters[i] = JsonParserToFlussConverters.create(projection.dataTypeAt(i));
+            String name = projection.nameAt(i);
+            projectedFields.put(name, i);
+            fieldPaths[i] = JsonPath.field(JsonPath.ROOT, name);
+            converters[i] =
+                    JsonParserToFlussConverters.create(projection.dataTypeAt(i), fieldPaths[i]);
         }
     }
 
@@ -94,6 +99,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
         if (bytes == null) {
             return new KafkaDecodedValue(new Object[nested ? 1 : projection.size()], null);
         }
+        // Jackson's byte parser can autodetect other encodings and accepts some invalid UTF-8.
         try (Reader reader =
                         new InputStreamReader(
                                 new ByteBufferBackedInputStream(bytes.duplicate()),
@@ -128,7 +134,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
                 values[position] =
                         converters[position].convert(
                                 parser,
-                                JsonPath.field(JsonPath.ROOT, name),
+                                fieldPaths[position],
                                 rescuedFields == null
                                         ? null
                                         : rescued -> rescuedFields.add(name, rescued));
@@ -140,9 +146,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
             }
             for (int i = 0; i < projection.size(); i++) {
                 if (!present[i]) {
-                    values[i] =
-                            converters[i].convertMissing(
-                                    JsonPath.field(JsonPath.ROOT, projection.nameAt(i)));
+                    values[i] = converters[i].convertMissing(fieldPaths[i]);
                 }
             }
             return new KafkaDecodedValue(
