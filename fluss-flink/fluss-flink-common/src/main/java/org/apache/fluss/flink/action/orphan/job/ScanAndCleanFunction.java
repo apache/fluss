@@ -86,14 +86,9 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
         }
         audit = new AuditLogger();
         int parallelism = getRuntimeContext().getTaskInfo().getNumberOfParallelSubtasks();
-        int subtaskIndex = getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();
-        // Distribute the configured rate as base + 1 extra for the first `remainder` subtasks.
-        // Flink does not provide a cross-JVM limiter here, so this is a best-effort job-level
-        // target. Each subtask gets at least 1/s; if parallelism exceeds the configured rate, the
-        // effective aggregate can exceed the target by that floor.
+        // Each worker owns its limiter; fractional rates preserve the best-effort job-level target.
         remoteFsOpRateLimiter =
-                RateLimiter.create(
-                        perSubtaskRate(remoteFsOpRateLimitPerSecond, parallelism, subtaskIndex));
+                RateLimiter.create(perSubtaskRate(remoteFsOpRateLimitPerSecond, parallelism));
     }
 
     @Override
@@ -241,11 +236,8 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
         return new SafeDeleter(fs, dryRun, audit, remoteFsOpRateLimiter);
     }
 
-    private static double perSubtaskRate(long totalRate, int parallelism, int subtaskIndex) {
-        long base = totalRate / parallelism;
-        long remainder = totalRate % parallelism;
-        long quota = base + (subtaskIndex < remainder ? 1L : 0L);
-        return Math.max(1.0, (double) quota);
+    static double perSubtaskRate(long totalRate, int parallelism) {
+        return ((double) totalRate) / parallelism;
     }
 
     private static final class DirVisit {
