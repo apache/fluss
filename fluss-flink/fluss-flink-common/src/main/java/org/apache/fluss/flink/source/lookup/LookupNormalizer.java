@@ -162,7 +162,7 @@ public class LookupNormalizer implements Serializable {
 
         public boolean fieldMatches(RowData result) {
             Object fieldValue = resultFieldGetter.getFieldOrNull(result);
-            return Objects.equals(expectedValue, fieldValue);
+            return Objects.deepEquals(expectedValue, fieldValue);
         }
     }
 

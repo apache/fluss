@@ -24,6 +24,7 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.table.types.logical.VarBinaryType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -165,6 +166,29 @@ class LookupNormalizerTest {
                         keys(0, 1), ints(1, 0, 2, 3), ints(1), NONE, SCHEMA, null);
         assertThat(reordered.normalizeLookupKey(GenericRowData.of(1L, 2L)))
                 .isEqualTo(GenericRowData.of(2L, 1L));
+    }
+
+    @Test
+    void testRemainingFilterComparesBinaryByContent() {
+        // Primary key (id); Join also has an equality condition on non-key BYTES column.
+        RowType schema =
+                RowType.of(
+                        new LogicalType[] {
+                            new BigIntType(), new VarBinaryType(VarBinaryType.MAX_LENGTH)
+                        },
+                        new String[] {"id", "payload"});
+        LookupNormalizer normalizer =
+                LookupNormalizer.validateAndCreateLookupNormalizer(
+                        keys(0, 1), ints(0), ints(0), NONE, schema, null);
+        assertThat(normalizer.normalizeLookupKey(GenericRowData.of(1L, new byte[] {1, 2})))
+                .isEqualTo(GenericRowData.of(1L));
+
+        RemainingFilter filter =
+                normalizer.createRemainingFilter(GenericRowData.of(1L, new byte[] {1, 2}));
+        assertThat(filter).isNotNull();
+        // The looked-up row carries a different byte[] instance with the same content.
+        assertThat(filter.isMatch(GenericRowData.of(1L, new byte[] {1, 2}))).isTrue();
+        assertThat(filter.isMatch(GenericRowData.of(1L, new byte[] {1, 3}))).isFalse();
     }
 
     private static int[][] keys(int... indexes) {
