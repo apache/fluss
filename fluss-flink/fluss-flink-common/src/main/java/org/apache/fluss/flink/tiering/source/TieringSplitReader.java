@@ -40,7 +40,6 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -430,7 +429,7 @@ public class TieringSplitReader<WriteResult>
     /**
      * Determines whether the current table should use the Arrow record batch path for tiering. The
      * batch path is used when the table is an ARROW format append-only (log) table and the lake
-     * writer supports batch writing.
+     * tiering factory supports record batch writes for it.
      */
     private boolean useRecordBatchPath() {
         if (currentTableUseRecordBatchPath != null) {
@@ -442,8 +441,7 @@ public class TieringSplitReader<WriteResult>
                 unshadedArrowAvailable
                         && !tableInfo.hasPrimaryKey()
                         && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
-                        && tableInfo.getTableConfig().getDataLakeFormat().orElse(null)
-                                == DataLakeFormat.PAIMON;
+                        && lakeTieringFactory.supportsRecordBatchWrite(tableInfo);
         return currentTableUseRecordBatchPath;
     }
 
