@@ -90,8 +90,14 @@ ALTER TABLE my_partitioned_table SET (
 
 :::warning
 After enabling or disabling `table.datalake.historical-partition.enabled`, restart any existing
-writer and lookup jobs that require historical partition access so that their clients reload the
-updated table configuration.
+writer, lookup, and Flink streaming read jobs that require historical partition access so that they
+reload the updated table configuration.
+
+An older checkpoint may not contain consumption offsets for `__historical__`, for example if it
+was taken before historical changelog consumption was enabled. If the source discovers
+`__historical__` as a new partition after restoring such a checkpoint, it starts at the earliest
+retained log offset, even when `scan.startup.mode` is `latest`. This can replay changes already
+reflected in downstream state.
 :::
 
 When enabled, the Coordinator creates and retains an internal `__historical__` system partition:
@@ -100,7 +106,19 @@ When enabled, the Coordinator creates and retains an internal `__historical__` s
   system partition while preserving each record's original partition name. The tiering service
   writes the records back to their original Paimon partitions.
 - **Reads:** Primary-key point lookups continue to resolve rows after the original Fluss partition
-  no longer exists. Historical reads currently support only primary-key point lookups.
+  no longer exists. [Flink streaming reads](../../engine-flink/reads.md#streaming-read)
+  also consume historical changelogs for both log tables and primary-key tables.
+
+:::warning Partition expiration during streaming reads
+If a Fluss partition expires while a streaming job is running, a later historical update can be
+emitted before an older record for the same primary key from the original partition. This can
+produce incorrect downstream materialized results or aggregations.
+
+When the source discovers the partition removal, it stops consuming that partition's log without
+first draining its unread records. Those records may be skipped; consuming the historical changelog
+does not recover them. These limitations apply to both `full` and changelog-only startup modes;
+complete, ordered consumption across partition expiration is not guaranteed.
+:::
 
 For primary-key tables, `table.datalake.historical-partition.lookup-mode` selects how historical
 partition lookups read Paimon when `table.datalake.historical-partition.enabled` is `true`.
