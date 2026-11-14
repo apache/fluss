@@ -28,7 +28,7 @@ import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
-import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.IntegerAssert
 
 import java.time.Duration
 
@@ -123,7 +123,7 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
         }
       }
 
-      assertThat(syncedBuckets.size)
+      new IntegerAssert(syncedBuckets.size)
         .withFailMessage(s"Not all buckets of $tablePath synced to lake within $SYNC_TIMEOUT")
         .isEqualTo(tableBuckets.size)
     } finally {
