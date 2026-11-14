@@ -24,6 +24,7 @@ import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -55,6 +56,7 @@ final class LogLoader {
     private final LogFormat logFormat;
     private final WriterStateManager writerStateManager;
     private final boolean isCleanShutdown;
+    private final Clock clock;
 
     public LogLoader(
             File logTabletDir,
@@ -63,7 +65,8 @@ final class LogLoader {
             long recoveryPointCheckpoint,
             LogFormat logFormat,
             WriterStateManager writerStateManager,
-            boolean isCleanShutdown) {
+            boolean isCleanShutdown,
+            Clock clock) {
         this.logTabletDir = logTabletDir;
         this.conf = conf;
         this.logSegments = logSegments;
@@ -71,6 +74,7 @@ final class LogLoader {
         this.logFormat = logFormat;
         this.writerStateManager = writerStateManager;
         this.isCleanShutdown = isCleanShutdown;
+        this.clock = clock;
     }
 
     /**
@@ -113,7 +117,12 @@ final class LogLoader {
         // can restore the complete WriterState. The only difference is that using logStartOffset
         // can potentially skip over more segments.
         LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
+                writerStateManager,
+                logSegments,
+                0,
+                nextOffset,
+                isCleanShutdown,
+                clock.milliseconds());
 
         LogSegment activeSegment = logSegments.lastSegment().get();
         activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
@@ -272,7 +281,12 @@ final class LogLoader {
         // can restore the complete WriterState. The only difference is that using logStartOffset
         // can potentially skip over more segments.
         LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, segment.getBaseOffset(), false);
+                writerStateManager,
+                logSegments,
+                0,
+                segment.getBaseOffset(),
+                false,
+                clock.milliseconds());
         int bytesTruncated = segment.recover();
         // once we have recovered the segment's data, take a snapshot to ensure that we won't
         // need to reload the same segment again while recovering another segment.
