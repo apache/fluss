@@ -1470,6 +1470,9 @@ pub struct PbFetchLogReqForBucket {
     pub max_fetch_bytes: i32,
     #[prost(int32, optional, tag = "5")]
     pub routing_bucket_count: ::core::option::Option<i32>,
+    /// Exclusive logical offset for bounded client scans; requires FETCH_LOG v1.
+    #[prost(int64, optional, tag = "6")]
+    pub stopping_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbFetchLogRespForTable {
@@ -1490,7 +1493,10 @@ pub struct PbFetchLogRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "5")]
     pub high_watermark: ::core::option::Option<i64>,
-    /// TODO now we don't introduce log start offset, but remain it in protobuf
+    /// For successful bounded FETCH_LOG v1 requests, returns the actual log start offset,
+    /// including lake storage. Zero is a valid offset.
+    /// For unbounded requests, this field is not guaranteed. Older servers may return zero
+    /// as a placeholder, which must not be treated as the actual log start offset.
     #[prost(int64, optional, tag = "6")]
     pub log_start_offset: ::core::option::Option<i64>,
     #[prost(message, optional, tag = "7")]

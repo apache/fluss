@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
@@ -49,6 +50,7 @@ import java.util.List;
 import java.util.function.IntPredicate;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -76,6 +78,14 @@ final class LogSegmentTest extends LogTestBase {
                 Arguments.of(2147483648L, 0L),
                 Arguments.of(-2147483648L, 0L),
                 Arguments.of(2147483648L, 4294967296L));
+    }
+
+    static Stream<Arguments> boundedFilterParameters() {
+        return Stream.of(
+                // The stop falls in an offset gap before the next batch.
+                Arguments.of(50L, 60L, 66L, 54L, 55L),
+                // The stop falls inside a filtered batch.
+                Arguments.of(50L, 53L, 56L, 50L, 54L));
     }
 
     @ParameterizedTest
@@ -784,11 +794,7 @@ final class LogSegmentTest extends LogTestBase {
 
         // Create projection: project only column 0 (field "a")
         FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
-        projection.setCurrentProjection(
-                1L,
-                TEST_SCHEMA_GETTER,
-                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
-                new int[] {0});
+        projection.setCurrentProjection(1L, TEST_SCHEMA_GETTER, DEFAULT_COMPRESSION, new int[] {0});
 
         try (LogRecordReadContext readContext =
                 LogRecordReadContext.createArrowReadContext(
@@ -846,11 +852,7 @@ final class LogSegmentTest extends LogTestBase {
         Predicate filter = builder.greaterThan(0, 5);
 
         FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
-        projection.setCurrentProjection(
-                1L,
-                TEST_SCHEMA_GETTER,
-                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
-                new int[] {0});
+        projection.setCurrentProjection(1L, TEST_SCHEMA_GETTER, DEFAULT_COMPRESSION, new int[] {0});
 
         try (LogRecordReadContext readContext =
                 LogRecordReadContext.createArrowReadContext(
@@ -952,11 +954,7 @@ final class LogSegmentTest extends LogTestBase {
 
         // Project only column 0 (int field "a") — much smaller than full row
         FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
-        projection.setCurrentProjection(
-                1L,
-                TEST_SCHEMA_GETTER,
-                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
-                new int[] {0});
+        projection.setCurrentProjection(1L, TEST_SCHEMA_GETTER, DEFAULT_COMPRESSION, new int[] {0});
 
         int unprojectedBatch1Size = batch1.sizeInBytes();
 
@@ -1252,6 +1250,242 @@ final class LogSegmentTest extends LogTestBase {
             // Last batch matches — no trailing filtered batches
             assertThat(read.hasFilteredEndOffset()).isFalse();
         }
+    }
+
+    @ParameterizedTest
+    @MethodSource("boundedFilterParameters")
+    void testBoundedFilterProgress(
+            long firstBatchOffset,
+            long secondBatchOffset,
+            long thirdBatchOffset,
+            long fetchOffset,
+            long stoppingOffset)
+            throws Exception {
+        LogSegment segment = createSegment(40L);
+        List<Object[]> firstRows =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        List<Object[]> secondRows =
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"});
+        List<Object[]> thirdRows =
+                Arrays.asList(new Object[] {7, "g"}, new Object[] {8, "h"}, new Object[] {9, "i"});
+        MemoryLogRecords firstBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        firstRows, DATA1_ROW_TYPE, firstBatchOffset, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords secondBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        secondRows, DATA1_ROW_TYPE, secondBatchOffset, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords thirdBatch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        thirdRows, DATA1_ROW_TYPE, thirdBatchOffset, DEFAULT_SCHEMA_ID);
+
+        segment.append(firstBatchOffset + 2, -1L, -1L, firstBatch);
+        segment.append(secondBatchOffset + 2, -1L, -1L, secondBatch);
+        segment.append(thirdBatchOffset + 2, -1L, -1L, thirdBatch);
+
+        Predicate predicate = new PredicateBuilder(DATA1_ROW_TYPE).greaterThan(0, 100);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FilterContext filterContext =
+                    new FilterContext(
+                            predicate, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+            FetchDataInfo result =
+                    segment.read(
+                            fetchOffset,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            filterContext,
+                            stoppingOffset);
+
+            assertThat(result).isNotNull();
+            assertThat(result.getRecords().sizeInBytes()).isZero();
+            assertThat(result.hasFilteredEndOffset()).isTrue();
+            assertThat(result.getFilteredEndOffset()).isEqualTo(stoppingOffset);
+        }
+    }
+
+    @Test
+    void testBoundedReadWithoutFilterUsesFileSlice() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords first =
+                genMemoryLogRecordsWithBaseOffset(
+                        50, Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}));
+        MemoryLogRecords second =
+                genMemoryLogRecordsWithBaseOffset(
+                        60, Arrays.asList(new Object[] {3, "c"}, new Object[] {4, "d"}));
+        MemoryLogRecords third =
+                genMemoryLogRecordsWithBaseOffset(
+                        70, Arrays.asList(new Object[] {5, "e"}, new Object[] {6, "f"}));
+        segment.append(51, -1L, -1L, first);
+        segment.append(61, -1L, -1L, second);
+        segment.append(71, -1L, -1L, third);
+
+        int totalSize = segment.getSizeInBytes();
+
+        // Stop exactly at the second batch boundary.
+        FetchDataInfo atBoundary = segment.read(50, totalSize, totalSize, false, null, null, 60L);
+        assertThat(atBoundary.getRecords()).isInstanceOf(FileLogRecords.class);
+        assertThat(atBoundary.getRecords().sizeInBytes()).isEqualTo(first.sizeInBytes());
+
+        // Stop inside the second batch: keep the entire batch for client-side trimming.
+        FetchDataInfo insideBatch = segment.read(50, totalSize, totalSize, false, null, null, 61L);
+        assertThat(insideBatch.getRecords().sizeInBytes())
+                .isEqualTo(first.sizeInBytes() + second.sizeInBytes());
+
+        // Offset gaps must not cause the next batch to be included.
+        FetchDataInfo inGap = segment.read(50, totalSize, totalSize, false, null, null, 55L);
+        assertThat(inGap.getRecords().sizeInBytes()).isEqualTo(first.sizeInBytes());
+
+        // No eligible batch: report bounded progress instead of returning no progress.
+        FetchDataInfo empty = segment.read(40, totalSize, totalSize, false, null, null, 49L);
+        assertThat(empty.getRecords().sizeInBytes()).isZero();
+        assertThat(empty.getFilteredEndOffset()).isEqualTo(49L);
+
+        // A stop beyond the segment does not change the file slice.
+        FetchDataInfo beyondEnd = segment.read(50, totalSize, totalSize, false, null, null, 80L);
+        assertThat(beyondEnd.getRecords().sizeInBytes()).isEqualTo(totalSize);
+
+        // The original unbounded behavior must remain unchanged.
+        FetchDataInfo unbounded = segment.read(50, totalSize, totalSize, false, null, null, null);
+        assertThat(unbounded.getRecords()).isInstanceOf(FileLogRecords.class);
+        assertThat(unbounded.getRecords().sizeInBytes()).isEqualTo(totalSize);
+
+        // minOneMessage still permits returning the first complete batch.
+        FetchDataInfo minOneMessage = segment.read(50, 1, totalSize, true, null, null, 60L);
+        assertThat(minOneMessage.getRecords().sizeInBytes()).isEqualTo(first.sizeInBytes());
+
+        // The upper byte limit is at the beginning of the next batch.
+        // LocalLog has established that the logical visible offset reached stop.
+        FetchDataInfo gapAtVisibleBoundary =
+                segment.read(40, totalSize, 0L, false, null, null, 49L);
+
+        assertThat(gapAtVisibleBoundary.getRecords().sizeInBytes()).isZero();
+        assertThat(gapAtVisibleBoundary.hasFilteredEndOffset()).isTrue();
+        assertThat(gapAtVisibleBoundary.getFilteredEndOffset()).isEqualTo(49L);
+
+        // A distant stop must not change the original maxSize-limited file slice.
+        FetchDataInfo smallWindow =
+                segment.read(50, first.sizeInBytes(), totalSize, false, null, null, 1000L);
+
+        assertThat(smallWindow.getRecords()).isInstanceOf(FileLogRecords.class);
+        assertThat(smallWindow.getRecords().sizeInBytes()).isEqualTo(first.sizeInBytes());
+    }
+
+    @Test
+    void testBoundedReadDoesNotCompleteBeforeHighWatermark() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords first =
+                genMemoryLogRecordsWithBaseOffset(
+                        50, Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}));
+        MemoryLogRecords second =
+                genMemoryLogRecordsWithBaseOffset(
+                        60, Arrays.asList(new Object[] {3, "c"}, new Object[] {4, "d"}));
+
+        segment.append(51, -1L, -1L, first);
+        segment.append(61, -1L, -1L, second);
+
+        int totalSize = segment.getSizeInBytes();
+
+        // The first batch is not yet fully visible at the high watermark.
+        FetchDataInfo firstBlocked = segment.read(50, totalSize, 0L, false, null, null, 62L);
+
+        assertThat(firstBlocked.getRecords().sizeInBytes()).isZero();
+        assertThat(firstBlocked.hasFilteredEndOffset()).isFalse();
+
+        // The first batch is visible, but the second batch is not.
+        // Verify the same behavior when startPosition is nonzero.
+        FetchDataInfo secondBlocked =
+                segment.read(60, totalSize, first.sizeInBytes(), false, null, null, 62L);
+
+        assertThat(secondBlocked.getRecords().sizeInBytes()).isZero();
+        assertThat(secondBlocked.hasFilteredEndOffset()).isFalse();
+
+        // The first batch is readable, but stop is still beyond the
+        // current visible range. Return the first batch without completing.
+        FetchDataInfo partiallyReadable =
+                segment.read(50, totalSize, first.sizeInBytes(), false, null, null, 62L);
+
+        assertThat(partiallyReadable.getRecords().sizeInBytes()).isEqualTo(first.sizeInBytes());
+        assertThat(partiallyReadable.hasFilteredEndOffset()).isFalse();
+    }
+
+    @Test
+    void testBoundedReadWithProjectionWithoutFilter() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords first =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}),
+                        DATA1_ROW_TYPE,
+                        50,
+                        DEFAULT_SCHEMA_ID);
+        MemoryLogRecords second =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(new Object[] {3, "c"}, new Object[] {4, "d"}),
+                        DATA1_ROW_TYPE,
+                        52,
+                        DEFAULT_SCHEMA_ID);
+
+        segment.append(51, -1L, -1L, first);
+        segment.append(53, -1L, -1L, second);
+
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+        projection.setCurrentProjection(1L, TEST_SCHEMA_GETTER, DEFAULT_COMPRESSION, new int[] {0});
+
+        FetchDataInfo result =
+                segment.read(
+                        50,
+                        Integer.MAX_VALUE,
+                        segment.getSizeInBytes(),
+                        true,
+                        projection,
+                        null,
+                        52L);
+
+        assertThat(result).isNotNull();
+        assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+
+        int batchCount = 0;
+        for (LogRecordBatch ignored : result.getRecords().batches()) {
+            batchCount++;
+        }
+        assertThat(batchCount).isEqualTo(1);
+    }
+
+    @Test
+    void testBoundedReadCompletesOffsetGapWithSmallByteBudget() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords records =
+                genMemoryLogRecordsWithBaseOffset(
+                        60, Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}));
+        segment.append(61, -1L, -1L, records);
+        int totalSize = segment.getSizeInBytes();
+        // The next batch starts at 60, beyond the exclusive stop 55.
+        // Even a budget smaller than the batch header should not prevent reporting an
+        // already-completed empty bounded range.
+        FetchDataInfo tinyBudget = segment.read(50, 1, totalSize, false, null, null, 55L);
+
+        assertThat(tinyBudget.getRecords().sizeInBytes()).isZero();
+        assertThat(tinyBudget.hasFilteredEndOffset()).isTrue();
+        assertThat(tinyBudget.getFilteredEndOffset()).isEqualTo(55L);
+
+        // A larger budget that is still insufficient for the full batch must produce the same
+        // result.
+        FetchDataInfo headerBudget =
+                segment.read(50, V0_RECORD_BATCH_HEADER_SIZE, totalSize, false, null, null, 55L);
+
+        assertThat(headerBudget.getRecords().sizeInBytes()).isZero();
+        assertThat(headerBudget.hasFilteredEndOffset()).isTrue();
+        assertThat(headerBudget.getFilteredEndOffset()).isEqualTo(55L);
+
+        // When stop falls inside the batch, insufficient bytes must never be mistaken for an empty
+        // completed range.
+        FetchDataInfo insideBatch = segment.read(60, 1, totalSize, false, null, null, 61L);
+
+        assertThat(insideBatch.getRecords().sizeInBytes()).isZero();
+        assertThat(insideBatch.hasFilteredEndOffset()).isFalse();
     }
 
     private LogSegment createSegment(long baseOffset) throws IOException {

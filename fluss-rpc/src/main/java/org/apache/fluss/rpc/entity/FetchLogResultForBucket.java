@@ -33,11 +33,14 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Result of {@link FetchLogRequest} for each table bucket. */
 @Internal
 public class FetchLogResultForBucket extends ResultForBucket {
+    private static final long NO_START_OFFSET = -1L;
+
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
     private final long minRetainOffset;
+    private final long logStartOffset;
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
@@ -46,13 +49,34 @@ public class FetchLogResultForBucket extends ResultForBucket {
             long highWatermark,
             long filteredEndOffset,
             long minRetainOffset,
-            ApiError error) {
+            ApiError error,
+            long logStartOffset) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
         this.minRetainOffset = minRetainOffset;
+        this.logStartOffset = logStartOffset;
+    }
+
+    /** Returns a result carrying the existing log start offset. */
+    public FetchLogResultForBucket withLogStartOffset(long logStartOffset) {
+        checkArgument(logStartOffset >= 0, "Log start offset must be nonnegative.");
+        return new FetchLogResultForBucket(
+                getTableBucket(),
+                remoteLogFetchInfo,
+                records,
+                highWatermark,
+                filteredEndOffset,
+                minRetainOffset,
+                getError(),
+                logStartOffset);
+    }
+
+    /** Returns the log start offset, or -1 when it is not supplied. */
+    public long getLogStartOffset() {
+        return logStartOffset;
     }
 
     /** Creates a successful local fetch result. */
@@ -70,7 +94,8 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 highWatermark,
                 filteredEndOffset,
                 minRetainOffset,
-                ApiError.NONE);
+                ApiError.NONE,
+                NO_START_OFFSET);
     }
 
     /** Creates a successful remote fetch result. */
@@ -83,19 +108,28 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 highWatermark,
                 -1L,
                 -1L,
-                ApiError.NONE);
+                ApiError.NONE,
+                NO_START_OFFSET);
     }
 
     /** Creates a successful empty fetch result. */
     public static FetchLogResultForBucket empty(
             TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
         return new FetchLogResultForBucket(
-                tableBucket, null, null, highWatermark, filteredEndOffset, -1L, ApiError.NONE);
+                tableBucket,
+                null,
+                null,
+                highWatermark,
+                filteredEndOffset,
+                -1L,
+                ApiError.NONE,
+                NO_START_OFFSET);
     }
 
     /** Creates a failed fetch result. */
     public static FetchLogResultForBucket error(TableBucket tableBucket, ApiError error) {
-        return new FetchLogResultForBucket(tableBucket, null, null, -1L, -1L, -1L, error);
+        return new FetchLogResultForBucket(
+                tableBucket, null, null, -1L, -1L, -1L, error, NO_START_OFFSET);
     }
 
     /**

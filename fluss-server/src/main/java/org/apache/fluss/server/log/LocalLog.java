@@ -386,6 +386,26 @@ public final class LocalLog {
             @Nullable FileLogProjection projection,
             @Nullable FilterContext filterContext)
             throws IOException {
+        return read(
+                readOffset,
+                maxLength,
+                minOneMessage,
+                maxOffsetMetadata,
+                projection,
+                filterContext,
+                null);
+    }
+
+    /** Reads log data with an optional exclusive stopping offset. */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            boolean minOneMessage,
+            LogOffsetMetadata maxOffsetMetadata,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext,
+            @Nullable Long stoppingOffset)
+            throws IOException {
 
         if (LOG.isTraceEnabled()) {
             LOG.trace(
@@ -431,6 +451,15 @@ public final class LocalLog {
             // Limit the number of segments scanned when filtering to prevent a single fetch
             // request from scanning the entire log when the filter rejects all data.
             int filteredSegmentsScanned = 0;
+            // For unfiltered reads, the stopping offset can only be used for pruning after it
+            // becomes visible at the requested fetch isolation level.
+            // Otherwise, keep the original file-slice read path.
+            Long segmentStoppingOffset =
+                    filterContext == null
+                                    && stoppingOffset != null
+                                    && maxOffsetMetadata.getMessageOffset() < stoppingOffset
+                            ? null
+                            : stoppingOffset;
             while (fetchDataInfo == null && segmentOpt.isPresent()) {
                 LogSegment segment = segmentOpt.get();
                 long baseOffset = segment.getBaseOffset();
@@ -447,7 +476,8 @@ public final class LocalLog {
                                 maxPosition,
                                 minOneMessage,
                                 projection,
-                                filterContext);
+                                filterContext,
+                                segmentStoppingOffset);
                 if (fetchDataInfo == null) {
                     segmentOpt = segments.higherSegment(baseOffset);
                 } else if (filterContext != null
@@ -456,6 +486,9 @@ public final class LocalLog {
                     // All batches in this segment were filtered out. Record the skip offset
                     // and continue scanning the next segment for matching data.
                     lastFilteredEndOffset = fetchDataInfo.getFilteredEndOffset();
+                    if (stoppingOffset != null && lastFilteredEndOffset >= stoppingOffset) {
+                        return fetchDataInfo;
+                    }
                     if (LOG.isDebugEnabled()) {
                         LOG.debug(
                                 "All batches filtered out in segment base={} for {}, advancing readOffset from {} to {}",
