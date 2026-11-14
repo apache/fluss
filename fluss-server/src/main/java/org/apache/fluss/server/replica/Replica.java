@@ -291,7 +291,7 @@ public final class Replica {
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
         TableConfig tableConfig = tableInfo.getTableConfig();
-        this.tableMinInSyncReplicas = tableConfig.getLogMinInSyncReplicas().orElse(null);
+        this.tableMinInSyncReplicas = tableConfig.getMinInSyncReplicas().orElse(null);
         String partitionName = physicalPath.getPartitionName();
         this.historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
         this.logFormat = tableConfig.getLogFormat();

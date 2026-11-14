@@ -528,7 +528,7 @@ public class TableDescriptorValidation {
 
     private static void checkMinInSyncReplicas(Configuration tableConf) {
         tableConf
-                .getOptional(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER)
+                .getOptional(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS)
                 .ifPresent(
                         minInSyncReplicas -> {
                             int replicationFactor =
@@ -537,8 +537,7 @@ public class TableDescriptorValidation {
                                 throw new InvalidConfigException(
                                         String.format(
                                                 "'%s' must be between 1 and '%s' (%s).",
-                                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER
-                                                        .key(),
+                                                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(),
                                                 ConfigOptions.TABLE_REPLICATION_FACTOR.key(),
                                                 replicationFactor));
                             }

@@ -22,7 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 
 /**
  * Number of in-sync replicas for the bucket is lower than the minimum configured by {@link
- * ConfigOptions#TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER}, or {@link
+ * ConfigOptions#TABLE_MIN_IN_SYNC_REPLICAS}, or {@link
  * ConfigOptions#LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER} if no table override is set. This
  * exception is raised when the low ISR size is discovered after the message was already appended to
  * the log. Producer retries will cause duplicates.

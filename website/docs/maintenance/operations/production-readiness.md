@@ -32,7 +32,7 @@ This checklist outlines the deployment and configuration recommendations for run
 
 :::tip Keep the default settings
 
-We recommend leaving the table-level `table.replication.factor` and `table.log.min-in-sync-replicas-number` unset to inherit the cluster configuration,
+We recommend leaving the table-level `table.replication.factor` and `table.min-in-sync-replicas` unset to inherit the cluster configuration,
 and keeping the cluster-level `log.replica.min-in-sync-replicas-number` at its default value.
 
 :::

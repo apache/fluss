@@ -22,7 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 
 /**
  * Number of in-sync replicas for the table bucket is lower than the minimum configured by {@link
- * ConfigOptions#TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER}, or {@link
+ * ConfigOptions#TABLE_MIN_IN_SYNC_REPLICAS}, or {@link
  * ConfigOptions#LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER} if no table override is set.
  *
  * @since 0.1

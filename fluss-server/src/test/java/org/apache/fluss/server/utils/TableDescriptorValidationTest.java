@@ -57,25 +57,25 @@ class TableDescriptorValidationTest {
 
     @ParameterizedTest
     @ValueSource(ints = {0, -1, 4})
-    void testRejectInvalidLogMinInSyncReplicas(int minInSyncReplicas) {
+    void testRejectInvalidMinInSyncReplicas(int minInSyncReplicas) {
         TableDescriptor tableDescriptor =
                 logTableWithProperty(
-                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(),
                                 String.valueOf(minInSyncReplicas))
                         .withReplicationFactor(3);
 
         assertThatThrownBy(() -> validate(tableDescriptor, null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key())
+                .hasMessageContaining(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key())
                 .hasMessageContaining(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
     }
 
     @ParameterizedTest
     @ValueSource(ints = {1, 3})
-    void testLogMinInSyncReplicasBounds(int minInSyncReplicas) {
+    void testMinInSyncReplicasBounds(int minInSyncReplicas) {
         TableDescriptor tableDescriptor =
                 logTableWithProperty(
-                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(),
                                 String.valueOf(minInSyncReplicas))
                         .withReplicationFactor(3);
 
@@ -83,29 +83,26 @@ class TableDescriptorValidationTest {
     }
 
     @Test
-    void testRejectMalformedLogMinInSyncReplicas() {
+    void testRejectMalformedMinInSyncReplicas() {
         TableDescriptor tableDescriptor =
-                logTableWithProperty(
-                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
-                                "invalid")
+                logTableWithProperty(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(), "invalid")
                         .withReplicationFactor(3);
 
         assertThatThrownBy(() -> validate(tableDescriptor, null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key());
+                .hasMessageContaining(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key());
     }
 
     @Test
-    void testLogMinInSyncReplicasCannotBeAltered() {
+    void testMinInSyncReplicasCannotBeAltered() {
         assertThatThrownBy(
                         () ->
                                 TableDescriptorValidation.validateAlterTableProperties(
                                         plainTableInfo(),
                                         Collections.singleton(
-                                                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER
-                                                        .key())))
+                                                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key())))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key());
+                .hasMessageContaining(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key());
     }
 
     @Test

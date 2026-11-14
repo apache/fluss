@@ -1485,8 +1485,7 @@ final class ReplicaTest extends ReplicaTestBase {
         TableInfo tableInfo = primaryKey ? DATA1_TABLE_INFO_PK : DATA1_TABLE_INFO;
         Map<String, String> properties = new HashMap<>(tableInfo.getProperties().toMap());
         properties.put(
-                ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
-                String.valueOf(minInSyncReplicas));
+                ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key(), String.valueOf(minInSyncReplicas));
         TableInfo initialTableInfo =
                 TableInfo.of(
                         tableInfo.getTablePath(),

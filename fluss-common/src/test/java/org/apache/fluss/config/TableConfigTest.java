@@ -29,15 +29,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TableConfigTest {
 
     @Test
-    void testLogMinInSyncReplicas() {
+    void testMinInSyncReplicas() {
         Configuration conf = new Configuration();
         TableConfig tableConfig = new TableConfig(conf);
 
-        assertThat(tableConfig.getLogMinInSyncReplicas()).isEmpty();
-        conf.set(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER, 2);
-        assertThat(tableConfig.getLogMinInSyncReplicas()).hasValue(2);
-        conf.removeConfig(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER);
-        assertThat(tableConfig.getLogMinInSyncReplicas()).isEmpty();
+        assertThat(tableConfig.getMinInSyncReplicas()).isEmpty();
+        conf.setString("table.min-in-sync-replicas", "2");
+        assertThat(tableConfig.getMinInSyncReplicas()).hasValue(2);
+        conf.removeConfig(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS);
+        assertThat(tableConfig.getMinInSyncReplicas()).isEmpty();
     }
 
     @Test

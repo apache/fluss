@@ -64,14 +64,14 @@ class TableMinInSyncReplicasITCase {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testCreateAndRejectAlter(boolean primaryKey) throws Exception {
-        String key = ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key();
+        String key = ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key();
         TablePath overriddenPath = TablePath.of("min_isr", "overridden_" + primaryKey);
         TableDescriptor overriddenDescriptor =
                 TableDescriptor.builder()
                         .schema(primaryKey ? DATA1_SCHEMA_PK : DATA1_SCHEMA)
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
-                        .property(ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER, 1)
+                        .property(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS, 1)
                         .build();
         long overriddenId =
                 createTable(FLUSS_CLUSTER_EXTENSION, overriddenPath, overriddenDescriptor);
@@ -97,7 +97,7 @@ class TableMinInSyncReplicasITCase {
 
     private static void assertAlterRejected(
             Replica replica, boolean primaryKey, Errors expectedWriteResult) throws Exception {
-        String key = ConfigOptions.TABLE_LOG_MIN_IN_SYNC_REPLICAS_NUMBER.key();
+        String key = ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key();
         TablePath tablePath = replica.getTableInfo().getTablePath();
         CoordinatorGateway coordinator = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         TableDescriptor originalDescriptor =
