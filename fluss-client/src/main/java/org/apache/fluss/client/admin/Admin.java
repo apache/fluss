@@ -486,6 +486,9 @@ public interface Admin extends AutoCloseable {
      * a bucket of a primary key table at a certain point in time. Therefore, there are at-most
      * {@code N} snapshots for a primary key table, {@code N} is the number of buckets.
      *
+     * <p>Each bucket uses its designated recovery snapshot when present. Its ID need not be the
+     * largest retained snapshot ID. Buckets without a designation use the largest registered ID.
+     *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
      * <ul>
@@ -506,6 +509,8 @@ public interface Admin extends AutoCloseable {
      * snapshot of a bucket of a primary key table at a certain point in time. Therefore, there are
      * at-most {@code N} snapshots for a partition of a primary key table, {@code N} is the number
      * of buckets.
+     *
+     * <p>Uses the same recovery snapshot selection as {@link #getLatestKvSnapshots(TablePath)}.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *

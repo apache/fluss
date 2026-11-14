@@ -125,6 +125,7 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -288,7 +289,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                         ioExecutor,
                         zooKeeperClient,
                         coordinatorMetricGroup,
-                        kvSnapshotLeaseManager::snapshotLeaseExist);
+                        kvSnapshotLeaseManager::snapshotLeaseExist,
+                        coordinatorContext.getCoordinatorZkVersion());
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -2514,10 +2516,29 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                                         tablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
-                        completedSnapshotStore.add(completedSnapshot);
-                        coordinatorEventManager.put(
-                                new NotifyKvSnapshotOffsetEvent(
-                                        tb, completedSnapshot.getLogOffset()));
+                        Long expectedRecoverySnapshotId =
+                                event.getAddCompletedSnapshotData().getExpectedRecoverySnapshotId();
+                        completedSnapshotStore.add(
+                                completedSnapshot,
+                                expectedRecoverySnapshotId,
+                                event.getBucketLeaderEpoch());
+                        try {
+                            long offset = completedSnapshot.getLogOffset();
+                            if (expectedRecoverySnapshotId == null) {
+                                Optional<BucketSnapshot> selected =
+                                        zooKeeperClient.getRecoveryBucketSnapshot(tb);
+                                if (selected.isPresent()) {
+                                    offset = Math.min(offset, selected.get().getLogOffset());
+                                }
+                            }
+                            coordinatorEventManager.put(
+                                    new NotifyKvSnapshotOffsetEvent(tb, offset));
+                        } catch (Exception notificationError) {
+                            LOG.warn(
+                                    "Snapshot committed but its WAL boundary could not be confirmed for {}.",
+                                    tb,
+                                    notificationError);
+                        }
                         callback.complete(new CommitKvSnapshotResponse());
                     } catch (Exception e) {
                         callback.completeExceptionally(e);

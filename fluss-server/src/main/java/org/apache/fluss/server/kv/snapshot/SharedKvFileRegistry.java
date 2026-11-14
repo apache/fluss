@@ -117,6 +117,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
                         registrationKey,
                         newHandle);
             }
+            entry.advanceLastUsingSnapshotID(snapshotID);
         }
 
         LOG.trace(
@@ -124,7 +125,6 @@ public class SharedKvFileRegistry implements AutoCloseable {
                 registrationKey,
                 entry.lastUsedSnapshotID,
                 snapshotID);
-        entry.advanceLastUsingSnapshotID(snapshotID);
         return entry.kvFileHandle;
     }
 
@@ -257,7 +257,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
          * {@code firstUsedSnapshotID} — the lower bound of the snapshot range referencing this
          * file.
          */
-        private final long createdBySnapshotID;
+        private long createdBySnapshotID;
 
         /**
          * The snapshot ID that last referenced this KV file — the upper bound of the snapshot range
@@ -274,6 +274,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
         }
 
         private void advanceLastUsingSnapshotID(long snapshotID) {
+            createdBySnapshotID = Math.min(snapshotID, createdBySnapshotID);
             lastUsedSnapshotID = Math.max(snapshotID, lastUsedSnapshotID);
         }
 

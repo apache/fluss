@@ -25,6 +25,8 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
@@ -46,9 +48,17 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
             LoggerFactory.getLogger(ZooKeeperCompletedSnapshotHandleStore.class);
 
     private final ZooKeeperClient client;
+    @Nullable private final Integer coordinatorEpochZkVersion;
 
     public ZooKeeperCompletedSnapshotHandleStore(ZooKeeperClient zooKeeperClient) {
+        this(zooKeeperClient, null);
+    }
+
+    /** Creates a store bound to the owning Coordinator's captured epoch. */
+    public ZooKeeperCompletedSnapshotHandleStore(
+            ZooKeeperClient zooKeeperClient, @Nullable Integer coordinatorEpochZkVersion) {
         this.client = zooKeeperClient;
+        this.coordinatorEpochZkVersion = coordinatorEpochZkVersion;
     }
 
     /**
@@ -58,40 +68,68 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
      * but store the snapshot path in ZooKeeper. This level of indirection makes sure that data in
      * ZooKeeper is small.
      *
-     * <p>The operation will fail if there is already a node under the given path.
-     *
      * @throws Exception If a ZooKeeper or snapshot handle operation fails
      */
     @Override
     public void add(
-            TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
+            TableBucket tableBucket,
+            long snapshotId,
+            CompletedSnapshotHandle snapshotHandle,
+            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Integer expectedLeaderEpoch)
             throws Exception {
         checkNotNull(snapshotHandle, "completed snapshot handle");
-
-        boolean success = false;
-        try {
+        BucketSnapshot reference =
+                new BucketSnapshot(
+                        snapshotId,
+                        snapshotHandle.getLogOffset(),
+                        snapshotHandle.getMetadataFilePath().toString());
+        if (coordinatorEpochZkVersion == null) {
+            if (expectedRecoverySnapshotId != null
+                    || expectedLeaderEpoch != null
+                    || client.getRecoverySnapshot(tableBucket).isPresent()) {
+                throw new UnsupportedOperationException(
+                        "Recovery snapshot writes require a Coordinator epoch.");
+            }
+            client.registerTableBucketSnapshot(tableBucket, reference);
+        } else {
             client.registerTableBucketSnapshot(
                     tableBucket,
-                    new BucketSnapshot(
-                            snapshotId,
-                            snapshotHandle.getLogOffset(),
-                            snapshotHandle.getMetadataFilePath().toString()));
-            success = true;
-        } finally {
-            if (!success) {
-                // Cleanup the snapshot metadata handle if it was not written to zookeeper
-                snapshotHandle.discard();
-            }
+                    reference,
+                    expectedRecoverySnapshotId,
+                    coordinatorEpochZkVersion,
+                    expectedLeaderEpoch);
         }
     }
 
     @Override
+    public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket)
+            throws Exception {
+        return client.getRecoveryBucketSnapshot(bucket)
+                .map(BucketSnapshot::toCompletedSnapshotHandle);
+    }
+
+    @Override
+    public void selectRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
+            throws Exception {
+        checkNotNull(coordinatorEpochZkVersion, "Coordinator epoch is required.");
+        client.selectRecoverySnapshot(
+                bucket,
+                new BucketSnapshot(
+                        handle.getSnapshotId(),
+                        handle.getLogOffset(),
+                        handle.getMetadataFilePath().toString()),
+                coordinatorEpochZkVersion);
+    }
+
+    @Override
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {
-        // TODO: it may bring concurrent delete operations when lost leadership and a new leadership
-        // grant. the new leader may need to use the snapshot to restore, but the ex-leader is
-        // removing it. May be handle it like https://issues.apache.org/jira/browse/FLINK-6612
         checkNotNull(tableBucket, "Table bucket");
-        client.deleteTableBucketSnapshot(tableBucket, snapshotId);
+        if (coordinatorEpochZkVersion == null) {
+            client.deleteTableBucketSnapshot(tableBucket, snapshotId);
+        } else {
+            client.deleteTableBucketSnapshot(tableBucket, snapshotId, coordinatorEpochZkVersion);
+        }
     }
 
     @Override

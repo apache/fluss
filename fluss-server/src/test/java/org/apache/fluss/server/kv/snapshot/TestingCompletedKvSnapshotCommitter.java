@@ -42,7 +42,10 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
 
     @Override
     public void commitKvSnapshot(
-            CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+            CompletedSnapshot snapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            Long expectedRecoverySnapshotId) {
         snapshots
                 .computeIfAbsent(snapshot.getTableBucket(), k -> new LinkedBlockingDeque<>())
                 .add(snapshot);

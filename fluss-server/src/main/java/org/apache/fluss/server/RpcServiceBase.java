@@ -512,30 +512,36 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             + tablePath
                             + "' is a partitioned table, but partition name is not provided.");
         }
-        try {
-            // get table id
-            long tableId = tableInfo.getTableId();
-            int numBuckets = tableInfo.getNumBuckets();
-            Long partitionId = null;
-            if (hasPartitionName) {
-                PartitionRegistration partition =
-                        getPartition(tablePath, request.getPartitionName());
-                partitionId = partition.getPartitionId();
-                numBuckets =
-                        partition.getBucketCountOrDefault(
-                                numBuckets, tableInfo.getBucketCountEpoch());
-            }
-            Map<Integer, Optional<BucketSnapshot>> snapshots;
-            if (partitionId != null) {
-                snapshots = zkClient.getPartitionLatestBucketSnapshot(partitionId);
-            } else {
-                snapshots = zkClient.getTableLatestBucketSnapshot(tableId);
-            }
-            return CompletableFuture.completedFuture(
-                    makeGetLatestKvSnapshotsResponse(tableId, partitionId, snapshots, numBuckets));
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        CompletableFuture<GetLatestKvSnapshotsResponse> result = new CompletableFuture<>();
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        // get table id
+                        long tableId = tableInfo.getTableId();
+                        int numBuckets = tableInfo.getNumBuckets();
+                        Long partitionId = null;
+                        if (hasPartitionName) {
+                            PartitionRegistration partition =
+                                    getPartition(tablePath, request.getPartitionName());
+                            partitionId = partition.getPartitionId();
+                            numBuckets =
+                                    partition.getBucketCountOrDefault(
+                                            numBuckets, tableInfo.getBucketCountEpoch());
+                        }
+                        Map<Integer, Optional<BucketSnapshot>> snapshots;
+                        if (partitionId != null) {
+                            snapshots = zkClient.getPartitionLatestBucketSnapshot(partitionId);
+                        } else {
+                            snapshots = zkClient.getTableLatestBucketSnapshot(tableId);
+                        }
+                        result.complete(
+                                makeGetLatestKvSnapshotsResponse(
+                                        tableId, partitionId, snapshots, numBuckets));
+                    } catch (Exception e) {
+                        result.completeExceptionally(e);
+                    }
+                });
+        return result;
     }
 
     private PartitionRegistration getPartition(TablePath tablePath, String partitionName) {

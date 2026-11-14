@@ -1885,13 +1885,20 @@ public class ServerRpcMessageUtils {
         return listOffsetsRequest;
     }
 
+    /** Creates a commit with the recovery identity captured by the original KV context. */
     public static CommitKvSnapshotRequest makeCommitKvSnapshotRequest(
-            CompletedSnapshot completedSnapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+            CompletedSnapshot completedSnapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable Long expectedRecoverySnapshotId) {
         CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
         byte[] completedSnapshotBytes = CompletedSnapshotJsonSerde.toJson(completedSnapshot);
         request.setCompletedSnapshot(completedSnapshotBytes)
                 .setCoordinatorEpoch(coordinatorEpoch)
                 .setBucketLeaderEpoch(bucketLeaderEpoch);
+        if (expectedRecoverySnapshotId != null) {
+            request.setExpectedRecoverySnapshotId(expectedRecoverySnapshotId);
+        }
         return request;
     }
 

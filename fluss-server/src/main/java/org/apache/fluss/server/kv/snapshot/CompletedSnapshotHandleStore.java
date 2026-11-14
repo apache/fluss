@@ -19,6 +19,8 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -28,18 +30,34 @@ import java.util.Optional;
  */
 public interface CompletedSnapshotHandleStore {
 
+    /** Returns the explicitly selected source, or empty for legacy recovery. */
+    default Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket)
+            throws Exception {
+        return Optional.empty();
+    }
+
+    /** Publishes the snapshot reference and recovery selection atomically. */
+    default void selectRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
+            throws Exception {
+        throw new UnsupportedOperationException("Recovery snapshot selection is not supported.");
+    }
+
     /**
      * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).
      *
      * @param tableBucket the table bucket the snapshot belongs to
      * @param snapshotId the snapshot id
      * @param completedSnapshotHandle CompletedSnapshotHandle to be added
+     * @param expectedRecoverySnapshotId recovery identity captured during snapshot preparation
+     * @param expectedLeaderEpoch leader epoch of the original KV instance, if available
      * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
     void add(
             TableBucket tableBucket,
             long snapshotId,
-            CompletedSnapshotHandle completedSnapshotHandle)
+            CompletedSnapshotHandle completedSnapshotHandle,
+            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Integer expectedLeaderEpoch)
             throws Exception;
 
     /**

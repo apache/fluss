@@ -30,11 +30,14 @@ import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -58,6 +61,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -76,6 +80,8 @@ class CompletedSnapshotStoreManagerTest {
 
     private static ExecutorService ioExecutor;
 
+    private int coordinatorEpochZkVersion;
+
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
@@ -86,6 +92,12 @@ class CompletedSnapshotStoreManagerTest {
         ioExecutor = Executors.newFixedThreadPool(1);
     }
 
+    @BeforeEach
+    void initializeCoordinatorEpoch() throws Exception {
+        coordinatorEpochZkVersion =
+                zookeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
+    }
+
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
@@ -94,6 +106,25 @@ class CompletedSnapshotStoreManagerTest {
     @AfterAll
     static void afterAll() {
         ioExecutor.shutdownNow();
+    }
+
+    @Test
+    void testHistoricalPartitionCannotSelectKvRecoverySnapshot() throws Exception {
+        TableBucket historical = new TableBucket(1L, 123L, 0);
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        ZkData.PartitionZNode.path(DATA1_TABLE_PATH, HISTORICAL_PARTITION_VALUE),
+                        ZkData.PartitionZNode.encode(new PartitionRegistration(1L, 123L, null, 1)));
+        CompletedSnapshotStoreManager manager = createCompletedSnapshotStoreManager(2);
+        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, historical, 1);
+        assertThatThrownBy(() -> manager.selectRecoverySnapshot(DATA1_TABLE_PATH, snapshot))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Historical partitions");
+        assertThat(zookeeperClient.getRecoverySnapshot(historical)).isEmpty();
+        assertThat(zookeeperClient.getTableBucketSnapshot(historical, 1L)).isEmpty();
     }
 
     @ParameterizedTest
@@ -220,7 +251,9 @@ class CompletedSnapshotStoreManagerTest {
                         new IOException(
                                 "Failed to open snapshot metadata.",
                                 new IOException(
-                                        "File does not exist: temporary standby response"))));
+                                        "File does not exist: temporary standby response"))),
+                null,
+                null);
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         10,
@@ -254,8 +287,8 @@ class CompletedSnapshotStoreManagerTest {
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new InMemoryCompletedSnapshotHandleStore();
-        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle);
-        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle);
+        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle, null, null);
+        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle, null, null);
 
         // CompletedSnapshotStoreManager
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
@@ -283,7 +316,8 @@ class CompletedSnapshotStoreManagerTest {
                 ioExecutor,
                 zookeeperClient,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                bucket -> true);
+                bucket -> true,
+                coordinatorEpochZkVersion);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(
@@ -302,7 +336,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                         DATA1_TABLE_PATH, tableBucket);
-        completedSnapshotStore.add(completedSnapshot);
+        completedSnapshotStore.add(completedSnapshot, null, null);
     }
 
     private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId)
@@ -321,11 +355,17 @@ class CompletedSnapshotStoreManagerTest {
                 .orElse(null);
     }
 
-    private Set<TableBucket> createTableBuckets(int tableNum, int bucketNum) {
+    private Set<TableBucket> createTableBuckets(int tableNum, int bucketNum) throws Exception {
         Set<TableBucket> tableBuckets = new HashSet<>();
         for (int tableId = 0; tableId < tableNum; tableId++) {
             for (int bucketId = 0; bucketId < bucketNum; bucketId++) {
-                tableBuckets.add(new TableBucket(tableId, bucketId));
+                TableBucket bucket = new TableBucket(tableId, bucketId);
+                zookeeperClient
+                        .getCuratorClient()
+                        .create()
+                        .creatingParentsIfNeeded()
+                        .forPath(ZkData.BucketIdZNode.path(bucket));
+                tableBuckets.add(bucket);
             }
         }
         return tableBuckets;
@@ -365,7 +405,9 @@ class CompletedSnapshotStoreManagerTest {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle)
+                CompletedSnapshotHandle completedSnapshotHandle,
+                Long expectedRecoverySnapshotId,
+                Integer expectedLeaderEpoch)
                 throws Exception {
             snapshotHandleMap
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())

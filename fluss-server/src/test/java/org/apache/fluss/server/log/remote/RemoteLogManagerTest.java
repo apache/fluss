@@ -42,8 +42,10 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -84,6 +86,44 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RemoteLogManager}. */
 class RemoteLogManagerTest extends RemoteLogTestBase {
+
+    @ParameterizedTest
+    @CsvSource({"true,false", "false,false", "false,true"})
+    void testKvRemoteExpiryPreservesRecoveryLogRange(boolean partitionTable, boolean lakeEnabled)
+            throws Exception {
+        TableBucket bucket = makeTableBucket(partitionTable, true);
+        makeKvTableAsLeader(bucket, partitionTable);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+        LogTablet log = replica.getLogTablet();
+        if (lakeEnabled) {
+            updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
+            log.updateLakeLogEndOffset(30);
+        }
+        addMultiSegmentsToLogTablet(log, 5, false);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        RemoteLogTablet remote = remoteLogManager.remoteLogTablet(bucket);
+        assertThat(remote.allRemoteLogSegments()).hasSize(4);
+        manualClock.advanceTime(Duration.ofDays(8));
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remote.allRemoteLogSegments()).hasSize(4);
+        zkClient.registerTableBucketSnapshot(bucket, new BucketSnapshot(7, 20, "file:/durable"));
+        log.updateMinRetainOffset(20);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remote.allRemoteLogSegments())
+                .hasSize(2)
+                .allSatisfy(
+                        segment ->
+                                assertThat(segment.remoteLogStartOffset())
+                                        .isGreaterThanOrEqualTo(20));
+        if (lakeEnabled) {
+            zkClient.registerTableBucketSnapshot(bucket, new BucketSnapshot(8, 40, "file:/next"));
+            log.updateMinRetainOffset(40);
+            remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+            assertThat(remote.allRemoteLogSegments())
+                    .singleElement()
+                    .satisfies(segment -> assertThat(segment.remoteLogStartOffset()).isEqualTo(30));
+        }
+    }
 
     @BeforeEach
     public void setup() throws Exception {
@@ -551,7 +591,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     void testCleanupLocalSegments(boolean partitionTable) throws Exception {
         TableBucket tb = makeTableBucket(partitionTable, true);
         // Need to make leader by ReplicaManager.
-        makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
+        makeKvTableAsLeader(tb, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
 
         // 2. generate 5 segments and trigger upload 4 to remote storage
@@ -1065,5 +1105,13 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 .anyMatch(name -> name.contains(segment2.remoteLogSegmentId().toString()));
         assertThat(dir2Files)
                 .noneMatch(name -> name.contains(segment1.remoteLogSegmentId().toString()));
+    }
+
+    private void makeKvTableAsLeader(TableBucket bucket, boolean partitioned) throws Exception {
+        zkClient.getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(ZkData.BucketIdZNode.path(bucket));
+        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitioned);
     }
 }
