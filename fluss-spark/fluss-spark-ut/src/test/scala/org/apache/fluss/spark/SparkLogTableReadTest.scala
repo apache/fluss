@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.metadata.{TableChange, TablePath}
 import org.apache.fluss.spark.read.{FlussAppendScan, FlussMetrics, FlussScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
@@ -25,6 +26,8 @@ import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
+
+import java.util.Collections
 
 class SparkLogTableReadTest extends FlussSparkTestBase {
 
@@ -540,6 +543,33 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
       val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2099-01-01'")
       checkAnswer(query, Nil)
       assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown skips bucket count checks for pruned partitions") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, pt INT)
+             |PARTITIONED BY (pt)
+             |TBLPROPERTIES ('bucket.num' = '1')""".stripMargin)
+      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (10, 1)")
+      admin
+        .alterTable(
+          TablePath.of(DEFAULT_DATABASE, "t"),
+          Collections.singletonList(TableChange.modifyBucketCount(2)),
+          false)
+        .get()
+      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (20, 2)")
+
+      checkAnswer(sql(s"SELECT id FROM $DEFAULT_DATABASE.t WHERE pt >= 2"), Row(20) :: Nil)
+      val selected = sql(s"SELECT id FROM $DEFAULT_DATABASE.t WHERE pt < 2")
+      val scan = selected.queryExecution.optimizedPlan.collectFirst {
+        case DataSourceV2ScanRelation(_, scan: FlussAppendScan, _, _, _) => scan
+      }.get
+      val error = intercept[UnsupportedOperationException] {
+        scan.toBatch.planInputPartitions()
+      }
+      assert(error.getMessage.contains("has bucket count 1 but the table-level count is 2"))
     }
   }
 
