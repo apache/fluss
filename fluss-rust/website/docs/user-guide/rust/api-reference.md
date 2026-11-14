@@ -384,7 +384,7 @@ close, and lookups left unfinished when the close times out fail with `Error::Lo
 Usage:
 
 ```rust
-// Fire-and-forget (batched)
+// Fire-and-forget (batched), flush() doesn't return the error of a failed write
 writer.append(&row)?;
 writer.flush().await?;
 

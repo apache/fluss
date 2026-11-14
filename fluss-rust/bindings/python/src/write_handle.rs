@@ -22,8 +22,9 @@ use std::sync::Mutex;
 /// Handle for a pending write operation.
 ///
 /// Returned by `upsert()`, `delete()`, `append()`, etc.
-/// Can be safely ignored for fire-and-forget semantics,
-/// or awaited via `wait()` for per-record acknowledgment.
+/// Can be ignored for fire-and-forget semantics, or awaited via `wait()` for
+/// per-record acknowledgment. `flush()` doesn't raise the error of a failed write,
+/// so an ignored handle means the failure goes unnoticed.
 ///
 /// # Example:
 ///     # Fire-and-forget — just ignore the handle

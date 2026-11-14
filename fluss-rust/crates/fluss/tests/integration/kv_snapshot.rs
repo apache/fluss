@@ -232,10 +232,14 @@ async fn persisted_snapshot_current_view_and_schema() {
             continue;
         }
         let writer = table.new_upsert().unwrap().create_writer().unwrap();
+        let mut acks = Vec::new();
         for (id, name) in [(1, "old"), (2, "deleted"), (3, "unchanged")] {
-            writer.upsert(&row(id, name, None, false, tagged)).unwrap();
+            acks.push(writer.upsert(&row(id, name, None, false, tagged)).unwrap());
         }
         writer.flush().await.unwrap();
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
         let partition = if tagged {
             Some(admin.list_partition_infos(&path).await.unwrap().remove(0))
         } else {
@@ -273,13 +277,15 @@ async fn persisted_snapshot_current_view_and_schema() {
             );
         }
         let writer = fixed_table.new_upsert().unwrap().create_writer().unwrap();
-        writer
+        let ack1 = writer
             .upsert(&row(1, "updated", Some(7), true, tagged))
             .unwrap();
-        writer
+        let ack2 = writer
             .delete(&row(2, "deleted", None, true, tagged))
             .unwrap();
         writer.flush().await.unwrap();
+        ack1.await.expect("upsert ack");
+        ack2.await.expect("delete ack");
         let end = end_offset(&admin, &path, partition_name.as_deref()).await;
         let (snapshot_id, seam) =
             snapshot_after(&admin, &path, partition_name.as_deref(), end).await;
@@ -306,13 +312,16 @@ async fn persisted_snapshot_current_view_and_schema() {
             .await
             .unwrap();
         assert!(leased.unavailable_snapshots.is_empty());
-        writer
+        let ack1 = writer
             .upsert(&row(1, "after-snapshot", Some(99), true, tagged))
             .unwrap();
-        writer
+        let ack2 = writer
             .upsert(&row(4, "after-snapshot", Some(99), true, tagged))
             .unwrap();
         writer.flush().await.unwrap();
+        for ack in [ack1, ack2] {
+            ack.await.expect("upsert ack");
+        }
 
         let mut reader = fixed_table
             .create_kv_snapshot_reader_with_lease_duration(
@@ -425,10 +434,11 @@ async fn persisted_snapshot_current_view_and_schema() {
         // Repeat after reader close to verify that it did not release the shared planning lease.
         for _ in 0..2 {
             for age in 100..103 {
-                writer
+                let ack = writer
                     .upsert(&row(1, "newer", Some(age), true, false))
                     .unwrap();
                 writer.flush().await.unwrap();
+                ack.await.expect("upsert ack");
                 let end = end_offset(&admin, &path, None).await;
                 snapshot_after(&admin, &path, None, end).await;
             }

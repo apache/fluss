@@ -138,7 +138,8 @@ impl AppendWriter {
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
-    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    /// or dropped for fire-and-forget behavior. `flush()` waits for a dropped write but
+    /// doesn't return its error.
     pub fn append<R: InternalRow>(&self, row: &R) -> Result<WriteResultFuture> {
         self.append_with_deadline(row, None)
     }
@@ -184,7 +185,8 @@ impl AppendWriter {
     ///
     /// # Returns
     /// A [`WriteResultFuture`] that can be awaited to wait for server acknowledgment,
-    /// or dropped for fire-and-forget behavior (use `flush()` to ensure delivery).
+    /// or dropped for fire-and-forget behavior. `flush()` waits for a dropped write but
+    /// doesn't return its error.
     pub fn append_arrow_batch(&self, batch: RecordBatch) -> Result<WriteResultFuture> {
         self.append_arrow_batch_with_deadline(batch, None)
     }
@@ -378,6 +380,8 @@ impl AppendWriter {
         }
     }
 
+    /// Sends all queued writes and waits until they complete.
+    /// The error of a failed write goes only to its [`WriteResultFuture`].
     pub async fn flush(&self) -> Result<()> {
         self.writer_client.flush().await
     }

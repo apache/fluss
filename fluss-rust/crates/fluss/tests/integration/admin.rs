@@ -738,10 +738,14 @@ mod admin_test {
         wait_for_table_buckets_ready(&admin, &log_path, &[0, 1, 2]).await;
         let log_table = connection.get_table(&log_path).await.unwrap();
         let writer = log_table.new_append().unwrap().create_writer().unwrap();
+        let mut acks = Vec::new();
         for id in 0..7 {
-            writer.append(&id_row(id, "v")).unwrap();
+            acks.push(writer.append(&id_row(id, "v")).unwrap());
         }
         writer.flush().await.unwrap();
+        for ack in acks {
+            ack.await.unwrap();
+        }
         let table_id = log_table.get_table_info().table_id;
         assert_eq!(row_count(&admin, table_id, buckets(None)).await, 7);
 
@@ -763,10 +767,14 @@ mod admin_test {
         wait_for_table_buckets_ready(&admin, &pk_path, &[0, 1, 2]).await;
         let pk_table = connection.get_table(&pk_path).await.unwrap();
         let writer = pk_table.new_upsert().unwrap().create_writer().unwrap();
+        let mut acks = Vec::new();
         for id in (0..10).chain(0..3) {
-            writer.upsert(&id_row(id, "v")).unwrap();
+            acks.push(writer.upsert(&id_row(id, "v")).unwrap());
         }
         writer.flush().await.unwrap();
+        for ack in acks {
+            ack.await.unwrap();
+        }
         let table_id = pk_table.get_table_info().table_id;
         assert_eq!(row_count(&admin, table_id, buckets(None)).await, 10);
 
@@ -794,11 +802,15 @@ mod admin_test {
             .unwrap()
             .create_writer()
             .unwrap();
+        let mut acks = Vec::new();
         for id in 0..5 {
-            writer.upsert(&id_row(id, "a")).unwrap();
-            writer.upsert(&id_row(id, "b")).unwrap();
+            acks.push(writer.upsert(&id_row(id, "a")).unwrap());
+            acks.push(writer.upsert(&id_row(id, "b")).unwrap());
         }
         writer.flush().await.unwrap();
+        for ack in acks {
+            ack.await.unwrap();
+        }
         let table_id = partitioned_table.get_table_info().table_id;
         let partition_buckets = admin
             .list_partition_infos(&partitioned_path)

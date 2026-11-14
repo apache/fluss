@@ -81,15 +81,19 @@ mod kv_table_test {
 
         let test_data = [(1, "Verso", 32i64), (2, "Noco", 25), (3, "Esquie", 35)];
 
-        // Upsert rows (fire-and-forget, then flush)
+        // Upsert rows without waiting, then flush and check each write
+        let mut acks = Vec::new();
         for (id, name, age) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *id);
             row.set_field(1, *name);
             row.set_field(2, *age);
-            upsert_writer.upsert(&row).expect("Failed to upsert row");
+            acks.push(upsert_writer.upsert(&row).expect("Failed to upsert row"));
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         // Lookup records
         let lookuper = table
@@ -227,14 +231,18 @@ mod kv_table_test {
             ("EU", 2, 250i64),
         ];
 
+        let mut acks = Vec::new();
         for (region, user_id, score) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *score);
-            upsert_writer.upsert(&row).expect("Failed to upsert");
+            acks.push(upsert_writer.upsert(&row).expect("Failed to upsert"));
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         // Lookup with composite key
         let lookuper = table
@@ -532,6 +540,7 @@ mod kv_table_test {
             ("APAC", 1, "Noco", 300, 55, "e", 5, "epsilon"),
         ];
 
+        let mut acks = Vec::new();
         for (region, user_id, name, score, seq, label, attr_v, tag) in &test_data {
             let mut nested = GenericRow::new(2);
             nested.set_field(0, *seq);
@@ -551,9 +560,12 @@ mod kv_table_test {
             row.set_field(4, Datum::Row(Box::new(nested)));
             row.set_field(5, Datum::Map(attrs));
             row.set_field(6, tags);
-            upsert_writer.upsert(&row).expect("upsert");
+            acks.push(upsert_writer.upsert(&row).expect("upsert"));
         }
         upsert_writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -717,16 +729,20 @@ mod kv_table_test {
             .expect("Failed to create writer");
 
         let regions = ["US", "EU", "APAC"];
+        let mut acks = Vec::new();
         for region in &regions {
             for id in 0..5i32 {
                 let mut row = GenericRow::new(3);
                 row.set_field(0, *region);
                 row.set_field(1, id);
                 row.set_field(2, format!("{}-{}", region, id));
-                writer.upsert(&row).expect("Failed to upsert");
+                acks.push(writer.upsert(&row).expect("Failed to upsert"));
             }
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -831,15 +847,19 @@ mod kv_table_test {
             (1, "aaaaaaaaa", 3, "value3"),
             (2, "aaaaaaaaa", 4, "value4"),
         ];
+        let mut acks = Vec::new();
         for (a, b, c, d) in test_data {
             let mut row = GenericRow::new(4);
             row.set_field(0, *a);
             row.set_field(1, *b);
             row.set_field(2, *c);
             row.set_field(3, *d);
-            writer.upsert(&row).expect("Failed to upsert");
+            acks.push(writer.upsert(&row).expect("Failed to upsert"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -942,6 +962,7 @@ mod kv_table_test {
             ("EU", 1, "aaaaaaaaa", 4, "eu-1"),
             ("EU", 1, "bbbbbbbbb", 5, "eu-2"),
         ];
+        let mut acks = Vec::new();
         for (region, a, b, c, d) in test_data {
             let mut row = GenericRow::new(5);
             row.set_field(0, *region);
@@ -949,9 +970,12 @@ mod kv_table_test {
             row.set_field(2, *b);
             row.set_field(3, *c);
             row.set_field(4, *d);
-            writer.upsert(&row).expect("Failed to upsert");
+            acks.push(writer.upsert(&row).expect("Failed to upsert"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -1216,16 +1240,20 @@ mod kv_table_test {
             .expect("Failed to create upsert")
             .create_writer()
             .expect("Failed to create writer");
+        let mut acks = Vec::new();
         for a in 0..20i32 {
             for b in 0..3i64 {
                 let mut row = GenericRow::new(3);
                 row.set_field(0, a);
                 row.set_field(1, b);
                 row.set_field(2, format!("{a}-{b}"));
-                writer.upsert(&row).expect("Failed to upsert");
+                acks.push(writer.upsert(&row).expect("Failed to upsert"));
             }
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -1394,15 +1422,21 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create Iceberg writer");
 
+        let mut acks = Vec::new();
         for (id, name) in [(1, "Frost"), (2, "Ember")] {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, name);
-            upsert_writer
-                .upsert(&row)
-                .expect("Failed to upsert Iceberg row");
+            acks.push(
+                upsert_writer
+                    .upsert(&row)
+                    .expect("Failed to upsert Iceberg row"),
+            );
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -1562,13 +1596,16 @@ mod kv_table_test {
 
         // Upsert two rows so we can also exercise delete on one and keep the
         // other intact afterwards.
-        upsert_writer
+        let ack1 = upsert_writer
             .upsert(&build_full_row(id))
             .expect("Failed to upsert paimon row");
-        upsert_writer
+        let ack2 = upsert_writer
             .upsert(&build_full_row(id + 1))
             .expect("Failed to upsert second paimon row");
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
