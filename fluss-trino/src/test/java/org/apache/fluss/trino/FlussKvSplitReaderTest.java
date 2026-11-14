@@ -68,7 +68,7 @@ final class FlussKvSplitReaderTest extends FlussTrinoTestBase {
                                 return scanner;
                             }
                         };
-                FlussKvSplitReader reader = new FlussKvSplitReader(table, bucket)) {
+                FlussKvSplitReader reader = new FlussKvSplitReader(table.newScan(), bucket)) {
             assertThat(reader.poll(timeout)).isEqualTo(YIELD);
             assertThat(empty.closes).isEqualTo(1);
             assertThat(reader.isFinished()).isFalse();

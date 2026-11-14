@@ -18,7 +18,7 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
@@ -63,8 +63,8 @@ final class FlussLogSplitReader implements FlussSplitReader {
     private boolean finished;
     private boolean closed;
 
-    FlussLogSplitReader(Table table, FlussBucketHandle bucket, FlussLogRange range) {
-        checkNotNull(table, "table is null");
+    FlussLogSplitReader(Scan scan, FlussBucketHandle bucket, FlussLogRange range) {
+        checkNotNull(scan, "scan is null");
         this.bucket = checkNotNull(bucket, "bucket is null");
         this.range = checkNotNull(range, "range is null");
         this.tableBucket = bucket.toTableBucket();
@@ -75,7 +75,7 @@ final class FlussLogSplitReader implements FlussSplitReader {
             return;
         }
 
-        LogScanner scanner = table.newScan().createLogScanner();
+        LogScanner scanner = scan.createLogScanner();
 
         try {
             if (bucket.isPartitioned()) {
