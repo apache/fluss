@@ -105,6 +105,9 @@ spec:
             {{- if (include "fluss.secrets.enabled" .) }}
             {{- include "fluss.secrets.env" . | trim | nindent 12 }}
             {{- end }}
+            {{- with (include "fluss.security.readinessProbe.env" .) }}
+            {{- . | trim | nindent 12 }}
+            {{- end }}
             {{- with .Values.coordinator.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
