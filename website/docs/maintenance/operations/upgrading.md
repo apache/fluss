@@ -18,7 +18,7 @@ This section outlines the general process for upgrading Fluss across versions. F
 the rolling upgrade method. Specifically, upgrade the `TabletServers` one-by-one first, and then upgrade the `CoordinatorServer`.
 
 :::note
-1. During the server upgrade process, read and write operations in the cluster will not be affected.
+1. During a rolling upgrade, read and write availability depends on replica health and leader readiness; leader changes may briefly interrupt requests. Before stopping a TabletServer, ensure each affected bucket will retain enough in-sync replicas to satisfy its effective minISR for `client.writer.acks=all` writes. See [Replication and minimum ISR](production-readiness.md#replication-and-minimum-isr) for configuration guidance.
 2. With a single `CoordinatorServer`, admin operations such as table creation are unavailable while it is being upgraded. To avoid this, deploy multiple `CoordinatorServer` instances (see [CoordinatorServer HA](docs/install-deploy/deploying-distributed-cluster.md#fluss-coordinatorserver-high-availability-ha-setup)) and upgrade them one-by-one.
 :::
 

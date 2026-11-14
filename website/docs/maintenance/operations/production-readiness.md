@@ -26,6 +26,32 @@ sidebar_position: 0
 
 This checklist outlines the deployment and configuration recommendations for running Fluss in production.
 
+## Fluss Cluster
+
+### Replication and minimum ISR
+
+:::tip Keep the default settings
+
+We recommend leaving the table-level `table.replication.factor` and `table.log.min-in-sync-replicas-number` unset to inherit the cluster configuration,
+and keeping the cluster-level `log.replica.min-in-sync-replicas-number` at its default value.
+
+:::
+
+The effective minimum ISR (minISR), including an inherited value, must not exceed the table's replication factor.
+The following examples illustrate the trade-offs of different settings and assume `client.writer.acks=all`:
+
+| Replication factor / minISR | Use case | Availability and durability implications | Rolling-upgrade impact |
+| --- | --- | --- | --- |
+| 1 / 1 | Test tables or temporary data that can be recreated | No replica redundancy; losing the only copy can lose data. | Reads and writes to affected buckets pause while their only replica is unavailable. |
+| 3 / 2 | Typical production tables | At least two replicas must be in sync to accept new writes. | Reads and writes can continue with the other two replicas in sync and a ready leader. |
+| 3 / 3 | Tables with stricter replica redundancy requirements that can tolerate write interruptions | All three replicas must be in sync to accept new writes. | New writes pause until all three replicas are back in sync. Committed records remain readable with a ready leader. |
+
+Rolling upgrades assume one TabletServer is restarted at a time and its replicas recover before the next restart.
+Leader changes may briefly interrupt reads and writes.
+
+With `minISR=1`, a write may be acknowledged when only the leader is in sync; losing that copy before replication completes can cause data loss.
+For rolling-upgrade recovery checks, see [Upgrade the TabletServers one-by-one](upgrading.md#upgrade-the-tabletservers-one-by-one).
+
 ## ZooKeeper
 
 Fluss uses ZooKeeper as its central metadata store and for cluster coordination and configuration management.
