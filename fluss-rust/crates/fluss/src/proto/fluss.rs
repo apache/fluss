@@ -1353,6 +1353,10 @@ pub struct PbTableMetadata {
     /// When present, bucket_count_epoch is also present, including epoch zero.
     #[prost(int32, optional, tag = "10")]
     pub bucket_count: ::core::option::Option<i32>,
+    /// The ID of the dropped table in an UpdateMetadataRequest tombstone, whose table_id is -2 so that
+    /// older TabletServers remove the table by path. Newer ones use it to reject late updates.
+    #[prost(int64, optional, tag = "11")]
+    pub deleted_table_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

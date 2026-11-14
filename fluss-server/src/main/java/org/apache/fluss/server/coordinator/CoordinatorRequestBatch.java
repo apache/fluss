@@ -65,7 +65,6 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
@@ -321,7 +320,7 @@ public class CoordinatorRequestBatch {
      *       tabletServer
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
      *   <li>case6: Partition is queued for deletion, in this case we will set an empty tableBucket
-     *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
+     *       set and partitionName set to {@link PartitionMetadata#DELETED_PARTITION_NAME} to avoid
      *       send unless info to tabletServer
      *   <li>case7: Leader and isr is changed for these input tableBuckets
      *   <li>case8: One newly tabletServer added into cluster
@@ -724,7 +723,8 @@ public class CoordinatorRequestBatch {
                 (tableId, bucketMetadataList) -> {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+                        tableMetadataList.add(
+                                toTableMetadata(tableId, tableInfo, bucketMetadataList));
                     }
                 });
 
@@ -743,27 +743,25 @@ public class CoordinatorRequestBatch {
                                 coordinatorContext.getPartitionBucketCount(
                                         new TablePartition(tableId, partitionId));
                         PartitionMetadata partitionMetadata;
-                        if (partitionName == null) {
-                            if (partitionQueuedForDeletion) {
-                                partitionMetadata =
-                                        new PartitionMetadata(
-                                                tableId,
-                                                DELETED_PARTITION_NAME,
-                                                partitionId,
-                                                kvEntry.getValue(),
-                                                bucketCount);
-                            } else {
-                                throw new IllegalStateException(
-                                        "Partition name is null for partition " + partitionId);
-                            }
+                        if (partitionQueuedForDeletion) {
+                            // Identified by ID, so that TabletServers know which partition was
+                            // dropped and can reject its late updates.
+                            partitionMetadata =
+                                    new PartitionMetadata(
+                                            tableId,
+                                            DELETED_PARTITION_NAME,
+                                            partitionId,
+                                            kvEntry.getValue(),
+                                            bucketCount);
+                        } else if (partitionName == null) {
+                            throw new IllegalStateException(
+                                    "Partition name is null for partition " + partitionId);
                         } else {
                             partitionMetadata =
                                     new PartitionMetadata(
                                             tableId,
                                             partitionName,
-                                            partitionQueuedForDeletion
-                                                    ? DELETED_PARTITION_ID
-                                                    : partitionId,
+                                            partitionId,
                                             kvEntry.getValue(),
                                             bucketCount);
                         }
@@ -774,7 +772,7 @@ public class CoordinatorRequestBatch {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
                         tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                                toTableMetadata(tableId, tableInfo, Collections.emptyList()));
                     }
                 });
 
@@ -786,6 +784,18 @@ public class CoordinatorRequestBatch {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList);
+    }
+
+    /**
+     * A tombstone that identifies the table by path also carries its ID, which older TabletServers
+     * ignore, so that newer ones can reject late updates of exactly this table.
+     */
+    private static TableMetadata toTableMetadata(
+            long tableId, TableInfo tableInfo, List<BucketMetadata> bucketMetadataList) {
+        return new TableMetadata(
+                tableInfo,
+                bucketMetadataList,
+                tableInfo.getTableId() == DELETED_TABLE_ID ? tableId : null);
     }
 
     @Nullable

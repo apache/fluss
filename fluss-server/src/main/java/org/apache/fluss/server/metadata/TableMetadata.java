@@ -20,6 +20,8 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Objects;
 
@@ -52,9 +54,31 @@ public class TableMetadata {
      */
     private final List<BucketMetadata> bucketMetadataList;
 
+    /**
+     * The ID of the dropped table if this is a tombstone with {@link #DELETED_TABLE_ID}, or null if
+     * it is not a tombstone or comes from an older Coordinator.
+     */
+    @Nullable private final Long deletedTableId;
+
     public TableMetadata(TableInfo tableInfo, List<BucketMetadata> bucketMetadataList) {
+        this(tableInfo, bucketMetadataList, null);
+    }
+
+    /**
+     * Creates table metadata that may be a tombstone identifying the dropped table by its path.
+     *
+     * @param tableInfo the table info, with {@link #DELETED_TABLE_ID} as the table ID for a
+     *     tombstone that identifies the table by path
+     * @param bucketMetadataList the bucket metadata of the table
+     * @param deletedTableId the ID of the dropped table for such a tombstone, otherwise null
+     */
+    public TableMetadata(
+            TableInfo tableInfo,
+            List<BucketMetadata> bucketMetadataList,
+            @Nullable Long deletedTableId) {
         this.tableInfo = tableInfo;
         this.bucketMetadataList = bucketMetadataList;
+        this.deletedTableId = deletedTableId;
     }
 
     public TableInfo getTableInfo() {
@@ -65,6 +89,15 @@ public class TableMetadata {
         return bucketMetadataList;
     }
 
+    /**
+     * Returns the ID of the dropped table if this is a tombstone that identifies the table by path,
+     * or null if it is not such a tombstone or comes from a Coordinator that does not send the ID.
+     */
+    @Nullable
+    public Long getDeletedTableId() {
+        return deletedTableId;
+    }
+
     @Override
     public String toString() {
         return "TableMetadata{"
@@ -72,6 +105,8 @@ public class TableMetadata {
                 + tableInfo
                 + ", bucketMetadataList="
                 + bucketMetadataList
+                + ", deletedTableId="
+                + deletedTableId
                 + '}';
     }
 
@@ -84,14 +119,13 @@ public class TableMetadata {
             return false;
         }
         TableMetadata that = (TableMetadata) o;
-        if (!tableInfo.equals(that.tableInfo)) {
-            return false;
-        }
-        return bucketMetadataList.equals(that.bucketMetadataList);
+        return tableInfo.equals(that.tableInfo)
+                && bucketMetadataList.equals(that.bucketMetadataList)
+                && Objects.equals(deletedTableId, that.deletedTableId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableInfo, bucketMetadataList);
+        return Objects.hash(tableInfo, bucketMetadataList, deletedTableId);
     }
 }

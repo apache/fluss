@@ -1032,6 +1032,10 @@ message PbTableMetadata {
   // When present, bucket_count_epoch is also present, including epoch zero.
   optional int32 bucket_count = 10;
 
+  // The ID of the dropped table in an UpdateMetadataRequest tombstone, whose table_id is -2 so that
+  // older TabletServers remove the table by path. Newer ones use it to reject late updates.
+  optional int64 deleted_table_id = 11;
+
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
 }

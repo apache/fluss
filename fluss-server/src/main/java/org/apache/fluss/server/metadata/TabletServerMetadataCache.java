@@ -32,8 +32,12 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -47,6 +51,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
@@ -57,6 +62,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** The implement of {@link ServerMetadataCache} for {@link TabletServer}. */
 public class TabletServerMetadataCache implements ServerMetadataCache {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TabletServerMetadataCache.class);
 
     private final Lock metadataLock = new ReentrantLock();
 
@@ -75,9 +82,31 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     @GuardedBy("metadataLock")
     private ServerTablePropertyCache tablePropertyCache;
 
+    @GuardedBy("metadataLock")
+    private final DeletedIdWatermarks deletedIdWatermarks;
+
+    /**
+     * The Coordinator epoch of the latest update, whose late updates {@link #deletedIdWatermarks}
+     * and {@link #unverifiedPaths} cover.
+     */
+    @GuardedBy("metadataLock")
+    private int currentCoordinatorEpoch = Integer.MIN_VALUE;
+
+    /**
+     * Table paths, as {@link PhysicalTablePath} without partition name, and partition paths at
+     * which a tombstone of an older Coordinator, which does not send the dropped ID, found no
+     * cached object, so that a late update of the dropped object cannot be rejected. Cache hits of
+     * partitions at these paths are checked against ZK. When the Coordinator epoch advances, the
+     * objects at these paths are removed and the paths released, as late requests of earlier epochs
+     * are rejected from then on and the new Coordinator pushes the live metadata on startup.
+     * Immutable, replaced under metadataLock after the snapshot it applies to is published.
+     */
+    private volatile Set<PhysicalTablePath> unverifiedPaths = Collections.emptySet();
+
     public TabletServerMetadataCache(MetadataManager metadataManager) {
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
         this.tablePropertyCache = ServerTablePropertyCache.empty();
+        this.deletedIdWatermarks = new DeletedIdWatermarks();
         this.metadataManager = metadataManager;
         this.serverSchemaCache = new ServerSchemaCache(metadataManager);
     }
@@ -209,75 +238,43 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getBucketCountEpoch(tableId);
     }
 
+    /** Returns the metadata of one partition, see {@link #getPartitionsMetadata(Collection)}. */
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
         return Optional.ofNullable(
                 getPartitionsMetadata(Collections.singletonList(partitionPath)).get(partitionPath));
     }
 
     /**
-     * Returns the cached metadata of the given partitions. Each cached partition is checked against
-     * its ZK registration, with one batched ZK read per table, so that a partition of a dropped or
-     * re-created table is not served. Partitions that are not cached or fail the check are absent
-     * from the result.
+     * Returns the cached metadata of the given partitions. Partitions that are not cached or are
+     * incomplete are absent from the result.
+     *
+     * <p>The snapshot may lag behind ZK, but never pairs a table ID with partitions of an older
+     * table of the same path, and a late update cannot restore a dropped or replaced table or
+     * partition, so cache hits are served without accessing ZK, except at {@link #unverifiedPaths},
+     * where they are checked against their ZK registrations, with one batched ZK read per table.
      */
     public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadata(
             Collection<PhysicalTablePath> partitionPaths) {
+        // A path is checked if it is unverified before or after the snapshot is read, so that
+        // neither adding nor releasing the path can race with publishing the snapshot.
+        Set<PhysicalTablePath> unverifiedBefore = unverifiedPaths;
         ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
-        Map<TablePath, Map<String, PartitionMetadata>> cachedPartitionsByTable = new HashMap<>();
-        for (PhysicalTablePath partitionPath : partitionPaths) {
-            TablePath tablePath = partitionPath.getTablePath();
-            String partitionName = partitionPath.getPartitionName();
-            OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
-            Optional<Long> partitionIdOpt = snapshot.getPartitionId(partitionPath);
-            if (!tableIdOpt.isPresent() || !partitionIdOpt.isPresent()) {
-                continue;
-            }
-            long tableId = tableIdOpt.getAsLong();
-            long partitionId = partitionIdOpt.get();
-            Integer bucketCount =
-                    snapshot.getPartitionBucketCount(new TablePartition(tableId, partitionId));
-            if (bucketCount == null) {
-                continue;
-            }
-            List<BucketMetadata> bucketMetadataList =
-                    getCompleteBucketMetadata(
-                            snapshot.getBucketMetadataForPartition(partitionId), bucketCount);
-            if (bucketMetadataList == null) {
-                continue;
-            }
-            cachedPartitionsByTable
-                    .computeIfAbsent(tablePath, k -> new HashMap<>())
-                    .put(
-                            partitionName,
-                            new PartitionMetadata(
-                                    tableId,
-                                    partitionName,
-                                    partitionId,
-                                    bucketMetadataList,
-                                    bucketCount));
-        }
-
+        Set<PhysicalTablePath> unverifiedAfter = unverifiedPaths;
         Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
-        for (Map.Entry<TablePath, Map<String, PartitionMetadata>> entry :
-                cachedPartitionsByTable.entrySet()) {
-            TablePath tablePath = entry.getKey();
-            Map<String, PartitionRegistration> registrations;
-            try {
-                registrations =
-                        metadataManager.getPartitionRegistrations(
-                                tablePath, entry.getValue().keySet());
-            } catch (Exception e) {
-                // let the caller fall back to reading the partitions from ZK
-                continue;
-            }
-            for (PartitionMetadata cached : entry.getValue().values()) {
-                PartitionRegistration registration = registrations.get(cached.getPartitionName());
-                if (registration != null
-                        && registration.getTableId() == cached.getTableId()
-                        && registration.getPartitionId() == cached.getPartitionId()) {
-                    result.put(PhysicalTablePath.of(tablePath, cached.getPartitionName()), cached);
-                }
-            }
+        Map<PhysicalTablePath, PartitionMetadata> unverified = new HashMap<>();
+        for (PhysicalTablePath partitionPath : partitionPaths) {
+            getCachedPartitionMetadata(snapshot, partitionPath)
+                    .ifPresent(
+                            metadata ->
+                                    (isUnverified(unverifiedBefore, partitionPath)
+                                                            || isUnverified(
+                                                                    unverifiedAfter, partitionPath)
+                                                    ? unverified
+                                                    : result)
+                                            .put(partitionPath, metadata));
+        }
+        if (!unverified.isEmpty()) {
+            result.putAll(verifyWithZk(unverified));
         }
         return result;
     }
@@ -287,16 +284,40 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     /**
-     * Applies a partial cluster metadata update.
+     * Applies a partial cluster metadata update in the Coordinator epoch of the last update.
      *
-     * @param clusterMetadata the partial cluster metadata to apply
-     * @return the real table IDs identified by table-deletion tombstones in this update; partition
-     *     deletion tombstones are not included
+     * @see #updateClusterMetadata(ClusterMetadata, int)
      */
+    @VisibleForTesting
     public Set<Long> updateClusterMetadata(ClusterMetadata clusterMetadata) {
         return inLock(
                 metadataLock,
+                () -> updateClusterMetadata(clusterMetadata, currentCoordinatorEpoch));
+    }
+
+    /**
+     * Applies a partial cluster metadata update.
+     *
+     * @param clusterMetadata the partial cluster metadata to apply
+     * @param coordinatorEpoch the Coordinator epoch of the request, which the caller has already
+     *     checked not to be older than any epoch it has seen
+     * @return the real table IDs identified by table-deletion tombstones in this update; partition
+     *     deletion tombstones are not included
+     */
+    public Set<Long> updateClusterMetadata(ClusterMetadata clusterMetadata, int coordinatorEpoch) {
+        return inLock(
+                metadataLock,
                 () -> {
+                    // Requests of earlier epochs are rejected from now on, so their late updates
+                    // no longer need to be detected.
+                    boolean epochAdvanced = coordinatorEpoch > currentCoordinatorEpoch;
+                    if (epochAdvanced) {
+                        deletedIdWatermarks.clear();
+                        currentCoordinatorEpoch = coordinatorEpoch;
+                    }
+                    Set<PhysicalTablePath> pathsToInvalidate =
+                            epochAdvanced ? unverifiedPaths : Collections.emptySet();
+                    List<PhysicalTablePath> unidentifiedDrops = new ArrayList<>();
                     ServerMetadataSnapshot currentSnapshot = serverMetadataSnapshot;
                     Set<Long> deletedTableIds = new HashSet<>();
 
@@ -321,28 +342,95 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                     ServerTablePropertyCache.Builder tableProperties =
                             tablePropertyCache.toBuilder();
+                    // Paths whose table is dropped or replaced; their partitions must be removed
+                    // in the same snapshot.
+                    Set<TablePath> invalidatedTablePaths = new HashSet<>();
+                    for (PhysicalTablePath path : pathsToInvalidate) {
+                        Long removedTableId =
+                                path.getPartitionName() == null
+                                        ? tableIdByPath.remove(path.getTablePath())
+                                        : null;
+                        if (removedTableId != null) {
+                            bucketMetadataMapForTables.remove(removedTableId);
+                            bucketCountEpochByTableId.remove(removedTableId);
+                            tableProperties.remove(removedTableId);
+                            invalidatedTablePaths.add(path.getTablePath());
+                        }
+                    }
+                    Set<Long> outdatedTableIds = new HashSet<>();
+                    // Updates are checked against the watermarks of earlier requests, so that a
+                    // tombstone does not reject a live object of the same request. The changes of
+                    // this request are applied after it has been processed without failure.
+                    List<Consumer<DeletedIdWatermarks>> watermarkChanges = new ArrayList<>();
                     for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
                         long tableId = tableInfo.getTableId();
 
                         if (tableId == DELETED_TABLE_ID) {
-                            Long removedTableId = tableIdByPath.remove(tablePath);
+                            Long deletedTableId = tableMetadata.getDeletedTableId();
+                            Long removedTableId;
+                            if (deletedTableId == null) {
+                                // From an older Coordinator, without the dropped ID: the table
+                                // cached for the path is taken to be the dropped one.
+                                removedTableId = tableIdByPath.remove(tablePath);
+                                if (removedTableId != null) {
+                                    long removedId = removedTableId;
+                                    watermarkChanges.add(w -> w.addTable(tablePath, removedId));
+                                } else {
+                                    unidentifiedDrops.add(PhysicalTablePath.of(tablePath));
+                                }
+                            } else {
+                                // A late tombstone must not remove a newer table of the path.
+                                removedTableId =
+                                        tableIdByPath.remove(tablePath, deletedTableId)
+                                                ? deletedTableId
+                                                : null;
+                                deletedTableIds.add(deletedTableId);
+                                watermarkChanges.add(w -> w.addTable(tablePath, deletedTableId));
+                            }
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
                                 deletedTableIds.add(removedTableId);
                                 bucketCountEpochByTableId.remove(removedTableId);
                                 tableProperties.remove(removedTableId);
+                                invalidatedTablePaths.add(tablePath);
                             }
-                        } else if (tablePath == DELETED_TABLE_PATH) {
+                        } else if (DELETED_TABLE_PATH.equals(tablePath)) {
+                            // Compared by value, as the path is decoded from the request.
                             currentSnapshot
                                     .getTablePath(tableId)
-                                    .ifPresent(path -> tableIdByPath.remove(path, tableId));
+                                    .ifPresent(
+                                            path -> {
+                                                tableIdByPath.remove(path, tableId);
+                                                invalidatedTablePaths.add(path);
+                                                watermarkChanges.add(
+                                                        w -> w.addTable(path, tableId));
+                                            });
                             bucketMetadataMapForTables.remove(tableId);
                             deletedTableIds.add(tableId);
                             bucketCountEpochByTableId.remove(tableId);
                             tableProperties.remove(tableId);
                         } else {
+                            // A late UpdateMetadata of a replaced or dropped table. Cache hits are
+                            // served without reading ZK, so neither the table nor its partitions
+                            // may be applied.
+                            Long cachedTableId = tableIdByPath.get(tablePath);
+                            Long maxDeletedTableId =
+                                    deletedIdWatermarks.getMaxDeletedTableId(tablePath);
+                            if (isOutdatedOrMaybeDeleted(
+                                    cachedTableId, tableId, maxDeletedTableId)) {
+                                LOG.debug(
+                                        "Ignore metadata of table {} with id {}, which may be"
+                                                + " replaced or dropped: cached id {}, max"
+                                                + " dropped id {}.",
+                                        tablePath,
+                                        tableId,
+                                        cachedTableId,
+                                        maxDeletedTableId);
+                                outdatedTableIds.add(tableId);
+                                continue;
+                            }
                             // Ignore an older UpdateMetadata to prevent an older bucket
                             // layout (ALTER bucket.num) from replacing a newer one.
                             long newEpoch = tableInfo.getBucketCountEpoch();
@@ -363,7 +451,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                 tableProperties.remove(previousId);
                                 bucketMetadataMapForTables.remove(previousId);
                                 bucketCountEpochByTableId.remove(previousId);
+                                invalidatedTablePaths.add(tablePath);
+                                watermarkChanges.add(w -> w.removePartitionsOf(previousId));
                             }
+                            watermarkChanges.add(w -> w.onTableCached(tablePath));
                             tableProperties.update(tableId, tableInfo.getProperties());
                             // Copy only the changed bucket map. Older snapshots retain their map.
                             Map<Integer, BucketMetadata> tableBuckets =
@@ -389,16 +480,39 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
                     Map<TablePartition, Integer> partitionBucketCounts =
                             new HashMap<>(currentSnapshot.getPartitionBucketCounts());
+                    removePartitionsOfTables(
+                            invalidatedTablePaths,
+                            partitionIdByPath,
+                            bucketMetadataMapForPartitions,
+                            partitionBucketCounts);
+                    for (PhysicalTablePath path : pathsToInvalidate) {
+                        Long removedPartitionId =
+                                path.getPartitionName() == null
+                                        ? null
+                                        : partitionIdByPath.remove(path);
+                        if (removedPartitionId != null) {
+                            bucketMetadataMapForPartitions.remove(removedPartitionId);
+                            partitionBucketCounts
+                                    .keySet()
+                                    .removeIf(k -> k.getPartitionId() == removedPartitionId);
+                        }
+                    }
 
                     for (PartitionMetadata partitionMetadata :
                             clusterMetadata.getPartitionMetadataList()) {
                         long tableId = partitionMetadata.getTableId();
+                        if (outdatedTableIds.contains(tableId)) {
+                            continue;
+                        }
                         TablePath tablePath = newPathByTableId.get(tableId);
                         String partitionName = partitionMetadata.getPartitionName();
                         PhysicalTablePath physicalTablePath =
                                 PhysicalTablePath.of(tablePath, partitionName);
                         long partitionId = partitionMetadata.getPartitionId();
                         if (partitionId == DELETED_PARTITION_ID) {
+                            // From an older Coordinator, without the dropped ID: the partition
+                            // cached for the name is taken to be the dropped one. Partitions of
+                            // uncached tables are covered by the table tombstone.
                             Long removedPartitionId = partitionIdByPath.remove(physicalTablePath);
                             if (removedPartitionId != null) {
                                 bucketMetadataMapForPartitions.remove(removedPartitionId);
@@ -406,16 +520,54 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                         .keySet()
                                         .removeIf(k -> k.getPartitionId() == removedPartitionId);
                             }
+                            if (tablePath != null) {
+                                if (removedPartitionId != null) {
+                                    watermarkChanges.add(
+                                            w -> w.addPartition(tableId, removedPartitionId));
+                                } else {
+                                    unidentifiedDrops.add(physicalTablePath);
+                                }
+                            }
                         } else if (partitionName.equals(DELETED_PARTITION_NAME)) {
                             currentSnapshot
                                     .getPhysicalTablePath(partitionId)
-                                    .ifPresent(partitionIdByPath::remove);
+                                    .ifPresent(path -> partitionIdByPath.remove(path, partitionId));
                             bucketMetadataMapForPartitions.remove(partitionId);
                             partitionBucketCounts
                                     .keySet()
                                     .removeIf(k -> k.getPartitionId() == partitionId);
+                            if (tablePath != null) {
+                                watermarkChanges.add(w -> w.addPartition(tableId, partitionId));
+                            }
                         } else {
+                            // Partitions of uncached tables share a null table path, so only a
+                            // cached table can have a same-name predecessor.
+                            Long previousId =
+                                    tablePath == null
+                                            ? null
+                                            : partitionIdByPath.get(physicalTablePath);
+                            // A late UpdateMetadata of a replaced or dropped partition, as with
+                            // tables above.
+                            Long maxDeletedPartitionId =
+                                    deletedIdWatermarks.getMaxDeletedPartitionId(tableId);
+                            if (isOutdatedOrMaybeDeleted(
+                                    previousId, partitionId, maxDeletedPartitionId)) {
+                                LOG.debug(
+                                        "Ignore metadata of partition {} with id {}, which may be"
+                                                + " replaced or dropped: cached id {}, max"
+                                                + " dropped id {}.",
+                                        physicalTablePath,
+                                        partitionId,
+                                        previousId,
+                                        maxDeletedPartitionId);
+                                continue;
+                            }
                             partitionIdByPath.put(physicalTablePath, partitionId);
+                            if (previousId != null && previousId != partitionId) {
+                                bucketMetadataMapForPartitions.remove(previousId);
+                                partitionBucketCounts.remove(
+                                        new TablePartition(tableId, previousId));
+                            }
                             mergePartitionBucketCount(
                                     partitionBucketCounts, tableId, partitionId, partitionMetadata);
                             Map<Integer, BucketMetadata> partitionBuckets =
@@ -443,7 +595,17 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionBucketCounts,
                                     bucketCountEpochByTableId);
                     tablePropertyCache = tableProperties.build();
+                    watermarkChanges.forEach(change -> change.accept(deletedIdWatermarks));
                     serverMetadataSnapshot = newSnapshot;
+                    if (!pathsToInvalidate.isEmpty()) {
+                        LOG.info(
+                                "Coordinator epoch advanced to {}. Removed the cached metadata at"
+                                        + " {}, which a late update may have restored after a"
+                                        + " tombstone of an older Coordinator.",
+                                coordinatorEpoch,
+                                pathsToInvalidate);
+                    }
+                    updateUnverifiedPaths(epochAdvanced, unidentifiedDrops);
                     return deletedTableIds;
                 });
     }
@@ -469,7 +631,9 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     Collections.emptyMap(),
                                     Collections.emptyMap());
                     tablePropertyCache = ServerTablePropertyCache.empty();
+                    deletedIdWatermarks.clear();
                     serverMetadataSnapshot = newSnapshot;
+                    unverifiedPaths = Collections.emptySet();
                 });
     }
 
@@ -526,10 +690,13 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     ServerTablePropertyCache.Builder tableProperties =
                             tablePropertyCache.toBuilder();
                     Long previousId = tableIdByPath.put(tablePath, tableId);
-                    if (previousId != null && previousId != tableId) {
+                    boolean tableIdChanged = previousId != null && previousId != tableId;
+                    if (tableIdChanged) {
                         tableProperties.remove(previousId);
                         bucketMetadataMapForTables.remove(previousId);
+                        deletedIdWatermarks.removePartitionsOf(previousId);
                     }
+                    deletedIdWatermarks.onTableCached(tablePath);
                     tableProperties.update(tableId, tableInfo.getProperties());
                     pathByTableId.put(tableId, tablePath);
 
@@ -546,6 +713,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(currentSnapshot.getPartitionIdByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
+                    Map<TablePartition, Integer> partitionBucketCounts =
+                            new HashMap<>(currentSnapshot.getPartitionBucketCounts());
+                    if (tableIdChanged) {
+                        removePartitionsOfTables(
+                                Collections.singleton(tablePath),
+                                partitionIdByPath,
+                                bucketMetadataMapForPartitions,
+                                partitionBucketCounts);
+                    }
 
                     // Build pathByTableId from tableIdByPath
                     tableIdByPath.forEach((path, id) -> pathByTableId.put(id, path));
@@ -553,7 +729,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     // Update epoch for this table
                     Map<Long, Long> bucketCountEpochByTableId =
                             new HashMap<>(currentSnapshot.getBucketCountEpochByTableId());
-                    if (previousId != null && previousId != tableId) {
+                    if (tableIdChanged) {
                         bucketCountEpochByTableId.remove(previousId);
                     }
                     bucketCountEpochByTableId.put(tableId, tableInfo.getBucketCountEpoch());
@@ -568,7 +744,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
-                                    currentSnapshot.getPartitionBucketCounts(),
+                                    partitionBucketCounts,
                                     bucketCountEpochByTableId);
                     tablePropertyCache = tableProperties.build();
                     serverMetadataSnapshot = newSnapshot;
@@ -576,8 +752,23 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     /**
-     * Update a single partition metadata to the local cache. This method is thread-safe and will
-     * merge the new partition metadata with existing cache.
+     * Publishes a cache-aside load only if no metadata update occurred while ZK was being read. In
+     * particular, an in-flight lookup must not restore a replaced partition or an outdated leader.
+     */
+    public void updatePartitionMetadata(
+            Collection<PartitionMetadata> partitions, ServerMetadataSnapshot expectedSnapshot) {
+        inLock(
+                metadataLock,
+                () -> {
+                    if (serverMetadataSnapshot == expectedSnapshot) {
+                        partitions.forEach(this::updatePartitionMetadata);
+                    }
+                });
+    }
+
+    /**
+     * Updates one partition in the local cache, removing metadata of a same-name predecessor. This
+     * method is thread-safe.
      *
      * @param partitionMetadata the partition metadata to update
      */
@@ -610,9 +801,15 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(currentSnapshot.getPartitionIdByPath());
                     Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
                             new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
+                    Map<TablePartition, Integer> partitionBucketCounts =
+                            new HashMap<>(currentSnapshot.getPartitionBucketCounts());
 
                     // Update partition mapping
-                    partitionIdByPath.put(physicalTablePath, partitionId);
+                    Long previousId = partitionIdByPath.put(physicalTablePath, partitionId);
+                    if (previousId != null && previousId != partitionId) {
+                        bucketMetadataMapForPartitions.remove(previousId);
+                        partitionBucketCounts.remove(new TablePartition(tableId, previousId));
+                    }
 
                     // Update bucket metadata for this partition
                     Map<Integer, BucketMetadata> partitionBucketMetadata = new HashMap<>();
@@ -623,8 +820,6 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     bucketMetadataMapForPartitions.put(
                             partitionId, Collections.unmodifiableMap(partitionBucketMetadata));
 
-                    Map<TablePartition, Integer> partitionBucketCounts =
-                            new HashMap<>(currentSnapshot.getPartitionBucketCounts());
                     mergePartitionBucketCount(
                             partitionBucketCounts, tableId, partitionId, partitionMetadata);
 
@@ -672,6 +867,148 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return result;
     }
 
+    /** Published after the snapshot of the same update, see {@link #getPartitionsMetadata}. */
+    @GuardedBy("metadataLock")
+    private void updateUnverifiedPaths(
+            boolean epochAdvanced, List<PhysicalTablePath> unidentifiedDrops) {
+        if (unidentifiedDrops.isEmpty()) {
+            if (epochAdvanced) {
+                unverifiedPaths = Collections.emptySet();
+            }
+            return;
+        }
+        Set<PhysicalTablePath> paths =
+                new HashSet<>(epochAdvanced ? Collections.emptySet() : unverifiedPaths);
+        for (PhysicalTablePath path : unidentifiedDrops) {
+            if (paths.add(path)) {
+                LOG.info(
+                        "Received a tombstone without the dropped ID from an older Coordinator"
+                                + " for {}, which is not cached. Partition metadata cache hits"
+                                + " at it are checked against ZooKeeper until the Coordinator"
+                                + " epoch advances.",
+                        path);
+            }
+        }
+        unverifiedPaths = Collections.unmodifiableSet(paths);
+    }
+
+    private static boolean isUnverified(
+            Set<PhysicalTablePath> unverifiedPaths, PhysicalTablePath partitionPath) {
+        return !unverifiedPaths.isEmpty()
+                && (unverifiedPaths.contains(partitionPath)
+                        || unverifiedPaths.contains(
+                                PhysicalTablePath.of(partitionPath.getTablePath())));
+    }
+
+    private static Optional<PartitionMetadata> getCachedPartitionMetadata(
+            ServerMetadataSnapshot snapshot, PhysicalTablePath partitionPath) {
+        OptionalLong tableIdOpt = snapshot.getTableId(partitionPath.getTablePath());
+        Optional<Long> partitionIdOpt = snapshot.getPartitionId(partitionPath);
+        if (!tableIdOpt.isPresent() || !partitionIdOpt.isPresent()) {
+            return Optional.empty();
+        }
+        long tableId = tableIdOpt.getAsLong();
+        long partitionId = partitionIdOpt.get();
+        Integer bucketCount =
+                snapshot.getPartitionBucketCount(new TablePartition(tableId, partitionId));
+        if (bucketCount == null) {
+            return Optional.empty();
+        }
+        List<BucketMetadata> bucketMetadataList =
+                getCompleteBucketMetadata(
+                        snapshot.getBucketMetadataForPartition(partitionId), bucketCount);
+        if (bucketMetadataList == null) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new PartitionMetadata(
+                        tableId,
+                        partitionPath.getPartitionName(),
+                        partitionId,
+                        bucketMetadataList,
+                        bucketCount));
+    }
+
+    /**
+     * Keeps the cached partitions whose ZK registration has the same table and partition ID, with
+     * one batched ZK read per table. On a ZK failure, the partitions of the table are left out, so
+     * that the caller reads them from ZK.
+     */
+    private Map<PhysicalTablePath, PartitionMetadata> verifyWithZk(
+            Map<PhysicalTablePath, PartitionMetadata> cached) {
+        Map<TablePath, List<PartitionMetadata>> cachedByTable = new HashMap<>();
+        cached.forEach(
+                (path, metadata) ->
+                        cachedByTable
+                                .computeIfAbsent(path.getTablePath(), k -> new ArrayList<>())
+                                .add(metadata));
+        Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
+        cachedByTable.forEach(
+                (tablePath, partitions) -> {
+                    List<String> partitionNames = new ArrayList<>();
+                    partitions.forEach(p -> partitionNames.add(p.getPartitionName()));
+                    Map<String, PartitionRegistration> registrations;
+                    try {
+                        registrations =
+                                metadataManager.getPartitionRegistrations(
+                                        tablePath, partitionNames);
+                    } catch (Exception e) {
+                        LOG.debug("Failed to check cached partitions of {} in ZK.", tablePath, e);
+                        return;
+                    }
+                    for (PartitionMetadata partition : partitions) {
+                        PartitionRegistration registration =
+                                registrations.get(partition.getPartitionName());
+                        if (registration != null
+                                && registration.getTableId() == partition.getTableId()
+                                && registration.getPartitionId() == partition.getPartitionId()) {
+                            result.put(
+                                    PhysicalTablePath.of(tablePath, partition.getPartitionName()),
+                                    partition);
+                        }
+                    }
+                });
+        return result;
+    }
+
+    /**
+     * Returns whether a pushed update of a table or partition may come from a late UpdateMetadata.
+     * IDs are allocated in increasing order, so this holds if the ID is smaller than the cached one
+     * of its path, or if it is not cached and not larger than the highest dropped ID.
+     */
+    private static boolean isOutdatedOrMaybeDeleted(
+            @Nullable Long cachedId, long id, @Nullable Long maxDeletedId) {
+        if (cachedId != null && cachedId == id) {
+            return false;
+        }
+        return (cachedId != null && id < cachedId) || (maxDeletedId != null && id <= maxDeletedId);
+    }
+
+    private static void removePartitionsOfTables(
+            Set<TablePath> tablePaths,
+            Map<PhysicalTablePath, Long> partitionIdByPath,
+            Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
+            Map<TablePartition, Integer> partitionBucketCounts) {
+        if (tablePaths.isEmpty()) {
+            return;
+        }
+        Set<Long> removedPartitionIds = new HashSet<>();
+        partitionIdByPath
+                .entrySet()
+                .removeIf(
+                        entry -> {
+                            if (!tablePaths.contains(entry.getKey().getTablePath())) {
+                                return false;
+                            }
+                            removedPartitionIds.add(entry.getValue());
+                            return true;
+                        });
+        removedPartitionIds.forEach(bucketMetadataMapForPartitions::remove);
+        partitionBucketCounts
+                .keySet()
+                .removeIf(partition -> removedPartitionIds.contains(partition.getPartitionId()));
+    }
+
     /**
      * Merges the coordinator-sent per-partition bucket count into the cache map. Coordinators of
      * older versions do not send it; if no count is cached, readers must load authoritative
@@ -691,5 +1028,79 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     @VisibleForTesting
     public ServerSchemaCache getServerSchemaCache() {
         return serverSchemaCache;
+    }
+
+    /** Returns the number of entries kept to reject late updates of dropped objects. */
+    @VisibleForTesting
+    int getDeletedIdWatermarkCount() {
+        return inLock(metadataLock, deletedIdWatermarks::size);
+    }
+
+    /**
+     * Upper bounds of the IDs of dropped tables and partitions, used to reject a late
+     * UpdateMetadata of an object after its tombstone removed it from the snapshot. Loads from ZK
+     * are not checked: the Coordinator sends a tombstone only after deleting the ZK node, and a
+     * load that read ZK before the tombstone is discarded by the snapshot check.
+     *
+     * <p>IDs are allocated in increasing order, and a path has at most one live table, so the
+     * highest dropped table ID per path rejects exactly the dropped and replaced tables of the
+     * path. The highest dropped partition ID per table does not grow with the dropped partitions of
+     * auto-partitioned tables, but also rejects an uncached live partition with a smaller ID until
+     * it is loaded from ZK.
+     *
+     * <p>Lifecycle: the entry of a path is removed when a table of the path is cached, and the
+     * entry of a table when the table is dropped or replaced. All entries are removed when the
+     * Coordinator epoch advances, as requests of earlier epochs, including late ones, are rejected
+     * from then on. Until then, a path dropped and never re-created keeps one entry.
+     *
+     * <p>A tombstone of an older Coordinator, which does not send the dropped ID, records the ID
+     * cached for its path or name, if any. Tombstones of partitions of uncached tables, e.g., of a
+     * dropped table, are not recorded, as an update of such a partition comes with its table, nor
+     * are ID-based tombstones of uncached tables, which only a Coordinator that has lost the table
+     * sends: an update of the table comes from an earlier Coordinator and is rejected by its epoch.
+     */
+    @NotThreadSafe
+    private static final class DeletedIdWatermarks {
+
+        private final Map<TablePath, Long> maxDeletedTableIdByPath = new HashMap<>();
+        private final Map<Long, Long> maxDeletedPartitionIdByTableId = new HashMap<>();
+
+        @Nullable
+        Long getMaxDeletedTableId(TablePath tablePath) {
+            return maxDeletedTableIdByPath.get(tablePath);
+        }
+
+        @Nullable
+        Long getMaxDeletedPartitionId(long tableId) {
+            return maxDeletedPartitionIdByTableId.get(tableId);
+        }
+
+        void clear() {
+            maxDeletedTableIdByPath.clear();
+            maxDeletedPartitionIdByTableId.clear();
+        }
+
+        int size() {
+            return maxDeletedTableIdByPath.size() + maxDeletedPartitionIdByTableId.size();
+        }
+
+        void addTable(TablePath tablePath, long tableId) {
+            maxDeletedTableIdByPath.merge(tablePath, tableId, Math::max);
+            removePartitionsOf(tableId);
+        }
+
+        /** From now on, the cached ID rejects the dropped IDs of the path. */
+        void onTableCached(TablePath tablePath) {
+            maxDeletedTableIdByPath.remove(tablePath);
+        }
+
+        void addPartition(long tableId, long partitionId) {
+            maxDeletedPartitionIdByTableId.merge(tableId, partitionId, Math::max);
+        }
+
+        /** Called when a table is dropped or replaced, whose partitions are rejected with it. */
+        void removePartitionsOf(long tableId) {
+            maxDeletedPartitionIdByTableId.remove(tableId);
+        }
     }
 }

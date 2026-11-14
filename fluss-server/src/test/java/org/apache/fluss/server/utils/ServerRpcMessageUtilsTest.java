@@ -23,6 +23,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -98,6 +99,7 @@ import java.util.UUID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.server.metadata.BucketMetadata.NO_LEADER_ISR_STATE_EPOCH;
+import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
@@ -105,6 +107,7 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
+import static org.assertj.core.api.Assertions.tuple;
 
 /** Tests for {@link ServerRpcMessageUtils}. */
 class ServerRpcMessageUtilsTest {
@@ -127,6 +130,52 @@ class ServerRpcMessageUtilsTest {
                         Collections.emptyList(),
                         Collections.singletonList(partition));
         assertThat(request.getPartitionMetadatasList().get(0).hasBucketCount()).isFalse();
+    }
+
+    @Test
+    void testDeletedTableIdRoundTrip() {
+        TableInfo pathTombstone =
+                TableInfo.of(
+                        DATA1_TABLE_INFO.getTablePath(),
+                        DELETED_TABLE_ID,
+                        DATA1_TABLE_INFO.getSchemaId(),
+                        DATA1_TABLE_INFO.toTableDescriptor(),
+                        DATA1_TABLE_INFO.getRemoteDataDir(),
+                        -1L,
+                        -1L);
+        UpdateMetadataRequest request =
+                makeUpdateMetadataRequest(
+                        null,
+                        null,
+                        Collections.emptySet(),
+                        Arrays.asList(
+                                new TableMetadata(
+                                        pathTombstone,
+                                        Collections.emptyList(),
+                                        DATA1_TABLE_INFO.getTableId()),
+                                // as sent by an older Coordinator
+                                new TableMetadata(pathTombstone, Collections.emptyList()),
+                                new TableMetadata(DATA1_TABLE_INFO, Collections.emptyList())),
+                        Collections.emptyList());
+
+        UpdateMetadataRequest decoded = new UpdateMetadataRequest();
+        decoded.parseFrom(request.toByteArray());
+
+        assertThat(getUpdateMetadataRequestData(decoded).getTableMetadataList())
+                .extracting(
+                        metadata -> metadata.getTableInfo().getTableId(),
+                        metadata -> metadata.getTableInfo().getTablePath(),
+                        TableMetadata::getDeletedTableId)
+                .containsExactly(
+                        tuple(
+                                DELETED_TABLE_ID,
+                                DATA1_TABLE_INFO.getTablePath(),
+                                DATA1_TABLE_INFO.getTableId()),
+                        tuple(DELETED_TABLE_ID, DATA1_TABLE_INFO.getTablePath(), null),
+                        tuple(
+                                DATA1_TABLE_INFO.getTableId(),
+                                DATA1_TABLE_INFO.getTablePath(),
+                                null));
     }
 
     @Test
