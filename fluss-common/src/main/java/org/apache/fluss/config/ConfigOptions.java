@@ -1843,8 +1843,8 @@ public class ConfigOptions {
                                     + "on the tablet server instead, which avoids downloading snapshot files "
                                     + "and replaying the changelog, but the scan is not resumable and each "
                                     + "bucket is read at the point in time its scanner was opened. "
-                                    + "This option has no effect when a lake snapshot already exists: the "
-                                    + "bounded read then performs the lake + Fluss-log union read. "
+                                    + "A lake-union read uses the lake snapshot and Fluss log without "
+                                    + "consulting this option; Fluss-only reads still follow this option. "
                                     + "Currently only the Flink connector honours this option.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
