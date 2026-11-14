@@ -21,6 +21,10 @@ import java.util.Objects;
 
 /** An entity for kv snapshot of table bucket. */
 public class TableBucketSnapshot {
+
+    /** Sentinel snapshot id indicating the bucket has no kv snapshot. */
+    public static final long NO_SNAPSHOT_ID = -1L;
+
     private final TableBucket tableBucket;
     private final long snapshotId;
 

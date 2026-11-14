@@ -567,7 +567,7 @@ public final class LogSegment {
         int adjustedMaxSize =
                 minOneMessage ? Math.max(maxSize, startOffsetAndSize.getSize()) : maxSize;
         // use V0 size as the lower bound, since V1 header size is large than V0
-        if (adjustedMaxSize <= V0_RECORD_BATCH_HEADER_SIZE) {
+        if (adjustedMaxSize < V0_RECORD_BATCH_HEADER_SIZE) {
             return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
         }
         if (projection == null) {

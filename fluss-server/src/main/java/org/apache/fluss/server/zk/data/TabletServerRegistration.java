@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.server.metadata.TabletServerResource;
 
 import javax.annotation.Nullable;
 
@@ -33,12 +34,22 @@ public class TabletServerRegistration {
     private final @Nullable String rack;
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
+    private final TabletServerResource resource;
 
     public TabletServerRegistration(
             @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
+        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown());
+    }
+
+    public TabletServerRegistration(
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            long registerTimestamp,
+            TabletServerResource resource) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
+        this.resource = resource;
     }
 
     public List<Endpoint> getEndpoints() {
@@ -53,6 +64,10 @@ public class TabletServerRegistration {
         return rack;
     }
 
+    public TabletServerResource getResource() {
+        return resource;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -64,12 +79,13 @@ public class TabletServerRegistration {
         TabletServerRegistration that = (TabletServerRegistration) o;
         return registerTimestamp == that.registerTimestamp
                 && Objects.equals(endpoints, that.endpoints)
-                && Objects.equals(rack, that.rack);
+                && Objects.equals(rack, that.rack)
+                && Objects.equals(resource, that.resource);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack);
+        return Objects.hash(endpoints, registerTimestamp, rack, resource);
     }
 
     @Override
@@ -81,6 +97,8 @@ public class TabletServerRegistration {
                 + registerTimestamp
                 + ", rack='"
                 + rack
+                + "', resource="
+                + resource
                 + '}';
     }
 }

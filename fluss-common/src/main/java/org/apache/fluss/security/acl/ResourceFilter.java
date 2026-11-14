@@ -18,6 +18,7 @@
 package org.apache.fluss.security.acl;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.GroupId;
 
 import javax.annotation.Nullable;
 
@@ -39,6 +40,23 @@ public class ResourceFilter {
         Objects.requireNonNull(type);
         this.type = type;
         this.name = name;
+    }
+
+    /**
+     * Creates a resource filter, validating concrete consumer-group names.
+     *
+     * @param type the resource type
+     * @param name the resource name, or {@code null} to match any name of the given type
+     * @return the resource filter
+     */
+    public static ResourceFilter of(ResourceType type, @Nullable String name) {
+        if (type == ResourceType.GROUP && name != null) {
+            if (Resource.WILDCARD_RESOURCE.equals(name)) {
+                return new ResourceFilter(type, name);
+            }
+            return new ResourceFilter(type, GroupId.of(name).getGroupId());
+        }
+        return new ResourceFilter(type, name);
     }
 
     public ResourceType getType() {

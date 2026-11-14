@@ -32,14 +32,17 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -89,6 +92,9 @@ public class KvSnapshotLeaseManager {
                 leaseExpirationCheckInterval,
                 zkClient,
                 remoteDataDir,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator lease expiration task instead of creating a component-owned
+                // scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("kv-snapshot-lease-cleaner")),
                 clock,
@@ -225,7 +231,7 @@ public class KvSnapshotLeaseManager {
                             long originalSnapshotId =
                                     kvSnapshotLeaseHandle.acquireBucket(
                                             tableBucket, kvSnapshotId, maxBucketNum);
-                            if (originalSnapshotId == -1L) {
+                            if (originalSnapshotId == TableBucketSnapshot.NO_SNAPSHOT_ID) {
                                 leasedBucketCount.incrementAndGet();
                             } else {
                                 // clear the original ref.
@@ -263,7 +269,7 @@ public class KvSnapshotLeaseManager {
 
                     for (TableBucket bucket : tableBucketsToRelease) {
                         long snapshotId = lease.releaseBucket(bucket);
-                        if (snapshotId != -1L) {
+                        if (snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID) {
                             leasedBucketCount.decrementAndGet();
                             decrementRefCount(new TableBucketSnapshot(bucket, snapshotId));
                         }
@@ -311,6 +317,57 @@ public class KvSnapshotLeaseManager {
                 });
     }
 
+    /**
+     * Returns lease-pinned snapshot ids per bucket for the given (tableId, partitionId) unit. Used
+     * by the {@code ListKvSnapshots} RPC to expose STILL_IN_USE snapshots that fall outside the
+     * retained_N window of {@link
+     * org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore#stillInUseSnapshots}.
+     *
+     * <p>Result map keys are bucket ids; values are the set of snapshot ids that the lease layer
+     * currently considers pinned for that bucket.
+     */
+    public Map<Integer, Set<Long>> getStillInUseSnapshotIds(
+            long tableId, @Nullable Long partitionId) {
+        return inReadLock(
+                managerLock,
+                () -> {
+                    Map<Integer, Set<Long>> result = new HashMap<>();
+                    for (KvSnapshotLeaseHandler leaseHandler : kvSnapshotLeaseMap.values()) {
+                        KvSnapshotTableLease tableLease =
+                                leaseHandler.getTableIdToTableLease().get(tableId);
+                        if (tableLease == null) {
+                            continue;
+                        }
+                        Long[] snapshots;
+                        if (partitionId == null) {
+                            snapshots = tableLease.getBucketSnapshots();
+                        } else {
+                            Map<Long, Long[]> byPartition = tableLease.getPartitionSnapshots();
+                            if (byPartition == null) {
+                                continue;
+                            }
+                            snapshots = byPartition.get(partitionId);
+                        }
+                        if (snapshots == null) {
+                            continue;
+                        }
+                        // Invariant: `snapshots` is indexed by bucketId starting at 0, contiguous,
+                        // with length >= bucket count (auto-expanded by KvSnapshotLeaseHandler when
+                        // buckets are added). Slots not yet registered hold NO_SNAPSHOT_ID (or
+                        // null after certain partitioned-table paths). See
+                        // KvSnapshotLeaseHandler#addBucket (bucketSnapshot[bucketId] = snapshotId)
+                        // for the writer-side enforcement.
+                        for (int bucketId = 0; bucketId < snapshots.length; bucketId++) {
+                            Long snapId = snapshots[bucketId];
+                            if (snapId != null && snapId != TableBucketSnapshot.NO_SNAPSHOT_ID) {
+                                result.computeIfAbsent(bucketId, k -> new HashSet<>()).add(snapId);
+                            }
+                        }
+                    }
+                    return result;
+                });
+    }
+
     private void initializeRefCount(KvSnapshotLeaseHandler lease) {
         for (Map.Entry<Long, KvSnapshotTableLease> tableEntry :
                 lease.getTableIdToTableLease().entrySet()) {
@@ -319,7 +376,7 @@ public class KvSnapshotLeaseManager {
             if (tableLease.getBucketSnapshots() != null) {
                 Long[] snapshots = tableLease.getBucketSnapshots();
                 for (int i = 0; i < snapshots.length; i++) {
-                    if (snapshots[i] == -1L) {
+                    if (snapshots[i] == TableBucketSnapshot.NO_SNAPSHOT_ID) {
                         continue;
                     }
 
@@ -332,7 +389,7 @@ public class KvSnapshotLeaseManager {
                     Long partitionId = entry.getKey();
                     Long[] snapshots = entry.getValue();
                     for (int i = 0; i < snapshots.length; i++) {
-                        if (snapshots[i] == -1L) {
+                        if (snapshots[i] == TableBucketSnapshot.NO_SNAPSHOT_ID) {
                             continue;
                         }
 
@@ -353,7 +410,7 @@ public class KvSnapshotLeaseManager {
             if (tableLease.getBucketSnapshots() != null) {
                 Long[] snapshots = tableLease.getBucketSnapshots();
                 for (int i = 0; i < snapshots.length; i++) {
-                    if (snapshots[i] == -1L) {
+                    if (snapshots[i] == TableBucketSnapshot.NO_SNAPSHOT_ID) {
                         continue;
                     }
                     decrementRefCount(
@@ -366,7 +423,7 @@ public class KvSnapshotLeaseManager {
                     Long partitionId = entry.getKey();
                     Long[] snapshots = entry.getValue();
                     for (int i = 0; i < snapshots.length; i++) {
-                        if (snapshots[i] == -1L) {
+                        if (snapshots[i] == TableBucketSnapshot.NO_SNAPSHOT_ID) {
                             continue;
                         }
 

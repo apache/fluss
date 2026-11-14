@@ -18,8 +18,11 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+
+import javax.annotation.Nullable;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -33,15 +36,31 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
     private final CompletableFuture<byte[]> future;
     private final boolean insertIfNotExists;
 
-    LookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
-        this(tablePath, tableBucket, key, false);
-    }
-
     LookupQuery(
-            TablePath tablePath, TableBucket tableBucket, byte[] key, boolean insertIfNotExists) {
-        super(tablePath, tableBucket, key);
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            boolean insertIfNotExists,
+            @Nullable String originalPartitionName,
+            int bucketCount) {
+        super(tablePath, tableBucket, key, originalPartitionName, bucketCount);
         this.future = new CompletableFuture<>();
         this.insertIfNotExists = insertIfNotExists;
+    }
+
+    @VisibleForTesting
+    LookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            boolean insertIfNotExists,
+            @Nullable String originalPartitionName) {
+        this(tablePath, tableBucket, key, insertIfNotExists, originalPartitionName, 0);
+    }
+
+    @VisibleForTesting
+    LookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this(tablePath, tableBucket, key, false, null, 0);
     }
 
     @Override

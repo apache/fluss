@@ -17,15 +17,29 @@ name: Check License
 permissions:
   contents: read
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - 'fluss-rust/**'
+      - 'fluss-gateway/**'
+      - 'website/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'fluss-rust/**'
+      - 'fluss-gateway/**'
+      - 'website/**'
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}
   cancel-in-progress: true
 
+# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
+# on x86, so a merge that breaks only x86 still shows up there.
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
       MVN_COMMON_OPTIONS: -U -B --no-transfer-progress
       MVN_BUILD_OUTPUT_FILE: "/tmp/mvn_build_output.out"
@@ -33,6 +47,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+
+      # Registered as a Maven toolchain for fluss-lake-iceberg-1.12. The next step sets the JDK
+      # that runs Maven and every other module.
+      - name: Set JDK 17 toolchain
+        uses: actions/setup-java@v5
+        with:
+          java-version: 17
+          distribution: 'temurin'
 
       - name: Set JDK
         uses: actions/setup-java@v5

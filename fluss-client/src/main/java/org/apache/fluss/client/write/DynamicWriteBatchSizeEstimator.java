@@ -69,8 +69,10 @@ public class DynamicWriteBatchSizeEstimator {
             // To increase 10%
             newEstimatedBatchSize = Math.min((int) (estimatedBatchSize * 1.1), maxBatchSize);
         } else if (observedBatchSize < estimatedBatchSize * RATIO_TO_DECREASE_BATCH_SIZE) {
-            // To decrease 5%
-            newEstimatedBatchSize = Math.max((int) (estimatedBatchSize * 0.95), 2 * pageSize);
+            // To decrease 5%. Bound the decrease floor by the configured batch size so the
+            // estimate never exceeds maxBatchSize (matters when pageSize > batchSize).
+            int minBatchSize = (int) Math.min((long) maxBatchSize, 2L * pageSize);
+            newEstimatedBatchSize = Math.max((int) (estimatedBatchSize * 0.95), minBatchSize);
         }
 
         estimatedBatchSizeMap.put(physicalTablePath, newEstimatedBatchSize);

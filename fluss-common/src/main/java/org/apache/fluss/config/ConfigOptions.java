@@ -24,8 +24,10 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LakeLookupMode;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.lang.reflect.Field;
@@ -71,6 +73,24 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
     // ------------------------------------------------------------------------
+    public static final ConfigOption<List<String>> CONFIG_PROVIDERS =
+            key("config.providers")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of config provider identifiers to enable, e.g. "
+                                    + "'directory,env'. Config providers resolve indirection markers of the "
+                                    + "form ${provider:[path:]key} in configuration values at load time, so "
+                                    + "secrets can be kept out of the configuration file (e.g. in a mounted "
+                                    + "Kubernetes Secret or an environment variable). Built-in providers: "
+                                    + "'directory' (${directory:/dir:file}, reads the file content), 'env' "
+                                    + "(${env:VAR}, reads an environment variable) and 'file' "
+                                    + "(${file:/path/to/file.properties:key}, reads a single property). "
+                                    + "Providers are configured via config.providers.<identifier>.param.<param> "
+                                    + "keys; the filesystem-reading providers require the 'allowed.paths' "
+                                    + "parameter restricting which paths they may read.");
+
     public static final ConfigOption<Integer> DEFAULT_BUCKET_NUMBER =
             key("default.bucket.number")
                     .intType()
@@ -200,6 +220,82 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Duration> COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT =
+            key("coordinator.lifecycle-throttler.inflight-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(3))
+                    .withDescription(
+                            "The timeout for an in-flight drop event in the coordinator's "
+                                    + "TableLifecycleThrottler. If a drop event has been admitted "
+                                    + "but the corresponding completion callback has not arrived "
+                                    + "within this timeout, the throttler abandons tracking of "
+                                    + "that drop and continues admitting the next pending drop.");
+
+    public static final ConfigOption<Duration>
+            COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL =
+                    key("coordinator.lifecycle-throttler.timeout-check-interval")
+                            .durationType()
+                            .defaultValue(Duration.ofMinutes(1))
+                            .withDescription(
+                                    "The periodic interval at which the coordinator's "
+                                            + "TableLifecycleThrottler scans in-flight drops for "
+                                            + "timeouts.");
+
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT =
+            key("coordinator.rebalance.target-unavailable-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if its target tablet servers remain unavailable and no "
+                                    + "bucket-state progress is observed. Observed progress or all "
+                                    + "target servers becoming live resets this timer. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Duration> COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT =
+            key("coordinator.rebalance.no-progress-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The time after which a timed-out bucket migration is marked FAILED "
+                                    + "if no bucket-state progress is observed, even when its target "
+                                    + "tablet servers are live. Observed progress resets this timer; "
+                                    + "this does not limit the total migration duration. Must be at "
+                                    + "least 1 ms and fit in a signed 64-bit millisecond value.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS =
+            key("coordinator.rebalance.max-tracked-timed-out-tasks")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "The maximum number of non-final timed-out bucket migrations tracked "
+                                    + "before the coordinator stops admitting new bucket migrations. "
+                                    + "Admission resumes when a tracked migration reaches a final "
+                                    + "status. This limits concurrent migrations and reconciliation "
+                                    + "work on the coordinator and ZooKeeper. Must be at least 1.");
+
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
+            key("coordinator.rebalance.max-inflight-tasks")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "The maximum number of bucket-level rebalance tasks that can be "
+                                    + "executed concurrently by the coordinator. A higher value "
+                                    + "can speed up rebalance, while a lower value reduces the "
+                                    + "number of simultaneous bucket movements. Must be at least "
+                                    + "1.");
+
+    public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
+            key("coordinator.offline-leader.retry-delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The delay before the coordinator retries offline leaders on live "
+                                    + "tablet servers after they are marked offline. This lets a "
+                                    + "leader that was rejected because of temporary tablet-server "
+                                    + "conditions, such as disk write protection, become electable "
+                                    + "again after recovery.");
+
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()
@@ -266,13 +362,40 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    public static final ConfigOption<Boolean> SECURITY_ACL_PRINCIPAL_IGNORE_CASE =
+            key("security.acl.principal.ignore-case")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to perform case-insensitive matching on principal name and type "
+                                    + "during ACL authorization checks. When set to true, principals "
+                                    + "such as 'User:Admin' and 'user:admin' will be treated as the same principal. "
+                                    + "Default is false for strict case-sensitive matching.");
+
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
-                    .defaultValue(128000)
+                    .defaultValue(4096)
                     .withDescription(
-                            "The maximum number of buckets that can be created for a table."
-                                    + "The default value is 128000");
+                            "The maximum number of buckets that can be created for a non-partitioned table "
+                                    + "or for each partition of a partitioned table. "
+                                    + "The default value is 4096. "
+                                    + "This default is capped to reduce the risk that an assignment znode exceeds "
+                                    + "ZooKeeper's packet size limit.");
+
+    public static final ConfigOption<MemorySize> KV_LEADER_REPLICA_MEMORY_RESERVED =
+            key("kv.leader-replica.memory-reserved")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The estimated memory consumption of each KV leader replica, "
+                                    + "used by the CoordinatorServer to calculate the cluster-level "
+                                    + "KV leader replica capacity. This value does not reserve or "
+                                    + "enforce memory on the tablet server. The default value of 0 "
+                                    + "disables memory-based KV leader replica capacity control. "
+                                    + "Set a positive value to enable it. When enabled, the recommended "
+                                    + "value is 8 MB, based on the measured memory consumption of an "
+                                    + "empty KV leader replica.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -335,15 +458,56 @@ public class ConfigOptions {
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
 
+    public static final ConfigOption<Integer> SERVER_HISTORICAL_PARTITION_THREAD_POOL_MAX_SIZE =
+            key("server.historical-partition.thread-pool.max-size")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The maximum number of threads used for historical partition operations, such as lake lookups and writes. "
+                                    + "Threads are started lazily and released after the keep-alive timeout when idle.");
+
+    public static final ConfigOption<Double>
+            SERVER_HISTORICAL_PARTITION_LOOKUP_CACHE_MAX_DISK_RATIO =
+                    key("server.historical-partition.lookup-cache.max-disk-ratio")
+                            .doubleType()
+                            .defaultValue(0.10)
+                            .withDescription(
+                                    "The maximum fraction of the total capacity of the volume containing the first available data directory allocated to historical partition lookup caches on a TabletServer. "
+                                            + "All table lookupers share this capacity, with eviction at file granularity. Historical lookup cache files are stored under that data directory; additional data volumes are not used. "
+                                            + "The valid range is (0.0, 1.0].");
+
+    public static final ConfigOption<Duration>
+            SERVER_HISTORICAL_PARTITION_LOOKUPER_CACHE_EXPIRE_AFTER_ACCESS =
+                    key("server.historical-partition.lookuper-cache.expire-after-access")
+                            .durationType()
+                            .defaultValue(Duration.ofHours(3))
+                            .withDescription(
+                                    "The duration after which an idle historical partition table lookuper or an idle lookup file is removed from its cache. "
+                                            + "Lookuper and file access times are tracked independently. This setting replaces the Paimon table-level lookup.cache-file-retention option for historical lookups. "
+                                            + "Dynamic changes apply to both caches without replacing active lookupers.");
+
     public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
             key("server.data-disk.write-limit-ratio")
                     .doubleType()
                     .defaultValue(0.85)
                     .withDescription(
-                            "Reject writes when the tablet server data disk usage exceeds this ratio. "
-                                    + "Writes resume after the usage drops below (ratio - 0.10). "
+                            "Reject writes when the tablet server data disk usage reaches this ratio. "
+                                    + "Writes resume when the usage reaches or drops below "
+                                    + "server.data-disk.write-recover-ratio. "
                                     + "Set to 1.0 to disable the disk-usage protection entirely. "
-                                    + "The valid range is (0.1, 1.0].");
+                                    + "The valid range is "
+                                    + "(server.data-disk.write-recover-ratio, 1.0]. When lowering "
+                                    + "both ratios dynamically, update them in the same request or "
+                                    + "lower server.data-disk.write-recover-ratio first.");
+
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_RECOVER_RATIO =
+            key("server.data-disk.write-recover-ratio")
+                    .doubleType()
+                    .defaultValue(0.80)
+                    .withDescription(
+                            "Resume writes when the tablet server data disk usage reaches or "
+                                    + "drops below this ratio. The valid range is "
+                                    + "(0.0, server.data-disk.write-limit-ratio).");
 
     public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
             key("server.data-disk.check-interval")
@@ -452,6 +616,24 @@ public class ConfigOptions {
                             "The interval for cleaning up expired producer offsets "
                                     + "and orphan files in remote storage. Default is 1 hour.");
 
+    public static final ConfigOption<Duration> COORDINATOR_CONTROL_REQUEST_RETRY_BACKOFF =
+            key("coordinator.control-request.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The backoff duration the coordinator waits before retrying a "
+                                    + "control-plane request to a tablet server after a "
+                                    + "transient RPC-layer failure.");
+
+    public static final ConfigOption<Duration> COORDINATOR_CONTROL_REQUEST_TIMEOUT =
+            key("coordinator.control-request.timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The timeout the sender thread waits for a response to a "
+                                    + "control-plane request before treating it as failed "
+                                    + "and retrying.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------
@@ -498,6 +680,118 @@ public class ConfigOptions {
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
+    public static final ConfigOption<Map<String, String>> SERVER_SASL_CREDENTIALS =
+            key("security.sasl.plain.credentials")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Map of user credentials for SASL/PLAIN authentication in 'username:password' format. "
+                                    + "For example: 'admin:admin-secret,bob:bob-secret'. "
+                                    + "This is syntactic sugar that auto-generates the JAAS config string.");
+
+    public static final ConfigOption<String> SERVER_SASL_PLAIN_JAAS_CONFIG =
+            key("security.sasl.plain.jaas.config")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for server-side SASL/PLAIN authentication. "
+                                    + "The value should use PlainLoginModule and define users with "
+                                    + "'user_<username>=\"<password>\"' options. This option is generated "
+                                    + "from 'security.sasl.plain.credentials' when that credential map is set, "
+                                    + "and can also be configured directly for compatibility.");
+
+    // ------------------------------------------------------------------------
+    //  Server-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_LISTENERS =
+            key("security.ssl.enabled.listeners")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Listener names with TLS enabled, e.g. `CLIENT,INTERNAL`; others "
+                                    + "accept plaintext. Requires `security.ssl.keystore.path`. A "
+                                    + "listener whose `security.protocol.map` entry is `mTLS` must "
+                                    + "be listed here, since it authenticates by certificate. Names "
+                                    + "match exactly: spell and case them as in `bind.listeners` "
+                                    + "and `security.protocol.map`, or no listener is selected.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_ENABLED_PROTOCOLS =
+            key("security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription(
+                            "TLS protocols enabled for incoming connections. `TLSv1.2` is kept "
+                                    + "by default for JDK 8 builds older than 8u261.");
+
+    public static final ConfigOption<List<String>> SERVER_SSL_CIPHER_SUITES =
+            key("security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Cipher suites enabled for TLS connections. Empty uses the provider "
+                                    + "defaults.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_PATH =
+            key("security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Keystore file with the server certificate and key. Required with "
+                                    + "`security.ssl.enabled.listeners`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEYSTORE_PASSWORD =
+            key("security.ssl.keystore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server keystore.");
+
+    public static final ConfigOption<String> SERVER_SSL_KEYSTORE_TYPE =
+            key("security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<Password> SERVER_SSL_KEY_PASSWORD =
+            key("security.ssl.key.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the server private key. Defaults to "
+                                    + "`security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_PATH =
+            key("security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the server trusts. Required "
+                                    + "for `mTLS` listeners, to validate client certificates.");
+
+    public static final ConfigOption<Password> SERVER_SSL_TRUSTSTORE_PASSWORD =
+            key("security.ssl.truststore.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the server truststore.");
+
+    public static final ConfigOption<String> SERVER_SSL_TRUSTSTORE_TYPE =
+            key("security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the server truststore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> SERVER_SSL_PRINCIPAL_MAPPING_RULES =
+            key("security.ssl.principal.mapping.rules")
+                    .stringType()
+                    .defaultValue("DEFAULT")
+                    .withDescription(
+                            "Rules that map the distinguished name of a client certificate, in "
+                                    + "RFC 2253 form, to the principal name of an `mTLS` listener. "
+                                    + "`DEFAULT` keeps the full distinguished name.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
@@ -511,6 +805,28 @@ public class ConfigOptions {
                     .withDescription(
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
+
+    public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
+            key("tablet-server.advertised-resource.cpu-cores")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The CPU capacity, in cores, that this tablet server advertises to the "
+                                    + "CoordinatorServer for resource reporting. This option does not limit "
+                                    + "CPU usage or configure a cgroup CPU quota. If not configured, the tablet "
+                                    + "server detects the value from cgroup CPU quota or the JVM runtime.");
+
+    public static final ConfigOption<MemorySize> TABLET_SERVER_ADVERTISED_RESOURCE_MEMORY_SIZE =
+            key("tablet-server.advertised-resource.memory-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The memory capacity that this tablet server advertises to the CoordinatorServer "
+                                    + "for resource reporting and cluster-level KV leader replica capacity "
+                                    + "estimation. This option does not configure JVM heap size, reserve memory, "
+                                    + "or enforce a process or container memory limit. It represents total usable "
+                                    + "capacity, not current memory usage or free memory. If not configured, the "
+                                    + "tablet server detects the value from cgroup or operating system information.");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")
@@ -537,10 +853,10 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
-                    .defaultValue(Duration.ofDays(7))
+                    .defaultValue(Duration.ofDays(1))
                     .withDescription(
                             "The time that the tablet server will wait without receiving any write request from "
-                                    + "a client before expiring the related status. The default value is 7 days.");
+                                    + "a client before expiring the related status. The default value is 1 day.");
 
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
@@ -808,6 +1124,33 @@ public class ConfigOptions {
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
 
+    public static final ConfigOption<Duration> LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(60))
+                    .withDescription(
+                            "The frequency with which we update the persistent record of the last "
+                                    + "flush which acts as the log recovery point. The default "
+                                    + "setting is 60 seconds.");
+
+    public static final ConfigOption<Duration> LOG_RETENTION_CHECK_INTERVAL =
+            key("log.retention.check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(5))
+                    .withDescription(
+                            "The frequency with which the log manager checks whether local log "
+                                    + "segments are eligible for TTL cleanup. The value must be "
+                                    + "greater than 0.");
+
+    public static final ConfigOption<Boolean> LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED =
+            key("log.retention.roll-active-segment.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to roll a non-empty active log segment after it has expired "
+                                    + "according to the effective local cleanup TTL and the high "
+                                    + "watermark has reached the log end offset. Enabled by default.");
+
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
                     .durationType()
@@ -979,23 +1322,45 @@ public class ConfigOptions {
                     .intType()
                     .defaultValue(3)
                     .withDescription(
-                            "The number of threads that the server uses for receiving requests "
-                                    + "from the network and sending responses to the network.");
+                            "The number of network threads per listener resource group for receiving "
+                                    + "requests and sending responses. When the server binds both the "
+                                    + "listener selected by internal.listener.name and external listeners, "
+                                    + "the internal listener uses a dedicated group and all external "
+                                    + "listeners share another group. Otherwise, all listeners share "
+                                    + "one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_WORKER_THREADS =
             key("netty.server.num-worker-threads")
                     .intType()
                     .defaultValue(8)
                     .withDescription(
-                            "The number of threads that the server uses for processing requests, "
-                                    + "which may include disk and remote I/O.");
+                            "The number of worker threads per listener resource group for processing "
+                                    + "requests, which may include disk and remote I/O. When the server "
+                                    + "binds both the listener selected by internal.listener.name and "
+                                    + "external listeners, the internal listener uses a dedicated group "
+                                    + "and all external listeners share another group. Otherwise, all "
+                                    + "listeners share one group.");
 
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_REQUESTS =
             key("netty.server.max-queued-requests")
                     .intType()
                     .defaultValue(500)
                     .withDescription(
-                            "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
+                            "The queued-request backpressure threshold per listener resource group, "
+                                    + "divided among its worker threads. When a worker queue reaches its "
+                                    + "threshold, reads are paused on its associated connections. Queues "
+                                    + "are unbounded; this is not a hard limit on queued requests. When "
+                                    + "the server binds both the listener selected by internal.listener.name "
+                                    + "and external listeners, the internal listener uses a dedicated "
+                                    + "group and all external listeners share another group. Otherwise, "
+                                    + "all listeners share one group.");
+
+    public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
+            key("netty.server.max-queued-historical-requests")
+                    .intType()
+                    .defaultValue(50)
+                    .withDescription(
+                            "The maximum number of in-flight historical partition operations, including running and queued lookups and writes, before throttling new operations.");
 
     public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
             key("netty.server.max-request-size")
@@ -1049,7 +1414,7 @@ public class ConfigOptions {
     public static final ConfigOption<Duration> CLIENT_CONNECT_TIMEOUT =
             key("client.connect-timeout")
                     .durationType()
-                    .defaultValue(Duration.ofSeconds(120))
+                    .defaultValue(Duration.ofSeconds(15))
                     .withDescription("The Netty client connect timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
@@ -1196,6 +1561,47 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF =
+            key("client.writer.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a write that failed with a retriable error. "
+                                    + "The delay doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.retry-backoff-max. Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_RETRY_BACKOFF_MAX =
+            key("client.writer.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a write that failed with a retriable error. "
+                                    + "Must be between the initial backoff and 2147483647ms. "
+                                    + "The backoff applies per physical table bucket and is independent of "
+                                    + "KV backpressure and disk-write protection.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF =
+            key("client.writer.disk-write-locked.backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The initial retry backoff when disk write protection rejects a write. "
+                                    + "Applies to both Log and KV writes, independently of KV backpressure. "
+                                    + "The backoff doubles with the batch retry count and uses 20% jitter, "
+                                    + "up to client.writer.disk-write-locked.backoff-max. "
+                                    + "The value must be at least 1ms and no greater than the maximum backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_WRITER_DISK_WRITE_LOCKED_BACKOFF_MAX =
+            key("client.writer.disk-write-locked.backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription(
+                            "The maximum retry backoff for a bucket whose writes are rejected by disk "
+                                    + "write protection. Must be between the initial backoff and 2147483647ms. "
+                                    + "Setting this equal to the initial backoff uses a fixed delay without jitter. "
+                                    + "Writes retry automatically after the delay, subject to client.writer.retries. "
+                                    + "Flush and graceful close also respect this delay.");
+
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
                     .booleanType()
@@ -1235,6 +1641,19 @@ public class ConfigOptions {
                                     + " Dynamic partition strategy refers to creating partitions based on the data "
                                     + "being written for partitioned table if the wrote partition don't exists.");
 
+    public static final ConfigOption<Duration> CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE =
+            key("client.writer.kv-backpressure.max-throttle")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(3000))
+                    .withDescription(
+                            "The upper bound of the per-bucket throttle delay the client applies in response to "
+                                    + "KV backpressure signals piggybacked by the server. "
+                                    + "Throttle delay is computed as: max_throttle * p^2, where p is the "
+                                    + "normalized pressure in [0, 1) reported by the server. "
+                                    + "Once the server rejects a write with StorageBackpressureException, "
+                                    + "the client also uses this value as the initial retry backoff so that the "
+                                    + "transition between throttle and rejection is continuous.");
+
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
                     .durationType()
@@ -1269,6 +1688,99 @@ public class ConfigOptions {
                     .defaultValue("PLAINTEXT")
                     .withDescription(
                             "The authentication protocol used to authenticate the client.");
+
+    public static final ConfigOption<Boolean> CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY =
+            key("client.security.enable-plugin-discovery")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "When set to true, the client will additionally discover "
+                                    + "authentication plugins from the configured plugins/ folder "
+                                    + "via the PluginManager, in addition to the default classpath. "
+                                    + "This is useful for standalone tools or scripts that run outside "
+                                    + "the server JVM but still need to load authentication plugins "
+                                    + "shipped in plugins/.");
+
+    // ------------------------------------------------------------------------
+    //  Client-side TLS (transport encryption + mTLS) options
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> CLIENT_SSL_ENABLED =
+            key("client.security.ssl.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the client connects over TLS. Must match the listener it "
+                                    + "connects to (`security.ssl.enabled.listeners`).");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
+            key("client.security.ssl.enabled.protocols")
+                    .stringType()
+                    .asList()
+                    .defaultValues("TLSv1.2", "TLSv1.3")
+                    .withDescription("TLS protocols enabled for client connections.");
+
+    public static final ConfigOption<List<String>> CLIENT_SSL_CIPHER_SUITES =
+            key("client.security.ssl.cipher.suites")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription("Cipher suites enabled for client connections.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PATH =
+            key("client.security.ssl.truststore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Truststore file holding the certificates the client trusts. If "
+                                    + "unset, the JVM default truststore is used.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_PASSWORD =
+            key("client.security.ssl.truststore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client truststore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_TRUSTSTORE_TYPE =
+            key("client.security.ssl.truststore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client truststore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PATH =
+            key("client.security.ssl.keystore.path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("Keystore file with the client certificate and key.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_PASSWORD =
+            key("client.security.ssl.keystore.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The password to access the client keystore.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEYSTORE_TYPE =
+            key("client.security.ssl.keystore.type")
+                    .stringType()
+                    .defaultValue("JKS")
+                    .withDescription("Format of the client keystore: `JKS` or `PKCS12`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_KEY_PASSWORD =
+            key("client.security.ssl.key.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Password of the client private key. Defaults to "
+                                    + "`client.security.ssl.keystore.password`.");
+
+    public static final ConfigOption<String> CLIENT_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM =
+            key("client.security.ssl.endpoint.identification.algorithm")
+                    .stringType()
+                    .defaultValue("https")
+                    .withDescription(
+                            "Algorithm verifying the server hostname against its certificate: "
+                                    + "`https` or `ldaps`. Empty disables the check, which is not "
+                                    + "recommended in production.");
 
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
@@ -1319,11 +1831,31 @@ public class ConfigOptions {
                                     + KV_SCANNER_MAX_BATCH_SIZE.key()
                                     + "'.");
 
+    public static final ConfigOption<KvBatchStrategy> CLIENT_SCANNER_KV_BATCH_STRATEGY =
+            key("client.scanner.kv.batch-strategy")
+                    .enumType(KvBatchStrategy.class)
+                    .defaultValue(KvBatchStrategy.SNAPSHOT_MERGE)
+                    .withDescription(
+                            "The strategy used for bounded reads of primary-key tables. "
+                                    + "'snapshot-merge' (default) merges the latest kv snapshot with the "
+                                    + "bounded changelog range that follows it; the scan is resumable and "
+                                    + "reflects a single point in time. 'server-scan' scans the live kv state "
+                                    + "on the tablet server instead, which avoids downloading snapshot files "
+                                    + "and replaying the changelog, but the scan is not resumable and each "
+                                    + "bucket is read at the point in time its scanner was opened. "
+                                    + "This option has no effect when a lake snapshot already exists: the "
+                                    + "bounded read then performs the lake + Fluss-log union read. "
+                                    + "Currently only the Flink connector honours this option.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
-                    .withDescription("The maximum number of pending lookup operations.");
+                    .withDescription(
+                            "The maximum number of lookup operations in the initial input queue. "
+                                    + "Adding a lookup blocks while this queue is full. Lookups waiting "
+                                    + "for a bucket's leader or for a retry are outside this limit, so the "
+                                    + "total number of pending lookups can grow beyond it.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
@@ -1355,6 +1887,26 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
 
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF =
+            key("client.lookup.retry-backoff")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(100))
+                    .withDescription(
+                            "The initial delay before retrying a lookup that failed with a retriable error, "
+                                    + "such as NOT_LEADER_OR_FOLLOWER, or whose bucket has no known leader. The "
+                                    + "delay doubles with each attempt and uses 20% jitter, up to "
+                                    + "client.lookup.retry-backoff-max. Attempts made while a bucket has no known "
+                                    + "leader don't count toward client.lookup.max-retries. "
+                                    + "Set to 0 to disable this backoff.");
+
+    public static final ConfigOption<Duration> CLIENT_LOOKUP_RETRY_BACKOFF_MAX =
+            key("client.lookup.retry-backoff-max")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(1))
+                    .withDescription(
+                            "The maximum delay before retrying a lookup. "
+                                    + "Must be between the initial backoff and 2147483647ms.");
+
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()
@@ -1362,6 +1914,23 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of remote log segments to keep in local temp file for LogScanner, "
                                     + "which download from remote storage. The default setting is 4.");
+
+    public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_FETCH_MAX_RETRIES =
+            key("client.scanner.remote-log.fetch.max-retries")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of retries for downloading a remote log segment file. "
+                                    + "Each retry is delayed by an exponential backoff starting from "
+                                    + "100ms and doubling up to a maximum of 5s. "
+                                    + "The default setting is 5.");
+
+    public static final ConfigOption<FetchLogReadPreference> CLIENT_SCANNER_LOG_READ_PREFERENCE =
+            key("client.scanner.log.read-preference")
+                    .enumType(FetchLogReadPreference.class)
+                    .defaultValue(FetchLogReadPreference.LOCAL_FIRST)
+                    .withDescription(
+                            "The read preference for LogScanner. Supported values are local-first and remote-first.");
 
     public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
             key("client.scanner.io.tmpdir")
@@ -1413,7 +1982,10 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                            "JAAS configuration string for the client. This option is retained for backward "
+                                    + "compatibility only. Since only SASL/PLAIN is currently supported, only "
+                                    + "PlainLoginModule is accepted. Prefer using 'client.security.sasl.username' "
+                                    + "and 'client.security.sasl.password' directly.\n"
                                     + "Example: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
@@ -1421,7 +1993,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication. "
+                            "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
@@ -1430,9 +2002,18 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication. "
+                            "The password to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_SASL_AUTHORIZATION_ID =
+            key("client.security.sasl.authorization-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user to act as with SASL/PLAIN. If unset or empty, the authenticated "
+                                    + "account is used. A different user requires a server-side grant "
+                                    + "in 'security.sasl.listener.name.<listener>.plain.proxy-users'.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
@@ -1503,6 +2084,16 @@ public class ConfigOptions {
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
                                     + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
 
+    /** The version of the physical KV value layout. */
+    public static final ConfigOption<Integer> TABLE_KV_VALUE_LAYOUT_VERSION =
+            key("table.kv.value-layout-version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The version of the physical KV value layout in RocksDB. "
+                                    + "The coordinator sets this option during table creation. "
+                                    + "Tables created before this option was introduced use the plain layout.");
+
     public static final ConfigOption<Boolean> TABLE_KV_STANDBY_REPLICA_ENABLED =
             key("table.kv.standby-replica.enabled")
                     .booleanType()
@@ -1510,9 +2101,30 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether to enable standby replicas for primary key tables. "
                                     + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
-                                    + "Automatically set to true by the coordinator during table creation for new PK tables. "
-                                    + "Tables created before this option was introduced are treated as disabled. "
+                                    + "Disabled if not configured, including for tables created before this option was introduced. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
+
+    public static final ConfigOption<Duration> TABLE_KV_TTL =
+            key("table.kv.ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The best-effort row-level TTL for primary key data. "
+                                    + "The changelog retention of a primary key table is controlled separately by 'table.log.ttl'. "
+                                    + "If not set, row-level TTL is disabled. "
+                                    + "The duration must be at least 1 millisecond. "
+                                    + "Expired rows may remain visible until RocksDB compaction removes them.");
+
+    public static final ConfigOption<String> TABLE_KV_TTL_TIME_COLUMN =
+            key("table.kv.ttl.time-column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The event-time column for row-level TTL. "
+                                    + "If not set, row-level TTL uses processing time. "
+                                    + "If set, the column must be BIGINT epoch milliseconds, TIMESTAMP, or TIMESTAMP_LTZ. "
+                                    + "TIMESTAMP values are interpreted in the TabletServer's system time zone. "
+                                    + "Rows with null event-time values do not expire through TTL.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
@@ -1545,13 +2157,31 @@ public class ConfigOptions {
                                     + "If the value is `HOUR`, the partition format for "
                                     + "auto created is yyyyMMddHH. "
                                     + "If the value is `DAY`, the partition format for "
-                                    + "auto created is yyyyMMdd. "
+                                    + "auto created is yyyyMMdd by default. "
                                     + "If the value is `MONTH`, the partition format for "
                                     + "auto created is yyyyMM. "
                                     + "If the value is `QUARTER`, the partition format for "
                                     + "auto created is yyyyQ. "
                                     + "If the value is `YEAR`, the partition format for "
-                                    + "auto created is yyyy.");
+                                    + "auto created is yyyy. The default format can be overridden "
+                                    + "by `table.auto-partition.time-format`.");
+
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIME_FORMAT =
+            key("table.auto-partition.time-format")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The DateTimeFormatter pattern for auto-created partitions. "
+                                    + "By default, the format is determined by `table.auto-partition.time-unit`: "
+                                    + "`yyyy` for YEAR, `yyyyQ` for QUARTER, `yyyyMM` for MONTH, "
+                                    + "`yyyyMMdd` for DAY, and `yyyyMMddHH` for HOUR. "
+                                    + "A custom format must list time fields from the largest to the smallest unit, "
+                                    + "include every field required by the configured time unit, and use fixed-width numeric fields. "
+                                    + "For example, `yyyy-MM-dd` is valid for DAY, while `MM-yyyy`, `yyyy-MM`, and `yyyy-M-dd` are invalid. "
+                                    + "The generated partition value must also satisfy Fluss partition-name restrictions: "
+                                    + "at most 200 ASCII alphanumeric, underscore, or hyphen characters, without the reserved `__` prefix. "
+                                    + "Optional pattern sections using `[` and `]` are not supported. "
+                                    + "The format is retained when auto partitioning is disabled and continues to validate manually created partitions.");
 
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")
@@ -1589,9 +2219,12 @@ public class ConfigOptions {
                     .durationType()
                     .defaultValue(Duration.ofDays(7))
                     .withDescription(
-                            "The time to live for log segments. The configuration controls the maximum time "
-                                    + "we will retain a log before we will delete old segments to free up "
-                                    + "space. If set to -1, the log will not be deleted.");
+                            "The time to live for log segments. The configuration controls the "
+                                    + "maximum time log segments are retained before they become "
+                                    + "eligible for deletion. When remote log tiering is enabled, "
+                                    + "this value controls the retention of remote log segments. "
+                                    + "Setting the value to '0ms' disables TTL-based deletion. "
+                                    + "The default value is 7 days.");
 
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
             key("table.log.tiered.local-segments")
@@ -1600,6 +2233,20 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
+
+    public static final ConfigOption<Duration> TABLE_LOG_LOCAL_TTL =
+            key("table.log.local-ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The time to live for local log segments. The configuration controls the "
+                                    + "maximum time local log segments are retained before they become "
+                                    + "eligible for deletion. When remote log tiering is enabled, an "
+                                    + "expired local segment is deleted only after it has been copied "
+                                    + "to remote storage. Setting the value to '0ms' disables TTL-based "
+                                    + "deletion. If not configured, the value inherits `table.log.ttl`. "
+                                    + "When both values are positive, it must be less than or equal to "
+                                    + "`table.log.ttl`.");
 
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")
@@ -1610,17 +2257,62 @@ public class ConfigOptions {
                                     + "When this option is set to ture and the datalake tiering service is up,"
                                     + " the table will be tiered and compacted into datalake format stored on lakehouse storage.");
 
+    public static final ConfigOption<Boolean> TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED =
+            key("table.datalake.historical-partition.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable historical partition access for the table. "
+                                    + "When enabled, the coordinator creates and retains a system partition "
+                                    + "for routing writes to expired partitions and, for primary-key tables, "
+                                    + "lookups of expired partitions to lake storage. Currently, this option "
+                                    + "only supports auto-partitioned Paimon tables with a single partition "
+                                    + "key. Disabled by default. "
+                                    + "After changing this option, restart existing lookup jobs that need "
+                                    + "to look up historical partition data so that their clients load the "
+                                    + "updated table configuration.");
+
+    /** Lookup strategy for historical partitions stored in lake storage. */
+    @Internal
+    public static final ConfigOption<LakeLookupMode>
+            TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE =
+                    key("table.datalake.historical-partition.lookup-mode")
+                            .enumType(LakeLookupMode.class)
+                            .defaultValue(LakeLookupMode.SST)
+                            .withDescription(
+                                    "The lookup mode for historical partitions stored in Paimon. "
+                                            + "SST uses local lookup files cached from lake storage. "
+                                            + "SCAN scans the requested partition and bucket with primary-key filters "
+                                            + "and a limit of one row, without creating local lookup files. "
+                                            + "This option can be changed with ALTER TABLE SET or reset to SST with ALTER TABLE RESET.");
+
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, and `lance`. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, `hudi`, and `lance`. "
+                                    + "In the future, more kinds of data lake formats will be supported, such as DeltaLake. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
                                     + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_DATABASE_NAME =
+            key("table.datalake.database-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the database name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss database name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
+
+    public static final ConfigOption<String> TABLE_DATALAKE_TABLE_NAME =
+            key("table.datalake.table-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the table name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
+                                    + "If not set, the Fluss table name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -1655,6 +2347,16 @@ public class ConfigOptions {
                                     + "The `first_row` merge engine will keep the first row of the same primary key. "
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
+
+    public static final ConfigOption<Boolean> TABLE_UPSERT_SKIP_UNCHANGED =
+            key("table.upsert.skip-unchanged")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "For a primary key table using the default merge behavior, skip the state write and changelog when the complete candidate row has the same schema ID and serialized row bytes as the stored row. "
+                                    + "This also applies to partial updates and partial deletes. "
+                                    + "It requires FULL changelog image mode and cannot be combined with row-level KV TTL or a merge engine. As with other tables without a merge engine, OVERWRITE writes are unsupported. "
+                                    + "FULL changelog image mode already reads the previous value for every upsert. Comparing it with the complete candidate row adds comparison costs.");
 
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
@@ -1719,6 +2421,86 @@ public class ConfigOptions {
                                     + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
                                     + "as older versions cannot parse the extended batch format.");
 
+    public static final ConfigOption<Boolean> TABLE_KAFKA_ENABLED =
+            key("table.kafka.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to expose this table as a Kafka topic. Requires a non-partitioned "
+                                    + "log table using the Arrow log format.");
+
+    public static final ConfigOption<KafkaValueConversionType> TABLE_KAFKA_CONVERT_VALUE_TYPE =
+            key("table.kafka.convert.value.type")
+                    .enumType(KafkaValueConversionType.class)
+                    .defaultValue(KafkaValueConversionType.PARSE_JSON)
+                    .withDescription(
+                            "How to convert Kafka record values. 'binary' stores the raw bytes in "
+                                    + "_kafka_value (BYTES); 'string' decodes UTF-8 text into _kafka_value "
+                                    + "(STRING); 'parse_json' parses a JSON object and maps its fields "
+                                    + "according to table.kafka.convert.value.layout. Defaults to 'parse_json'.");
+
+    public static final ConfigOption<KafkaValueConversionLayout> TABLE_KAFKA_CONVERT_VALUE_LAYOUT =
+            key("table.kafka.convert.value.layout")
+                    .enumType(KafkaValueConversionLayout.class)
+                    .defaultValue(KafkaValueConversionLayout.FLAT)
+                    .withDescription(
+                            "How to map JSON object fields when table.kafka.convert.value.type is "
+                                    + "'parse_json'. 'flat' maps fields by name to top-level table columns; "
+                                    + "'nested' maps them to fields in the _kafka_value column, which must "
+                                    + "have ROW type. Defaults to 'flat'. Ignored for 'binary' and 'string' conversion.");
+
+    public static final ConfigOption<KafkaKeyConversionType> TABLE_KAFKA_CONVERT_KEY_TYPE =
+            key("table.kafka.convert.key.type")
+                    .enumType(KafkaKeyConversionType.class)
+                    .noDefaultValue()
+                    .withDescription(
+                            "How to convert Kafka record keys. Only 'binary' is supported, which stores "
+                                    + "raw key bytes in the _kafka_key column of type BYTES. If this column "
+                                    + "is declared, keys are stored even when this option is omitted. "
+                                    + "Without this column, keys are not stored and this option must be left unset.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for Consumer Offsets
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<MemorySize> OFFSET_METADATA_MAX_BYTES =
+            key("server.consumer-offsets.metadata.max-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4kb"))
+                    .withDescription(
+                            "The maximum size for a metadata entry associated with an offset commit.");
+
+    public static final ConfigOption<Duration> OFFSETS_RETENTION =
+            key("server.consumer-offsets.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(7))
+                    .withDescription(
+                            "The retention period for committed consumer offsets after they become inactive.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
+            key("server.consumer-offsets.table.bucket-count")
+                    .intType()
+                    .defaultValue(16)
+                    .withDescription(
+                            "The number of buckets for the consumer-offset system table. This value should not change after deployment. "
+                                    + "Unlike log tables, each KV bucket leader maintains a separate RocksDB instance, so a large value "
+                                    + "introduces overhead for small and medium clusters. Increase it only if the consumer-offset write "
+                                    + "load cannot be handled by the default number of bucket leaders.");
+
+    public static final ConfigOption<Integer> OFFSETS_TABLE_REPLICATION_FACTOR =
+            key("server.consumer-offsets.table.replication-factor")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The replication factor for the consumer-offset system table. Table creation waits until the cluster has enough tablet servers.");
+
+    public static final ConfigOption<Duration> OFFSET_COMMIT_TIMEOUT =
+            key("server.consumer-offsets.commit-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription(
+                            "The maximum time to wait for all replicas to acknowledge an offset commit.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
@@ -1736,6 +2518,14 @@ public class ConfigOptions {
                     .defaultValue(1)
                     .withDescription(
                             "The number of threads that the server uses to schedule snapshot kv data for all the replicas in the server.");
+
+    public static final ConfigOption<Integer> KV_FLUSH_THREAD_NUM =
+            key("kv.flush.thread-num")
+                    .intType()
+                    .defaultValue(10)
+                    .withDescription(
+                            "The number of threads that the server uses to asynchronously flush primary-key table writes to RocksDB. "
+                                    + "The default value is 10.");
 
     /**
      * @deprecated This option is deprecated. Please use {@link ConfigOptions#SERVER_IO_POOL_SIZE}
@@ -1779,6 +2569,36 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of open files (per  bucket of table) that can be used by the DB, `-1` means no limit. "
                                     + "The default value is `-1`.");
+
+    public static final ConfigOption<Boolean> KV_USE_DIRECT_READS =
+            key("kv.rocksdb.use-direct-reads")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to use direct I/O for RocksDB SST reads. "
+                                    + "This applies to primary key tables, does not affect WAL or MANIFEST I/O, "
+                                    + "and requires a TabletServer restart to take effect. "
+                                    + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_USE_DIRECT_IO_FOR_FLUSH_AND_COMPACTION =
+            key("kv.rocksdb.use-direct-io-for-flush-and-compaction")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to use direct I/O for RocksDB SST reads and writes during flush and compaction. "
+                                    + "This applies to primary key tables, does not affect WAL or MANIFEST I/O, "
+                                    + "and requires a TabletServer restart to take effect. "
+                                    + "The default value is `false`.");
+
+    public static final ConfigOption<MemorySize> KV_COMPACTION_READAHEAD_SIZE =
+            key("kv.rocksdb.compaction.readahead-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription(
+                            "The amount of data to prefetch when reading RocksDB SST files during compaction. "
+                                    + "A value of `0` disables compaction readahead. "
+                                    + "This applies to primary key tables and requires a TabletServer restart to take effect. "
+                                    + "The default value is `2MB`.");
 
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
@@ -1844,6 +2664,29 @@ public class ConfigOptions {
                                     + "All KV tablets share a single global RateLimiter to prevent disk IO from being saturated. "
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The soft capacity of the shared block cache for all RocksDB instances "
+                                    + "in the TabletServer. All KV tablets share a single block cache "
+                                    + "to improve memory utilization. Hot tablets can use more cache "
+                                    + "while cold tablets use less. Set to 0 to disable the shared "
+                                    + "block cache, in which case each tablet creates its own cache. "
+                                    + "This is not a hard limit on process memory. The default is 0.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_WRITE_BUFFER_SIZE =
+            key("kv.rocksdb.shared-write-buffer.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ZERO)
+                    .withDescription(
+                            "The shared soft memory limit for RocksDB memtables across all KV tablets "
+                                    + "in the TabletServer. Reaching the limit makes RocksDB flush memtables "
+                                    + "more aggressively, but it is not a hard limit on process memory. "
+                                    + "Set to 0 to disable the shared write buffer manager. "
+                                    + "The default is 0. Changes require a TabletServer restart.");
 
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
@@ -1968,7 +2811,9 @@ public class ConfigOptions {
                     .defaultValue(MemorySize.parse("8mb"))
                     .withDescription(
                             "The amount of the cache for data blocks in RocksDB. "
-                                    + "The default block-cache size is `8MB`.");
+                                    + "The default block-cache size is `8MB`. "
+                                    + "This setting is ignored when "
+                                    + "kv.rocksdb.shared-block-cache.size is greater than 0.");
 
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")
@@ -2003,6 +2848,20 @@ public class ConfigOptions {
                                     + "together with all other data blocks. This helps to limit memory usage "
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
+
+    public static final ConfigOption<Boolean> KV_PARTITIONED_INDEX_FILTERS =
+            key("kv.rocksdb.block.partitioned-index-filters")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enables partitioned indexes. If `kv.rocksdb.use-bloom-filter` is true, "
+                                    + "Bloom filters are partitioned as well. Requires a positive "
+                                    + "`kv.rocksdb.block.metadata-blocksize`; when `kv.rocksdb.use-bloom-filter` "
+                                    + "is true, `kv.rocksdb.bloom-filter.block-based-mode` must be `false`. "
+                                    + "Only newly generated SSTs "
+                                    + "use this format; existing SSTs remain readable when this option is enabled or disabled. "
+                                    + "Partitions use the block cache even when metadata caching is disabled. "
+                                    + "Takes effect when opening a RocksDB instance.");
 
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
@@ -2062,6 +2921,21 @@ public class ConfigOptions {
                             "The number of threads used to download remote log segments during "
                                     + "KV recovery. Should be less than or equal to "
                                     + "'kv.recover.remote-log.prefetch-num'.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for KV backpressure
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Integer> KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER =
+            key("kv.backpressure.l0-slowdown-trigger")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "The L0 file count at which Fluss starts emitting proactive backpressure to clients. "
+                                    + "This value should be lower than the underlying storage engine's own "
+                                    + "L0 slowdown trigger (RocksDB level0_slowdown_writes_trigger, default 20), "
+                                    + "so that clients begin throttling before the storage engine is forced to throttle itself. "
+                                    + "The gap between this value and the storage trigger forms the throttle ramp-up window.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for metrics
@@ -2134,6 +3008,24 @@ public class ConfigOptions {
                             .defaultValue(Duration.ofSeconds(10))
                             .withDescription(
                                     "The interval of pushing metrics to Prometheus PushGateway.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME =
+            key("metrics.reporter.prometheus-push.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username for Basic Auth of the Prometheus PushGateway. "
+                                    + "Leave it unset to disable authentication.");
+
+    public static final ConfigOption<Password> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD =
+            key("metrics.reporter.prometheus-push.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password for Basic Auth of the Prometheus PushGateway. "
+                                    + "Only takes effect when username is configured. "
+                                    + "The value is automatically redacted when the configuration "
+                                    + "is logged or displayed.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
@@ -2214,8 +3106,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, Hudi, and Lance. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for tiering service
@@ -2230,6 +3122,32 @@ public class ConfigOptions {
                                     + "even if "
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
+
+    public static final ConfigOption<Boolean> LAKE_TIERING_PARTITION_MARK_DONE_ENABLED =
+            key("lake.tiering.partition.mark-done.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether the tiering service marks idle partitions of tiered partitioned tables as done. "
+                                    + "Disabled by default. When enabled, mark-done uses the actual lake table's options "
+                                    + "(e.g. 'partition.idle-time-to-done' on the Paimon table).");
+
+    public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIRS =
+            key("lake.tiering.io.tmp.dirs")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Local directory or directories that are used by the lake tiering service for temporary IO files. "
+                                    + "Multiple directories can be separated by comma or the system path separator. "
+                                    + "If not configured and the tiering service runs in a Flink job, Fluss uses "
+                                    + "Flink's IO temporary directories with a 'fluss' child directory.");
+
+    public static final ConfigOption<Integer> LAKE_TIERING_COMMIT_THREAD_NUM =
+            key("lake.tiering.commit-thread-num")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "The number of threads the tiering service uses to commit tables concurrently. Must be positive.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
@@ -2250,19 +3168,15 @@ public class ConfigOptions {
                     .withDescription(
                             "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
 
-    public static final ConfigOption<String> KAFKA_DATABASE =
-            key("kafka.database")
+    public static final ConfigOption<String> KAFKA_DEFAULT_DATABASE =
+            key("kafka.default.database")
                     .stringType()
-                    .defaultValue("kafka")
+                    .defaultValue("fluss")
                     .withDescription(
-                            "The database for fluss kafka. The default database is `kafka`.");
-
-    public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
-            key("kafka.connection.max-idle-time")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(60))
-                    .withDescription(
-                            "Close kafka idle connections after the given time specified by this config.");
+                            "Default database for unqualified Kafka topic names. Fully qualified names may "
+                                    + "access other databases. When Kafka is enabled, the coordinator creates "
+                                    + "the configured database if missing, including 'fluss'. With Kafka disabled, "
+                                    + "native initialization creates 'fluss' only when the cluster has no databases.");
 
     /**
      * Compaction style for Fluss's kv, which is same to rocksdb's, but help use avoid including

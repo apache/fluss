@@ -17,6 +17,7 @@
 
 package org.apache.fluss.config;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicStable;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.utils.CollectionUtils;
@@ -55,6 +56,9 @@ public class Configuration implements Serializable, ReadableConfig {
     /** Stores the concrete key/value pairs of this configuration object. */
     protected final HashMap<String, Object> confData;
 
+    /** Keys resolved from a secret source, hidden in {@link #toString()}. */
+    private Set<String> sensitiveKeys = new HashSet<>();
+
     // --------------------------------------------------------------------------------------------
 
     /** Creates a new empty configuration. */
@@ -69,6 +73,7 @@ public class Configuration implements Serializable, ReadableConfig {
      */
     public Configuration(Configuration other) {
         this.confData = new HashMap<>(other.confData);
+        this.sensitiveKeys = new HashSet<>(other.sensitiveKeys());
     }
 
     // --------------------------------------------------------------------------------------------
@@ -457,8 +462,17 @@ public class Configuration implements Serializable, ReadableConfig {
                             "Value for config option %s must be one of %s (was %s)",
                             configOption.key(),
                             Arrays.toString(enumClass.getEnumConstants()),
-                            rawValue);
+                            hasSensitiveValue(configOption) ? Password.HIDDEN_CONTENT : rawValue);
             throw new IllegalArgumentException(errorMessage);
+        }
+    }
+
+    /** Whether the option's value must be hidden in error messages and logs. */
+    private boolean hasSensitiveValue(ConfigOption<?> option) {
+        synchronized (this.confData) {
+            return option.isSensitive()
+                    || sensitiveKeys().contains(option.key())
+                    || ConfigurationUtils.isSensitiveKey(option.key());
         }
     }
 
@@ -495,8 +509,33 @@ public class Configuration implements Serializable, ReadableConfig {
         synchronized (this.confData) {
             synchronized (other.confData) {
                 this.confData.putAll(other.confData);
+                this.sensitiveKeys().addAll(other.sensitiveKeys());
             }
         }
+    }
+
+    /** Marks the key as holding secret material, hiding it in {@link #toString()}. */
+    @Internal
+    public void markSensitive(String key) {
+        synchronized (this.confData) {
+            sensitiveKeys().add(key);
+        }
+    }
+
+    /** Returns the keys marked via {@link #markSensitive(String)}. */
+    @Internal
+    public Set<String> getSensitiveKeys() {
+        synchronized (this.confData) {
+            return new HashSet<>(sensitiveKeys());
+        }
+    }
+
+    /** Lazily recreated, as the set is {@code null} when deserialized from older streams. */
+    private Set<String> sensitiveKeys() {
+        if (sensitiveKeys == null) {
+            sensitiveKeys = new HashSet<>();
+        }
+        return sensitiveKeys;
     }
 
     /**
@@ -566,7 +605,7 @@ public class Configuration implements Serializable, ReadableConfig {
             }
         } catch (Exception e) {
             throw new IllegalArgumentException(
-                    option.isSensitive()
+                    hasSensitiveValue(option)
                             ? String.format("Could not parse value for key '%s'.", option.key())
                             : String.format(
                                     "Could not parse value '%s' for key '%s'.",
@@ -745,6 +784,18 @@ public class Configuration implements Serializable, ReadableConfig {
 
     @Override
     public String toString() {
-        return this.confData.toString();
+        // hides secret material; use toMap()/get() to read real values
+        synchronized (this.confData) {
+            Map<String, Object> safe = new HashMap<>(this.confData.size());
+            for (Map.Entry<String, Object> entry : confData.entrySet()) {
+                safe.put(
+                        entry.getKey(),
+                        sensitiveKeys().contains(entry.getKey())
+                                ? Password.HIDDEN_CONTENT
+                                : ConfigurationUtils.hideSensitiveValue(
+                                        entry.getKey(), entry.getValue()));
+            }
+            return safe.toString();
+        }
     }
 }

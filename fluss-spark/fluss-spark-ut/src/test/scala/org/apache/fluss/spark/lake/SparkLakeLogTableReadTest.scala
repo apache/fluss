@@ -117,6 +117,10 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         sql(s"SELECT name FROM $DEFAULT_DATABASE.t_lake_only ORDER BY name"),
         Row("alpha") :: Row("beta") :: Row("gamma") :: Nil
       )
+
+      // COUNT(*) / COUNT(1) over a lake-only read: empty projection must fall back.
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t_lake_only"), Row(3L) :: Nil)
     }
 
     // Test partitioned table
@@ -151,6 +155,19 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
         Row("alpha", "2026-01-01") ::
           Row("beta", "2026-01-01") ::
           Row("gamma", "2026-01-02") :: Nil
+      )
+
+      // COUNT(*) over a partitioned lake-only read.
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned"),
+        Row(3L) :: Nil
+      )
+
+      // COUNT(*) with a partition filter.
+      checkAnswer(
+        sql(
+          s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t_lake_only_partitioned WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
@@ -685,8 +702,63 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
 
 }
 
+@SparkLakeTest
 class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
+
+  test("Spark Lake Read: custom lake path falls back when no lake snapshot") {
+    withTable("t_custom_lake_path_fallback") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_fallback (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_fallback',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_fallback VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"""
+               |SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_fallback
+               |WHERE id >= 1
+               |ORDER BY id
+               |""".stripMargin),
+        Row(1, "hello") :: Row(2, "fluss") :: Nil
+      )
+    }
+  }
+
+  test("Spark Lake Read: custom lake path rejects an actual lake read") {
+    withTable("t_custom_lake_path_snapshot") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_custom_lake_path_snapshot (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()}' = 'custom_lake_db',
+             |  '${ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()}' = 'custom_lake_table_snapshot',
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_custom_lake_path_snapshot VALUES
+             |(1, "hello"), (2, "fluss")
+             |""".stripMargin)
+      tierToLake("t_custom_lake_path_snapshot")
+
+      val error = intercept[UnsupportedOperationException] {
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_custom_lake_path_snapshot").collect()
+      }
+      assert(
+        error.getMessage == "Custom lake table path is not supported for Spark lake reads yet.")
+    }
+  }
 
   override protected def flussConf: Configuration = {
     val conf = super.flussConf
@@ -707,6 +779,8 @@ class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
   }
 }
 
+@SparkLakeTest
+@SparkLakeIcebergTest
 class SparkLakeIcebergLogTableReadTest extends SparkLakeLogTableReadTest {
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
 

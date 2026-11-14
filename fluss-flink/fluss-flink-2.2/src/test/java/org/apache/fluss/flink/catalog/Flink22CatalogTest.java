@@ -18,8 +18,11 @@
 package org.apache.fluss.flink.catalog;
 
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.DefaultIndex;
+import org.apache.flink.table.catalog.IntervalFreshness;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 
@@ -40,5 +43,15 @@ public class Flink22CatalogTest extends FlinkCatalogTest {
                 Collections.singletonList(
                         DefaultIndex.newIndex(
                                 "INDEX_first_third", Arrays.asList("first", "third"))));
+    }
+
+    @Override
+    protected ResolvedCatalogMaterializedTable createResolvedCatalogMaterializedTable(
+            CatalogMaterializedTable origin,
+            ResolvedSchema resolvedSchema,
+            CatalogMaterializedTable.RefreshMode refreshMode,
+            IntervalFreshness intervalFreshness) {
+        return new ResolvedCatalogMaterializedTable(
+                origin, resolvedSchema, refreshMode, intervalFreshness);
     }
 }

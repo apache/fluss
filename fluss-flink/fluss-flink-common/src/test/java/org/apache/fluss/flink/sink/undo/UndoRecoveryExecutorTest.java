@@ -18,10 +18,15 @@
 package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.flink.utils.TestLogScanner;
 import org.apache.fluss.flink.utils.TestUpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -29,13 +34,23 @@ import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.BiPredicate;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit tests for {@link UndoRecoveryExecutor}.
@@ -69,6 +84,105 @@ class UndoRecoveryExecutorTest {
         executor =
                 new UndoRecoveryExecutor(
                         mockScanner, mockWriter, undoComputer, TEST_MAX_TOTAL_WAIT_TIME_MS);
+    }
+
+    @Test
+    void testFilteredRecoveryIsolatesBucketKeysAndCompletesFromEmptyPollProgress()
+            throws Exception {
+        TableBucket bucket0 = new TableBucket(TABLE_ID, 0);
+        TableBucket bucket1 = new TableBucket(TABLE_ID, 1);
+        BucketRecoveryContext ctx0 = new BucketRecoveryContext(bucket0, 0L, 3L);
+        BucketRecoveryContext ctx1 = new BucketRecoveryContext(bucket1, 3L, 5L);
+        ScanRecord first0 =
+                new ScanRecord(0L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket0", 100));
+        ScanRecord first1 =
+                new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(1, "bucket1", 200));
+        ScanRecord duplicate0 =
+                new ScanRecord(1L, 0L, ChangeType.UPDATE_BEFORE, row(1, "duplicate", 300));
+        ScanRecord end0 = new ScanRecord(3L, 0L, ChangeType.UPDATE_BEFORE, row(2, "outside", 400));
+        ScanRecord remaining0 =
+                new ScanRecord(2L, 0L, ChangeType.UPDATE_BEFORE, row(1, "duplicate", 500));
+        ScanRecord after1 = new ScanRecord(4L, 0L, ChangeType.UPDATE_AFTER, row(2, "after", 600));
+        LogScannerImpl scanner = mock(LogScannerImpl.class);
+        when(scanner.pollFiltered(any(Duration.class), any()))
+                .thenAnswer(
+                        invocation -> {
+                            BiPredicate<TableBucket, LogRecord> filter = invocation.getArgument(1);
+                            assertThat(filter.test(bucket0, first0)).isTrue();
+                            assertThat(filter.test(bucket0, duplicate0)).isFalse();
+                            assertThat(filter.test(bucket0, end0)).isFalse();
+                            assertThat(filter.test(bucket1, first1)).isTrue();
+                            assertThat(filter.test(new TableBucket(TABLE_ID, 2), first0)).isFalse();
+                            assertThat(ctx0.getProcessedKeys()).isEmpty();
+                            assertThat(ctx1.getProcessedKeys()).isEmpty();
+                            Map<TableBucket, List<ScanRecord>> selected = new HashMap<>();
+                            selected.put(bucket0, Collections.singletonList(first0));
+                            selected.put(bucket1, Collections.singletonList(first1));
+                            Map<TableBucket, Long> progress = new HashMap<>();
+                            progress.put(bucket0, 2L);
+                            progress.put(bucket1, 4L);
+                            return new ScanRecords(selected, progress);
+                        })
+                .thenAnswer(
+                        invocation -> {
+                            BiPredicate<TableBucket, LogRecord> filter = invocation.getArgument(1);
+                            assertThat(filter.test(bucket0, remaining0)).isFalse();
+                            assertThat(filter.test(bucket1, after1)).isFalse();
+                            Map<TableBucket, Long> progress = new HashMap<>();
+                            progress.put(bucket0, 3L);
+                            progress.put(bucket1, 5L);
+                            return new ScanRecords(Collections.emptyMap(), progress);
+                        })
+                .thenThrow(
+                        new AssertionError("Recovery polled after consuming both bucket ranges"));
+
+        new UndoRecoveryExecutor(scanner, mockWriter, undoComputer, TEST_MAX_TOTAL_WAIT_TIME_MS)
+                .execute(Arrays.asList(ctx0, ctx1));
+
+        assertThat(mockWriter.getAllUpsertedRows())
+                .containsExactly(first0.getRow(), first1.getRow());
+        assertThat(mockWriter.getDeleteCount()).isZero();
+        assertThat(mockWriter.isFlushCalled()).isTrue();
+        assertThat(ctx0.isComplete()).isTrue();
+        assertThat(ctx1.isComplete()).isTrue();
+        assertThat(ctx0.getProcessedKeys()).hasSize(1);
+        assertThat(ctx1.getProcessedKeys()).hasSize(1);
+        verify(scanner, times(2)).pollFiltered(any(Duration.class), any());
+        verify(scanner).unsubscribe(0);
+        verify(scanner).unsubscribe(1);
+    }
+
+    @Test
+    void testRecoveredOffsetWaitsForOutOfOrderAcknowledgements() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        CompletableFuture<UpsertResult> first = new CompletableFuture<>();
+        CompletableFuture<UpsertResult> second = new CompletableFuture<>();
+        TestUpsertWriter writer =
+                new TestUpsertWriter() {
+                    @Override
+                    public CompletableFuture<UpsertResult> upsert(InternalRow record) {
+                        return record.getInt(0) == 1 ? first : second;
+                    }
+
+                    @Override
+                    public void flush() {
+                        second.complete(new UpsertResult(bucket, 20L));
+                        first.complete(new UpsertResult(bucket, 10L));
+                    }
+                };
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Arrays.asList(
+                        new ScanRecord(0L, 0L, ChangeType.DELETE, row(1, "a", 100)),
+                        new ScanRecord(1L, 0L, ChangeType.DELETE, row(2, "b", 200))));
+        UndoRecoveryExecutor recovery =
+                new UndoRecoveryExecutor(mockScanner, writer, new UndoComputer(keyEncoder, writer));
+
+        Map<TableBucket, Long> recovered =
+                recovery.execute(
+                        Collections.singletonList(new BucketRecoveryContext(bucket, 0L, 2L)));
+
+        assertThat(recovered).containsOnlyKeys(bucket).containsEntry(bucket, 20L);
     }
 
     /**
@@ -278,18 +392,53 @@ class UndoRecoveryExecutorTest {
         assertThat(mockWriter.isFlushCalled()).isTrue();
     }
 
-    /**
-     * Test scanner position-based completion for empty-batch-only recovery ranges.
-     *
-     * <p>Simulates a scenario where the recovery range (checkpointOffset=0, logEndOffset=3)
-     * contains only empty LogRecordBatches. Empty batches consume WAL offsets but produce zero
-     * ScanRecords. The scanner position advances past the recovery range without emitting any
-     * records for the target bucket.
-     *
-     * <p>Uses a two-bucket setup: bucket0 has no records (empty batches), bucket1 has real records
-     * that cause the mock scanner to advance bucket0's position on each poll. Completion is
-     * detected via {@code scanner.position(bucket) >= logEndOffset}.
-     */
-    // TODO: Empty LogRecordBatch scenario is not testable with current offset-based completion
-    //  detection. Once LogScanner supports bounded subscription mode, add a test here.
+    @Test
+    void testEmptyBatchOnlyRangeCompletesFromPollProgress() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 3L);
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        assertThat(executor.execute(Collections.singletonList(ctx))).containsEntry(bucket, 3L);
+
+        assertThat(ctx.isComplete()).isTrue();
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(0);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(0);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testTrailingEmptyBatchRangeCompletesFromPollProgress() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 3L);
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Collections.singletonList(
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "a", 100))));
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        executor.execute(Collections.singletonList(ctx));
+
+        assertThat(ctx.isComplete()).isTrue();
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(1);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testDoesNotProcessRecordAtOrBeyondTargetLeo() throws Exception {
+        TableBucket bucket = new TableBucket(TABLE_ID, 0);
+        BucketRecoveryContext ctx = new BucketRecoveryContext(bucket, 0L, 2L);
+        mockScanner.setRecordsForBucket(
+                bucket,
+                Arrays.asList(
+                        new ScanRecord(0L, 0L, ChangeType.INSERT, row(1, "before-target", 100)),
+                        new ScanRecord(2L, 0L, ChangeType.INSERT, row(2, "at-target", 200))));
+        mockScanner.setConsumedUpToOffset(bucket, 3L);
+
+        executor.execute(Collections.singletonList(ctx));
+
+        assertThat(ctx.getTotalRecordsProcessed()).isEqualTo(1);
+        assertThat(mockWriter.getDeleteCount()).isEqualTo(1);
+        assertThat(mockWriter.getUpsertCount()).isEqualTo(0);
+    }
 }

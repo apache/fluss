@@ -25,6 +25,7 @@ import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.NameCallback;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.AppConfigurationEntry;
+import javax.security.sasl.AuthorizeCallback;
 
 import java.util.List;
 
@@ -58,6 +59,18 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
     private static final String JAAS_USER_PREFIX = "user_";
     private List<AppConfigurationEntry> jaasConfigEntries;
 
+    private final PlainSaslProxyAuthorization authorization;
+
+    /** Creates a handler that permits only the authenticated identity. */
+    public PlainServerCallbackHandler() {
+        this(PlainSaslProxyAuthorization.disabled());
+    }
+
+    /** Creates a handler using the configured proxy grants. */
+    public PlainServerCallbackHandler(PlainSaslProxyAuthorization authorization) {
+        this.authorization = authorization;
+    }
+
     @Override
     public void configure(String saslMechanism, List<AppConfigurationEntry> jaasConfigEntries) {
         this.jaasConfigEntries = jaasConfigEntries;
@@ -73,6 +86,12 @@ public class PlainServerCallbackHandler implements AuthenticateCallbackHandler {
                 PlainAuthenticateCallback plainCallback = (PlainAuthenticateCallback) callback;
                 boolean authenticated = authenticate(username, plainCallback.password());
                 plainCallback.authenticated(authenticated);
+            } else if (callback instanceof AuthorizeCallback) {
+                AuthorizeCallback authorizeCallback = (AuthorizeCallback) callback;
+                authorization.authorize(
+                        authorizeCallback.getAuthenticationID(),
+                        authorizeCallback.getAuthorizationID());
+                authorizeCallback.setAuthorized(true);
             } else {
                 throw new UnsupportedCallbackException(callback);
             }

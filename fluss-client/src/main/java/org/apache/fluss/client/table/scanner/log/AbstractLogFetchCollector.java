@@ -44,19 +44,16 @@ import java.util.Map;
 @Internal
 abstract class AbstractLogFetchCollector<T, R> {
     protected final Logger log;
-    protected final TablePath tablePath;
     protected final LogScannerStatus logScannerStatus;
     private final int maxPollRecords;
     private final MetadataUpdater metadataUpdater;
 
     protected AbstractLogFetchCollector(
             Logger log,
-            TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
         this.log = log;
-        this.tablePath = tablePath;
         this.logScannerStatus = logScannerStatus;
         this.maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
         this.metadataUpdater = metadataUpdater;
@@ -65,7 +62,7 @@ abstract class AbstractLogFetchCollector<T, R> {
     /**
      * Return the fetched log records, empty the record buffer and update the consumed position.
      *
-     * <p>NOTE: returning empty records guarantees the consumed position are NOT updated.
+     * <p>NOTE: empty record lists may still advance the consumed position.
      *
      * @return The fetched records per partition
      * @throws FetchException If there is OffsetOutOfRange error in fetchResponse and the
@@ -73,6 +70,7 @@ abstract class AbstractLogFetchCollector<T, R> {
      */
     public R collectFetch(final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<T>> fetched = new HashMap<>();
+        Map<TableBucket, Long> consumedUpToOffsets = new HashMap<>();
         int recordsRemaining = maxPollRecords;
 
         try {
@@ -108,8 +106,12 @@ abstract class AbstractLogFetchCollector<T, R> {
                     logFetchBuffer.poll();
                 } else {
                     List<T> records = fetchRecords(nextInLineFetch, recordsRemaining);
+                    TableBucket tableBucket = nextInLineFetch.tableBucket;
+                    // Always record the advanced next fetch offset for this bucket, even when
+                    // the materialized record list is empty.
+                    consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
+                    recordsRemaining -= fetchedRecordCount(nextInLineFetch, records);
                     if (!records.isEmpty()) {
-                        TableBucket tableBucket = nextInLineFetch.tableBucket;
                         List<T> currentRecords = fetched.get(tableBucket);
                         if (currentRecords == null) {
                             fetched.put(tableBucket, records);
@@ -125,7 +127,8 @@ abstract class AbstractLogFetchCollector<T, R> {
                             fetched.put(tableBucket, mergedRecords);
                         }
 
-                        recordsRemaining -= recordCount(records);
+                    } else {
+                        fetched.putIfAbsent(tableBucket, Collections.emptyList());
                     }
                 }
             }
@@ -140,7 +143,12 @@ abstract class AbstractLogFetchCollector<T, R> {
             throw e;
         }
 
-        return toResult(fetched);
+        return toResult(fetched, consumedUpToOffsets);
+    }
+
+    /** Returns the scanned record count, including records rejected before materialization. */
+    protected int fetchedRecordCount(CompletedFetch fetch, List<T> records) {
+        return recordCount(records);
     }
 
     /** Initialize a {@link CompletedFetch} object. */
@@ -153,7 +161,11 @@ abstract class AbstractLogFetchCollector<T, R> {
             if (error.isSuccess()) {
                 return handleInitializeSuccess(completedFetch);
             } else {
-                handleInitializeErrors(completedFetch, error.error(), error.messageWithFallback());
+                handleInitializeErrors(
+                        completedFetch,
+                        error.error(),
+                        error.messageWithFallback(),
+                        completedFetch.tablePath);
                 return null;
             }
         } finally {
@@ -199,10 +211,11 @@ abstract class AbstractLogFetchCollector<T, R> {
     }
 
     private void handleInitializeErrors(
-            CompletedFetch completedFetch, Errors error, String errorMessage) {
+            CompletedFetch completedFetch, Errors error, String errorMessage, TablePath tablePath) {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
+                || error == Errors.LEADER_NOT_AVAILABLE_EXCEPTION
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION
                 || error == Errors.STORAGE_EXCEPTION
@@ -293,7 +306,8 @@ abstract class AbstractLogFetchCollector<T, R> {
 
     protected abstract int recordCount(List<T> fetchedRecords);
 
-    protected abstract R toResult(Map<TableBucket, List<T>> fetchedRecords);
+    protected abstract R toResult(
+            Map<TableBucket, List<T>> fetchedRecords, Map<TableBucket, Long> consumedUpToOffsets);
 
     /**
      * Release resources held by fetched records on failure. The default implementation is a no-op,

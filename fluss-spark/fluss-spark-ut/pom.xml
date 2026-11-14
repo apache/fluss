@@ -24,16 +24,28 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-spark</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-spark-ut_${scala.binary.version}</artifactId>
-    <name>Apache Fluss (Incubating) : Engine Spark : UT</name>
+    <name>Apache Fluss : Engine Spark : UT</name>
+
+    <properties>
+        <!-- skipTests skips execution only; test compile and test-jar stay enabled. -->
+        <skipTests>${skip.on.java8}</skipTests>
+    </properties>
 
     <dependencies>
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-spark-common_${scala.binary.version}</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-spark-tiering_${scala.binary.version}</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
@@ -96,38 +108,16 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-arrow</artifactId>
+            <version>${paimon.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-iceberg</artifactId>
             <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- Flink tiering job dependencies -->
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-common</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-flink-1.20</artifactId>
-            <version>${project.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-base</artifactId>
-            <version>${flink.version}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-test-utils</artifactId>
-            <version>${flink.version}</version>
             <scope>test</scope>
         </dependency>
 

@@ -151,11 +151,15 @@ docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run
+Count the long-running containers:
+
 ```shell
-docker container ls -a
+docker compose ps --status running --quiet \
+  coordinator-server tablet-server zookeeper jobmanager taskmanager | wc -l
 ```
-to check whether all containers are running properly.
+
+The expected output is `5`. A lower number means that one or more containers failed
+to start. Run `docker compose ps -a` to identify them.
 
 You can also visit http://localhost:8083/ to see if Flink is running normally.
 
@@ -515,7 +519,7 @@ As the `admin` user, create two databases and assign appropriate ACLs:
 ```sql title="Flink SQL"
 CREATE DATABASE `admin_catalog`.`marketing_db`;
 CALL admin_catalog.sys.add_acl(
-    resource => 'cluster.marketing_db', 
+    resource => 'database:marketing_db',
     permission => 'ALLOW',
     principal => 'User:marketing', 
     operation => 'ALL'
@@ -524,7 +528,7 @@ CALL admin_catalog.sys.add_acl(
 
 CREATE DATABASE `admin_catalog`.`finance_db`;
 CALL admin_catalog.sys.add_acl(
-    resource => 'cluster.finance_db', 
+    resource => 'database:finance_db',
     permission => 'ALLOW',
     principal => 'User:finance', 
     operation => 'ALL'
@@ -542,8 +546,8 @@ Output will show like:
 +--------------------------------------------------------------------------------------------------------+
 |                                                                                                 result |
 +--------------------------------------------------------------------------------------------------------+
-| resource="cluster.marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
-|     resource="cluster.finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
+| resource="database:marketing_db";permission="ALLOW";principal="User:marketing";operation="ALL";host="*" |
+|     resource="database:finance_db";permission="ALLOW";principal="User:finance";operation="ALL";host="*" |
 +--------------------------------------------------------------------------------------------------------+
 2 rows in set
 ```

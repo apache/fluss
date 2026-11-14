@@ -17,12 +17,14 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -39,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 /** A manager for tables. */
 public class TableManager {
@@ -47,23 +50,40 @@ public class TableManager {
     private final MetadataManager metadataManager;
     private final RemoteStorageCleaner remoteStorageCleaner;
     private final CoordinatorContext coordinatorContext;
+    private final ReplicaCapacityController replicaCapacityController;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
     private final ExecutorService ioExecutor;
 
+    /**
+     * Throttler used to pace the asynchronous replica cleanup that follows {@link
+     * #onDeleteTable(long)} / {@link #onDeletePartition(long, long)}. {@link #resumeDeletions()}
+     * routes eligible drops through it (one at a time) instead of invoking the state-machine
+     * transitions directly, and {@link #completeDeleteTable(long)} / {@link
+     * #completeDeletePartition(TablePartition)} notify it so the next pending drop can be admitted.
+     *
+     * <p>Wired in via the constructor so that the reference publication is safe (final field) and
+     * cannot race with the coordinator event thread.
+     */
+    private final TableLifecycleThrottler lifecycleThrottler;
+
     public TableManager(
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
+            ReplicaCapacityController replicaCapacityController,
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine,
             RemoteStorageCleaner remoteStorageCleaner,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            TableLifecycleThrottler lifecycleThrottler) {
         this.metadataManager = metadataManager;
         this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
+        this.replicaCapacityController = replicaCapacityController;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
         this.ioExecutor = ioExecutor;
+        this.lifecycleThrottler = lifecycleThrottler;
     }
 
     public void startup() {
@@ -114,16 +134,16 @@ public class TableManager {
      *
      * @param tablePath the table path
      * @param tableId the table id
-     * @param partitionId the id for the created partition
-     * @param partitionName the name for the created partition
+     * @param partitionInfo the info for the created partition
      * @param partitionAssignment the assignment for the created partition.
      */
     public void onCreateNewPartition(
             TablePath tablePath,
             long tableId,
-            long partitionId,
-            String partitionName,
+            PartitionInfo partitionInfo,
             PartitionAssignment partitionAssignment) {
+        String partitionName = partitionInfo.getPartitionName();
+        long partitionId = partitionInfo.getPartitionId();
         LOG.info(
                 "New partition {} with partition id {} and assignment {} for table {}.",
                 partitionName,
@@ -132,6 +152,9 @@ public class TableManager {
                 tablePath);
         Set<TableBucket> newTableBuckets = new HashSet<>();
         // get the partition assignment
+        coordinatorContext.putPartitionBucketCount(
+                new TablePartition(tableId, partitionId),
+                partitionAssignment.getBucketAssignments().size());
         for (Map.Entry<Integer, BucketAssignment> assignment :
                 partitionAssignment.getBucketAssignments().entrySet()) {
             int bucket = assignment.getKey();
@@ -140,7 +163,7 @@ public class TableManager {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, replicas);
             coordinatorContext.putPartition(
-                    partitionId, PhysicalTablePath.of(tablePath, partitionName));
+                    partitionId, PhysicalTablePath.of(tablePath, partitionName), partitionInfo);
             newTableBuckets.add(tableBucket);
         }
         onCreateNewTableBucket(tableId, newTableBuckets);
@@ -151,6 +174,11 @@ public class TableManager {
                 "New table buckets: {} for table {}.",
                 tableBuckets,
                 coordinatorContext.getTablePathById(tableId));
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (tableInfo != null && tableInfo.hasPrimaryKey()) {
+            coordinatorContext.addKvBuckets(tableBuckets);
+            updateObservedKvLeaderReplicaCount();
+        }
         // first, we transmit it to state NewBucket
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NewBucket);
         // then get all the replicas of the all table buckets
@@ -168,7 +196,7 @@ public class TableManager {
         Set<TableBucket> tableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.OfflineBucket);
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NonExistentBucket);
-        onDeleteTableBucket(coordinatorContext.getAllReplicasForTable(tableId));
+        onDeleteTableBucket(tableBuckets, coordinatorContext.getAllReplicasForTable(tableId));
     }
 
     /** Invoked with partitions of a table to be deleted. */
@@ -177,7 +205,8 @@ public class TableManager {
                 coordinatorContext.getAllBucketsForPartition(tableId, partitionId);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.OfflineBucket);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.NonExistentBucket);
-        onDeleteTableBucket(coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
+        onDeleteTableBucket(
+                deleteBuckets, coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
     }
 
     /**
@@ -186,19 +215,95 @@ public class TableManager {
      *
      * <p>It does the following:
      *
-     * <p>1. Move all the replicas to offline state. This will send stop replica request to the
-     * replicas.
+     * <p>1. Move all replicas to offline state. For live or shutting-down tablet servers, this
+     * sends stop replica requests so they stop fetching from their leaders.
      *
-     * <p>2. Move all the replicas to deletion started state. This will send stop replica request
-     * with delete=true which will delete all persistent data from all the replicas of the all the
-     * respective buckets.
+     * <p>2. Move replicas on live or shutting-down tablet servers to deletion started state and
+     * send stop replica requests with delete=true. Replicas on dead tablet servers are moved to
+     * deletion ineligible state and retried when their tablet servers come back.
      */
-    private void onDeleteTableBucket(Set<TableBucketReplica> allReplicas) {
-        // to offline, send stop replica to all followers that are not in the OfflineReplica state
-        // so they stop sending fetch requests to the leader
+    private void onDeleteTableBucket(
+            Set<TableBucket> tableBuckets, Set<TableBucketReplica> allReplicas) {
+        coordinatorContext.removeKvBuckets(tableBuckets);
+        updateObservedKvLeaderReplicaCount();
+        Map<Boolean, Set<TableBucketReplica>> replicasByTabletServerLiveness =
+                allReplicas.stream()
+                        .collect(
+                                Collectors.partitioningBy(
+                                        replica ->
+                                                coordinatorContext
+                                                        .liveOrShuttingDownTabletServers()
+                                                        .contains(replica.getReplica()),
+                                        Collectors.toSet()));
+
+        Set<TableBucketReplica> replicasOnLiveServers = replicasByTabletServerLiveness.get(true);
+        Set<TableBucketReplica> replicasOnDeadServers = replicasByTabletServerLiveness.get(false);
+        // Replica state alone does not indicate whether a delete request can be sent: an
+        // OfflineReplica may still be hosted by a live tablet server. Only replicas on dead tablet
+        // servers have no active channel and must wait for the server to come back.
+        // A dead server may still have OnlineReplica entries, for example when it goes down
+        // while a recovered deletion waits in the lifecycle throttler. Move all replicas through
+        // OfflineReplica before starting deletion or marking it ineligible.
         replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.OfflineReplica);
-        // to deletion started
-        replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.ReplicaDeletionStarted);
+        replicaStateMachine.handleStateChanges(
+                replicasOnDeadServers, ReplicaState.ReplicaDeletionIneligible);
+        replicaStateMachine.handleStateChanges(
+                replicasOnLiveServers, ReplicaState.ReplicaDeletionStarted);
+    }
+
+    /** Marks pending replica deletions on an offline tablet server as ineligible. */
+    public void failReplicaDeletion(int tabletServerId) {
+        Set<TableBucketReplica> replicas =
+                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                        .filter(
+                                replica ->
+                                        coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                        .filter(
+                                replica -> {
+                                    ReplicaState state =
+                                            coordinatorContext.getReplicaState(replica);
+                                    // A recovered OfflineReplica may still be waiting for
+                                    // deletion admission. Only fail a deletion already started;
+                                    // otherwise server startup could bypass the lifecycle
+                                    // throttler.
+                                    return state == ReplicaState.ReplicaDeletionStarted;
+                                })
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            LOG.info(
+                    "Marking deletion of replicas {} ineligible because tablet server {} is offline.",
+                    replicas,
+                    tabletServerId);
+            replicaStateMachine.handleStateChanges(
+                    replicas, ReplicaState.ReplicaDeletionIneligible);
+        }
+    }
+
+    /** Retries ineligible replica deletions after a tablet server comes back. */
+    public void resumeReplicaDeletion(int tabletServerId) {
+        Set<TableBucketReplica> replicas =
+                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                        .filter(
+                                replica ->
+                                        coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                        .filter(
+                                replica ->
+                                        coordinatorContext.getReplicaState(replica)
+                                                == ReplicaState.ReplicaDeletionIneligible)
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            LOG.info(
+                    "Retrying deletion of replicas {} after tablet server {} came back.",
+                    replicas,
+                    tabletServerId);
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.OfflineReplica);
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.ReplicaDeletionStarted);
+        }
+    }
+
+    private void updateObservedKvLeaderReplicaCount() {
+        replicaCapacityController.updateObservedKvLeaderReplicaCount(
+                coordinatorContext.getKvBucketCount());
     }
 
     public void resumeDeletions() {
@@ -206,24 +311,25 @@ public class TableManager {
         resumePartitionDeletions();
     }
 
-    private void resumeTableDeletions() {
+    public void resumeTableDeletions() {
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
-        Set<Long> eligibleTableDeletion = new HashSet<>();
-
         for (long tableId : tablesToBeDeleted) {
-            // if all replicas are marked as deleted successfully, then table deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
+                TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+                if (tableInfo != null && tableInfo.isPartitioned()) {
+                    if (coordinatorContext.hasPartitionsToDelete(tableId)) {
+                        // Skip table deletion until all partitions are deleted
+                        LOG.debug(
+                                "Table {} has partitions still being deleted, skip table deletion for now.",
+                                tableId);
+                        continue;
+                    }
+                }
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
-            }
-            if (isEligibleForDeletion(tableId)) {
-                eligibleTableDeletion.add(tableId);
-            }
-        }
-        if (!eligibleTableDeletion.isEmpty()) {
-            for (long tableId : eligibleTableDeletion) {
-                onDeleteTable(tableId);
+            } else if (isEligibleForDeletion(tableId)) {
+                lifecycleThrottler.submitTableDropForResume(tableId);
             }
         }
     }
@@ -231,23 +337,28 @@ public class TableManager {
     private void resumePartitionDeletions() {
         Set<TablePartition> partitionsToDelete =
                 new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
-        Set<TablePartition> eligiblePartitionDeletion = new HashSet<>();
+        boolean hasPartitionCompleted = false;
 
         for (TablePartition partition : partitionsToDelete) {
             // if all replicas are marked as deleted successfully, then partition deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
+                hasPartitionCompleted = true;
                 LOG.info("Deletion of partition {} successfully completed.", partition);
-            }
-            if (isEligibleForDeletion(partition)) {
-                eligiblePartitionDeletion.add(partition);
+            } else if (isEligibleForDeletion(partition)) {
+                long tableId = partition.getTableId();
+                long partitionId = partition.getPartitionId();
+                String partitionName = coordinatorContext.getPartitionName(partitionId);
+                lifecycleThrottler.submitPartitionDropForResume(
+                        tableId, partitionId, partitionName);
             }
         }
-        if (!eligiblePartitionDeletion.isEmpty()) {
-            for (TablePartition partition : eligiblePartitionDeletion) {
-                onDeletePartition(partition.getTableId(), partition.getPartitionId());
-            }
+
+        // If any partition was completed, check if we can now complete the table deletion
+        // for partitioned tables that were waiting for all partitions to be deleted.
+        if (hasPartitionCompleted) {
+            resumeTableDeletions();
         }
     }
 
@@ -257,6 +368,8 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tableId);
         asyncDeleteTableMetadata(tableId);
         coordinatorContext.removeTable(tableId);
+        // Release the manager's in-flight tracking so the next batch can be submitted.
+        lifecycleThrottler.onTableDropCompleted(tableId);
     }
 
     private void completeDeletePartition(TablePartition tablePartition) {
@@ -267,6 +380,7 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tablePartition);
         asyncDeletePartitionMetadata(tablePartition.getPartitionId());
         coordinatorContext.removePartition(tablePartition);
+        lifecycleThrottler.onPartitionDropCompleted(tablePartition);
     }
 
     private void asyncDeleteRemoteDirectory(long tableId) {
@@ -275,7 +389,10 @@ public class TableManager {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
             remoteStorageCleaner.asyncDeleteTableRemoteDir(
-                    tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+                    tableInfo.getRemoteDataDir(),
+                    tableInfo.getTablePath(),
+                    tableInfo.hasPrimaryKey(),
+                    tableId);
         }
     }
 
@@ -286,8 +403,11 @@ public class TableManager {
         if (tableInfo != null) {
             String partitionName =
                     coordinatorContext.getPartitionName(tablePartition.getPartitionId());
+            PartitionInfo partitionInfo =
+                    coordinatorContext.getPartitionInfoById(tablePartition.getPartitionId());
             if (partitionName != null) {
                 remoteStorageCleaner.asyncDeletePartitionRemoteDir(
+                        partitionInfo.getRemoteDataDir(),
                         PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
                         tableInfo.hasPrimaryKey(),
                         tablePartition);
@@ -322,17 +442,21 @@ public class TableManager {
 
     private boolean isEligibleForDeletion(long tableId) {
         // the table is queued for deletion and
-        // no any replica is in state deletion started
+        // no replica deletion is in progress or waiting for an offline tablet server
         return coordinatorContext.isTableQueuedForDeletion(tableId)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tableId, ReplicaState.ReplicaDeletionStarted);
+                        tableId, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isAnyReplicaInState(
+                        tableId, ReplicaState.ReplicaDeletionIneligible);
     }
 
     private boolean isEligibleForDeletion(TablePartition tablePartition) {
         // the partition is queued for deletion and
-        // no any replica is in state deletion started
+        // no replica deletion is in progress or waiting for an offline tablet server
         return coordinatorContext.isPartitionQueuedForDeletion(tablePartition)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tablePartition, ReplicaState.ReplicaDeletionStarted);
+                        tablePartition, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isAnyReplicaInState(
+                        tablePartition, ReplicaState.ReplicaDeletionIneligible);
     }
 }

@@ -25,19 +25,18 @@ import org.apache.fluss.bucketing.FlussBucketingFunction;
 @Internal
 public class HashBucketAssigner extends StaticBucketAssigner {
 
-    private final int numBuckets;
     private final BucketingFunction function;
 
-    public HashBucketAssigner(int numBuckets) {
-        this(numBuckets, new FlussBucketingFunction());
+    public HashBucketAssigner() {
+        this(new FlussBucketingFunction());
     }
 
-    public HashBucketAssigner(int numBuckets, BucketingFunction function) {
-        this.numBuckets = numBuckets;
+    public HashBucketAssigner(BucketingFunction function) {
         this.function = function;
     }
 
-    public int assignBucket(byte[] bucketKeys) {
-        return function.bucketing(bucketKeys, numBuckets);
+    @Override
+    public int assignBucket(byte[] bucketKeys, int bucketCount) {
+        return function.bucketing(bucketKeys, bucketCount);
     }
 }

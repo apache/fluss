@@ -22,8 +22,11 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.AbstractIterator;
 
+import javax.annotation.Nullable;
+
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,8 +44,36 @@ public class ScanRecords implements Iterable<ScanRecord> {
 
     private final Map<TableBucket, List<ScanRecord>> records;
 
+    /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
+    private final Map<TableBucket, Long> consumedUpToOffsets;
+
     public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
-        this.records = records;
+        this(records, Collections.emptyMap());
+    }
+
+    public ScanRecords(
+            Map<TableBucket, List<ScanRecord>> records,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        this.records = withProgressOnlyBuckets(records, consumedUpToOffsets);
+        this.consumedUpToOffsets = consumedUpToOffsets;
+    }
+
+    /**
+     * Ensures every bucket with a consumed offset has a (possibly empty) record list entry, so that
+     * {@link #buckets()} surfaces progress-only buckets as documented. Returns the original map
+     * when the invariant already holds (the common case for collector-produced results).
+     */
+    private static Map<TableBucket, List<ScanRecord>> withProgressOnlyBuckets(
+            Map<TableBucket, List<ScanRecord>> records,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        if (records.keySet().containsAll(consumedUpToOffsets.keySet())) {
+            return records;
+        }
+        Map<TableBucket, List<ScanRecord>> merged = new LinkedHashMap<>(records);
+        for (TableBucket bucket : consumedUpToOffsets.keySet()) {
+            merged.putIfAbsent(bucket, Collections.emptyList());
+        }
+        return merged;
     }
 
     /**
@@ -59,13 +90,23 @@ public class ScanRecords implements Iterable<ScanRecord> {
     }
 
     /**
-     * Get the bucket ids which have records contained in this record set.
-     *
-     * @return the set of partitions with data in this record set (maybe empty if no data was
-     *     returned)
+     * Get the bucket ids that were polled in this round, including buckets whose record list is
+     * empty but whose log offset still advanced.
      */
     public Set<TableBucket> buckets() {
         return Collections.unmodifiableSet(records.keySet());
+    }
+
+    /**
+     * Get the exclusive upper bound of offsets consumed for the given bucket in this poll round.
+     *
+     * @param bucket the bucket to query
+     * @return the exclusive upper bound offset, or {@code null} if the bucket was not polled in
+     *     this round
+     */
+    @Nullable
+    public Long consumedUpToOffset(TableBucket bucket) {
+        return consumedUpToOffsets.get(bucket);
     }
 
     /** The number of records for all buckets. */
@@ -77,8 +118,19 @@ public class ScanRecords implements Iterable<ScanRecord> {
         return count;
     }
 
+    /** Returns {@code true} if this {@code ScanRecords} contains no materialized records. */
     public boolean isEmpty() {
-        return records.isEmpty();
+        return count() == 0;
+    }
+
+    /**
+     * Returns {@code true} if this {@code ScanRecords} carries any scanner progress.
+     *
+     * <p>A result may have progress even when {@link #isEmpty()} is {@code true}, for example when
+     * a bucket returns no materialized records but advances its consumed offset.
+     */
+    public boolean hasProgress() {
+        return count() > 0 || !consumedUpToOffsets.isEmpty();
     }
 
     @Override

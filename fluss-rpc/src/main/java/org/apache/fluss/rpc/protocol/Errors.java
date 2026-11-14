@@ -21,6 +21,10 @@ import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
+import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
+import org.apache.fluss.exception.ConsumerOffsetMetadataTooLargeException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
@@ -31,15 +35,20 @@ import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidProducerIdException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
@@ -58,6 +67,7 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.NotEnoughReplicasAfterAppendException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
@@ -76,6 +86,7 @@ import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
 import org.apache.fluss.exception.ServerTagNotExistException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -270,7 +281,50 @@ public enum Errors {
     DISK_WRITE_LOCKED(
             70,
             "The tablet server has rejected writes because its data disk usage reached the configured write-limit ratio.",
-            DiskWriteLockedException::new);
+            DiskWriteLockedException::new),
+    INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY(
+            71,
+            "The cluster does not have enough KV leader replica capacity.",
+            InsufficientKvLeaderReplicaCapacityException::new),
+    STORAGE_BACKPRESSURE_EXCEPTION(
+            72,
+            "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold.",
+            StorageBackpressureException::new),
+    HISTORICAL_PARTITION_THROTTLED(
+            73,
+            "Historical partition request is throttled because too many historical requests are in flight.",
+            HistoricalPartitionThrottledException::new),
+    INVALID_BUCKET_ROUTING(
+            74,
+            "The request's bucket routing information is missing or invalid. The client should "
+                    + "refresh partition metadata and rebuild the request.",
+            InvalidBucketRoutingException::new),
+    INVALID_CONSUMER_GROUP_ID(
+            75,
+            "The configured consumer group ID is invalid.",
+            InvalidConsumerGroupIdException::new),
+    CONSUMER_GROUP_OWNER_LOADING(
+            76,
+            "The consumer group owner is installing local replica leadership.",
+            ConsumerGroupOwnerLoadingException::new),
+    CONSUMER_GROUP_OWNER_NOT_AVAILABLE(
+            77,
+            "The consumer group owner is not available.",
+            ConsumerGroupOwnerNotAvailableException::new),
+    NOT_CONSUMER_GROUP_OWNER(
+            78,
+            "This server is not the consumer group owner.",
+            NotConsumerGroupOwnerException::new),
+    CONSUMER_GROUP_ID_NOT_FOUND(
+            79, "The consumer group ID does not exist.", ConsumerGroupIdNotFoundException::new),
+    CONSUMER_OFFSET_METADATA_TOO_LARGE(
+            80,
+            "The metadata field of the consumer offset request is too large.",
+            ConsumerOffsetMetadataTooLargeException::new),
+    INVALID_REQUEST(
+            81,
+            "The request contains an invalid combination or value of parameters.",
+            InvalidRequestException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

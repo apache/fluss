@@ -13,7 +13,7 @@ Considerations before opening an issue:
 
 - Make sure that the issue corresponds to a genuine bug or enhancement request. Exceptions are made for typos in documentation files, which can be reported directly.
 
-- Provide a clear and descriptive title. Use component labels (such as `component=server`, `component=client`, `component=connector`, `component=docs`) to help categorize your issue and make it easier to filter and search.
+- Provide a clear and descriptive title. Use component labels (such as `component=server`, `component=client`, `component=connector`, `component=rust`, `component=docs`) to help categorize your issue and make it easier to filter and search.
 
 - Fill out the issue template to describe the problem or enhancement clearly. Please describe it such that maintainers understand the context and impact from the description, not only from reproduction steps.
 
@@ -42,7 +42,7 @@ When filing an issue, make sure to answer these five questions:
 5. What did you see instead?
 
 Troubleshooting questions should be posted on:
-* [Slack (#troubleshooting)](https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw)
+* [Slack (#troubleshooting)](https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ)
 * [GitHub Discussions](https://github.com/apache/fluss/discussions)
 
 ## How to suggest a feature or enhancement

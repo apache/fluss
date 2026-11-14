@@ -20,14 +20,18 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
-import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.metadata.{LakeTableUtil, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.utils.PropertiesUtils
 
+import org.apache.spark.internal.Logging
+
 import java.util
+import java.util.Collections
 
 import scala.collection.JavaConverters._
 
-object FlussLakeUtils {
+object FlussLakeUtils extends Logging {
 
   /**
    * Paimon DLF supports multiple authentication schemes (see
@@ -49,6 +53,13 @@ object FlussLakeUtils {
       tableProperties: util.Map[String, String],
       tablePath: TablePath): LakeSource[LakeSplit] = {
     val tableConfig = Configuration.fromMap(tableProperties)
+    // TODO: Support reading custom Paimon and Iceberg lake table paths in Spark.
+    // See https://github.com/apache/fluss/issues/3832 (Paimon)
+    // and https://github.com/apache/fluss/issues/4712 (Iceberg).
+    if (LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig) != tablePath) {
+      throw new UnsupportedOperationException(
+        "Custom lake table path is not supported for Spark lake reads yet.")
+    }
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
@@ -69,4 +80,19 @@ object FlussLakeUtils {
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {
     projection.map(i => Array(i))
   }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicates: java.util.List[FlussPredicate]): LakeSource.FilterPushDownResult = {
+    val result = lakeSource.withFilters(predicates)
+    logInfo(
+      s"Lake source accepted ${result.acceptedPredicates()}, " +
+        s"remaining ${result.remainingPredicates()}")
+    result
+  }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicate: FlussPredicate): LakeSource.FilterPushDownResult =
+    applyLakeFilters(lakeSource, Collections.singletonList(predicate))
 }

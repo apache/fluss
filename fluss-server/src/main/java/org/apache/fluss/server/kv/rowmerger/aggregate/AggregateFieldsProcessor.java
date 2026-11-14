@@ -23,6 +23,8 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldAggregator;
 
+import javax.annotation.Nullable;
+
 import java.util.BitSet;
 import java.util.List;
 
@@ -145,6 +147,39 @@ public final class AggregateFieldsProcessor {
             int targetIdx,
             RowEncoder encoder) {
         encoder.encodeField(targetIdx, fieldGetter.getFieldOrNull(oldRow));
+    }
+
+    /**
+     * Encodes the first row written for a key, passing the fields whose aggregator requires it
+     * through {@code agg(null, value)}.
+     *
+     * <p>For partial updates, non-target columns are set to null without invoking their
+     * aggregators.
+     *
+     * @param row the first row written for the key
+     * @param context context for the row schema
+     * @param targetPosBitSet target column positions in the input schema, or null for a full-row
+     *     write
+     * @param encoder the row encoder to encode results (should match context)
+     */
+    public static void aggregateFirstRow(
+            BinaryRow row,
+            AggregationContext context,
+            @Nullable BitSet targetPosBitSet,
+            RowEncoder encoder) {
+        InternalRow.FieldGetter[] fieldGetters = context.getFieldGetters();
+        FieldAggregator[] aggregators = context.getAggregators();
+        for (int idx = 0; idx < context.getFieldCount(); idx++) {
+            if (targetPosBitSet != null && !targetPosBitSet.get(idx)) {
+                encoder.encodeField(idx, null);
+                continue;
+            }
+            Object field = fieldGetters[idx].getFieldOrNull(row);
+            FieldAggregator aggregator = aggregators[idx];
+            encoder.encodeField(
+                    idx,
+                    aggregator.requiresAggOnFirstWrite() ? aggregator.agg(null, field) : field);
+        }
     }
 
     /**

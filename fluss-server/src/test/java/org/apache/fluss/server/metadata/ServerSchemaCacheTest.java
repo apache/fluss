@@ -34,6 +34,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -106,6 +107,25 @@ public class ServerSchemaCacheTest {
     }
 
     @Test
+    void testLatestSchemaUpdateDoesNotPolluteHistoricalSchemaCache() {
+        long tableId = 1L;
+        TablePath tablePath = new TablePath("test_db", "test_table");
+        UpdatingSchemaInfoMap latestSchemas = new UpdatingSchemaInfoMap();
+        ServerSchemaCache manager =
+                new ServerSchemaCache(
+                        new TestingMetadataManager(Collections.emptyList()), latestSchemas);
+        SchemaGetter schemaGetter =
+                manager.subscribeWithInitialSchema(tableId, tablePath, 2, DATA2_SCHEMA);
+
+        latestSchemas.updateAfterNextGet(
+                tableId, new SchemaInfo(DATA1_SCHEMA, 1), new SchemaInfo(DATA2_SCHEMA, 2));
+
+        assertThat(schemaGetter.getSchema(1)).isEqualTo(DATA1_SCHEMA);
+        assertThat(schemaGetter.getSchema(1)).isEqualTo(DATA1_SCHEMA);
+        assertThat(schemaGetter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+    }
+
+    @Test
     void testUnsubscribeSchemaChange() {
         ServerSchemaCache manager =
                 new ServerSchemaCache(new TestingMetadataManager(Collections.emptyList()));
@@ -170,6 +190,32 @@ public class ServerSchemaCacheTest {
                 return new SchemaInfo(schemaInfoMap.get(tablePath).get((short) schemaId), schemaId);
             }
             throw new SchemaNotExistException("Schema not exist");
+        }
+    }
+
+    private static final class UpdatingSchemaInfoMap extends ConcurrentHashMap<Long, SchemaInfo> {
+        private static final long serialVersionUID = 1L;
+
+        private Long tableIdToUpdate;
+        private SchemaInfo schemaInfoToInstall;
+        private boolean updateAfterNextGet;
+
+        void updateAfterNextGet(
+                long tableId, SchemaInfo schemaInfoToReturn, SchemaInfo schemaInfoToInstall) {
+            put(tableId, schemaInfoToReturn);
+            this.tableIdToUpdate = tableId;
+            this.schemaInfoToInstall = schemaInfoToInstall;
+            this.updateAfterNextGet = true;
+        }
+
+        @Override
+        public SchemaInfo get(Object key) {
+            SchemaInfo schemaInfo = super.get(key);
+            if (updateAfterNextGet && tableIdToUpdate.equals(key)) {
+                updateAfterNextGet = false;
+                put(tableIdToUpdate, schemaInfoToInstall);
+            }
+            return schemaInfo;
         }
     }
 }

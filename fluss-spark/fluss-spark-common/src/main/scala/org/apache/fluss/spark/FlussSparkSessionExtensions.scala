@@ -17,7 +17,8 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.spark.catalyst.analysis.FlussProcedureResolver
+import org.apache.fluss.spark.catalyst.analysis.{FlussProcedureResolver, FlussTableValuedFunctionResolver}
+import org.apache.fluss.spark.catalyst.plans.logical.FlussTableValuedFunctions
 import org.apache.fluss.spark.execution.FlussStrategy
 
 import org.apache.spark.sql.SparkSessionExtensions
@@ -32,6 +33,14 @@ class FlussSparkSessionExtensions extends (SparkSessionExtensions => Unit) {
 
     // analyzer extensions
     extensions.injectResolutionRule(spark => FlussProcedureResolver(spark))
+    extensions.injectResolutionRule(spark => FlussTableValuedFunctionResolver(spark))
+
+    // table function extensions
+    FlussTableValuedFunctions.supportedFnNames.foreach {
+      fnName =>
+        extensions.injectTableFunction(
+          FlussTableValuedFunctions.getTableValueFunctionInjection(fnName))
+    }
 
     // planner extensions
     extensions.injectPlannerStrategy(spark => FlussStrategy(spark))

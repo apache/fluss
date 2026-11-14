@@ -19,15 +19,18 @@ package org.apache.fluss.client.admin;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.OffsetSpec.LatestSpec;
 import org.apache.fluss.client.admin.OffsetSpec.TimestampSpec;
 import org.apache.fluss.client.lookup.Lookuper;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
@@ -41,6 +44,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterEach;
@@ -61,6 +65,7 @@ import java.util.stream.IntStream;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -237,6 +242,23 @@ public abstract class ClientToServerITCaseBase {
         }
         assertThat(scanRecordCount).isEqualTo(totalRecords);
         verifyRows(rowType, actualRows, expectPartitionsRows);
+    }
+
+    /**
+     * Restarts the coordinator server, which binds to a new port, while the client keeps caching
+     * the old coordinator address.
+     */
+    protected void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
+        MetadataUpdater metadataUpdater = ((FlussConnection) conn).getMetadataUpdater();
+        ServerNode cachedCoordinator = metadataUpdater.getCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        waitUntil(
+                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofMinutes(1),
+                "Coordinator server node still exists in ZooKeeper");
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        assertThat(metadataUpdater.getCoordinatorServer()).isEqualTo(cachedCoordinator);
     }
 
     public static void waitAllReplicasReady(long tableId, int expectBucketCount) {

@@ -1,0 +1,300 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use fluss::config::{Config, NoKeyAssigner};
+use rustler::{NifStruct, NifUnitEnum};
+
+/// Bucket-assigner strategy for tables without bucket keys.
+/// Maps to fluss::config::NoKeyAssigner.
+#[derive(NifUnitEnum)]
+pub enum NifNoKeyAssigner {
+    Sticky,
+    RoundRobin,
+}
+
+/// Decoded from `%Fluss.Config{}` Elixir struct.
+#[derive(NifStruct)]
+#[module = "Fluss.Config"]
+pub struct NifConfig {
+    pub bootstrap_servers: String,
+    pub connect_timeout_ms: Option<u64>,
+    pub connection_max_idle_time_ms: Option<u64>,
+    pub lookup_batch_timeout_ms: Option<u64>,
+    pub lookup_max_batch_size: Option<u64>,
+    pub lookup_max_inflight_requests: Option<u64>,
+    pub lookup_max_retries: Option<i32>,
+    pub lookup_queue_size: Option<u64>,
+    pub lookup_retry_backoff_ms: Option<u64>,
+    pub lookup_retry_max_backoff_ms: Option<u64>,
+    pub remote_file_download_thread_num: Option<u64>,
+    pub scanner_io_tmp_dir: Option<String>,
+    pub scanner_log_fetch_max_bytes: Option<i32>,
+    pub scanner_log_fetch_max_bytes_for_bucket: Option<i32>,
+    pub scanner_log_fetch_min_bytes: Option<i32>,
+    pub scanner_log_fetch_wait_max_time_ms: Option<i32>,
+    pub scanner_log_max_poll_records: Option<u64>,
+    pub scanner_remote_log_prefetch_num: Option<u64>,
+    pub scanner_remote_log_read_concurrency: Option<u64>,
+    pub security_protocol: Option<String>,
+    pub security_sasl_mechanism: Option<String>,
+    pub security_sasl_password: Option<String>,
+    pub security_sasl_username: Option<String>,
+    pub writer_acks: Option<String>,
+    pub writer_batch_size: Option<i32>,
+    pub writer_batch_timeout_ms: Option<i64>,
+    pub writer_bucket_no_key_assigner: Option<NifNoKeyAssigner>,
+    pub writer_buffer_memory_size: Option<u64>,
+    pub writer_buffer_wait_timeout_ms: Option<u64>,
+    pub writer_kv_backpressure_max_throttle_ms: Option<u64>,
+    pub writer_dynamic_batch_size_enabled: Option<bool>,
+    pub writer_dynamic_batch_size_min: Option<i32>,
+    pub writer_dynamic_create_partition_enabled: Option<bool>,
+    pub writer_enable_idempotence: Option<bool>,
+    pub writer_max_inflight_requests_per_bucket: Option<u64>,
+    pub writer_request_max_size: Option<i32>,
+    pub writer_retries: Option<i32>,
+    pub writer_retry_backoff_ms: Option<u64>,
+    pub writer_retry_max_backoff_ms: Option<u64>,
+}
+
+impl NifConfig {
+    pub fn into_core(self) -> Config {
+        let mut config = Config {
+            bootstrap_servers: self.bootstrap_servers,
+            scanner_io_tmp_dir: self.scanner_io_tmp_dir,
+            ..Config::default()
+        };
+        if let Some(timeout) = self.connect_timeout_ms {
+            config.connect_timeout_ms = timeout;
+        }
+        if let Some(max_idle_time) = self.connection_max_idle_time_ms {
+            config.connection_max_idle_time_ms = max_idle_time;
+        }
+        if let Some(n) = self.remote_file_download_thread_num {
+            config.remote_file_download_thread_num = n as usize;
+        }
+        if let Some(size) = self.scanner_log_fetch_max_bytes {
+            config.scanner_log_fetch_max_bytes = size;
+        }
+        if let Some(size) = self.scanner_log_fetch_max_bytes_for_bucket {
+            config.scanner_log_fetch_max_bytes_for_bucket = size;
+        }
+        if let Some(size) = self.scanner_log_fetch_min_bytes {
+            config.scanner_log_fetch_min_bytes = size;
+        }
+        if let Some(ms) = self.scanner_log_fetch_wait_max_time_ms {
+            config.scanner_log_fetch_wait_max_time_ms = ms;
+        }
+        if let Some(n) = self.scanner_log_max_poll_records {
+            config.scanner_log_max_poll_records = n as usize;
+        }
+        if let Some(n) = self.scanner_remote_log_prefetch_num {
+            config.scanner_remote_log_prefetch_num = n as usize;
+        }
+        if let Some(n) = self.scanner_remote_log_read_concurrency {
+            config.scanner_remote_log_read_concurrency = n as usize;
+        }
+        if let Some(protocol) = self.security_protocol {
+            config.security_protocol = protocol;
+        }
+        if let Some(mechanism) = self.security_sasl_mechanism {
+            config.security_sasl_mechanism = mechanism;
+        }
+        if let Some(password) = self.security_sasl_password {
+            config.security_sasl_password = password;
+        }
+        if let Some(username) = self.security_sasl_username {
+            config.security_sasl_username = username;
+        }
+        if let Some(size) = self.writer_batch_size {
+            config.writer_batch_size = size;
+        }
+        if let Some(ms) = self.writer_batch_timeout_ms {
+            config.writer_batch_timeout_ms = ms;
+        }
+        if let Some(enabled) = self.writer_dynamic_batch_size_enabled {
+            config.writer_dynamic_batch_size_enabled = enabled;
+        }
+        if let Some(size) = self.writer_dynamic_batch_size_min {
+            config.writer_dynamic_batch_size_min = size;
+        }
+        if let Some(enabled) = self.writer_dynamic_create_partition_enabled {
+            config.writer_dynamic_create_partition_enabled = enabled;
+        }
+        if let Some(acks) = self.writer_acks {
+            config.writer_acks = acks;
+        }
+        if let Some(assigner) = self.writer_bucket_no_key_assigner {
+            config.writer_bucket_no_key_assigner = match assigner {
+                NifNoKeyAssigner::Sticky => NoKeyAssigner::Sticky,
+                NifNoKeyAssigner::RoundRobin => NoKeyAssigner::RoundRobin,
+            };
+        }
+        if let Some(memory_size) = self.writer_buffer_memory_size {
+            config.writer_buffer_memory_size = memory_size as usize;
+        }
+        if let Some(timeout_ms) = self.writer_buffer_wait_timeout_ms {
+            config.writer_buffer_wait_timeout_ms = timeout_ms;
+        }
+        if let Some(timeout_ms) = self.writer_kv_backpressure_max_throttle_ms {
+            config.writer_kv_backpressure_max_throttle_ms = timeout_ms;
+        }
+        if let Some(enabled) = self.writer_enable_idempotence {
+            config.writer_enable_idempotence = enabled;
+        }
+        if let Some(requests_limit) = self.writer_max_inflight_requests_per_bucket {
+            config.writer_max_inflight_requests_per_bucket = requests_limit as usize;
+        }
+        if let Some(max_size) = self.writer_request_max_size {
+            config.writer_request_max_size = max_size;
+        }
+        if let Some(retries) = self.writer_retries {
+            config.writer_retries = retries;
+        }
+        if let Some(backoff) = self.writer_retry_backoff_ms {
+            config.writer_retry_backoff_ms = backoff;
+        }
+        if let Some(backoff) = self.writer_retry_max_backoff_ms {
+            config.writer_retry_max_backoff_ms = backoff;
+        }
+        if let Some(timeout_ms) = self.lookup_batch_timeout_ms {
+            config.lookup_batch_timeout_ms = timeout_ms;
+        }
+        if let Some(size) = self.lookup_max_batch_size {
+            config.lookup_max_batch_size = size as usize;
+        }
+        if let Some(requests_limit) = self.lookup_max_inflight_requests {
+            config.lookup_max_inflight_requests = requests_limit as usize;
+        }
+        if let Some(retries) = self.lookup_max_retries {
+            config.lookup_max_retries = retries;
+        }
+        if let Some(size) = self.lookup_queue_size {
+            config.lookup_queue_size = size as usize;
+        }
+        if let Some(backoff) = self.lookup_retry_backoff_ms {
+            config.lookup_retry_backoff_ms = backoff;
+        }
+        if let Some(backoff) = self.lookup_retry_max_backoff_ms {
+            config.lookup_retry_max_backoff_ms = backoff;
+        }
+        config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn default_config() -> NifConfig {
+        NifConfig {
+            bootstrap_servers: "localhost:9123".to_string(),
+            connect_timeout_ms: None,
+            connection_max_idle_time_ms: None,
+            lookup_batch_timeout_ms: None,
+            lookup_max_batch_size: None,
+            lookup_max_inflight_requests: None,
+            lookup_max_retries: None,
+            lookup_queue_size: None,
+            lookup_retry_backoff_ms: None,
+            lookup_retry_max_backoff_ms: None,
+            remote_file_download_thread_num: None,
+            scanner_io_tmp_dir: None,
+            scanner_log_fetch_max_bytes: None,
+            scanner_log_fetch_max_bytes_for_bucket: None,
+            scanner_log_fetch_min_bytes: None,
+            scanner_log_fetch_wait_max_time_ms: None,
+            scanner_log_max_poll_records: None,
+            scanner_remote_log_prefetch_num: None,
+            scanner_remote_log_read_concurrency: None,
+            security_protocol: None,
+            security_sasl_mechanism: None,
+            security_sasl_password: None,
+            security_sasl_username: None,
+            writer_acks: None,
+            writer_batch_size: None,
+            writer_batch_timeout_ms: None,
+            writer_bucket_no_key_assigner: None,
+            writer_buffer_memory_size: None,
+            writer_buffer_wait_timeout_ms: None,
+            writer_kv_backpressure_max_throttle_ms: None,
+            writer_dynamic_batch_size_enabled: None,
+            writer_dynamic_batch_size_min: None,
+            writer_dynamic_create_partition_enabled: None,
+            writer_enable_idempotence: None,
+            writer_max_inflight_requests_per_bucket: None,
+            writer_request_max_size: None,
+            writer_retries: None,
+            writer_retry_backoff_ms: None,
+            writer_retry_max_backoff_ms: None,
+        }
+    }
+
+    #[test]
+    fn writer_dynamic_create_partition_enabled_is_preserved_in_core_config() {
+        for (enabled, expected) in [(None, true), (Some(false), false), (Some(true), true)] {
+            let mut config = default_config();
+            config.writer_dynamic_create_partition_enabled = enabled;
+            assert_eq!(
+                config.into_core().writer_dynamic_create_partition_enabled,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn connection_max_idle_time_is_preserved_in_core_config() {
+        assert_eq!(
+            default_config().into_core().connection_max_idle_time_ms,
+            600_000
+        );
+
+        let mut config = default_config();
+        config.connection_max_idle_time_ms = Some(0);
+        assert_eq!(config.into_core().connection_max_idle_time_ms, 0);
+    }
+
+    #[test]
+    fn lookup_retry_backoff_is_preserved_in_core_config() {
+        let core = default_config().into_core();
+        assert_eq!(core.lookup_retry_backoff_ms, 100);
+        assert_eq!(core.lookup_retry_max_backoff_ms, 1000);
+
+        let mut config = default_config();
+        config.lookup_retry_backoff_ms = Some(0);
+        config.lookup_retry_max_backoff_ms = Some(5_000);
+        let core = config.into_core();
+        assert_eq!(core.lookup_retry_backoff_ms, 0);
+        assert_eq!(core.lookup_retry_max_backoff_ms, 5_000);
+    }
+
+    #[test]
+    fn scanner_io_tmp_dir_is_preserved_in_core_config() {
+        for directory in [
+            None,
+            Some("/tmp/fluss logs"),
+            Some("relative/日志"),
+            Some(""),
+        ] {
+            let mut config = default_config();
+            config.scanner_io_tmp_dir = directory.map(str::to_string);
+            let core = config.into_core();
+            assert_eq!(core.scanner_io_tmp_dir.as_deref(), directory);
+            assert_eq!(core.bootstrap_servers, "localhost:9123");
+        }
+    }
+}

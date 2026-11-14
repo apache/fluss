@@ -81,6 +81,24 @@ public final class ArrayUtils {
         return resultArray;
     }
 
+    /**
+     * Creates a deep copy of a two-dimensional {@code int} array.
+     *
+     * <p>This method returns {@code null} for a {@code null} input array and preserves {@code null}
+     * nested arrays.
+     */
+    public static int[][] deepCopy(int[][] array) {
+        if (array == null) {
+            return null;
+        }
+
+        int[][] copy = new int[array.length][];
+        for (int i = 0; i < array.length; i++) {
+            copy[i] = array[i] == null ? null : array[i].clone();
+        }
+        return copy;
+    }
+
     /** Check if the second array is a subset of the first array. */
     public static boolean isSubset(int[] a, int[] b) {
         // Iterate over each element in the second array

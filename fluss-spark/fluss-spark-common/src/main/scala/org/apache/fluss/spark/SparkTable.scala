@@ -21,7 +21,7 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
-import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussLakeAppendScanBuilder, FlussLakeUpsertScanBuilder, FlussUpsertScanBuilder}
+import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussUpsertScanBuilder}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
 
 import org.apache.spark.sql.catalyst.SQLConfHelper
@@ -41,45 +41,36 @@ class SparkTable(
   with SupportsWrite
   with SQLConfHelper {
 
-  private def populateSparkConf(flussConfig: FlussConfiguration): Unit = {
+  /**
+   * Merges the current `spark.sql.fluss.*` session configuration onto a copy of the catalog
+   * configuration, which is shared by every table of this catalog and must not be mutated.
+   */
+  private def configWithSessionConfs(): FlussConfiguration = {
+    val merged = new FlussConfiguration(flussConfig)
     conf.getAllConfs
       .filter(_._1.startsWith(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX))
       .foreach {
         case (k, v) =>
-          flussConfig.setString(k.substring(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX.length), v)
+          merged.setString(k.substring(SparkFlussConf.SPARK_FLUSS_CONF_PREFIX.length), v)
       }
+    merged
   }
 
   override def newWriteBuilder(logicalWriteInfo: LogicalWriteInfo): WriteBuilder = {
-    populateSparkConf(flussConfig)
+    val config = configWithSessionConfs()
     if (tableInfo.getPrimaryKeys.isEmpty) {
-      new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+      new FlussAppendWriteBuilder(tablePath, logicalWriteInfo.schema(), config)
     } else {
-      new FlussUpsertWriteBuilder(tablePath, logicalWriteInfo.schema(), flussConfig)
+      new FlussUpsertWriteBuilder(tablePath, logicalWriteInfo.schema(), config)
     }
   }
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
-    populateSparkConf(flussConfig)
-    val isDataLakeEnabled = tableInfo.getTableConfig.isDataLakeEnabled
-    val startupMode = options
-      .getOrDefault(
-        SparkFlussConf.SCAN_START_UP_MODE.key(),
-        flussConfig.get(SparkFlussConf.SCAN_START_UP_MODE))
-      .toUpperCase
-    val isFullMode = startupMode == SparkFlussConf.StartUpMode.FULL.toString
+    val config = configWithSessionConfs()
     if (tableInfo.getPrimaryKeys.isEmpty) {
-      if (isDataLakeEnabled && isFullMode) {
-        new FlussLakeAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
-      } else {
-        new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
-      }
+      new FlussAppendScanBuilder(tablePath, tableInfo, options, config)
     } else {
-      if (isDataLakeEnabled) {
-        new FlussLakeUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
-      } else {
-        new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
-      }
+      new FlussUpsertScanBuilder(tablePath, tableInfo, options, config)
     }
   }
 }

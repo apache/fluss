@@ -28,6 +28,9 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -59,9 +62,32 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
 
     public static final String IDENTIFIER = DataLakeFormat.PAIMON.toString();
 
+    /**
+     * This plugin is registered through SPI in the server test jar, which modules that test against
+     * the real Paimon plugin also put on their classpath. Registering both under {@link
+     * #IDENTIFIER} is rejected as a duplicate, so this plugin uses another identifier whenever the
+     * real plugin is present.
+     */
+    private static final String REAL_PLUGIN_CLASS =
+            "org.apache.fluss.lake.paimon.PaimonLakeStoragePlugin";
+
+    private static final String SHADOWED_IDENTIFIER = "testing-paimon-shadowed";
+
+    private static final boolean REAL_PLUGIN_PRESENT = isRealPluginPresent();
+
     @Override
     public String identifier() {
-        return IDENTIFIER;
+        return REAL_PLUGIN_PRESENT ? SHADOWED_IDENTIFIER : IDENTIFIER;
+    }
+
+    private static boolean isRealPluginPresent() {
+        try {
+            Class.forName(
+                    REAL_PLUGIN_CLASS, false, TestingPaimonStoragePlugin.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     @Override
@@ -85,6 +111,24 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeTableLookuperManager createLakeTableLookuperManager(
+                String ioTmpDir, LookupCacheOptions options) {
+            return new LakeTableLookuperManager() {
+                @Override
+                public LakeTableLookuper createLakeTableLookuper(
+                        TablePath tablePath, Context context) {
+                    throw new UnsupportedOperationException("Not implemented");
+                }
+
+                @Override
+                public void reconfigure(LookupCacheOptions options) {}
+
+                @Override
+                public void close() {}
+            };
         }
     }
 
@@ -242,8 +286,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public LakeCommitResult commit(
-                TestPaimonCommittable committable, Map<String, String> snapshotProperties)
+        public LakeCommitResult commit(TestPaimonCommittable committable, CommitContext context)
                 throws IOException {
             // do nothing, and always return 1 as committed snapshot
             return LakeCommitResult.committedIsReadable(1);

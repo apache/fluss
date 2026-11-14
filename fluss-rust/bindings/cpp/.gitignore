@@ -1,0 +1,27 @@
+build/
+cmake-build-*/
+CMakeFiles/
+.idea/
+*.o
+*.a
+*.so
+*.dylib
+
+# Bazel build outputs
+bazel-build/
+bazel-bin
+bazel-out
+bazel-testlogs
+bazel-cpp
+bazel-*
+MODULE.bazel.lock
+
+# Keep versioned Bazel consumer examples (name starts with bazel-).
+!examples/bazel-consumer/
+!examples/bazel-consumer/**
+# `build/` is ignored globally above; keep this fixture path visible.
+!examples/bazel-consumer/build/
+!examples/bazel-consumer/build/**
+examples/bazel-consumer/**/MODULE.bazel.lock
+examples/bazel-consumer/**/bazel-*
+examples/bazel-consumer/**/tmp.log

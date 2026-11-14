@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** The abstract write batch contains write callback object to wait write request feedback. */
@@ -43,25 +44,52 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public abstract class WriteBatch {
     private static final Logger LOG = LoggerFactory.getLogger(WriteBatch.class);
 
+    private static final ThreadLocal<Boolean> IN_CALLBACK = ThreadLocal.withInitial(() -> false);
+
     private final long createdMs;
     private final PhysicalTablePath physicalTablePath;
     private final RequestFuture requestFuture;
     private final long tableId;
+    private final int schemaId;
+    private final WriteFormat writeFormat;
     private final int bucketId;
+
+    // The bucket count used to calculate this batch's bucketId; carried into the request so the
+    // TabletServer can validate it against the actual count (INVALID_BUCKET_ROUTING on mismatch).
+    private int bucketCount;
 
     protected final List<WriteCallback> callbacks = new ArrayList<>();
     private final AtomicReference<FinalState> finalState = new AtomicReference<>(null);
     private final AtomicInteger attempts = new AtomicInteger(0);
+    // Whether this batch targets the historical partition. When true, the original partition name
+    // is derived from physicalTablePath.
+    private volatile boolean isHistoricalPartition;
+
     protected boolean reopened;
     protected int recordCount;
     private long drainedMs;
+    // Snapshot of the bucket's lastAckedBatchSequence taken when this attempt was sent, used to
+    // tell a stale/reordered OutOfOrderSequence response (state advanced while in flight) apart
+    // from a genuine one (no progress since send).
+    private int lastAckedSequenceAtSend = IdempotenceBucketEntry.NO_LAST_ACKED_BATCH_SEQUENCE;
 
     public WriteBatch(
-            long tableId, int bucketId, PhysicalTablePath physicalTablePath, long createdMs) {
+            long tableId,
+            int bucketId,
+            int bucketCount,
+            PhysicalTablePath physicalTablePath,
+            int schemaId,
+            WriteFormat writeFormat,
+            boolean isHistoricalPartition,
+            long createdMs) {
         this.physicalTablePath = physicalTablePath;
         this.createdMs = createdMs;
         this.tableId = tableId;
+        this.schemaId = schemaId;
+        this.writeFormat = checkNotNull(writeFormat, "write format must be not null");
+        this.isHistoricalPartition = isHistoricalPartition;
         this.bucketId = bucketId;
+        this.bucketCount = bucketCount;
         this.requestFuture = new RequestFuture();
         this.recordCount = 0;
     }
@@ -79,10 +107,18 @@ public abstract class WriteBatch {
      *
      * @param writeRecord the record to write
      * @param callback the callback to send back to writer
-     * @return true if append success, false if the batch is full.
+     * @return true if append success, false if the batch is full or belongs to a different table,
+     *     write format or schema.
      */
-    public abstract boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
-            throws Exception;
+    public final boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception {
+        checkNotNull(writeRecord, "write record must be not null");
+        checkNotNull(callback, "write callback must be not null");
+        if (!canAppend(writeRecord)) {
+            return false;
+        }
+        return tryAppendRecord(writeRecord, callback);
+    }
 
     /**
      * Gets the memory segment bytes view of the batch. This includes the latest updated {@link
@@ -139,11 +175,20 @@ public abstract class WriteBatch {
 
     /** Abort the batch and complete the future and callbacks. */
     public void abort(Exception exception) {
-        if (!finalState.compareAndSet(null, FinalState.ABORTED)) {
+        if (!trySetAborted()) {
             throw new IllegalStateException(
                     "Batch has already been completed in final stata " + finalState.get());
         }
 
+        completeAbort(exception);
+    }
+
+    boolean trySetAborted() {
+        return finalState.compareAndSet(null, FinalState.ABORTED);
+    }
+
+    /** Complete the abort after the caller has atomically changed the final state. */
+    void completeAbort(Exception exception) {
         LOG.trace(
                 "Abort batch for table path {} with bucket_id {}",
                 physicalTablePath,
@@ -156,16 +201,63 @@ public abstract class WriteBatch {
         return reopened;
     }
 
+    public void setLastAckedSequenceAtSend(int lastAckedSequenceAtSend) {
+        this.lastAckedSequenceAtSend = lastAckedSequenceAtSend;
+    }
+
+    public int lastAckedSequenceAtSend() {
+        return lastAckedSequenceAtSend;
+    }
+
     public int bucketId() {
         return bucketId;
+    }
+
+    public int getBucketCount() {
+        return bucketCount;
+    }
+
+    /** Updates the routing count of an unsent batch whose bucket ID remains valid. */
+    void setBucketCount(int bucketCount) {
+        this.bucketCount = bucketCount;
     }
 
     public long tableId() {
         return tableId;
     }
 
+    int schemaId() {
+        return schemaId;
+    }
+
     public PhysicalTablePath physicalTablePath() {
         return physicalTablePath;
+    }
+
+    /** Returns whether this batch targets the historical partition. */
+    public boolean isHistoricalPartition() {
+        return isHistoricalPartition;
+    }
+
+    /** Returns the physical partition path used as the write RPC target. */
+    public PhysicalTablePath writeTargetPath() {
+        return !isHistoricalPartition
+                ? physicalTablePath
+                : PhysicalTablePath.of(
+                        physicalTablePath.getTablePath(), HISTORICAL_PARTITION_VALUE);
+    }
+
+    /** Returns the original partition name for a historical write, or null for a normal write. */
+    public @Nullable String getOriginalPartitionName() {
+        return isHistoricalPartition ? physicalTablePath.getPartitionName() : null;
+    }
+
+    /** Marks this batch as targeting the historical partition. */
+    void rerouteToHistoricalPartition() {
+        checkNotNull(
+                physicalTablePath.getPartitionName(),
+                "A historical write batch must have an original partition name.");
+        isHistoricalPartition = true;
     }
 
     public RequestFuture getRequestFuture() {
@@ -208,18 +300,32 @@ public abstract class WriteBatch {
             long resultLogEndOffset,
             @Nullable Exception exception) {
         // execute callbacks with result info (for KV batches that track log end offsets)
-        callbacks.forEach(
-                callback -> {
-                    try {
-                        callback.onCompletion(resultBucket, resultLogEndOffset, exception);
-                    } catch (Exception e) {
-                        LOG.error(
-                                "Error executing user-provided callback on message for table path '{}'",
-                                physicalTablePath,
-                                e);
-                    }
-                });
+        // Callbacks may complete other batches on this thread, which must not clear this marker.
+        boolean wasInCallback = IN_CALLBACK.get();
+        IN_CALLBACK.set(true);
+        try {
+            callbacks.forEach(
+                    callback -> {
+                        try {
+                            callback.onCompletion(resultBucket, resultLogEndOffset, exception);
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Error executing user-provided callback on message for table path '{}'",
+                                    physicalTablePath,
+                                    e);
+                        }
+                    });
+        } finally {
+            if (!wasInCallback) {
+                IN_CALLBACK.remove();
+            }
+        }
         requestFuture.done();
+    }
+
+    /** Returns whether the current thread is running the write callbacks of a batch. */
+    static boolean isInCallback() {
+        return IN_CALLBACK.get();
     }
 
     int attempts() {
@@ -241,6 +347,18 @@ public abstract class WriteBatch {
      */
     boolean isDone() {
         return finalState.get() != null;
+    }
+
+    abstract boolean tryAppendRecord(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception;
+
+    private boolean canAppend(WriteRecord writeRecord) {
+        // a schema id mismatch is a batch-compatibility boundary like table id and write format:
+        // returning false makes the accumulator close this batch and roll a new one carrying the
+        // record's schema id, so a single batch never mixes schemas.
+        return tableId == writeRecord.getTableInfo().getTableId()
+                && writeFormat == writeRecord.getWriteFormat()
+                && schemaId == writeRecord.getSchemaId();
     }
 
     /**

@@ -24,24 +24,15 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-server</artifactId>
 
-    <name>Apache Fluss (Incubating) : Server</name>
+    <name>Apache Fluss : Server</name>
     <packaging>jar</packaging>
     <description>
         The server for Fluss.
-
-        Apache Fluss is an effort undergoing incubation at The Apache Software
-        Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is
-        required of all newly accepted projects until a further review indicates
-        that the infrastructure, communications, and decision-making process have
-        stabilized in a manner consistent with other successful ASF projects.
-        While incubation status is not necessarily a reflection of the
-        completeness or stability of the code, it does indicate that the project
-        has yet to be fully endorsed by the ASF.
     </description>
 
     <properties>
@@ -87,6 +78,12 @@
             <version>${roaringbitmap.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.datasketches</groupId>
+            <artifactId>datasketches-java</artifactId>
+            <version>${datasketches-java.version}</version>
+        </dependency>
+
         <!--
         we will start zookeeper server when start a local cluster,
         need include this module for starting zookeeper requires it -->
@@ -100,6 +97,13 @@
             <groupId>org.apache.curator</groupId>
             <artifactId>curator-test</artifactId>
             <version>${curator.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.ververica</groupId>
+            <artifactId>frocksdbjni</artifactId>
+            <version>${frocksdb.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -149,6 +153,10 @@
                                 </includes>
                             </artifactSet>
                             <relocations>
+                                <relocation>
+                                    <pattern>org.apache.datasketches</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
                                 <relocation>
                                     <pattern>org.apache.commons</pattern>
                                     <shadedPattern>org.apache.fluss.shaded.org.apache.commons</shadedPattern>

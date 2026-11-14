@@ -31,25 +31,27 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Internal
 public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
     private final PhysicalTablePath physicalTablePath;
-    private final int bucketNumber;
     private final AtomicInteger counter = new AtomicInteger(new Random().nextInt());
 
-    public RoundRobinBucketAssigner(PhysicalTablePath physicalTablePath, int bucketNumber) {
+    public RoundRobinBucketAssigner(PhysicalTablePath physicalTablePath) {
         this.physicalTablePath = physicalTablePath;
-        this.bucketNumber = bucketNumber;
     }
 
     @Override
-    public int assignBucket(Cluster cluster) {
+    public int assignBucket(Cluster cluster, int bucketCount) {
         int nextValue = counter.getAndIncrement();
         List<BucketLocation> bucketsForTable =
                 cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
         if (!bucketsForTable.isEmpty()) {
             int bucket = MathUtils.toPositive(nextValue) % bucketsForTable.size();
-            return bucketsForTable.get(bucket).getBucketId();
+            int bucketId = bucketsForTable.get(bucket).getBucketId();
+            // Metadata may already expose the final layout while the context is still tentative.
+            return bucketId < bucketCount
+                    ? bucketId
+                    : MathUtils.toPositive(nextValue) % bucketCount;
         } else {
             // no buckets are available, give a non-available bucket.
-            return MathUtils.toPositive(nextValue) % bucketNumber;
+            return MathUtils.toPositive(nextValue) % bucketCount;
         }
     }
 
@@ -59,7 +61,7 @@ public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
     }
 
     @Override
-    public void onNewBatch(Cluster cluster, int prevBucketId) {
+    public void onNewBatch(Cluster cluster, int bucketCount, int prevBucketId) {
         // do nothing
     }
 }

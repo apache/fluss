@@ -46,6 +46,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
@@ -399,6 +400,19 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                     .hasSize(2)
                     .doesNotHaveDuplicates()
                     .isSubsetOf(expectedRowsInExpiredPartition);
+
+            for (String options : Arrays.asList("", " /*+ OPTIONS('lookup.cache' = 'FULL') */")) {
+                String query = "SELECT * FROM " + tableName + options + " LIMIT 4";
+                assertThat(batchTEnv.explainSql(query)).as(query).contains("limit=[4]");
+                List<Row> limitedRows =
+                        CollectionUtil.iteratorToList(batchTEnv.executeSql(query).collect());
+                assertThat(limitedRows)
+                        .as(query)
+                        .hasSize(4)
+                        .doesNotHaveDuplicates()
+                        .extracting(result -> result.getField(2))
+                        .containsAll(partitionNameByIds.values());
+            }
         } finally {
             jobClient.cancel().get();
         }

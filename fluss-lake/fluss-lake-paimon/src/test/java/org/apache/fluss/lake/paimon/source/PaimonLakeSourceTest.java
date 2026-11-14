@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.paimon.source;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -34,6 +35,7 @@ import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import org.apache.flink.types.Row;
 import org.apache.paimon.CoreOptions;
@@ -42,16 +44,23 @@ import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.source.DataSplit;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** UT for {@link PaimonLakeSource}. */
 class PaimonLakeSourceTest extends PaimonSourceTestBase {
@@ -76,8 +85,21 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
     }
 
     @Test
-    void testWithFilters() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_filters");
+    void testEmptyFiltersDoNotAccessCatalog() {
+        PaimonLakeSource lakeSource =
+                new PaimonLakeSource(
+                        new Configuration(), TablePath.of("missing_db", "missing_table"));
+
+        LakeSource.FilterPushDownResult result = lakeSource.withFilters(Collections.emptyList());
+
+        assertThat(result.acceptedPredicates()).isEmpty();
+        assertThat(result.remainingPredicates()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testWithFilters(boolean useProvidedTable) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
         createTable(tablePath, SCHEMA);
 
         // write some rows
@@ -113,10 +135,14 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                 FLUSS_BUILDER.startsWith(1, org.apache.fluss.row.BinaryString.fromString("name"));
         List<Predicate> allFilters = Arrays.asList(filter1, filter2, filter3);
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                useProvidedTable
+                        ? new PaimonLakeSource((FileStoreTable) getTable(tablePath))
+                        : lakeStorage.createLakeSource(tablePath);
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+        LakeSource<PaimonSplit> copiedLakeSource = lakeSource.copy();
 
         // read data to verify the filters work
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(() -> 2).plan();
@@ -162,6 +188,90 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
+
+        List<PaimonSplit> unfilteredSplits = lakeSource.createPlanner(() -> 2).plan();
+        assertThat(unfilteredSplits).hasSize(1);
+        assertThat(unfilteredSplits.get(0).dataSplit().dataFiles()).hasSize(2);
+
+        List<PaimonSplit> copiedFilteredSplits = copiedLakeSource.createPlanner(() -> 2).plan();
+        assertThat(copiedFilteredSplits).hasSize(1);
+        assertThat(copiedFilteredSplits.get(0).dataSplit().dataFiles()).hasSize(1);
+    }
+
+    @Test
+    void testNullProvidedTable() {
+        assertThatThrownBy(() -> new PaimonLakeSource((FileStoreTable) null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testProvidedTableCopyAndSerialization(boolean primaryKeyTable) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.INT())
+                        .column("name", org.apache.paimon.types.DataTypes.STRING());
+        if (primaryKeyTable) {
+            schema.primaryKey("id").option(CoreOptions.BUCKET.key(), "1");
+        }
+        createTable(tablePath, schema.build());
+        writeRecord(
+                tablePath,
+                Arrays.asList(
+                        GenericRow.of(1, BinaryString.fromString("one")),
+                        GenericRow.of(2, BinaryString.fromString("two"))));
+        long snapshotId = getTable(tablePath).latestSnapshot().get().id();
+        writeRecord(
+                tablePath,
+                Collections.singletonList(GenericRow.of(3, BinaryString.fromString("three"))));
+
+        FileStoreTable table = (FileStoreTable) getTable(tablePath);
+        long latestSnapshotId = table.latestSnapshot().get().id();
+        Map<String, String> options = new HashMap<>(table.options());
+        PaimonLakeSource source = new PaimonLakeSource(table);
+        PredicateBuilder predicateBuilder =
+                new PredicateBuilder(RowType.of(DataTypes.INT(), DataTypes.STRING()));
+        source.withFilters(Collections.singletonList(predicateBuilder.greaterOrEqual(0, 2)));
+        source.withProject(new int[][] {{1}});
+
+        PaimonLakeSource copiedSource = source.copy();
+        PaimonLakeSource serializedSource = InstantiationUtils.clone(source);
+        source.withFilters(Collections.emptyList());
+        source.withProject(new int[][] {{0}});
+
+        assertThat(readRows(copiedSource, snapshotId, RowType.of(DataTypes.STRING())))
+                .containsExactly(Row.of(org.apache.fluss.row.BinaryString.fromString("two")));
+        assertThat(readRows(serializedSource, snapshotId, RowType.of(DataTypes.STRING())))
+                .containsExactly(Row.of(org.apache.fluss.row.BinaryString.fromString("two")));
+        assertThat(readRows(source, snapshotId, RowType.of(DataTypes.INT())))
+                .containsExactlyInAnyOrder(Row.of(1), Row.of(2));
+        assertThat(table.options()).isEqualTo(options);
+        assertThat(table.newScan().plan().splits())
+                .isNotEmpty()
+                .allSatisfy(
+                        split ->
+                                assertThat(((DataSplit) split).snapshotId())
+                                        .isEqualTo(latestSnapshotId));
+    }
+
+    private List<Row> readRows(LakeSource<PaimonSplit> source, long snapshotId, RowType rowType)
+            throws Exception {
+        List<Row> rows = new ArrayList<>();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(rowType);
+        for (PaimonSplit split : source.createPlanner(() -> snapshotId).plan()) {
+            assertThat(split.dataSplit().snapshotId()).isEqualTo(snapshotId);
+            try (CloseableIterator<LogRecord> iterator =
+                    source.createRecordReader(() -> split).read()) {
+                rows.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        iterator, LogRecord::getRow)));
+            }
+        }
+        return rows;
     }
 
     private static class UnSupportFilterFunction extends LeafFunction {

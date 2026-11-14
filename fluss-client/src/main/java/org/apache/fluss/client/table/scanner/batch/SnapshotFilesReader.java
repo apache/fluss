@@ -27,18 +27,19 @@ import org.apache.fluss.rocksdb.RocksDBHandle;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.SchemaUtil;
 
-import org.rocksdb.ColumnFamilyOptions;
-import org.rocksdb.DBOptions;
-import org.rocksdb.ReadOptions;
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksIterator;
-import org.rocksdb.Snapshot;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.DBOptions;
+import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Snapshot;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
@@ -80,12 +81,13 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
             @Nullable int[] projectedFields,
             int targetSchemaId,
             Schema targetSchema,
-            SchemaGetter schemaGetter)
+            SchemaGetter schemaGetter,
+            KvValueLayout kvValueLayout)
             throws IOException {
         this.targetSchemaId = targetSchemaId;
         this.targetSchema = targetSchema;
         this.schemaGetter = schemaGetter;
-        this.valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
+        this.valueDecoder = new ValueDecoder(schemaGetter, kvFormat, kvValueLayout);
         this.projectedFields = projectedFields;
         closeableRegistry = new CloseableRegistry();
         try {

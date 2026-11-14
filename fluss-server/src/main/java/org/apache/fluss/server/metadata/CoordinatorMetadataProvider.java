@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.metadata;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -30,6 +31,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -76,9 +78,14 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
             return Optional.empty();
         }
         TableInfo tableInfo = ctx.getTableInfoById(tableId);
+        Map<Integer, List<Integer>> assignment = ctx.getTableAssignment(tableId);
+        if (!tableInfo.isPartitioned()
+                && !isCompleteAssignment(assignment, tableInfo.getNumBuckets())) {
+            return Optional.empty();
+        }
 
         List<BucketMetadata> bucketMetadataList =
-                getBucketMetadataFromContext(ctx, tableId, null, ctx.getTableAssignment(tableId));
+                getBucketMetadataFromContext(ctx, tableId, null, assignment);
         return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
     }
 
@@ -96,14 +103,17 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
             return Optional.empty();
         }
         long partitionId = partitionIdOpt.get();
+        Map<Integer, List<Integer>> assignment =
+                ctx.getPartitionAssignment(new TablePartition(tableId, partitionId));
+        Integer count = ctx.getPartitionBucketCount(new TablePartition(tableId, partitionId));
+        if (count == null || !isCompleteAssignment(assignment, count)) {
+            return Optional.empty();
+        }
         List<BucketMetadata> bucketMetadataList =
-                getBucketMetadataFromContext(
-                        ctx,
-                        tableId,
-                        partitionId,
-                        ctx.getPartitionAssignment(new TablePartition(tableId, partitionId)));
+                getBucketMetadataFromContext(ctx, tableId, partitionId, assignment);
         return Optional.of(
-                new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList));
+                new PartitionMetadata(
+                        tableId, partitionName, partitionId, bucketMetadataList, count));
     }
 
     @Override
@@ -111,13 +121,25 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
         return ctx.getPhysicalTablePath(partitionId);
     }
 
+    private static boolean isCompleteAssignment(Map<Integer, List<Integer>> assignment, int count) {
+        if (count <= 0 || assignment.size() != count) {
+            return false;
+        }
+        for (int bucket : assignment.keySet()) {
+            if (bucket < 0 || bucket >= count) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * Constructs bucket metadata list from coordinator context information.
      *
      * <p>This method builds a complete list of bucket metadata by combining assignment information
-     * from the provided table assignment map with leader and epoch data from the coordinator
-     * context. Each bucket's metadata includes its ID, current leader server, leader epoch, and
-     * replica assignments.
+     * from the provided table assignment map with leader and ISR data from the coordinator context.
+     * Each bucket's metadata includes its ID, current leader server, leader epoch, ISR, bucket
+     * epoch, and replica assignments.
      *
      * @param ctx the coordinator context containing leader and epoch information
      * @param tableId the table identifier
@@ -125,7 +147,8 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
      * @param tableAssignment the assignment map from bucket ID to list of replica server IDs
      * @return a list of bucket metadata objects containing complete bucket information
      */
-    private static List<BucketMetadata> getBucketMetadataFromContext(
+    @VisibleForTesting
+    static List<BucketMetadata> getBucketMetadataFromContext(
             CoordinatorContext ctx,
             long tableId,
             @Nullable Long partitionId,
@@ -135,13 +158,27 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
                 (bucketId, serverIds) -> {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
                     Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
-                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    bucketId,
-                                    leader,
-                                    ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
+                    BucketMetadata bucketMetadata;
+                    if (optLeaderAndIsr.isPresent()) {
+                        LeaderAndIsr leaderAndIsr = optLeaderAndIsr.get();
+                        bucketMetadata =
+                                new BucketMetadata(
+                                        bucketId,
+                                        leaderAndIsr.leader(),
+                                        leaderAndIsr.leaderEpoch(),
+                                        serverIds,
+                                        leaderAndIsr.isr(),
+                                        leaderAndIsr.bucketEpoch());
+                    } else {
+                        bucketMetadata =
+                                new BucketMetadata(
+                                        bucketId,
+                                        null,
+                                        null,
+                                        serverIds,
+                                        Collections.emptyList(),
+                                        BucketMetadata.NO_LEADER_ISR_STATE_EPOCH);
+                    }
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;

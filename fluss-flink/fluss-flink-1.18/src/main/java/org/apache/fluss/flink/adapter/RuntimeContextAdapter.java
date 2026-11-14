@@ -20,12 +20,19 @@ package org.apache.fluss.flink.adapter;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import org.apache.flink.table.functions.FunctionContext;
+
+import java.lang.reflect.Field;
+
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * An adapter for Flink {@link RuntimeContext} class for Flink 1.18.
  *
  * <p>In Flink 1.18, methods like getJobId(), getIndexOfThisSubtask() are available directly on
- * RuntimeContext. In Flink 1.19+, these were moved to getJobInfo() and getTaskInfo().
+ * RuntimeContext. In Flink 1.19+, these were moved to getJobInfo() and getTaskInfo(). {@link
+ * FunctionContext} does not expose the runtime information, so the wrapped runtime context is read
+ * from the function context.
  *
  * <p>TODO: remove this class when no longer support flink 1.18.
  */
@@ -53,5 +60,48 @@ public class RuntimeContextAdapter {
      */
     public static JobID getJobId(RuntimeContext runtimeContext) {
         return runtimeContext.getJobId();
+    }
+
+    /**
+     * Gets the index of this subtask from the given function context.
+     *
+     * @param functionContext the function context to read the subtask index from
+     * @return the index of this subtask
+     */
+    public static int getIndexOfThisSubtask(FunctionContext functionContext) {
+        return getRuntimeContext(functionContext).getIndexOfThisSubtask();
+    }
+
+    /**
+     * Gets the number of parallel subtasks from the given function context.
+     *
+     * @param functionContext the function context to read the parallelism from
+     * @return the number of parallel subtasks
+     */
+    public static int getNumberOfParallelSubtasks(FunctionContext functionContext) {
+        return getRuntimeContext(functionContext).getNumberOfParallelSubtasks();
+    }
+
+    /**
+     * Extracts the runtime context wrapped by the given function context.
+     *
+     * <p>Flink 1.18 does not expose the runtime context on {@link FunctionContext}, so the private
+     * runtime context field is read reflectively.
+     */
+    private static RuntimeContext getRuntimeContext(FunctionContext functionContext) {
+        RuntimeContext runtimeContext;
+        try {
+            Field field = FunctionContext.class.getDeclaredField("context");
+            field.setAccessible(true);
+            runtimeContext = (RuntimeContext) field.get(functionContext);
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new IllegalStateException(
+                    "Unable to extract the runtime context from the Flink function context.", e);
+        }
+        checkState(
+                runtimeContext != null,
+                "The Flink function context does not carry a runtime context, so the subtask "
+                        + "information is unavailable.");
+        return runtimeContext;
     }
 }

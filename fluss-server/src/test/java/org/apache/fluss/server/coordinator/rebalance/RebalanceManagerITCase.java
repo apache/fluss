@@ -18,7 +18,6 @@
 package org.apache.fluss.server.coordinator.rebalance;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
-import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -28,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
@@ -35,7 +35,6 @@ import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
-import org.apache.fluss.server.log.remote.RemoteLogManifest;
 import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.tablet.TabletServer;
@@ -112,20 +111,25 @@ public class RebalanceManagerITCase {
                 new PartitionSpec(Collections.singletonMap("b", partitionName1)),
                 false);
 
-        ClusterModel clusterModel = rebalanceManager.buildClusterModel();
-        assertThat(clusterModel.servers().size()).isEqualTo(6);
-        assertThat(clusterModel.aliveServers().size()).isEqualTo(6);
-        assertThat(clusterModel.offlineServers().size()).isEqualTo(0);
-        assertThat(clusterModel.tables().size()).isEqualTo(2);
-        assertThat(clusterModel.tables()).contains(tableId1, tableId2);
+        // Wait for the bucket leader and ISR state to be initialized after table creation.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    ClusterModel clusterModel = buildClusterModel();
+                    assertThat(clusterModel.servers().size()).isEqualTo(6);
+                    assertThat(clusterModel.aliveServers().size()).isEqualTo(6);
+                    assertThat(clusterModel.offlineServers().size()).isEqualTo(0);
+                    assertThat(clusterModel.tables().size()).isEqualTo(2);
+                    assertThat(clusterModel.tables()).contains(tableId1, tableId2);
+                });
 
-        // offline one table.
+        // offline one server.
         AddServerTagRequest request =
                 new AddServerTagRequest().setServerTag(ServerTag.PERMANENT_OFFLINE.value);
         request.addServerId(0);
         FLUSS_CLUSTER_EXTENSION.newCoordinatorClient().addServerTag(request).get();
 
-        clusterModel = rebalanceManager.buildClusterModel();
+        ClusterModel clusterModel = buildClusterModel();
         assertThat(clusterModel.servers().size()).isEqualTo(6);
         assertThat(clusterModel.aliveServers().size()).isEqualTo(5);
         assertThat(clusterModel.offlineServers().size()).isEqualTo(1);
@@ -171,10 +175,21 @@ public class RebalanceManagerITCase {
         assertThat(originReplicaStates).allMatch(replicaState -> replicaState == OnlineReplica);
         assertThat(newReplicaStates).allMatch(Objects::isNull);
 
-        rebalanceManager.registerRebalance(
-                "test-rebalance-dsds",
-                Collections.singletonMap(tb, planForBucket),
-                RebalanceStatus.NOT_STARTED);
+        // RebalanceManager state is confined to the coordinator event thread.
+        AccessContextEvent<Void> registerEvent =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            rebalanceManager.registerRebalance(
+                                    "test-rebalance-dsds",
+                                    Collections.singletonMap(tb, planForBucket));
+                            return null;
+                        });
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(registerEvent);
+        registerEvent.getResultFuture().get(30, TimeUnit.SECONDS);
 
         retry(
                 Duration.ofMinutes(2),
@@ -224,6 +239,16 @@ public class RebalanceManagerITCase {
         // so the new leader's manifest can contain more segments than remoteLogSize.
         assertThat(newManifest.getRemoteLogSegmentList().size())
                 .isGreaterThanOrEqualTo(remoteLogSize);
+    }
+
+    private ClusterModel buildClusterModel() throws Exception {
+        // Read the non-thread-safe coordinator context on its event thread.
+        AccessContextEvent<ClusterModel> event =
+                new AccessContextEvent<>(ctx -> rebalanceManager.buildClusterModel());
+        CoordinatorEventProcessor processor =
+                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
+        processor.getCoordinatorEventManager().put(event);
+        return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }
 
     private void fromCoordinatorContext(

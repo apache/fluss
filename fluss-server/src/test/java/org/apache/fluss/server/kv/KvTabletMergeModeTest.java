@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
@@ -60,6 +61,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -125,6 +127,8 @@ class KvTabletMergeModeTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
@@ -209,6 +213,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -248,6 +253,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
 
@@ -299,6 +305,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -321,6 +328,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -351,6 +359,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -404,6 +413,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -442,6 +452,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -489,6 +500,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -528,6 +540,7 @@ class KvTabletMergeModeTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(AGG_ROW_TYPE)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }

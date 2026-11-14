@@ -15,10 +15,9 @@ Fluss provides a pluggable authorization framework that uses Access Control List
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
 | authorizer.type    | String  | default       | Specifies the type of authorizer to be used for access control. This value corresponds to the identifier of the authorization plugin. The default value is `default`, which indicates the built-in authorizer implementation. Custom authorizers can be implemented by providing a matching plugin identifier. |
 
-
 ## Core Components of ACLs
 
-Fluss uses an Access Control List (ACL) mechanism to enforce fine-grained permissions on resources such as clusters, databases, and tables. This allows administrators to define who (principals) can perform what actions (operations) on which objects (resources).
+Fluss uses an Access Control List (ACL) mechanism to enforce fine-grained permissions on resources such as clusters, databases, tables, and consumer groups. This allows administrators to define who (principals) can perform what actions (operations) on which objects (resources).
 
 Fluss ACLs are defined in the general format:
 ```
@@ -28,23 +27,25 @@ Principal {P} is Allowed Operation {O} From Host {H} on any Resource {R}.
 ### Resource
 In Fluss, a Resource represents an object to which access control can be applied. **Resources are organized in a hierarchical structure**, enabling fine-grained permission management as well as permission inheritance from higher-level scopes (e.g., database-level permissions apply to all tables within that database).
 
-There are three main types of resources:
+There are four main types of resources:
 
 | Resource Type | Resource Name Format Example | Description                                                                                                             |
-|---------------|------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| Cluster       | cluster                      | The cluster resource represents the entire Fluss cluster and is used for cluster-wide permissions.                      |
-| Database      | default_db                   | A database resource represents a specific database within the Fluss cluster and is used for database-level permissions. |
-| Table         | default_db.default_table     | A table resource represents a specific table within a database and is used for table-level permissions.                 |
+|---------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| Cluster       | cluster                    | The cluster resource represents the entire Fluss cluster and is used for cluster-wide permissions.                      |
+| Database      | default_db                 | A database resource represents a specific database within the Fluss cluster and is used for database-level permissions. |
+| Table         | default_db.default_table   | A table resource represents a specific table within a database and is used for table-level permissions.                 |
+| Group         | default_group              | A consumer group identified by its groupId. Group permissions are scoped to consumer groups and inherit from Cluster.   |
 
 This hierarchy follows this pattern:
 ```text
 Cluster
- └── Database
-     └── Table
+ ├── Database
+ │   └── Table
+ └── Group
 ```
 
 ### Operation
-In Fluss, an OperationType defines the type of action a principal (user or role) is attempting to perform on a resource (cluster, database, or table).
+In Fluss, an OperationType defines the type of action a principal (user or role) is attempting to perform on a resource (cluster, database, table, or consumer group).
 
 | Operation Type | Description |
 |----------------| --- |
@@ -53,7 +54,7 @@ In Fluss, an OperationType defines the type of action a principal (user or role)
 | `READ` | Allows reading data from a resource (e.g., querying tables).|
 | `WRITE` | Allows writing data to a resource (e.g., inserting or updating data in tables).|
 | `CREATE` | Allows creating a new resource (e.g., creating a new database or table).|
-| `DELETE` | Allows deleting a resource (e.g., deleting a database or table).|
+| `DROP` | Allows dropping a resource (e.g., dropping a database or table).|
 | `ALTER` | Allows modifying the structure of a resource (e.g., altering the schema of a table).|
 | `DESCRIBE` | Allows describing a resource (e.g., retrieving metadata about a table).|
 
@@ -72,34 +73,69 @@ Example usage:
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.
 
 ## Operations and Resources on Protocols
-Below is a summary of the currently public protocols and their relationship with operations and resource types:
-| Protocol | Operations | Resources | Note |
+Below is a summary of the currently public protocols and their relationship with ACL operations and resource types. `None` means the protocol does not perform ACL authorization.
+
+| Protocol | Operation | Resource | Note |
 | --- | --- | --- | --- |
+| API_VERSIONS | None | None | Lists supported APIs and versions. |
 | CREATE_DATABASE | CREATE | Cluster | |
-| DROP_DATABASE | DELETE | Database | |
-| LIST_DATABASES | DESCRIBE | Database | Only databases that the user has permission to access are returned. Databases for which the user lacks sufficient privileges are automatically filtered from the results.  |
-| CREATE_TABLE | CREATE | Database | |
-| DROP_TABLE | DELETE | Table | |
-| GET_TABLE_INFO | DESCRIBE | Table | |
-| LIST_TABLES | DESCRIBE | Table | Only tables that the user has permission to access are returned. Tables for which the user lacks sufficient privileges are automatically filtered from the results. |
-| LIST_PARTITION_INFOS | DESCRIBE | Table | Only partitions that the user has permission to access are returned. Partitions for which the user lacks sufficient privileges are automatically filtered from the results. |
-| GET_METADATA | DESCRIBE | Table | Only metadata that the user has permission to access is returned. Metadata for which the user lacks sufficient privileges is automatically filtered from the results.|
-| PRODUCE_LOG | WRITE | Table | |
-| FETCH_LOG | READ | Table | |
-| PUT_KV | WRITE | Cluster | |
-| LOOKUP | READ | Cluster | |
-| INIT_WRITER | WRITE | Table | User has the INIT_WRITER permission if it has the WRITE permission for one of the requested tables. |
-| LIMIT_SCAN | READ | Table | |
-| PREFIX_LOOKUP | READ | Table | |
+| DROP_DATABASE | DROP | Database | |
+| LIST_DATABASES | DESCRIBE | Database | Only databases that the user has permission to access are returned. |
+| DATABASE_EXISTS | DESCRIBE | Database | Returns `false` if the user lacks permission. The default database is exempted for compatibility. |
 | GET_DATABASE_INFO | DESCRIBE | Database | |
+| ALTER_DATABASE | ALTER | Database | |
+| CREATE_TABLE | CREATE | Database | |
+| DROP_TABLE | DROP | Table | |
+| ALTER_TABLE | ALTER | Table | |
+| GET_TABLE_INFO | DESCRIBE | Table | |
+| GET_TABLE_SCHEMA | DESCRIBE | Table | |
+| TABLE_EXISTS | DESCRIBE | Table | Returns `false` if the user lacks permission. |
+| LIST_TABLES | DESCRIBE | Table | Only tables that the user has permission to access are returned. |
+| LIST_PARTITION_INFOS | DESCRIBE | Table | Requires permission on the owning table. Partition-level ACLs are not checked. |
+| GET_METADATA | DESCRIBE | Table | Only metadata that the user has permission to access is returned. |
+| GET_LATEST_KV_SNAPSHOTS | DESCRIBE | Table | |
+| GET_KV_SNAPSHOT_METADATA | DESCRIBE | Table | |
+| GET_LAKE_SNAPSHOT | DESCRIBE | Table | |
+| LIST_REMOTE_LOG_MANIFESTS | DESCRIBE | Table | |
+| LIST_KV_SNAPSHOTS | DESCRIBE | Table | |
+| PRODUCE_LOG | WRITE | Table | |
+| FETCH_LOG | READ | Table | Normal client fetches require `READ`; replication follower fetches are treated as internal requests. |
+| PUT_KV | WRITE | Table | |
+| LOOKUP | READ or WRITE | Table | Normal lookup requires `READ`; lookup with `insertIfNotExists` requires `WRITE`. |
+| PREFIX_LOOKUP | READ | Table | |
+| LIMIT_SCAN | READ | Table | |
+| SCAN_KV | READ | Table | Opening a scan requires `READ` on the table. |
+| GET_TABLE_STATS | READ | Table | |
+| LIST_OFFSETS | DESCRIBE | Table | |
+| INIT_WRITER | WRITE | Table | The user is authorized if it has `WRITE` permission on one of the requested tables. |
 | CREATE_PARTITION | WRITE | Table | |
 | DROP_PARTITION | WRITE | Table | |
-| CREATE_ACLS | ALTER | Cluster | |
-| DROP_ACLS | ALTER | Cluster | |
-| LIST_ACLS | DESCRIBE | Cluster | |
+| CREATE_ACLS | ALL | Target resource | Requires `ALL` on the target resource. For table ACLs, `ALL` is checked on the database. |
+| DROP_ACLS | ALL | Target resource | Requires `ALL` on each matched resource. For table ACLs, `ALL` is checked on the database. All applicable checks precede any changes. |
+| LIST_ACLS | DESCRIBE | Target resource | Only ACLs on resources the user can `DESCRIBE` are returned. |
+| DESCRIBE_CLUSTER_CONFIGS | DESCRIBE | Cluster | |
+| ALTER_CLUSTER_CONFIGS | ALTER | Cluster | |
+| ADD_SERVER_TAG | ALTER | Cluster | |
+| ADD_SERVER_TAG_BY_RACK | ALTER | Cluster | If no registered TabletServer matches, authorization is still checked and the request succeeds as a no-op. |
+| REMOVE_SERVER_TAG | ALTER | Cluster | |
+| REMOVE_SERVER_TAG_BY_RACK | ALTER | Cluster | If no registered TabletServer matches, authorization is still checked and the request succeeds as a no-op. |
+| REBALANCE | WRITE | Cluster | |
+| LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
+| CANCEL_REBALANCE | WRITE | Cluster | |
+| GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
+| FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |
+| COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. |
+| GET_CONSUMER_OFFSETS | DESCRIBE | Group and source Tables | Requires `DESCRIBE` on the consumer group and every explicitly requested source table. `allOffsets` requests omit source tables the caller cannot describe. |
+| REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
+| GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
+| DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
+| ACQUIRE_KV_SNAPSHOT_LEASE | READ | Table | Requires `READ` on all tables in the request. |
+| RELEASE_KV_SNAPSHOT_LEASE | READ | Table | Requires `READ` on all tables in the request. |
+| DROP_KV_SNAPSHOT_LEASE | READ | Table | Requires `READ` on all tables held by the lease. |
+| GET_FILESYSTEM_SECURITY_TOKEN | None | None | Currently no ACL is enforced for this protocol. |
 
 ## ACL Operation
-Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using the Flink CALL statement. This allows administrators and users to dynamically control access permissions for principals (users or roles) on various resources such as clusters, databases, and tables.
+Fluss provides a FLINK SQL interface to manage Access Control Lists (ACLs) using the Flink CALL statement. This allows administrators and users to dynamically control access permissions for principals (users or roles) on clusters, databases, tables, and consumer groups.
 
 ### Add ACL
 The general syntax is:
@@ -123,13 +159,13 @@ CALL [catalog].sys.add_acl(
 );
 ```
 
-| Parameter  | Required | Description                                                                                                   |
-|------------|----------|---------------------------------------------------------------------------------------------------------------|
-| resource   | Yes      | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`)                             |
-| permission | Yes      | The permission to grant to the principal on the resource, currently only `ALLOW` is supported.                    |
-| principal  | Yes      | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`)                                              |
-| operation  | Yes      | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`) |
-| host       | No       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts (same as `*`)  |
+| Parameter  | Required | Description |
+|------------|----------|-------------|
+| resource   | Yes      | The resource to apply the ACL to. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. Use `database:*`, `table:*`, or `group:*` to grant the operation on every resource of that type. |
+| permission | Yes      | The permission to grant to the principal on the resource. Currently only `ALLOW` is supported. |
+| principal  | Yes      | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). |
+| operation  | Yes      | The operation to allow for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ALL`). `ANY` is only for filters and should not be used when adding ACLs. |
+| host       | No       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts (same as `*`). |
 
 ### Remove ACL
 The general syntax is:
@@ -152,20 +188,20 @@ CALL [catalog].sys.drop_acl(
     '[host]'
 );
 ```
-| Parameter  | Required | Description                                                                                                                                                                                           |
-|------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| resource   | NO       | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If not specified, it will filter all the resource (same as `ANY`)                              |
-| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., `ALLOW`, `DENY`). If If not specified, it will filter all the permission(same as `ANY`)                                           |
-| principal  | NO       | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). If If not specified, it will filter all the principal(same as `ANY`)                                                                |
-| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If If not specified, it will filter all the operation(same as `ANY`) |
-| host       | NO       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts( same as `ANY`)                                                                                        |
+| Parameter  | Required | Description |
+|------------|----------|-------------|
+| resource   | No       | The resource to match. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. If not specified, it matches all resources (same as `ANY`). |
+| permission | No       | The permission to match (e.g., `ALLOW`, `ANY`). If not specified, it matches all permissions (same as `ANY`). |
+| principal  | No       | The principal to match (e.g., `User:alice`, `Role:admin`). If not specified, it matches all principals (same as `ANY`). |
+| operation  | No       | The operation to match (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If not specified, it matches all operations (same as `ANY`). |
+| host       | No       | The host to match (e.g., `127.0.0.1`). If not specified, it matches all hosts (same as `ANY`). |
 
 ### List ACL
 List ACL will return a list of ACLs that match the specified criteria.
 The general syntax is:
 ```sql title="Flink SQL"
 -- Recommended, use named argument (only supported since Flink 1.19)
-CALL [catalog].sys.drop_acl(
+CALL [catalog].sys.list_acl(
     resource => '[resource]',
     permission => 'ALLOW',
     principal => '[principal_type:principal_name]',
@@ -174,7 +210,7 @@ CALL [catalog].sys.drop_acl(
 );
      
 -- Use indexed argument
-CALL [catalog].sys.drop_acl(
+CALL [catalog].sys.list_acl(
     '[resource]', 
     '[permission]',
     '[principal_type:principal_name]', 
@@ -182,13 +218,13 @@ CALL [catalog].sys.drop_acl(
     '[host]'
 );
 ```
-| Parameter  | Required | Description                                                                                                                                                                                           |
-|------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| resource   | NO       | The resource to apply the ACL to (e.g., `cluster`, `cluster.db1`, `cluster.db1.table1`). If If not specified, it will filter all the resource(same as `ANY`)                              |
-| permission | NO       | The permission to grant or deny to the principal on the resource (e.g., `ALLOW`, `DENY`). If If not specified, it will filter all the permission(same as `ANY`)                                           |
-| principal  | NO       | The principal to apply the ACL to (e.g., `User:alice`, `Role:admin`). If If not specified, it will filter all the principal(same as `ANY`)                                                                |
-| operation  | NO       | The operation to allow or deny for the principal on the resource (e.g., `READ`, `WRITE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If If not specified, it will filter all the operation(same as `ANY`) |
-| host       | NO       | The host to apply the ACL to (e.g., `127.0.0.1`). If not specified, the ACL applies to all hosts( same as `ANY`)                                                                                        |
+| Parameter  | Required | Description |
+|------------|----------|-------------|
+| resource   | No       | The resource to match. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. The legacy forms `cluster.<database_name>` and `cluster.<database_name>.<table_name>` remain supported. If not specified, it matches all resources (same as `ANY`). |
+| permission | No       | The permission to match (e.g., `ALLOW`, `ANY`). If not specified, it matches all permissions (same as `ANY`). |
+| principal  | No       | The principal to match (e.g., `User:alice`, `Role:admin`). If not specified, it matches all principals (same as `ANY`). |
+| operation  | No       | The operation to match (e.g., `READ`, `WRITE`, `CREATE`, `DROP`, `ALTER`, `DESCRIBE`, `ANY`, `ALL`). If not specified, it matches all operations (same as `ANY`). |
+| host       | No       | The host to match (e.g., `127.0.0.1`). If not specified, it matches all hosts (same as `ANY`). |
 
 
 ## Extending Authorization Methods (For Developers)
@@ -200,4 +236,3 @@ Steps to Implement a Custom Authorization Logic:
 2.  **Server-Side Plugin Installation**:
     Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin directory: `<FLUSS_HOME>/plugins/<custom_auth_plugin>/`. The server will automatically load the plugin at startup.
 3. **Configure the Desired Protocol**: Set  `org.apache.fluss.server.authorizer.AuthorizationPlugin.identifier` as the value of `authorizer.type` in the Fluss server configuration file.
-

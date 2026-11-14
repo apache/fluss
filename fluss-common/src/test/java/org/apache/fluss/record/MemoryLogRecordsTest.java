@@ -27,6 +27,7 @@ import java.util.function.Function;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 
 /** Tests for {@link MemoryLogRecords}. */
 class MemoryLogRecordsTest {
@@ -79,6 +80,7 @@ class MemoryLogRecordsTest {
         LogRecordsAssert.assertThatLogRecords(newRecords)
                 .hasBatchesCount(1)
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(TEST_SCHEMA_GETTER)
                 .isEqualTo(records);
     }
 }

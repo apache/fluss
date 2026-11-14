@@ -26,9 +26,11 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.TableLifecycleThrottler;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
@@ -44,8 +46,10 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -58,6 +62,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -81,6 +86,7 @@ class TableChangeWatcherTest {
     private static ZooKeeperClient zookeeperClient;
     private static String remoteDataDir;
     private TestingEventManager eventManager;
+    private TableLifecycleThrottler lifecycleThrottler;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
 
@@ -109,7 +115,11 @@ class TableChangeWatcherTest {
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
 
         eventManager = new TestingEventManager();
-        tableChangeWatcher = new TableChangeWatcher(zookeeperClient, eventManager);
+        lifecycleThrottler =
+                new TableLifecycleThrottler(
+                        eventManager, SystemClock.getInstance(), new Configuration());
+        tableChangeWatcher =
+                new TableChangeWatcher(zookeeperClient, eventManager, lifecycleThrottler);
         tableChangeWatcher.start();
     }
 
@@ -117,6 +127,9 @@ class TableChangeWatcherTest {
     void after() {
         if (tableChangeWatcher != null) {
             tableChangeWatcher.stop();
+        }
+        if (lifecycleThrottler != null) {
+            lifecycleThrottler.close();
         }
     }
 
@@ -137,7 +150,7 @@ class TableChangeWatcherTest {
                             });
             long tableId =
                     metadataManager.createTable(
-                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                            tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -147,7 +160,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
-                                    remoteDataDir,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -172,7 +185,15 @@ class TableChangeWatcherTest {
             expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false, false));
         }
 
-        // collect all events and check the all events
+        // The throttler admits one drop at a time; drive it by completing each drop
+        // as it appears so the next pending drop is admitted.
+        for (CoordinatorEvent event : expectedTableEvents) {
+            DropTableEvent drop = (DropTableEvent) event;
+            retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents()).contains(drop));
+            lifecycleThrottler.onTableDropCompleted(drop.getTableId());
+        }
+
+        // collect all events and check the all events.
         List<CoordinatorEvent> allEvents = new ArrayList<>(expectedEvents);
         allEvents.addAll(expectedTableEvents);
         retry(
@@ -200,7 +221,7 @@ class TableChangeWatcherTest {
                         .withReplicationFactor(3);
         long tableId =
                 metadataManager.createTable(
-                        tablePath, remoteDataDir, partitionedTable, null, false);
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
@@ -212,7 +233,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
-                                remoteDataDir,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
@@ -233,15 +254,39 @@ class TableChangeWatcherTest {
                                 .getBucketAssignments());
         // register assignment and metadata
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, remoteDataDir, tablePath, tableId);
+                1L,
+                "2011",
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, remoteDataDir, tablePath, tableId);
+                2L,
+                "2022",
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                tablePath,
+                tableId,
+                partitionAssignment.getBucketAssignments().size());
 
         // create partitions events
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 1L, "2011", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath,
+                        tableId,
+                        1L,
+                        "2011",
+                        partitionAssignment,
+                        DEFAULT_REMOTE_DATA_DIR));
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 2L, "2022", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath,
+                        tableId,
+                        2L,
+                        "2022",
+                        partitionAssignment,
+                        DEFAULT_REMOTE_DATA_DIR));
 
         retry(
                 Duration.ofMinutes(1),
@@ -257,11 +302,16 @@ class TableChangeWatcherTest {
         // drop table event
         expectedEvents.add(new DropTableEvent(tableId, true, false));
 
+        // The throttler admits one drop at a time; drive it by completing partition
+        // drops as they arrive (the table drop is fire-and-forget for partitioned tables).
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+                () -> {
+                    lifecycleThrottler.onPartitionDropCompleted(new TablePartition(tableId, 1L));
+                    lifecycleThrottler.onPartitionDropCompleted(new TablePartition(tableId, 2L));
+                    assertThat(eventManager.getEvents())
+                            .containsExactlyInAnyOrderElementsOf(expectedEvents);
+                });
     }
 
     @Test
@@ -281,7 +331,7 @@ class TableChangeWatcherTest {
                             });
             long tableId =
                     metadataManager.createTable(
-                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                            tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -291,7 +341,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
-                                    remoteDataDir,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -356,7 +406,7 @@ class TableChangeWatcherTest {
                         });
         long tableId =
                 metadataManager.createTable(
-                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         long currentMillis = System.currentTimeMillis();
 
@@ -368,7 +418,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 TEST_TABLE,
-                                remoteDataDir,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         tableAssignment));
@@ -385,7 +435,14 @@ class TableChangeWatcherTest {
         builder.setCustomProperty("custom.key", "custom.value");
         TablePropertyChanges tablePropertyChanges = builder.build();
         metadataManager.alterTableProperties(
-                tablePath, Collections.emptyList(), tablePropertyChanges, false, null);
+                tablePath,
+                Collections.emptyList(),
+                tablePropertyChanges,
+                false,
+                null,
+                (currentTable, updatedTable) -> {},
+                (currentTable, updatedTable) -> {},
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get the updated table registration
         TableRegistration updatedTableRegistration =
@@ -461,7 +518,11 @@ class TableChangeWatcherTest {
         // existing nodes with full data - the same code path as when the async
         // getData race causes NODE_CHANGED to be lost.
         TestingEventManager newEventManager = new TestingEventManager();
-        TableChangeWatcher newWatcher = new TableChangeWatcher(zookeeperClient, newEventManager);
+        TableLifecycleThrottler newThrottler =
+                new TableLifecycleThrottler(
+                        newEventManager, SystemClock.getInstance(), new Configuration());
+        TableChangeWatcher newWatcher =
+                new TableChangeWatcher(zookeeperClient, newEventManager, newThrottler);
         newWatcher.start();
 
         retry(
@@ -470,5 +531,6 @@ class TableChangeWatcherTest {
                         assertThat(newEventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
         newWatcher.stop();
+        newThrottler.close();
     }
 }

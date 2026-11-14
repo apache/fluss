@@ -18,6 +18,7 @@
 package org.apache.fluss.client.token;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
 
@@ -27,7 +28,6 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ServiceLoader;
-import java.util.function.Consumer;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -41,30 +41,34 @@ class SecurityTokenReceiverRepository {
     private final Map<String, SecurityTokenReceiver> securityTokenReceivers;
 
     SecurityTokenReceiverRepository() {
-        this.securityTokenReceivers = loadReceivers();
+        this(
+                ServiceLoader.load(
+                        SecurityTokenReceiver.class, SecurityTokenReceiver.class.getClassLoader()));
     }
 
-    private Map<String, SecurityTokenReceiver> loadReceivers() {
+    @VisibleForTesting
+    SecurityTokenReceiverRepository(Iterable<SecurityTokenReceiver> tokenReceivers) {
+        this.securityTokenReceivers = loadReceivers(tokenReceivers);
+    }
+
+    private Map<String, SecurityTokenReceiver> loadReceivers(
+            Iterable<SecurityTokenReceiver> tokenReceivers) {
         LOG.info("Loading security token receivers");
 
         Map<String, SecurityTokenReceiver> receivers = new HashMap<>();
-
-        Consumer<SecurityTokenReceiver> loadReceiver =
-                (receiver) -> {
-                    checkState(
-                            !receivers.containsKey(receiver.scheme()),
-                            "Security token receiver with scheme name {} has multiple implementations",
-                            receiver.scheme());
-                    receivers.put(receiver.scheme(), receiver);
-                    LOG.info(
-                            "Security token receiver '{}' loaded and initialized",
-                            receiver.scheme());
-                };
-
-        ServiceLoader.load(
-                        SecurityTokenReceiver.class, SecurityTokenReceiver.class.getClassLoader())
-                .iterator()
-                .forEachRemaining(loadReceiver);
+        for (SecurityTokenReceiver receiver : tokenReceivers) {
+            checkState(
+                    !receivers.containsKey(receiver.scheme()),
+                    "Security token receiver with scheme name %s has multiple implementations",
+                    receiver.scheme());
+            receivers.put(receiver.scheme(), receiver);
+            LOG.info("Security token receiver '{}' loaded and initialized", receiver.scheme());
+        }
+        for (SecurityTokenReceiver receiver : tokenReceivers) {
+            for (String scheme : receiver.getAliasSchemes()) {
+                receivers.putIfAbsent(scheme, receiver);
+            }
+        }
 
         LOG.info("Security token receivers loaded successfully");
         return receivers;

@@ -20,6 +20,7 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.RemoteStorageException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.server.log.OffsetIndex;
@@ -181,9 +182,13 @@ public class RemoteLogIndexCache implements Closeable {
     }
 
     /** Get the position of the given offset in the remote log segment. */
-    public int lookupPosition(RemoteLogSegment remoteLogSegment, long offset) {
+    public int lookupPosition(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, long offset) {
         return inReadLock(
-                lock, () -> getIndexEntry(remoteLogSegment).lookupOffset(offset).getPosition());
+                lock,
+                () ->
+                        getIndexEntry(remoteLogDir, remoteLogSegment)
+                                .lookupOffset(offset)
+                                .getPosition());
     }
 
     /**
@@ -191,12 +196,17 @@ public class RemoteLogIndexCache implements Closeable {
      * the timestamp lower than the smallest commit timestamp in this segment, return the
      * remoteLogStartOffset.
      */
-    public long lookupOffsetForTimestamp(RemoteLogSegment remoteLogSegment, long timestamp) {
+    public long lookupOffsetForTimestamp(
+            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment, long timestamp) {
         return inReadLock(
-                lock, () -> getIndexEntry(remoteLogSegment).lookupTimestamp(timestamp).getOffset());
+                lock,
+                () ->
+                        getIndexEntry(remoteLogDir, remoteLogSegment)
+                                .lookupTimestamp(timestamp)
+                                .getOffset());
     }
 
-    Entry getIndexEntry(RemoteLogSegment remoteLogSegment) {
+    Entry getIndexEntry(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment) {
         if (isRemoteIndexCacheClosed.get()) {
             throw new IllegalStateException(
                     "Unable to fetch index for "
@@ -218,11 +228,11 @@ public class RemoteLogIndexCache implements Closeable {
                     }
                     return internalCache.get(
                             remoteLogSegment.remoteLogSegmentId(),
-                            id -> createCacheEntry(remoteLogSegment));
+                            id -> createCacheEntry(remoteLogDir, remoteLogSegment));
                 });
     }
 
-    private Entry createCacheEntry(RemoteLogSegment remoteLogSegment) {
+    private Entry createCacheEntry(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment) {
         long startOffset = remoteLogSegment.remoteLogStartOffset();
         try {
             File offsetIndexFile = remoteOffsetIndexCacheFile(cacheDir, remoteLogSegment);
@@ -233,7 +243,9 @@ public class RemoteLogIndexCache implements Closeable {
                             metadata -> {
                                 try {
                                     return remoteLogStorage.fetchIndex(
-                                            remoteLogSegment, RemoteLogStorage.IndexType.OFFSET);
+                                            remoteLogDir,
+                                            remoteLogSegment,
+                                            RemoteLogStorage.IndexType.OFFSET);
                                 } catch (RemoteStorageException e) {
                                     throw new FlussRuntimeException(e);
                                 }
@@ -257,7 +269,9 @@ public class RemoteLogIndexCache implements Closeable {
                             metadata -> {
                                 try {
                                     return remoteLogStorage.fetchIndex(
-                                            remoteLogSegment, RemoteLogStorage.IndexType.TIMESTAMP);
+                                            remoteLogDir,
+                                            remoteLogSegment,
+                                            RemoteLogStorage.IndexType.TIMESTAMP);
                                 } catch (RemoteStorageException e) {
                                     throw new FlussRuntimeException(e);
                                 }
@@ -324,7 +338,9 @@ public class RemoteLogIndexCache implements Closeable {
     private Cache<UUID, Entry> initEmptyCache(long maxSize) {
         return Caffeine.newBuilder()
                 .maximumWeight(maxSize)
-                .weigher((UUID key, Entry entry) -> (int) entry.entrySizeBytes)
+                .weigher(
+                        (UUID key, Entry entry) ->
+                                (int) Math.min(entry.entrySizeBytes, Integer.MAX_VALUE))
                 // This listener is invoked each time an entry is being automatically removed due to
                 // eviction. The cache will invoke this listener during the atomic operation to
                 // remove the entry (refer: https://github.com/ben-manes/caffeine/wiki/Removal),
@@ -368,7 +384,7 @@ public class RemoteLogIndexCache implements Closeable {
         try (Stream<Path> paths = Files.list(cacheDir.toPath())) {
             paths.forEach(
                     path -> {
-                        if (path.endsWith(TMP_FILE_SUFFIX)) {
+                        if (path.getFileName().toString().endsWith(TMP_FILE_SUFFIX)) {
                             try {
                                 if (Files.deleteIfExists(path)) {
                                     LOG.debug("Deleted file path {} on cache initialization", path);
@@ -568,7 +584,8 @@ public class RemoteLogIndexCache implements Closeable {
         }
 
         private long estimatedEntrySize() {
-            return inReadLock(entryLock, offsetIndex::sizeInBytes);
+            return inReadLock(
+                    entryLock, () -> (long) offsetIndex.sizeInBytes() + timeIndex.sizeInBytes());
         }
 
         public OffsetPosition lookupOffset(long targetOffset) {

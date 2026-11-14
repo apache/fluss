@@ -24,9 +24,9 @@ import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.DescribedEnum;
+import org.apache.flink.configuration.MemorySize;
 import org.apache.flink.configuration.description.InlineElement;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
-import org.apache.flink.table.catalog.IntervalFreshness;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -55,7 +55,10 @@ public class FlinkConnectorOptions {
             ConfigOptions.key("bucket.num")
                     .intType()
                     .noDefaultValue()
-                    .withDescription("The number of buckets of a Fluss table.");
+                    .withDescription(
+                            "The target number of buckets for a Fluss table. "
+                                    + "For partitioned tables, this value applies to newly created "
+                                    + "partitions; existing partitions retain their original bucket count.");
 
     public static final ConfigOption<String> BUCKET_KEY =
             ConfigOptions.key("bucket.key")
@@ -116,6 +119,46 @@ public class FlinkConnectorOptions {
                                     + "Default is false.");
 
     // --------------------------------------------------------------------------------------------
+    // Full lookup cache options
+    // --------------------------------------------------------------------------------------------
+
+    public static final ConfigOption<MemorySize> LOOKUP_FULL_CACHE_WRITE_BUFFER_SIZE =
+            ConfigOptions.key("lookup.full-cache.rocksdb.write-buffer-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(32))
+                    .withDescription(
+                            "RocksDB memtable size per full-cache instance in the TaskManager.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_WRITE_BUFFER_COUNT =
+            ConfigOptions.key("lookup.full-cache.rocksdb.write-buffer-count")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "Maximum number of RocksDB write buffers per full-cache instance; at least two.");
+
+    public static final ConfigOption<MemorySize> LOOKUP_FULL_CACHE_BLOCK_CACHE_SIZE =
+            ConfigOptions.key("lookup.full-cache.rocksdb.block-cache-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(32))
+                    .withDescription(
+                            "RocksDB block cache capacity per full-cache instance, including index and filter blocks. "
+                                    + "Pinned blocks can exceed this capacity; this does not bound total native memory.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_MAX_BACKGROUND_JOBS =
+            ConfigOptions.key("lookup.full-cache.rocksdb.max-background-jobs")
+                    .intType()
+                    .defaultValue(2)
+                    .withDescription(
+                            "Maximum RocksDB background flush and compaction jobs per full-cache instance.");
+
+    public static final ConfigOption<Integer> LOOKUP_FULL_CACHE_MAX_OPEN_FILES =
+            ConfigOptions.key("lookup.full-cache.rocksdb.max-open-files")
+                    .intType()
+                    .defaultValue(512)
+                    .withDescription(
+                            "Maximum open files per full-cache RocksDB instance; must be positive.");
+
+    // --------------------------------------------------------------------------------------------
     // Scan specific options
     // --------------------------------------------------------------------------------------------
 
@@ -137,6 +180,42 @@ public class FlinkConnectorOptions {
                                     + "The format is 'timestamp' or 'yyyy-MM-dd HH:mm:ss'. "
                                     + "Like '1678883047356' or '2023-12-09 23:09:12'.");
 
+    public static final ConfigOption<ScanBoundedMode> SCAN_BOUNDED_MODE =
+            ConfigOptions.key("scan.bounded.mode")
+                    .enumType(ScanBoundedMode.class)
+                    .defaultValue(ScanBoundedMode.UNBOUNDED)
+                    .withDescription(
+                            String.format(
+                                    "Bounded mode for the Fluss source. Default is '%s'. In batch "
+                                            + "execution mode, '%s' behaves the same as '%s': the "
+                                            + "source reads up to the latest log offsets captured "
+                                            + "at startup. In streaming execution mode, a bounded "
+                                            + "mode other than '%s' makes the source stop at the "
+                                            + "given stopping offsets and then the job finishes "
+                                            + "(a bounded streaming read). Bounded modes other "
+                                            + "than '%s' are supported for log tables and the "
+                                            + "changelog of primary key tables (earliest/latest/"
+                                            + "timestamp startup mode), but not for the full "
+                                            + "startup mode of primary key tables or the datalake "
+                                            + "union read.",
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.LATEST_OFFSET.value,
+                                    ScanBoundedMode.UNBOUNDED.value,
+                                    ScanBoundedMode.UNBOUNDED.value));
+
+    public static final ConfigOption<String> SCAN_BOUNDED_TIMESTAMP =
+            ConfigOptions.key("scan.bounded.timestamp")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Optional timestamp for Fluss source in case of bounded mode is timestamp. "
+                                    + "The source stops before the first record batch whose commit "
+                                    + "timestamp is greater than or equal to the given timestamp, i.e. "
+                                    + "only records with a commit timestamp smaller than the given "
+                                    + "timestamp are read. The format is 'timestamp' or "
+                                    + "'yyyy-MM-dd HH:mm:ss'. Like '1678883047356' or '2023-12-09 23:09:12'.");
+
     public static final ConfigOption<Duration> SCAN_PARTITION_DISCOVERY_INTERVAL =
             ConfigOptions.key("scan.partition.discovery.interval")
                     .durationType()
@@ -149,6 +228,14 @@ public class FlinkConnectorOptions {
                                     + "number of requests to ZooKeeper in server, this option cannot be set too small, "
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
                                     + "once list partitions is optimized, the default value of this parameter can be reduced.");
+
+    public static final ConfigOption<Boolean> SCAN_FILTER_UNCHANGED_ROW_ENABLED =
+            ConfigOptions.key("scan.filter-unchanged-row.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Skip complete update pairs with equal projected values when scanning a subset of "
+                                    + "a primary-key table's columns. Skipped updates do not advance watermarks.");
 
     public static final ConfigOption<Integer> SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE =
             ConfigOptions.key("scan.split.assignment.batch-size")
@@ -194,6 +281,14 @@ public class FlinkConnectorOptions {
                     .defaultValue(DistributionMode.AUTO)
                     .withDescription(
                             "Defines the distribution mode for writing data to the sink. Available options are:\n"
+                                    + "- BUCKET_BALANCE: Shuffles records by bucket key using an LCM-based logical-slot assignment. "
+                                    + "This improves sink-subtask utilization and expected load distribution, particularly when the bucket count and sink parallelism do not evenly divide each other. "
+                                    + "For a fixed bucket count and sink parallelism, records with the same bucket key always route to the same subtask, "
+                                    + "while different bucket keys in the same physical bucket may be processed by different subtasks assigned to that bucket. "
+                                    + "This mode does not guarantee that every physical bucket is distributed across all subtasks, or that every subtask receives data; actual load depends on the bucket-key distribution. "
+                                    + "When the bucket count is an exact multiple of the sink parallelism, it behaves like BUCKET mode. "
+                                    + "It requires 'bucket.key' to be defined and does not guarantee intra-bucket ordering. "
+                                    + "It is not supported for tables using the aggregation merge engine because Undo Recovery requires each physical bucket to be written by exactly one subtask.\n"
                                     + "- AUTO: Automatically chooses the best mode based on the table type. "
                                     + "Uses BUCKET mode for Primary Key Tables and Log table with bucket key to maximize throughput, "
                                     + "and NONE for Log Tables without bucket key.\n"
@@ -233,8 +328,8 @@ public class FlinkConnectorOptions {
     public static final List<String> ALTER_DISALLOW_OPTIONS =
             Arrays.asList(
                     AUTO_INCREMENT_FIELDS.key(),
-                    BUCKET_NUMBER.key(),
                     BUCKET_KEY.key(),
+                    BUCKET_NUMBER.key(),
                     BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
@@ -249,18 +344,29 @@ public class FlinkConnectorOptions {
                     .noDefaultValue()
                     .withDescription(
                             "The definition query text of materialized table, text is expanded in contrast to the original SQL.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_ORIGINAL_QUERY =
+            ConfigOptions.key("materialized-table.original-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Original text of the materialized table definition that preserves the original formatting.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_EXPANDED_QUERY =
+            ConfigOptions.key("materialized-table.expanded-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Expanded text of the original materialized table definition with resolved identifiers.");
     public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS =
             ConfigOptions.key("materialized-table.interval-freshness")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "The freshness interval of materialized table which is used to determine the physical refresh mode.");
-    public static final ConfigOption<IntervalFreshness.TimeUnit>
-            MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT =
-                    ConfigOptions.key("materialized-table.interval-freshness.time-unit")
-                            .enumType(IntervalFreshness.TimeUnit.class)
-                            .noDefaultValue()
-                            .withDescription("The time unit of freshness interval.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT =
+            ConfigOptions.key("materialized-table.interval-freshness.time-unit")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The time unit of freshness interval.");
     public static final ConfigOption<CatalogMaterializedTable.LogicalRefreshMode>
             MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE =
                     ConfigOptions.key("materialized-table.logical-refresh-mode")
@@ -319,6 +425,43 @@ public class FlinkConnectorOptions {
         private final InlineElement description;
 
         ScanStartupMode(String value, InlineElement description) {
+            this.value = value;
+            this.description = description;
+        }
+
+        @Override
+        public String toString() {
+            return value;
+        }
+
+        @Override
+        public InlineElement getDescription() {
+            return description;
+        }
+    }
+
+    /** Bounded mode for the fluss scanner, see {@link #SCAN_BOUNDED_MODE}. */
+    public enum ScanBoundedMode implements DescribedEnum {
+        UNBOUNDED(
+                "unbounded",
+                text(
+                        "In streaming execution mode, the source never stops. In batch execution "
+                                + "mode, the source reads up to the latest log offsets captured "
+                                + "at startup.")),
+        LATEST_OFFSET(
+                "latest-offset",
+                text("Bounded by the latest log offsets captured when the source starts.")),
+        TIMESTAMP(
+                "timestamp",
+                text(
+                        "Bounded by a user-supplied timestamp. The source stops before the first "
+                                + "record batch whose commit timestamp is greater than or equal "
+                                + "to the given timestamp."));
+
+        private final String value;
+        private final InlineElement description;
+
+        ScanBoundedMode(String value, InlineElement description) {
             this.value = value;
             this.description = description;
         }

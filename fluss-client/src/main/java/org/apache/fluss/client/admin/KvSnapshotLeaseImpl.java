@@ -20,6 +20,7 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.RetryableGatewayClientProxy;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
@@ -27,6 +28,7 @@ import org.apache.fluss.rpc.messages.DropKvSnapshotLeaseRequest;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAcquireKvSnapshotLeaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeReleaseKvSnapshotLeaseRequest;
@@ -37,10 +39,17 @@ public class KvSnapshotLeaseImpl implements KvSnapshotLease {
     private final long leaseDurationMs;
     private final AdminGateway gateway;
 
-    public KvSnapshotLeaseImpl(String leaseId, long leaseDurationMs, AdminGateway gateway) {
+    public KvSnapshotLeaseImpl(
+            String leaseId,
+            long leaseDurationMs,
+            AdminGateway gateway,
+            Runnable metadataRefreshAction,
+            Executor refreshExecutor) {
         this.leaseId = leaseId;
         this.leaseDurationMs = leaseDurationMs;
-        this.gateway = gateway;
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        gateway, metadataRefreshAction, refreshExecutor, AdminGateway.class);
     }
 
     @Override

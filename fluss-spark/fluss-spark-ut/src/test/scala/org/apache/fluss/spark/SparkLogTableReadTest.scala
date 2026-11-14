@@ -17,12 +17,12 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.spark.read.{FlussMetrics, FlussScan}
-import org.apache.fluss.spark.read.FlussAppendScan
+import org.apache.fluss.spark.read.{FlussAppendScan, FlussMetrics, FlussScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.read.InputPartition
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -84,6 +84,30 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(1000L, 25L) ::
           Row(1100L, 260L) :: Nil
       )
+
+      // Insert one row with a NULL nullable column to make the COUNT(nullable_col)
+      // assertion below actually discriminate between row count and non-null count.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1200L, 270L, 607, NULL)
+             |""".stripMargin)
+
+      // COUNT(*) / COUNT(1) — empty projection case
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
+
+      // COUNT(*) with filter — verifies the non-empty-projection path is unaffected
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE orderId >= 900"),
+        Row(5L) :: Nil
+      )
+
+      // COUNT on a nullable column — address is nullable STRING and one row has NULL,
+      // so COUNT(address) must be strictly less than COUNT(*).
+      checkAnswer(
+        sql(s"SELECT COUNT(address) FROM $DEFAULT_DATABASE.t"),
+        Row(8L) :: Nil
+      )
     }
   }
 
@@ -129,6 +153,15 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(700L, "addr2", "2026-01-01") ::
           Row(800L, "addr3", "2026-01-02") ::
           Row(900L, "addr4", "2026-01-02") :: Nil
+      )
+
+      // COUNT(*) on partitioned log table
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(5L) :: Nil)
+
+      // COUNT(*) with partition filter
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
@@ -665,6 +698,69 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
       }.get
       val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
       assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: split partition by config") {
+    withSampleTable {
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+          -> "2") {
+        val df = sql(s"SELECT amount FROM $DEFAULT_DATABASE.t ORDER BY orderId")
+        checkAnswer(df, Row(601) :: Row(602) :: Row(603) :: Row(604) :: Row(605) :: Nil)
+
+        val partitions = getInputPartitions(df)
+        assertThat(partitions.length).isEqualTo(3)
+      }
+    }
+
+    withTable("t_partition") {
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t_partition (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+           |PARTITIONED BY (dt)
+           |""".stripMargin
+      )
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_partition VALUES
+             |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+             |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+             |(1000L, 25L, 605, "addr5", "2026-01-03")
+             |""".stripMargin)
+      Seq((0, 3), (1, 5), (2, 3)).foreach {
+        case (maxRecords, expectedPartitions) =>
+          withClue(s"maxRecords = $maxRecords, expectedPartitions = $expectedPartitions") {
+            withSQLConf(
+              s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+                -> maxRecords.toString) {
+              val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_partition ORDER BY orderId")
+              checkAnswer(
+                df,
+                Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+                  Row(700L, 22L, 602, "addr2", "2026-01-01") ::
+                  Row(800L, 23L, 603, "addr3", "2026-01-02") ::
+                  Row(900L, 24L, 604, "addr4", "2026-01-02") ::
+                  Row(1000L, 25L, 605, "addr5", "2026-01-03") :: Nil
+              )
+
+              val partitions = getInputPartitions(df)
+              assertThat(partitions.length).isEqualTo(expectedPartitions)
+            }
+          }
+      }
+    }
+  }
+
+  private def getInputPartitions(df: DataFrame): Seq[InputPartition] = {
+    df.queryExecution.executedPlan match {
+      case aeq: AdaptiveSparkPlanExec =>
+        aeq.inputPlan.collect { case b: BatchScanExec => b.inputPartitions }.flatten
+      case e =>
+        e.collect {
+          case b: BatchScanExec => b.inputPartitions
+          case _ => Seq.empty[InputPartition]
+        }.flatten
     }
   }
 }

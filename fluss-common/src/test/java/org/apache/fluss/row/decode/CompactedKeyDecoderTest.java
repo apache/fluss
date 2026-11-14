@@ -18,6 +18,7 @@
 
 package org.apache.fluss.row.decode;
 
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
@@ -173,6 +174,24 @@ class CompactedKeyDecoderTest {
             assertThat(decoded.getInt(0)).isEqualTo(original.getInt(0));
             assertThat(decoded.getString(1).toString()).isEqualTo(original.getString(1).toString());
         }
+    }
+
+    @Test
+    void testHudiPrimaryKeyDecoderUsesCompactedDecoder() {
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.INT(), DataTypes.STRING()},
+                        new String[] {"id", "name"});
+        List<String> pk = Arrays.asList("id", "name");
+
+        assertThat(
+                        KeyDecoder.ofPrimaryKeyDecoder(
+                                rowType, pk, (short) 1, DataLakeFormat.HUDI, true))
+                .isInstanceOf(CompactedKeyDecoder.class);
+        assertThat(
+                        KeyDecoder.ofPrimaryKeyDecoder(
+                                rowType, pk, (short) 2, DataLakeFormat.HUDI, false))
+                .isInstanceOf(CompactedKeyDecoder.class);
     }
 
     @Test

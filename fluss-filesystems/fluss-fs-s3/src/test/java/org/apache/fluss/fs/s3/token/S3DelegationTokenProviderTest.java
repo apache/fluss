@@ -19,15 +19,27 @@ package org.apache.fluss.fs.s3.token;
 
 import org.apache.hadoop.conf.Configuration;
 import org.junit.jupiter.api.Test;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
+import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.sts.StsClient;
 
+import java.io.IOException;
+import java.net.URI;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link S3DelegationTokenProvider} constructor validation. */
-class S3DelegationTokenProviderTest {
+public class S3DelegationTokenProviderTest {
+
+    private static final String PROVIDER_CONFIG = "fs.s3a.aws.credentials.provider";
 
     @Test
-    void testDefaultChainWithRoleArn() {
+    void testDefaultChainWithRoleArn() throws IOException {
         Configuration conf = new Configuration();
         conf.set("fs.s3a.region", "us-east-1");
         conf.set("fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
@@ -54,5 +66,202 @@ class S3DelegationTokenProviderTest {
         assertThatThrownBy(() -> new S3DelegationTokenProvider("s3", conf))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must both be set or both be unset");
+    }
+
+    @Test
+    void testConfiguredProviderWithoutStaticCredentialsIsAccepted() {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, RefreshableCredentialsProvider.class);
+
+        assertThatCode(() -> new S3DelegationTokenProvider("s3", conf)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testDynamicTemporaryCredentialsProviderIsRejected() {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, DynamicTemporaryAWSCredentialsProvider.class);
+
+        assertThatThrownBy(() -> new S3DelegationTokenProvider("s3", conf))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(DynamicTemporaryAWSCredentialsProvider.NAME)
+                .hasMessageContaining("server-side");
+    }
+
+    @Test
+    void testConfiguredProviderRequiresRegion() {
+        Configuration conf = new Configuration();
+        setConfiguredProvider(conf, RefreshableCredentialsProvider.class);
+
+        assertThatThrownBy(() -> new S3DelegationTokenProvider("s3", conf))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Region is not set");
+    }
+
+    @Test
+    void testConfiguredProviderWithRoleArnCallsAssumeRoleAsTheProvider() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, SessionCredentialsProvider.class);
+        conf.set("fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+
+        assertThat(provider.createStsCredentialsProvider().resolveCredentials())
+                .isInstanceOf(AwsSessionCredentials.class);
+    }
+
+    @Test
+    void testStsClientCloseDoesNotInvalidateTheConfiguredProvider() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, SessionCredentialsProvider.class);
+        conf.set("fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+        AwsCredentialsProvider stsCaller = provider.createStsCredentialsProvider();
+
+        try (StsClient client =
+                StsClient.builder()
+                        .region(Region.of("us-east-1"))
+                        .credentialsProvider(stsCaller)
+                        .build()) {
+            assertThat(client).isNotNull();
+        }
+
+        assertThat(provider.createStsCredentialsProvider().resolveCredentials())
+                .isInstanceOf(AwsSessionCredentials.class);
+    }
+
+    @Test
+    void testConfiguredProviderCredentialsAreResolvedForEachUse() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, RefreshableCredentialsProvider.class);
+        RefreshableCredentialsProvider.setCredentials("firstAccessKey", "firstSecretKey");
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+
+        AwsCredentials firstCredentials =
+                provider.createStsCredentialsProvider().resolveCredentials();
+        RefreshableCredentialsProvider.setCredentials("secondAccessKey", "secondSecretKey");
+        AwsCredentials secondCredentials =
+                provider.createStsCredentialsProvider().resolveCredentials();
+
+        assertThat(firstCredentials.accessKeyId()).isEqualTo("firstAccessKey");
+        assertThat(firstCredentials.secretAccessKey()).isEqualTo("firstSecretKey");
+        assertThat(secondCredentials.accessKeyId()).isEqualTo("secondAccessKey");
+        assertThat(secondCredentials.secretAccessKey()).isEqualTo("secondSecretKey");
+    }
+
+    @Test
+    void testConfiguredProviderTakesPrecedenceOverStaticCredentials() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        conf.set("fs.s3a.access.key", "staticAccessKey");
+        conf.set("fs.s3a.secret.key", "staticSecretKey");
+        setConfiguredProvider(conf, RefreshableCredentialsProvider.class);
+        RefreshableCredentialsProvider.setCredentials("providerAccessKey", "providerSecretKey");
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+
+        AwsCredentials credentials = provider.createStsCredentialsProvider().resolveCredentials();
+
+        assertThat(credentials.accessKeyId()).isEqualTo("providerAccessKey");
+        assertThat(credentials.secretAccessKey()).isEqualTo("providerSecretKey");
+    }
+
+    @Test
+    void testConfiguredProviderReturningSessionCredentialsThrowsBeforeSts() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        setConfiguredProvider(conf, SessionCredentialsProvider.class);
+        S3DelegationTokenProvider provider = new S3DelegationTokenProvider("s3", conf);
+
+        assertThatThrownBy(provider::createStsCredentialsProvider)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Session credentials")
+                .hasMessageNotContaining("sessionSecretKey")
+                .hasMessageNotContaining("sessionToken");
+    }
+
+    @Test
+    void testConfiguredProviderWithUriConfigurationConstructorIsSupported() throws IOException {
+        Configuration conf = new Configuration();
+        conf.set("fs.s3a.region", "us-east-1");
+        conf.set("test.config.value", "configured-value");
+        setConfiguredProvider(conf, UriConfigurationCredentialsProvider.class);
+
+        new S3DelegationTokenProvider("s3", conf);
+
+        assertThat(UriConfigurationCredentialsProvider.uri).isNull();
+        assertThat(UriConfigurationCredentialsProvider.configuredValue)
+                .isEqualTo("configured-value");
+    }
+
+    @Test
+    void testStsEndpointWithoutSchemeDefaultsToHttps() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("sts.amazonaws.com"))
+                .isEqualTo(URI.create("https://sts.amazonaws.com"));
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("localhost:4566"))
+                .isEqualTo(URI.create("https://localhost:4566"));
+    }
+
+    @Test
+    void testHttpStsEndpointIsPreserved() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("http://localhost:4566"))
+                .isEqualTo(URI.create("http://localhost:4566"));
+    }
+
+    @Test
+    void testHttpsStsEndpointIsPreserved() {
+        assertThat(S3DelegationTokenProvider.parseStsEndpoint("https://sts.amazonaws.com"))
+                .isEqualTo(URI.create("https://sts.amazonaws.com"));
+    }
+
+    private static void setConfiguredProvider(
+            Configuration conf, Class<? extends AwsCredentialsProvider> providerClass) {
+        conf.set(PROVIDER_CONFIG, providerClass.getName());
+        conf.setBoolean(S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED, true);
+    }
+
+    /** Refreshable credentials provider for tests. */
+    public static class RefreshableCredentialsProvider implements AwsCredentialsProvider {
+        private static volatile AwsCredentials credentials =
+                AwsBasicCredentials.create("defaultAccessKey", "defaultSecretKey");
+
+        static void setCredentials(String accessKey, String secretKey) {
+            credentials = AwsBasicCredentials.create(accessKey, secretKey);
+        }
+
+        @Override
+        public AwsCredentials resolveCredentials() {
+            return credentials;
+        }
+    }
+
+    /** Session credentials provider for tests. */
+    public static class SessionCredentialsProvider implements AwsCredentialsProvider {
+
+        @Override
+        public AwsSessionCredentials resolveCredentials() {
+            return AwsSessionCredentials.create(
+                    "sessionAccessKey", "sessionSecretKey", "sessionToken");
+        }
+    }
+
+    /** Credentials provider with the Hadoop S3A URI/configuration constructor form. */
+    public static class UriConfigurationCredentialsProvider implements AwsCredentialsProvider {
+        private static volatile URI uri;
+        private static volatile String configuredValue;
+
+        public UriConfigurationCredentialsProvider(URI uri, Configuration conf) {
+            UriConfigurationCredentialsProvider.uri = uri;
+            UriConfigurationCredentialsProvider.configuredValue = conf.get("test.config.value");
+        }
+
+        @Override
+        public AwsCredentials resolveCredentials() {
+            return AwsBasicCredentials.create("uriAccessKey", "uriSecretKey");
+        }
     }
 }

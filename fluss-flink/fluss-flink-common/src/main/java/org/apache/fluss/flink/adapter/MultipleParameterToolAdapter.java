@@ -19,6 +19,9 @@ package org.apache.fluss.flink.adapter;
 
 import org.apache.flink.api.java.utils.MultipleParameterTool;
 
+import javax.annotation.Nullable;
+
+import java.util.Collection;
 import java.util.Map;
 
 /**
@@ -42,5 +45,24 @@ public class MultipleParameterToolAdapter {
 
     public Map<String, String> toMap() {
         return this.multipleParameterTool.toMap();
+    }
+
+    /** Returns whether the given key is present in the parsed arguments. */
+    public boolean has(String key) {
+        return this.multipleParameterTool.has(key);
+    }
+
+    /** Returns the value for the given key, or {@code null} if the key is not found. */
+    @Nullable
+    public String get(String key) {
+        return this.multipleParameterTool.get(key);
+    }
+
+    /**
+     * Returns all values associated with the given key, or {@code null} if the key is not found.
+     */
+    @Nullable
+    public Collection<String> getMultiParameter(String key) {
+        return this.multipleParameterTool.getMultiParameter(key);
     }
 }

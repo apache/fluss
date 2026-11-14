@@ -31,6 +31,8 @@ import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,8 +40,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -128,9 +132,15 @@ public class TableBucketStateMachine {
             BucketState targetState,
             ReplicaLeaderElection replicaLeaderElection) {
         try {
+            boolean isControlledShutdown =
+                    replicaLeaderElection instanceof ControlledShutdownLeaderElection
+                            && targetState == BucketState.OnlineBucket;
             coordinatorRequestBatch.newBatch();
 
-            if (checkIfCreateTablePartitionRequest(tableBuckets, targetState)) {
+            if (isControlledShutdown) {
+                batchHandleControlledShutdown(
+                        tableBuckets, (ControlledShutdownLeaderElection) replicaLeaderElection);
+            } else if (checkIfCreateTablePartitionRequest(tableBuckets, targetState)) {
                 // batch register table bucket lead and isr
                 batchHandleOnlineChangeAndInitLeader(tableBuckets);
             } else {
@@ -143,6 +153,165 @@ public class TableBucketStateMachine {
         } catch (Throwable e) {
             LOG.error("Failed to move table buckets {} to state {}.", tableBuckets, targetState, e);
         }
+    }
+
+    private void batchHandleControlledShutdown(
+            Set<TableBucket> tableBuckets,
+            ControlledShutdownLeaderElection controlledShutdownLeaderElection) {
+        Map<TableBucket, LeaderAndIsr> currentLeaderAndIsrs;
+        long batchReadStartTimeMs = System.currentTimeMillis();
+        try {
+            currentLeaderAndIsrs = zooKeeperClient.getLeaderAndIsrs(tableBuckets);
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to batch read LeaderAndIsr for {} buckets during controlled shutdown. Falling back to individual updates.",
+                    tableBuckets.size(),
+                    e);
+            for (TableBucket tableBucket : tableBuckets) {
+                doHandleStateChange(
+                        tableBucket, BucketState.OnlineBucket, controlledShutdownLeaderElection);
+            }
+            return;
+        }
+        LOG.info(
+                "Batch read LeaderAndIsr for {} of {} controlled shutdown buckets in {} ms.",
+                currentLeaderAndIsrs.size(),
+                tableBuckets.size(),
+                System.currentTimeMillis() - batchReadStartTimeMs);
+
+        long electionStartTimeMs = System.currentTimeMillis();
+        Map<TableBucket, ElectionResult> electionResults = new HashMap<>();
+        Map<TableBucket, String> partitionNames = new HashMap<>();
+        Set<TableBucket> bucketsToRetryIndividually = new HashSet<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            coordinatorContext.putBucketStateIfNotExists(
+                    tableBucket, BucketState.NonExistentBucket);
+            if (!checkValidTableBucketStateChange(tableBucket, BucketState.OnlineBucket)) {
+                continue;
+            }
+
+            BucketState currentState = coordinatorContext.getBucketState(tableBucket);
+            if (currentState == BucketState.NewBucket) {
+                bucketsToRetryIndividually.add(tableBucket);
+                continue;
+            }
+
+            String partitionName = null;
+            if (tableBucket.getPartitionId() != null) {
+                partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
+                if (partitionName == null) {
+                    logFailedStateChange(
+                            tableBucket,
+                            currentState,
+                            BucketState.OnlineBucket,
+                            String.format(
+                                    "Can't find partition name for partition: %s.",
+                                    tableBucket.getPartitionId()));
+                    continue;
+                }
+            }
+
+            LeaderAndIsr leaderAndIsr = currentLeaderAndIsrs.get(tableBucket);
+            if (leaderAndIsr == null) {
+                bucketsToRetryIndividually.add(tableBucket);
+                continue;
+            }
+
+            Optional<ElectionResult> optionalElectionResult =
+                    electNewLeaderForTableBucket(
+                            tableBucket, leaderAndIsr, controlledShutdownLeaderElection);
+            if (!optionalElectionResult.isPresent()) {
+                logFailedStateChange(
+                        tableBucket,
+                        currentState,
+                        BucketState.OnlineBucket,
+                        "Elect result is empty.");
+                continue;
+            }
+            electionResults.put(tableBucket, optionalElectionResult.get());
+            partitionNames.put(tableBucket, partitionName);
+        }
+        LOG.info(
+                "Prepared {} controlled shutdown leader elections in {} ms; {} buckets require individual retry.",
+                electionResults.size(),
+                System.currentTimeMillis() - electionStartTimeMs,
+                bucketsToRetryIndividually.size());
+
+        Map<TableBucket, LeaderAndIsr> leaderAndIsrsToUpdate = new HashMap<>();
+        electionResults.forEach(
+                (tableBucket, electionResult) ->
+                        leaderAndIsrsToUpdate.put(tableBucket, electionResult.leaderAndIsr));
+        Set<TableBucket> updatedBuckets =
+                batchUpdateLeaderAndIsrWithFallback(leaderAndIsrsToUpdate);
+
+        for (TableBucket tableBucket : updatedBuckets) {
+            ElectionResult electionResult = electionResults.get(tableBucket);
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+            doStateChange(tableBucket, BucketState.OnlineBucket);
+            coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                    new HashSet<>(electionResult.liveReplicas),
+                    PhysicalTablePath.of(
+                            coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                            partitionNames.get(tableBucket)),
+                    tableBucket,
+                    coordinatorContext.getAssignment(tableBucket),
+                    electionResult.leaderAndIsr);
+        }
+
+        for (TableBucket tableBucket : bucketsToRetryIndividually) {
+            doHandleStateChange(
+                    tableBucket, BucketState.OnlineBucket, controlledShutdownLeaderElection);
+        }
+    }
+
+    private Set<TableBucket> batchUpdateLeaderAndIsrWithFallback(
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrs) {
+        Set<TableBucket> updatedBuckets = new HashSet<>();
+        if (leaderAndIsrs.isEmpty()) {
+            return updatedBuckets;
+        }
+
+        try {
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    leaderAndIsrs, coordinatorContext.getCoordinatorZkVersion());
+            updatedBuckets.addAll(leaderAndIsrs.keySet());
+            return updatedBuckets;
+        } catch (Exception e) {
+            if (ExceptionUtils.findThrowable(e, KeeperException.BadVersionException.class)
+                    .isPresent()) {
+                LOG.error(
+                        "Aborted batch LeaderAndIsr update during controlled shutdown because the coordinator was fenced.",
+                        e);
+                return updatedBuckets;
+            }
+            LOG.warn(
+                    "Failed to batch update LeaderAndIsr for {} buckets during controlled shutdown. Falling back to individual updates.",
+                    leaderAndIsrs.size(),
+                    e);
+        }
+
+        for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrs.entrySet()) {
+            try {
+                zooKeeperClient.updateLeaderAndIsr(
+                        entry.getKey(),
+                        entry.getValue(),
+                        coordinatorContext.getCoordinatorZkVersion());
+                updatedBuckets.add(entry.getKey());
+            } catch (Exception e) {
+                if (ExceptionUtils.findThrowable(e, KeeperException.BadVersionException.class)
+                        .isPresent()) {
+                    LOG.error(
+                            "Stopped individual LeaderAndIsr updates during controlled shutdown because the coordinator was fenced.",
+                            e);
+                    break;
+                }
+                LOG.error(
+                        "Failed to update bucket LeaderAndIsr for table bucket {} during controlled shutdown.",
+                        stringifyBucket(entry.getKey()),
+                        e);
+            }
+        }
+        return updatedBuckets;
     }
 
     /**
@@ -214,7 +383,7 @@ public class TableBucketStateMachine {
                                 targetState,
                                 String.format(
                                         "Can't find partition name for partition: %s.",
-                                        tableBucket.getBucket()));
+                                        tableBucket.getPartitionId()));
                         return;
                     }
                 }
@@ -347,7 +516,7 @@ public class TableBucketStateMachine {
                             BucketState.OnlineBucket,
                             String.format(
                                     "Can't find partition name for partition: %s.",
-                                    tableBucket.getBucket()));
+                                    tableBucket.getPartitionId()));
                     continue;
                 }
             }
@@ -486,6 +655,32 @@ public class TableBucketStateMachine {
             LOG.error("Can't get state for table bucket {}.", stringifyBucket(tableBucket), e);
             return Optional.empty();
         }
+        Optional<ElectionResult> optionalElectionResult =
+                electNewLeaderForTableBucket(tableBucket, leaderAndIsr, electionStrategy);
+        if (!optionalElectionResult.isPresent()) {
+            return Optional.empty();
+        }
+        ElectionResult electionResult = optionalElectionResult.get();
+        try {
+            zooKeeperClient.updateLeaderAndIsr(
+                    tableBucket,
+                    electionResult.leaderAndIsr,
+                    coordinatorContext.getCoordinatorZkVersion());
+        } catch (Exception e) {
+            LOG.error(
+                    "Fail to update bucket LeaderAndIsr for table bucket {}.",
+                    stringifyBucket(tableBucket),
+                    e);
+            return Optional.empty();
+        }
+        coordinatorContext.putBucketLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+        return optionalElectionResult;
+    }
+
+    private Optional<ElectionResult> electNewLeaderForTableBucket(
+            TableBucket tableBucket,
+            LeaderAndIsr leaderAndIsr,
+            ReplicaLeaderElection electionStrategy) {
         if (leaderAndIsr.coordinatorEpoch() > coordinatorContext.getCoordinatorEpoch()) {
             LOG.error(
                     "Aborted leader election for table bucket {} since the bucket state path was "
@@ -505,21 +700,7 @@ public class TableBucketStateMachine {
                     stringifyBucket(tableBucket));
             return Optional.empty();
         }
-        ElectionResult electionResult = optionalElectionResult.get();
-        try {
-            zooKeeperClient.updateLeaderAndIsr(
-                    tableBucket,
-                    electionResult.leaderAndIsr,
-                    coordinatorContext.getCoordinatorZkVersion());
-        } catch (Exception e) {
-            LOG.error(
-                    "Fail to update bucket LeaderAndIsr for table bucket {}.",
-                    stringifyBucket(tableBucket),
-                    e);
-            return Optional.empty();
-        }
-        coordinatorContext.putBucketLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
-        return Optional.of(electionResult);
+        return optionalElectionResult;
     }
 
     private boolean checkValidTableBucketStateChange(
