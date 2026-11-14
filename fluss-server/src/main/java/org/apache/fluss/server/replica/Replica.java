@@ -1209,19 +1209,9 @@ public final class Replica {
                             zkClient.getCuratorClient(),
                             ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
 
-            // todo: it's hack logic for snapshot target
-            // to get bucket/coordinator leader epoch.
-            // and it will happen when the snapshot target
-            // is doing snapshot(leader epoch = 0), and then leader switch to another(leader epoch =
-            // 1),
-            // and again switch to this(leader epoch = 2). The snapshot target will
-            // get the leader epoch = 2, and use the epoch 2 to submit snapshot
-            // which will cause older snapshot overwrite the newer snapshot
-
-            // refactor the snapshot logic in FLUSS-56282058, may should prepare the
-            // bucket/coordinator leader epoch, kv snapshot data in replica
-            // instead of a separate class
-            Supplier<Integer> bucketLeaderEpochSupplier = () -> leaderEpoch;
+            // This target must not adopt the epoch of a replacement KV instance.
+            final int snapshotLeaderEpoch = leaderEpoch;
+            Supplier<Integer> bucketLeaderEpochSupplier = () -> snapshotLeaderEpoch;
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
 
             FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
@@ -1245,6 +1235,10 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
+            if (completedSnapshot != null) {
+                kvTabletSnapshotTarget.bindRecoverySnapshotId(
+                        completedSnapshot.getRecoverySnapshotId());
+            }
             this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
                             tableBucket,

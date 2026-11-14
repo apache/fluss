@@ -29,6 +29,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SharedKvFileRegistryTest {
 
     @Test
+    void testLateReferenceProtectsSharedFileUntilReleased() {
+        SharedKvFileRegistry registry = new SharedKvFileRegistry();
+        TestKvHandle file = new TestKvHandle("shared");
+        SharedKvFileRegistryKey key = SharedKvFileRegistryKey.fromKvFileHandle(file);
+        registry.registerReference(key, file, 3L);
+        registry.registerReference(key, new PlaceholderKvFileHandler(file), 2L);
+
+        registry.unregisterUnusedKvFile(4L, Collections.singleton(2L));
+        assertThat(file.discarded).isFalse();
+
+        registry.unregisterUnusedKvFile(4L, Collections.emptySet());
+        assertThat(file.discarded).isTrue();
+    }
+
+    @Test
     void testRegistryNormal() throws Exception {
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
 

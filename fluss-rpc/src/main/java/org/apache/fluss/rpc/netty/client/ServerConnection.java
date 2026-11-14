@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -387,6 +388,12 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.COMMIT_KV_SNAPSHOT
+                && version < 1
+                && ((CommitKvSnapshotRequest) rawRequest).hasExpectedRecoverySnapshotId()) {
+            throw new UnsupportedVersionException(
+                    "Recovery-aware snapshot commits require version 1.");
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

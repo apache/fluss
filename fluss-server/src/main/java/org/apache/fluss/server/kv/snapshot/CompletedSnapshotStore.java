@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayDeque;
@@ -43,6 +44,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -72,6 +74,8 @@ public class CompletedSnapshotStore {
     private final SnapshotInUseChecker snapshotInUseChecker;
 
     private final ReentrantLock lock = new ReentrantLock();
+
+    @Nullable private Long recoverySnapshotId;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -108,12 +112,38 @@ public class CompletedSnapshotStore {
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
 
-    public void add(final CompletedSnapshot completedSnapshot) throws Exception {
+    /** Commits using the leader epoch captured when the original KV target was created. */
+    public void add(
+            CompletedSnapshot snapshot,
+            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Integer expectedLeaderEpoch)
+            throws Exception {
         inLock(
                 lock,
                 () ->
-                        addSnapshotAndSubsumeOldestOne(
-                                completedSnapshot, snapshotsCleaner, () -> {}));
+                        registerSnapshot(
+                                snapshot,
+                                expectedRecoverySnapshotId,
+                                expectedLeaderEpoch,
+                                snapshotsCleaner,
+                                () -> {}));
+    }
+
+    /** Publishes a snapshot reference and selects it for recovery atomically. */
+    public void selectRecoverySnapshot(CompletedSnapshot snapshot) throws Exception {
+        inLock(
+                lock,
+                () -> {
+                    CompletedSnapshotHandle handle = prepareSnapshotHandle(snapshot);
+                    completedSnapshotHandleStore.selectRecoverySnapshot(
+                            snapshot.getTableBucket(), handle);
+                    if (containsSnapshot(snapshot.getSnapshotID())) {
+                        recoverySnapshotId = snapshot.getSnapshotID();
+                        subsumeOldSnapshots(snapshot, snapshotsCleaner, () -> {});
+                    } else {
+                        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, () -> {});
+                    }
+                });
     }
 
     public long getPhysicalStorageRemoteKvSize() {
@@ -157,24 +187,79 @@ public class CompletedSnapshotStore {
             SnapshotsCleaner snapshotsCleaner,
             Runnable postCleanup)
             throws Exception {
-        checkNotNull(snapshot, "Snapshot");
+        registerSnapshot(snapshot, null, null, snapshotsCleaner, postCleanup);
+    }
 
-        CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
+    private void registerSnapshot(
+            CompletedSnapshot snapshot,
+            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Integer expectedLeaderEpoch,
+            SnapshotsCleaner snapshotsCleaner,
+            Runnable postCleanup)
+            throws Exception {
+        CompletedSnapshotHandle completedSnapshotHandle = prepareSnapshotHandle(snapshot);
         completedSnapshotHandleStore.add(
-                snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
+                snapshot.getTableBucket(),
+                snapshot.getSnapshotID(),
+                completedSnapshotHandle,
+                expectedRecoverySnapshotId,
+                expectedLeaderEpoch);
 
         adoptConfirmedSnapshot(snapshot, snapshotsCleaner, postCleanup);
     }
 
-    /**
-     * Makes a snapshot whose persistent node is already confirmed visible: shared handles are
-     * exposed only now, never before the node exists, and retention is applied.
-     */
+    private CompletedSnapshotHandle prepareSnapshotHandle(CompletedSnapshot snapshot)
+            throws Exception {
+        checkNotNull(snapshot, "Snapshot");
+        Optional<CompletedSnapshotHandle> previous =
+                completedSnapshotHandleStore.get(
+                        snapshot.getTableBucket(), snapshot.getSnapshotID());
+        CompletedSnapshotHandle completedSnapshotHandle;
+        if (previous.isPresent()) {
+            completedSnapshotHandle = previous.get();
+            checkState(
+                    completedSnapshotHandle.getLogOffset() == snapshot.getLogOffset()
+                            && completedSnapshotHandle
+                                    .getMetadataFilePath()
+                                    .equals(snapshot.getMetadataFilePath()),
+                    "Conflicting snapshot reference.");
+        } else {
+            completedSnapshotHandle = store(snapshot);
+        }
+        return completedSnapshotHandle;
+    }
+
     private void adoptConfirmedSnapshot(
             CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
             throws Exception {
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        completedSnapshots.removeIf(
+                existing -> existing.getSnapshotID() == snapshot.getSnapshotID());
+        stillInUseSnapshots.remove(snapshot.getSnapshotID());
         completedSnapshots.addLast(snapshot);
+        Optional<CompletedSnapshotHandle> selected =
+                completedSnapshotHandleStore.getRecoverySnapshot(snapshot.getTableBucket());
+        checkState(
+                recoverySnapshotId == null || selected.isPresent(),
+                "Recovery snapshot selection disappeared.");
+        if (selected.isPresent() && !containsSnapshot(selected.get().getSnapshotId())) {
+            CompletedSnapshot source = selected.get().retrieveCompleteSnapshot();
+            source.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+            stillInUseSnapshots.put(source.getSnapshotID(), source);
+        }
+        recoverySnapshotId = selected.map(CompletedSnapshotHandle::getSnapshotId).orElse(null);
+        subsumeOldSnapshots(snapshot, snapshotsCleaner, postCleanup);
+    }
+
+    private boolean containsSnapshot(long snapshotId) {
+        return stillInUseSnapshots.containsKey(snapshotId)
+                || completedSnapshots.stream()
+                        .anyMatch(snapshot -> snapshot.getSnapshotID() == snapshotId);
+    }
+
+    private void subsumeOldSnapshots(
+            CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
+            throws Exception {
 
         // Remove completed snapshot from queue and snapshotStateHandleStore, not
         // discard.
@@ -182,7 +267,7 @@ public class CompletedSnapshotStore {
                 completedSnapshots,
                 maxNumberOfSnapshotsToRetain,
                 completedSnapshot -> {
-                    if (snapshotInUseChecker.isInUse(completedSnapshot)) {
+                    if (isSnapshotInUse(completedSnapshot)) {
                         LOG.debug(
                                 "Snapshot {} is still in use, move it to stillInUseSnapshots",
                                 completedSnapshot.getSnapshotID());
@@ -221,16 +306,20 @@ public class CompletedSnapshotStore {
         while (stillInUseIter.hasNext()) {
             Map.Entry<Long, CompletedSnapshot> entry = stillInUseIter.next();
             CompletedSnapshot snapshot = entry.getValue();
-            if (!snapshotInUseChecker.isInUse(snapshot)) {
-                stillInUseIter.remove();
-
+            if (!isSnapshotInUse(snapshot)) {
                 remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
+                stillInUseIter.remove();
                 snapshotsCleaner.addSubsumedSnapshot(snapshot);
                 LOG.debug(
                         "Released snapshot {} from stillInUseSnapshots (lease expired)",
                         snapshot.getSnapshotID());
             }
         }
+    }
+
+    private boolean isSnapshotInUse(CompletedSnapshot snapshot) {
+        return (recoverySnapshotId != null && recoverySnapshotId == snapshot.getSnapshotID())
+                || snapshotInUseChecker.isInUse(snapshot);
     }
 
     /**
@@ -244,7 +333,8 @@ public class CompletedSnapshotStore {
     }
 
     private static void subsume(
-            Deque<CompletedSnapshot> snapshots, int numRetain, SubsumeAction subsumeAction) {
+            Deque<CompletedSnapshot> snapshots, int numRetain, SubsumeAction subsumeAction)
+            throws Exception {
         if (snapshots.isEmpty()) {
             return;
         }
@@ -254,12 +344,8 @@ public class CompletedSnapshotStore {
         while (snapshots.size() > numRetain && iterator.hasNext()) {
             CompletedSnapshot next = iterator.next();
             if (canSubsume(next, latest)) {
+                subsumeAction.subsume(next);
                 iterator.remove();
-                try {
-                    subsumeAction.subsume(next);
-                } catch (Exception e) {
-                    LOG.warn("Fail to subsume the old snapshot.", e);
-                }
             }
         }
     }
@@ -295,10 +381,9 @@ public class CompletedSnapshotStore {
     }
 
     protected static Optional<Long> findLowest(Deque<CompletedSnapshot> unSubsumedSnapshots) {
-        for (CompletedSnapshot p : unSubsumedSnapshots) {
-            return Optional.of(p.getSnapshotID());
-        }
-        return Optional.empty();
+        return unSubsumedSnapshots.stream()
+                .map(CompletedSnapshot::getSnapshotID)
+                .min(Long::compare);
     }
 
     /**

@@ -71,6 +71,7 @@ import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -636,7 +637,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 coordinatorEventManager.put(
                         new CommitKvSnapshotEvent(
                                 new CommitKvSnapshotData(
-                                        completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
+                                        completedSnapshot,
+                                        coordinatorEpoch,
+                                        bucketLeaderEpoch,
+                                        null),
                                 responseCompletableFuture));
 
                 // get the response
@@ -664,7 +668,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, coordinatorEpoch, invalidBucketLeaderEpoch),
+                                completedSnapshot,
+                                coordinatorEpoch,
+                                invalidBucketLeaderEpoch,
+                                null),
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
@@ -677,7 +684,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, bucketLeaderEpoch, invalidCoordinatorEpoch),
+                                completedSnapshot,
+                                bucketLeaderEpoch,
+                                invalidCoordinatorEpoch,
+                                null),
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
@@ -1319,15 +1329,26 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         responseCompletableFuture1.get();
         verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
 
-        // verify CommitKvSnapshot trigger notify offsets request
+        // A preceding KV context may publish a higher-offset reference without replacing recovery.
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
-        CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        CompletedSnapshot selected = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        eventProcessor.completedSnapshotStoreManager().selectRecoverySnapshot(t1, selected);
+        CompletedSnapshot completedSnapshot =
+                new CompletedSnapshot(
+                        tableBucket,
+                        1L,
+                        new FsPath(tempDir.resolve("late-snapshot").toUri()),
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0),
+                        10L,
+                        null,
+                        null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
+                                completedSnapshot, coordinatorEpoch, bucketLeaderEpoch, null),
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
         retry(
@@ -1335,6 +1356,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 () ->
                         verifyReceiveRequestExceptFor(
                                 3, leader, NotifyKvSnapshotOffsetRequest.class));
+        for (int server = 0; server < 3; server++) {
+            if (server != leader) {
+                TestTabletServerGateway gateway =
+                        (TestTabletServerGateway)
+                                testCoordinatorChannelManager.getTabletServerGateway(server).get();
+                NotifyKvSnapshotOffsetRequest request =
+                        (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
+                assertThat(request.getMinRetainOffset()).isZero();
+            }
+        }
     }
 
     @Test

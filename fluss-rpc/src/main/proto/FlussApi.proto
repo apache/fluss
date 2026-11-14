@@ -545,6 +545,7 @@ message CommitKvSnapshotRequest {
   required bytes completed_snapshot = 1;
   required int32 coordinator_epoch = 2;
   required int32 bucket_leader_epoch = 3;
+  optional int64 expected_recovery_snapshot_id = 4;
 }
 
 message CommitKvSnapshotResponse {

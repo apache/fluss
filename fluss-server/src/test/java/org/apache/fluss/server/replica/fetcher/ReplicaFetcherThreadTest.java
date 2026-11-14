@@ -59,6 +59,7 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.FlussPaths;
@@ -251,6 +252,10 @@ public class ReplicaFetcherThreadTest {
                 TableRegistration.newTable(
                         DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
+        zkClient.getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(ZkData.BucketIdZNode.path(pkTableBucket));
         makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH_PK), pkTableBucket);
 
         Replica leaderReplica = leaderRM.getReplicaOrException(pkTableBucket);

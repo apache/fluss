@@ -21,6 +21,7 @@ import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.client.tiering.TieringSplitGenerator;
 import org.apache.fluss.client.write.HashBucketAssigner;
@@ -38,10 +39,12 @@ import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
-import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.TestingLakeSource;
@@ -59,7 +62,14 @@ import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
@@ -489,13 +499,52 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     @Test
-    void testPkTableWithSnapshotSplits() throws Throwable {
+    void testDesignatedSnapshotsInSourceAndTieringSplits() throws Throwable {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 5;
         // write data and wait snapshot finish to make sure
         // we can hava snapshot split
         Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 10);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        ZooKeeperCompletedSnapshotHandleStore handles =
+                new ZooKeeperCompletedSnapshotHandleStore(zk);
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            CompletedSnapshot selected =
+                    handles.get(tableBucket, 0L).get().retrieveCompleteSnapshot();
+            zk.getCuratorClient()
+                    .create()
+                    .forPath(
+                            ZkData.RecoverySnapshotZNode.path(tableBucket),
+                            new RecoverySnapshot(selected.getSnapshotID()).toJson());
+            long laterId =
+                    new ZkSequenceIDCounter(
+                                    zk.getCuratorClient(),
+                                    ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket))
+                            .getAndIncrement();
+            CompletedSnapshot later =
+                    new CompletedSnapshot(
+                            tableBucket,
+                            laterId,
+                            new FsPath(
+                                    selected.getSnapshotLocation().getParent(),
+                                    String.valueOf(laterId)),
+                            selected.getKvSnapshotHandle(),
+                            selected.getLogOffset(),
+                            selected.getRowCount(),
+                            selected.getAutoIncIDRanges());
+            FsPath metadataPath = later.getMetadataFilePath();
+            try (FSDataOutputStream out =
+                    metadataPath
+                            .getFileSystem()
+                            .create(metadataPath, FileSystem.WriteMode.NO_OVERWRITE)) {
+                out.write(CompletedSnapshotJsonSerde.toJson(later));
+            }
+            zk.registerTableBucketSnapshot(
+                    tableBucket,
+                    new BucketSnapshot(laterId, later.getLogOffset(), metadataPath.toString()));
+        }
 
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
@@ -567,7 +616,23 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                     bucketIdToNumRecords.get(2),
                                     LogSplit.NO_STOPPING_OFFSET,
                                     false)));
-            checkSplitAssignmentIgnoreSnapshotFiles(expectedAssignment, actualAssignment);
+            assertThat(actualAssignment).isEqualTo(expectedAssignment);
+            List<TieringSplit> tieringSplits =
+                    new TieringSplitGenerator(admin)
+                            .generateTableSplits(admin.getTableInfo(DEFAULT_TABLE_PATH).get());
+            assertThat(tieringSplits)
+                    .hasSize(DEFAULT_BUCKET_NUM)
+                    .allSatisfy(
+                            split -> {
+                                assertThat(split).isInstanceOf(TieringSnapshotSplit.class);
+                                TieringSnapshotSplit snapshot = (TieringSnapshotSplit) split;
+                                assertThat(snapshot.getSnapshotId()).isZero();
+                                assertThat(snapshot.getLogOffsetOfSnapshot())
+                                        .isEqualTo(
+                                                bucketIdToNumRecords
+                                                        .get(split.getTableBucket().getBucket())
+                                                        .longValue());
+                            });
         }
     }
 
@@ -2000,34 +2065,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         SplitsAssignment<SourceSplitBase> splitAssignment =
                 splitsAssignments.get(splitsAssignments.size() - 1);
         return splitAssignment.assignment();
-    }
-
-    private void checkSplitAssignmentIgnoreSnapshotFiles(
-            Map<Integer, List<SourceSplitBase>> expectedAssignment,
-            Map<Integer, List<SourceSplitBase>> actualAssignment) {
-        assertThat(expectedAssignment).hasSameSizeAs(actualAssignment);
-        for (Map.Entry<Integer, List<SourceSplitBase>> splitAssignEntry :
-                expectedAssignment.entrySet()) {
-            int subtaskId = splitAssignEntry.getKey();
-            List<SourceSplitBase> expectedSplits = splitAssignEntry.getValue();
-            List<SourceSplitBase> actualSplits = actualAssignment.get(subtaskId);
-            assertThat(expectedSplits).hasSameSizeAs(actualSplits);
-
-            for (int i = 0; i < expectedSplits.size(); i++) {
-                SourceSplitBase sourceSplitBase = expectedSplits.get(i);
-                if (sourceSplitBase.isHybridSnapshotLogSplit()) {
-                    SnapshotSplit expected = sourceSplitBase.asHybridSnapshotLogSplit();
-                    SnapshotSplit actual = actualSplits.get(i).asHybridSnapshotLogSplit();
-                    // note: in here, we skip the check of the snapshot files
-                    TableBucket expectedBucket = expected.getTableBucket();
-                    TableBucket actualBucket = actual.getTableBucket();
-                    assertThat(expectedBucket).isEqualTo(actualBucket);
-                    assertThat(expected.recordsToSkip()).isEqualTo(actual.recordsToSkip());
-                } else {
-                    assertThat(expectedSplits.get(i)).isEqualTo(actualSplits.get(i));
-                }
-            }
-        }
     }
 
     private Map<Integer, Integer> putRows(TablePath tablePath, int rowsNum) throws Exception {

@@ -32,6 +32,7 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,11 +46,13 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -72,19 +75,45 @@ public class CompletedSnapshotStoreManager {
     private final SnapshotInUseChecker snapshotInUseChecker;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
+    /** Creates snapshot stores fenced by the owning Coordinator's captured epoch. */
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotInUseChecker,
+            int coordinatorEpochZkVersion) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
-                ZooKeeperCompletedSnapshotHandleStore::new,
+                client ->
+                        new ZooKeeperCompletedSnapshotHandleStore(
+                                client, coordinatorEpochZkVersion),
                 coordinatorMetricGroup,
                 snapshotInUseChecker);
+    }
+
+    /**
+     * Selects a recovery source using the same bucket lock as ordinary publication and GC.
+     *
+     * <p>Callers must enable this only after all Coordinators and TabletServers support the
+     * recovery-aware snapshot commit protocol and retention rules. Downgrading those servers while
+     * explicit selections remain is unsupported.
+     */
+    public void selectRecoverySnapshot(TablePath tablePath, CompletedSnapshot snapshot)
+            throws Exception {
+        TableBucket bucket = snapshot.getTableBucket();
+        if (bucket.getPartitionId() != null) {
+            Optional<PartitionRegistration> historical =
+                    zooKeeperClient.getPartition(tablePath, HISTORICAL_PARTITION_VALUE);
+            checkArgument(
+                    !historical.isPresent()
+                            || historical.get().getPartitionId() != bucket.getPartitionId(),
+                    "Historical partitions recover from lake progress and cannot select KV snapshots.");
+        }
+        getOrCreateCompletedSnapshotStore(tablePath, snapshot.getTableBucket())
+                .selectRecoverySnapshot(snapshot);
     }
 
     @VisibleForTesting

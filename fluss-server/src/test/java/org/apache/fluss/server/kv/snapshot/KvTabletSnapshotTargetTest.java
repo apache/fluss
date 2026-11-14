@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
@@ -37,6 +38,8 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -51,6 +54,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.annotation.Nonnull;
@@ -85,6 +89,168 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KvTabletSnapshotTarget}. */
 class KvTabletSnapshotTargetTest {
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true"})
+    void testLostResponseBindsOnlyConfirmedOriginalContext(
+            boolean superseded, boolean queryFails, @TempDir Path directory) throws Throwable {
+        int epoch =
+                zooKeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
+        String headPath = ZkData.RecoverySnapshotZNode.path(tableBucket);
+        zooKeeperClient.registerTableBucketSnapshot(
+                tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .forPath(headPath, new RecoverySnapshot(0).toJson());
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        10,
+                        new SharedKvFileRegistry(),
+                        Collections.emptyList(),
+                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient, epoch),
+                        directExecutor(),
+                        snapshot -> false);
+        CompletedKvSnapshotCommitter committer =
+                new CompletedKvSnapshotCommitter() {
+                    @Override
+                    public void commitKvSnapshot(
+                            CompletedSnapshot snapshot,
+                            int coordinatorEpoch,
+                            int leaderEpoch,
+                            Long expected)
+                            throws Exception {
+                        assertThat(expected).isEqualTo(snapshot.getSnapshotID() - 1);
+                        store.add(snapshot, expected, null);
+                        if (superseded) {
+                            zooKeeperClient.registerTableBucketSnapshot(
+                                    tableBucket, new BucketSnapshot(2, 2, "file:/next"));
+                            zooKeeperClient
+                                    .getCuratorClient()
+                                    .setData()
+                                    .withVersion(1)
+                                    .forPath(headPath, new RecoverySnapshot(2).toJson());
+                        }
+                        throw new IOException("Commit response lost.");
+                    }
+                };
+        AtomicBoolean failQuery = new AtomicBoolean(queryFails);
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, directory.toUri().toString());
+        ZooKeeperClient reader =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zooKeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
+                    @Override
+                    public Optional<BucketSnapshot> getTableBucketSnapshot(
+                            TableBucket bucket, long snapshotId) throws Exception {
+                        if (failQuery.getAndSet(false)) {
+                            throw new IOException("Snapshot query failed.");
+                        }
+                        return super.getTableBucketSnapshot(bucket, snapshotId);
+                    }
+                };
+        KvTabletSnapshotTarget original =
+                createSnapshotTargetWithCustomZkAndCommitter(
+                        FsPath.fromLocalFile(directory.resolve("original").toFile()),
+                        reader,
+                        committer);
+        original.bindRecoverySnapshotId(0L);
+        rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
+        PeriodicSnapshotManager.SnapshotRunnable task = original.initSnapshot().get();
+        task.getSnapshotRunnable().run();
+        SnapshotResult result = task.getSnapshotRunnable().get();
+        org.assertj.core.api.ThrowableAssert.ThrowingCallable complete =
+                () ->
+                        original.handleSnapshotResult(
+                                task.getSnapshotId(),
+                                task.getCoordinatorEpoch(),
+                                task.getBucketLeaderEpoch(),
+                                task.getSnapshotLocation(),
+                                result);
+        if (superseded || queryFails) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(complete)
+                    .isInstanceOf(IOException.class);
+            assertThat(original.getRecoverySnapshotId()).isZero();
+        } else {
+            complete.call();
+            assertThat(original.getRecoverySnapshotId()).isEqualTo(1);
+        }
+        assertThat(result.getSnapshotPath().getFileSystem().exists(result.getSnapshotPath()))
+                .isTrue();
+        assertThat(zooKeeperClient.getTableBucketSnapshot(tableBucket, task.getSnapshotId()))
+                .isPresent();
+        if (queryFails) {
+            logOffsetGenerator.set(2L);
+            PeriodicSnapshotManager.SnapshotRunnable next = original.initSnapshot().get();
+            next.getSnapshotRunnable().run();
+            SnapshotResult nextResult = next.getSnapshotRunnable().get();
+            original.handleSnapshotResult(
+                    next.getSnapshotId(),
+                    next.getCoordinatorEpoch(),
+                    next.getBucketLeaderEpoch(),
+                    next.getSnapshotLocation(),
+                    nextResult);
+            assertThat(original.getRecoverySnapshotId()).isEqualTo(2L);
+            assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(2L);
+        }
+    }
+
+    @Test
+    void testVersionlessSnapshotCannotAdvanceWalBeyondSelectedSource(@TempDir Path directory)
+            throws Throwable {
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(ZkData.BucketIdZNode.path(tableBucket));
+        int epoch =
+                zooKeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
+        CompletedSnapshotStore store =
+                new CompletedSnapshotStore(
+                        10,
+                        new SharedKvFileRegistry(),
+                        Collections.emptyList(),
+                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient, epoch),
+                        directExecutor(),
+                        snapshot -> false);
+        KvTabletSnapshotTarget original =
+                createSnapshotTargetWithCustomCommitter(
+                        FsPath.fromLocalFile(directory.resolve("ordinary").toFile()),
+                        (snapshot, coordinatorEpoch, leaderEpoch, expectedRecoverySnapshotId) ->
+                                store.add(snapshot, expectedRecoverySnapshotId, null));
+        CompletedSnapshot selected =
+                new CompletedSnapshot(
+                        tableBucket,
+                        0,
+                        FsPath.fromLocalFile(directory.resolve("selected").toFile()),
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0));
+        store.add(selected, null, null);
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .forPath(
+                        ZkData.RecoverySnapshotZNode.path(tableBucket),
+                        new RecoverySnapshot(0).toJson());
+        logOffsetGenerator.set(5);
+        rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
+        PeriodicSnapshotManager.SnapshotRunnable task = original.initSnapshot().get();
+        task.getSnapshotRunnable().run();
+        SnapshotResult result = task.getSnapshotRunnable().get();
+        original.handleSnapshotResult(
+                task.getSnapshotId(),
+                task.getCoordinatorEpoch(),
+                task.getBucketLeaderEpoch(),
+                task.getSnapshotLocation(),
+                result);
+        assertThat(zooKeeperClient.getTableBucketSnapshot(tableBucket, task.getSnapshotId()))
+                .isPresent();
+        assertThat(zooKeeperClient.getRecoverySnapshot(tableBucket).get().data().getSnapshotId())
+                .isZero();
+        assertThat(original.getRecoverySnapshotId()).isNull();
+        assertThat(updateMinRetainOffsetConsumer.get()).isZero();
+    }
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -101,6 +267,7 @@ class KvTabletSnapshotTargetTest {
 
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
+    private AtomicInteger coordinatorEpochGenerator;
     private AtomicLong updateMinRetainOffsetConsumer;
 
     static ZooKeeperClient zooKeeperClient;
@@ -122,6 +289,7 @@ class KvTabletSnapshotTargetTest {
         // init snapshot id and log offset generator
         snapshotIdGenerator = new AtomicLong(1);
         logOffsetGenerator = new AtomicLong(1);
+        coordinatorEpochGenerator = new AtomicInteger();
         updateMinRetainOffsetConsumer = new AtomicLong(Long.MAX_VALUE);
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
     }
@@ -281,6 +449,11 @@ class KvTabletSnapshotTargetTest {
 
     @Test
     void testAddToSnapshotToStoreFail(@TempDir Path kvTabletDir) throws Exception {
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(ZkData.BucketIdZNode.path(tableBucket));
         final String errMsg = "Add to snapshot handle failed.";
         AtomicLong uploadedBytes = new AtomicLong();
         AtomicBoolean shouldFail = new AtomicBoolean(true);
@@ -295,7 +468,8 @@ class KvTabletSnapshotTargetTest {
                                                     .getKvSnapshotHandle()
                                                     .getIncrementalSize());
                                     if (shouldFail.get()) {
-                                        throw new FlussException(errMsg);
+                                        throw new org.apache.fluss.exception
+                                                .InvalidRequestException(errMsg);
                                     }
                                     return null;
                                 })
@@ -364,15 +538,20 @@ class KvTabletSnapshotTargetTest {
         // Create a committer that commits to ZK first, then throws exception
         // This simulates coordinator failover after ZK commit but before response
         CompletedKvSnapshotCommitter failingAfterZkCommitCommitter =
-                (snapshot, coordinatorEpoch, bucketLeaderEpoch) -> {
+                (snapshot, coordinatorEpoch, bucketLeaderEpoch, expectedRecoverySnapshotId) -> {
                     // Always commit to ZK first
                     CompletedSnapshotHandle handle =
                             new CompletedSnapshotHandle(
                                     snapshot.getSnapshotID(),
-                                    snapshot.getSnapshotLocation(),
+                                    CompletedSnapshot.getMetadataFilePath(
+                                            snapshot.getSnapshotLocation()),
                                     snapshot.getLogOffset());
                     completedSnapshotHandleStore.add(
-                            snapshot.getTableBucket(), snapshot.getSnapshotID(), handle);
+                            snapshot.getTableBucket(),
+                            snapshot.getSnapshotID(),
+                            handle,
+                            null,
+                            null);
 
                     // Then throw exception - simulating coordinator failover after ZK commit
                     throw new FlussException("Coordinator failover after ZK commit");
@@ -417,8 +596,8 @@ class KvTabletSnapshotTargetTest {
 
         // Create a committer that always fails - simulating genuine coordinator failure
         CompletedKvSnapshotCommitter alwaysFailingCommitter =
-                (snapshot, coordinatorEpoch, bucketLeaderEpoch) -> {
-                    throw new FlussException(
+                (snapshot, coordinatorEpoch, bucketLeaderEpoch, expectedRecoverySnapshotId) -> {
+                    throw new InvalidRequestException(
                             "Genuine coordinator failure - snapshot not committed to ZK");
                 };
 
@@ -456,7 +635,7 @@ class KvTabletSnapshotTargetTest {
         ZooKeeperClient failingZkClient = createFailingZooKeeperClient();
 
         CompletedKvSnapshotCommitter failingCommitter =
-                (snapshot, coordinatorEpoch, bucketLeaderEpoch) -> {
+                (snapshot, coordinatorEpoch, bucketLeaderEpoch, expectedRecoverySnapshotId) -> {
                     throw new FlussException("Commit failed");
                 };
 
@@ -538,7 +717,7 @@ class KvTabletSnapshotTargetTest {
 
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
-        Supplier<Integer> coordinatorEpochSupplier = () -> 0;
+        Supplier<Integer> coordinatorEpochSupplier = coordinatorEpochGenerator::get;
 
         return new KvTabletSnapshotTarget(
                 tableBucket,
@@ -576,7 +755,7 @@ class KvTabletSnapshotTargetTest {
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
-        Supplier<Integer> coordinatorEpochSupplier = () -> 0;
+        Supplier<Integer> coordinatorEpochSupplier = coordinatorEpochGenerator::get;
 
         return new KvTabletSnapshotTarget(
                 tableBucket,
@@ -763,9 +942,12 @@ class KvTabletSnapshotTargetTest {
 
         @Override
         public void commitKvSnapshot(
-                CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
+                CompletedSnapshot snapshot,
+                int coordinatorEpoch,
+                int bucketLeaderEpoch,
+                Long expectedRecoverySnapshotId)
                 throws Exception {
-            completedSnapshotStore.add(snapshot);
+            completedSnapshotStore.add(snapshot, expectedRecoverySnapshotId, null);
         }
     }
 }

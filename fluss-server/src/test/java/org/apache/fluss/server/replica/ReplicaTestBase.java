@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
@@ -511,6 +512,11 @@ public class ReplicaTestBase {
             List<Integer> isr,
             int leaderEpoch,
             boolean partitionTable) {
+        ThrowingRunnable.unchecked(
+                        () ->
+                                zkClient.createRecursiveWithEpochCheck(
+                                        ZkData.BucketIdZNode.path(tb), null, -1, false))
+                .run();
         makeLeaderAndFollower(
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(

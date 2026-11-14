@@ -82,12 +82,12 @@ class ZooKeeperCompletedSnapshotStoreTest {
         SnapshotsCleanerTest.TestCompletedSnapshot snapshot1 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 0, snapshotPath);
 
-        snapshotStore.add(snapshot1);
+        snapshotStore.add(snapshot1, null, null);
         assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot1);
 
         final SnapshotsCleanerTest.TestCompletedSnapshot snapshot2 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 1, snapshotPath);
-        snapshotStore.add(snapshot2);
+        snapshotStore.add(snapshot2, null, null);
         final List<CompletedSnapshot> allSnapshots = snapshotStore.getAllSnapshots();
         assertThat(allSnapshots).containsExactly(snapshot2);
 

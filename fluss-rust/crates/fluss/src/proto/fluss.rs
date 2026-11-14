@@ -702,6 +702,8 @@ pub struct CommitKvSnapshotRequest {
     pub coordinator_epoch: i32,
     #[prost(int32, required, tag = "3")]
     pub bucket_leader_epoch: i32,
+    #[prost(int64, optional, tag = "4")]
+    pub expected_recovery_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitKvSnapshotResponse {}

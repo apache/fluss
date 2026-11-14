@@ -37,6 +37,7 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -95,6 +96,30 @@ import static org.mockito.Mockito.when;
 
 /** Test for {@link ServerConnection}. */
 public class ServerConnectionTest {
+
+    @Test
+    void testRecoveryAwareSnapshotCannotDowngrade() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignored) -> {});
+        try {
+            CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
+            request.setExpectedRecoverySnapshotId(0L);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 1, request);
+        } finally {
+            connection.close().get();
+        }
+    }
 
     private EventLoopGroup eventLoopGroup;
     private Bootstrap bootstrap;

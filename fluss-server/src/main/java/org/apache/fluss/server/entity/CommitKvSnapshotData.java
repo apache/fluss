@@ -20,6 +20,8 @@ package org.apache.fluss.server.entity;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 
+import javax.annotation.Nullable;
+
 /** The data for request {@link CommitKvSnapshotRequest}. */
 public class CommitKvSnapshotData {
 
@@ -32,11 +34,21 @@ public class CommitKvSnapshotData {
     /** The leader epoch of the bucket when the snapshot is triggered. */
     private final int bucketLeaderEpoch;
 
+    private final @Nullable Long expectedRecoverySnapshotId;
+
     public CommitKvSnapshotData(
-            CompletedSnapshot completedSnapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+            CompletedSnapshot completedSnapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable Long expectedRecoverySnapshotId) {
         this.completedSnapshot = completedSnapshot;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketLeaderEpoch = bucketLeaderEpoch;
+        this.expectedRecoverySnapshotId = expectedRecoverySnapshotId;
+    }
+
+    public @Nullable Long getExpectedRecoverySnapshotId() {
+        return expectedRecoverySnapshotId;
     }
 
     public CompletedSnapshot getCompletedSnapshot() {

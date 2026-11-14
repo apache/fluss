@@ -22,10 +22,13 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
 
 import java.util.function.Supplier;
 
@@ -57,12 +60,15 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
 
     @Override
     public void commitKvSnapshot(
-            CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
+            CompletedSnapshot snapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable Long expectedRecoverySnapshotId)
             throws Exception {
-        coordinatorGateway
-                .commitKvSnapshot(
-                        makeCommitKvSnapshotRequest(snapshot, coordinatorEpoch, bucketLeaderEpoch))
-                .get();
+        CommitKvSnapshotRequest request =
+                makeCommitKvSnapshotRequest(
+                        snapshot, coordinatorEpoch, bucketLeaderEpoch, expectedRecoverySnapshotId);
+        coordinatorGateway.commitKvSnapshot(request).get();
     }
 
     private static class CoordinatorServerSupplier implements Supplier<ServerNode> {
