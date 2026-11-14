@@ -19,6 +19,7 @@ package org.apache.fluss.lake.iceberg.tiering.writer;
 
 import org.apache.fluss.lake.iceberg.tiering.RecordWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.iceberg.Table;
@@ -27,6 +28,9 @@ import org.apache.iceberg.io.TaskWriter;
 
 /** A {@link RecordWriter} to write to Iceberg's primary-key table. */
 public class DeltaTaskWriter extends RecordWriter {
+
+    // WAL changelog image has no UPDATE_BEFORE, so delete the old row by key before writing
+    private final boolean upsert;
 
     public DeltaTaskWriter(
             Table icebergTable,
@@ -37,6 +41,9 @@ public class DeltaTaskWriter extends RecordWriter {
                 icebergTable.schema(),
                 writerInitContext.tableInfo().getRowType(),
                 writerInitContext.tableBucket());
+        this.upsert =
+                writerInitContext.tableInfo().getTableConfig().getChangelogImage()
+                        == ChangelogImage.WAL;
     }
 
     @Override
@@ -46,6 +53,9 @@ public class DeltaTaskWriter extends RecordWriter {
         switch (record.getChangeType()) {
             case INSERT:
             case UPDATE_AFTER:
+                if (upsert) {
+                    deltaWriter.delete(flussRecordAsIcebergRecord);
+                }
                 deltaWriter.write(flussRecordAsIcebergRecord);
                 break;
             case UPDATE_BEFORE:

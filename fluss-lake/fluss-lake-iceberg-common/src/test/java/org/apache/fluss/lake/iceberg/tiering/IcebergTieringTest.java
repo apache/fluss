@@ -26,6 +26,7 @@ import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -348,6 +349,57 @@ class IcebergTieringTest {
     }
 
     @Test
+    void testUpsertAcrossTieringRoundsWithWalChangelog() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_upsert_wal_changelog");
+        createTable(tablePath, true, false);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false, ChangelogImage.WAL);
+
+        // WAL changelog image emits only UPDATE_AFTER, even for the first insert
+        tierOneRound(tablePath, tableInfo, toRecord(0L, pkRow(1, "v1"), UPDATE_AFTER));
+        tierOneRound(
+                tablePath,
+                tableInfo,
+                toRecord(1L, pkRow(1, "v2"), UPDATE_AFTER),
+                toRecord(2L, pkRow(1, "v3"), UPDATE_AFTER));
+
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        List<String> rows = new ArrayList<>();
+        try (CloseableIterator<Record> records = IcebergGenerics.read(table).build().iterator()) {
+            while (records.hasNext()) {
+                Record record = records.next();
+                rows.add(record.getField("c1") + ":" + record.getField("c2"));
+            }
+        }
+        assertThat(rows).containsExactly("1:v3");
+    }
+
+    private static GenericRow pkRow(int key, String value) {
+        GenericRow row = new GenericRow(3);
+        row.setField(0, key);
+        row.setField(1, BinaryString.fromString(value));
+        row.setField(2, BinaryString.fromString("x"));
+        return row;
+    }
+
+    private void tierOneRound(TablePath tablePath, TableInfo tableInfo, LogRecord... records)
+            throws Exception {
+        IcebergWriteResult writeResult;
+        try (LakeWriter<IcebergWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
+            for (LogRecord record : records) {
+                writer.write(record);
+            }
+            writeResult = writer.complete();
+        }
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            committer.commit(
+                    committer.toCommittable(Collections.singletonList(writeResult)),
+                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
+        }
+    }
+
+    @Test
     void testEmptyCommitCreatesSnapshot() throws Exception {
         TablePath tablePath = TablePath.of("iceberg", "test_empty_commit");
         createTable(tablePath, false, false);
@@ -458,6 +510,15 @@ class IcebergTieringTest {
 
     private TableInfo createTableInfo(
             TablePath tablePath, boolean isPrimaryKeyTable, boolean isPartitionedTable) {
+        return createTableInfo(
+                tablePath, isPrimaryKeyTable, isPartitionedTable, ChangelogImage.FULL);
+    }
+
+    private TableInfo createTableInfo(
+            TablePath tablePath,
+            boolean isPrimaryKeyTable,
+            boolean isPartitionedTable,
+            ChangelogImage changelogImage) {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("c1", DataTypes.INT())
@@ -475,7 +536,8 @@ class IcebergTieringTest {
                 TableDescriptor.builder()
                         .schema(schemaBuilder.build())
                         .distributedBy(BUCKET_NUM)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true);
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage);
         if (isPartitionedTable) {
             descriptorBuilder.partitionedBy("c3");
         }
