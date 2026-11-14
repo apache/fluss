@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -125,6 +126,30 @@ public abstract class AbstractTableWriter implements TableWriter {
                             + fieldCount
                             + ", Actual: "
                             + row.getFieldCount());
+        }
+    }
+
+    static void checkNotNullConstraints(
+            InternalRow row, TableInfo tableInfo, @Nullable int[] targetColumns) {
+        RowType rowType = tableInfo.getRowType();
+        if (targetColumns == null) {
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                checkColumnNotNull(row, rowType, tableInfo, i);
+            }
+        } else {
+            for (int targetColumn : targetColumns) {
+                checkColumnNotNull(row, rowType, tableInfo, targetColumn);
+            }
+        }
+    }
+
+    private static void checkColumnNotNull(
+            InternalRow row, RowType rowType, TableInfo tableInfo, int index) {
+        if (!rowType.getTypeAt(index).isNullable() && row.isNullAt(index)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Column '%s' at position %d of table %s is NOT NULL, but the row has a null value for it.",
+                            rowType.getFieldNames().get(index), index, tableInfo.getTablePath()));
         }
     }
 }
