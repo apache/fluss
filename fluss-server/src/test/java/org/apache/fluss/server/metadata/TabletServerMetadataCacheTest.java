@@ -261,8 +261,6 @@ public class TabletServerMetadataCacheTest {
                                 Collections.emptyList()));
         assertThat(deletedTableIds).containsExactly(DATA1_TABLE_ID);
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
-        assertThat(serverMetadataCache.isDeletedTable(DATA1_TABLE_ID)).isTrue();
-        assertThat(serverMetadataCache.isDeletedTable(partitionTableId)).isFalse();
 
         // test delete one partition.
         deletedTableIds =

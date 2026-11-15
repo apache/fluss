@@ -214,7 +214,7 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
 
     /**
      * Deletes committed offsets for selected buckets of a consumer group. Requires Group {@code
-     * WRITE} and Table {@code READ}.
+     * WRITE}; no source-table permission is required.
      */
     @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
     CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(

@@ -503,7 +503,7 @@ message GetConsumerOffsetsResponse {
   repeated PbGetConsumerOffsetsResponseTable tables = 1;
 }
 
-// Delete committed offsets for selected buckets. Requires Group WRITE and Table READ.
+// Delete committed offsets for selected buckets. Requires Group WRITE; no source-table permission.
 message DeleteConsumerOffsetsRequest {
   required string group_id = 1;
   // An empty list, or tables containing no buckets, is a valid no-op and produces an empty

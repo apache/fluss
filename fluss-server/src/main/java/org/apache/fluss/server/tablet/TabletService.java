@@ -924,16 +924,6 @@ public final class TabletService extends RpcServiceBase
             return CompletableFuture.completedFuture(new DeleteConsumerOffsetsResponse());
         }
 
-        // The session is bound to the RPC thread. Live source tables require READ before their
-        // offsets can be deleted. Deleted source tables no longer have a table resource, so their
-        // cleanup is authorized by the consumer-group permission above.
-        if (authorizer != null) {
-            requestedBuckets.stream()
-                    .map(TableBucket::getTableId)
-                    .distinct()
-                    .forEach(this::authorizeLiveSourceTable);
-        }
-
         return groupManager
                 .handleDeleteConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
                 .thenApply(ServerRpcMessageUtils::makeDeleteConsumerOffsetsResponse);
@@ -1223,17 +1213,6 @@ public final class TabletService extends RpcServiceBase
             response.completeExceptionally(t);
         }
         return response;
-    }
-
-    private void authorizeLiveSourceTable(long tableId) {
-        if (metadataCache.getTablePath(tableId).isPresent()) {
-            authorizeTable(READ, tableId);
-        } else if (!metadataCache.isDeletedTable(tableId)) {
-            // A metadata cache miss is unknown state, not proof that the table was deleted. Keep
-            // Table READ mandatory until the cache observes either the table or its tombstone.
-            throw new UnknownTableOrBucketException(
-                    "The metadata state of table " + tableId + " is unknown; retry later.");
-        }
     }
 
     @Override

@@ -69,10 +69,6 @@ public class ServerMetadataSnapshot {
     // epoch to prevent an older bucket layout (ALTER bucket.num) from replacing a newer one.
     private final Map<Long, Long> bucketCountEpochByTableId;
 
-    // Table IDs that this server has observed as deleted. A missing table ID is unknown state,
-    // not proof of deletion.
-    private final Set<Long> deletedTableIds;
-
     public ServerMetadataSnapshot(
             @Nullable ServerInfo coordinatorServer,
             Map<Integer, ServerInfo> aliveTabletServers,
@@ -82,8 +78,7 @@ public class ServerMetadataSnapshot {
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
             Map<TablePartition, Integer> partitionBucketCounts,
-            Map<Long, Long> bucketCountEpochByTableId,
-            Set<Long> deletedTableIds) {
+            Map<Long, Long> bucketCountEpochByTableId) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServers = Collections.unmodifiableMap(aliveTabletServers);
 
@@ -102,7 +97,6 @@ public class ServerMetadataSnapshot {
                 Collections.unmodifiableMap(bucketMetadataMapForPartitions);
         this.partitionBucketCounts = Collections.unmodifiableMap(partitionBucketCounts);
         this.bucketCountEpochByTableId = Collections.unmodifiableMap(bucketCountEpochByTableId);
-        this.deletedTableIds = Collections.unmodifiableSet(deletedTableIds);
     }
 
     /** Create an empty cluster instance with no nodes and no table-buckets. */
@@ -116,8 +110,7 @@ public class ServerMetadataSnapshot {
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
-                Collections.emptyMap(),
-                Collections.emptySet());
+                Collections.emptyMap());
     }
 
     public ServerNode getCoordinatorServer(String listenerName) {
@@ -204,14 +197,6 @@ public class ServerMetadataSnapshot {
 
     public Map<Long, Long> getBucketCountEpochByTableId() {
         return bucketCountEpochByTableId;
-    }
-
-    public boolean isDeletedTable(long tableId) {
-        return deletedTableIds.contains(tableId);
-    }
-
-    public Set<Long> getDeletedTableIds() {
-        return deletedTableIds;
     }
 
     public Map<PhysicalTablePath, Long> getPartitionIdByPath() {

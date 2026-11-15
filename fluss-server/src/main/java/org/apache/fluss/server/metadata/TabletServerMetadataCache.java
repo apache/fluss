@@ -140,11 +140,6 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getTablePath(tableId);
     }
 
-    /** Returns whether this server has observed a deletion tombstone for the table ID. */
-    public boolean isDeletedTable(long tableId) {
-        return serverMetadataSnapshot.isDeletedTable(tableId);
-    }
-
     public Optional<PhysicalTablePath> getPhysicalTablePath(long partitionId) {
         return serverMetadataSnapshot.getPhysicalTablePath(partitionId);
     }
@@ -303,9 +298,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                 metadataLock,
                 () -> {
                     ServerMetadataSnapshot currentSnapshot = serverMetadataSnapshot;
-                    Set<Long> knownDeletedTableIds =
-                            new HashSet<>(currentSnapshot.getDeletedTableIds());
-                    Set<Long> newlyDeletedTableIds = new HashSet<>();
+                    Set<Long> deletedTableIds = new HashSet<>();
 
                     // 1. update coordinator server.
                     ServerInfo coordinatorServer = clusterMetadata.getCoordinatorServer();
@@ -337,8 +330,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             Long removedTableId = tableIdByPath.remove(tablePath);
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
-                                newlyDeletedTableIds.add(removedTableId);
-                                knownDeletedTableIds.add(removedTableId);
+                                deletedTableIds.add(removedTableId);
                                 bucketCountEpochByTableId.remove(removedTableId);
                                 tableProperties.remove(removedTableId);
                             }
@@ -347,8 +339,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     .getTablePath(tableId)
                                     .ifPresent(path -> tableIdByPath.remove(path, tableId));
                             bucketMetadataMapForTables.remove(tableId);
-                            newlyDeletedTableIds.add(tableId);
-                            knownDeletedTableIds.add(tableId);
+                            deletedTableIds.add(tableId);
                             bucketCountEpochByTableId.remove(tableId);
                             tableProperties.remove(tableId);
                         } else {
@@ -450,11 +441,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     partitionBucketCounts,
-                                    bucketCountEpochByTableId,
-                                    knownDeletedTableIds);
+                                    bucketCountEpochByTableId);
                     tablePropertyCache = tableProperties.build();
                     serverMetadataSnapshot = newSnapshot;
-                    return newlyDeletedTableIds;
+                    return deletedTableIds;
                 });
     }
 
@@ -477,8 +467,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     Collections.emptyMap(),
                                     Collections.emptyMap(),
                                     Collections.emptyMap(),
-                                    Collections.emptyMap(),
-                                    currentSnapshot.getDeletedTableIds());
+                                    Collections.emptyMap());
                     tablePropertyCache = ServerTablePropertyCache.empty();
                     serverMetadataSnapshot = newSnapshot;
                 });
@@ -580,8 +569,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     currentSnapshot.getPartitionBucketCounts(),
-                                    bucketCountEpochByTableId,
-                                    currentSnapshot.getDeletedTableIds());
+                                    bucketCountEpochByTableId);
                     tablePropertyCache = tableProperties.build();
                     serverMetadataSnapshot = newSnapshot;
                 });
@@ -658,8 +646,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions,
                                     partitionBucketCounts,
-                                    currentSnapshot.getBucketCountEpochByTableId(),
-                                    currentSnapshot.getDeletedTableIds());
+                                    currentSnapshot.getBucketCountEpochByTableId());
                     serverMetadataSnapshot = newSnapshot;
                 });
     }

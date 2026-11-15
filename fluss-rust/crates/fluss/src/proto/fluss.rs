@@ -650,7 +650,7 @@ pub struct GetConsumerOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsResponseTable>,
 }
-/// Delete committed offsets for selected buckets. Requires Group WRITE and Table READ.
+/// Delete committed offsets for selected buckets. Requires Group WRITE; no source-table permission.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]

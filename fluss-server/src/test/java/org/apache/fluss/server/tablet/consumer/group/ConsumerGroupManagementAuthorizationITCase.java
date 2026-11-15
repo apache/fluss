@@ -21,11 +21,10 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
-import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -53,13 +52,12 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
-import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.SystemTables;
-import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,7 +76,6 @@ import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.DROP;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
-import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropTable;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -113,6 +110,7 @@ class ConsumerGroupManagementAuthorizationITCase {
     private ServerNode clientNode;
     private TableBucket sourceBucket;
     private TableBucket secondSourceBucket;
+    private TableBucket offsetsTableBucket;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -160,7 +158,8 @@ class ConsumerGroupManagementAuthorizationITCase {
                         () -> cluster.getZooKeeperClient().getTable(SystemTables.CONSUMER_OFFSETS),
                         WAIT_TIMEOUT,
                         "Consumer offsets table was not created");
-        cluster.waitUntilAllReplicaReady(new TableBucket(offsetsTable.tableId, 0));
+        offsetsTableBucket = new TableBucket(offsetsTable.tableId, 0);
+        cluster.waitUntilAllReplicaReady(offsetsTableBucket);
     }
 
     @AfterEach
@@ -211,7 +210,7 @@ class ConsumerGroupManagementAuthorizationITCase {
     }
 
     @Test
-    void testDeleteConsumerOffsetsRequiresGroupWriteAndTableRead() throws Exception {
+    void testDeleteConsumerOffsetsRequiresOnlyGroupWrite() throws Exception {
         commitOffset(FIRST_GROUP, 10L);
 
         grant(READ, Resource.group(FIRST_GROUP));
@@ -219,17 +218,11 @@ class ConsumerGroupManagementAuthorizationITCase {
                 .rootCause()
                 .isInstanceOf(AuthorizationException.class)
                 .hasMessageContaining("WRITE");
+        assertThat(lookupOffset(sourceBucket)).doesNotContainNull();
 
         grant(WRITE, Resource.group(FIRST_GROUP));
-        assertThatThrownBy(() -> clientGateway.deleteConsumerOffsets(deleteRequest()).get())
-                .rootCause()
-                .isInstanceOf(AuthorizationException.class)
-                .hasMessageContaining("READ");
-
-        grant(READ, Resource.table(SOURCE_TABLE));
-        assertThat(getAllOffsets(FIRST_GROUP)).containsExactly(10L);
-        clientGateway.deleteConsumerOffsets(deleteRequest()).get();
-        assertThat(getAllOffsets(FIRST_GROUP)).isEmpty();
+        deleteOffsets(sourceBucket);
+        assertThat(lookupOffset(sourceBucket)).containsOnlyNulls();
     }
 
     @Test
@@ -247,13 +240,9 @@ class ConsumerGroupManagementAuthorizationITCase {
     void testGroupWriteWithoutDropDeletesOffsetsButNotGroup() throws Exception {
         commitOffset(FIRST_GROUP, 10L);
         grant(WRITE, Resource.group(FIRST_GROUP));
-        grant(READ, Resource.table(SOURCE_TABLE));
 
-        clientGateway.deleteConsumerOffsets(deleteRequest()).get();
-
-        grant(DESCRIBE, Resource.group(FIRST_GROUP));
-        grant(DESCRIBE, Resource.table(SOURCE_TABLE));
-        assertThat(getAllOffsets(FIRST_GROUP)).isEmpty();
+        deleteOffsets(sourceBucket);
+        assertThat(lookupOffset(sourceBucket)).containsOnlyNulls();
 
         assertThatThrownBy(
                         () ->
@@ -272,14 +261,7 @@ class ConsumerGroupManagementAuthorizationITCase {
     @Test
     void testDeleteConsumerOffsetsTreatsMissingOffsetsAsNoOp() throws Exception {
         grant(WRITE, Resource.group(FIRST_GROUP));
-        grant(READ, Resource.table(SOURCE_TABLE));
-
-        DeleteConsumerOffsetsResponse response =
-                clientGateway.deleteConsumerOffsets(deleteRequest()).get();
-
-        assertThat(response.getTablesList()).hasSize(1);
-        assertThat(response.getTableAt(0).getBucketsList()).hasSize(1);
-        assertThat(response.getTableAt(0).getBucketAt(0).hasErrorCode()).isFalse();
+        deleteOffsets(sourceBucket);
     }
 
     @Test
@@ -287,53 +269,30 @@ class ConsumerGroupManagementAuthorizationITCase {
         commitOffset(FIRST_GROUP, 10L);
         grant(WRITE, Resource.group(FIRST_GROUP));
 
-        long tableId = sourceBucket.getTableId();
         dropTable(cluster, SOURCE_TABLE);
         retry(
                 WAIT_TIMEOUT,
                 () -> assertThat(cluster.getZooKeeperClient().tableExist(SOURCE_TABLE)).isFalse());
 
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
-                        .distributedBy(1)
-                        .build();
-        TableInfo deletedTableInfo =
-                TableInfo.of(SOURCE_TABLE, DELETED_TABLE_ID, 0, descriptor, null, -1L, -1L);
-        ClusterMetadata clusterMetadata =
-                new ClusterMetadata(
-                        null,
-                        Collections.emptySet(),
-                        Collections.singletonList(
-                                new TableMetadata(deletedTableInfo, Collections.emptyList())),
-                        Collections.emptyList());
-        cluster.getTabletServerById(clientNode.id())
-                .getMetadataCache()
-                .updateClusterMetadata(clusterMetadata);
-
-        clientGateway.deleteConsumerOffsets(deleteRequest(tableId)).get();
+        assertThat(lookupOffset(sourceBucket)).doesNotContainNull();
+        deleteOffsets(sourceBucket);
+        assertThat(lookupOffset(sourceBucket)).containsOnlyNulls();
     }
 
     @Test
-    void testLiveSourceTableMissingFromMetadataCacheFailsGroupOnlyCleanup() throws Exception {
-        commitOffset(FIRST_GROUP, 10L);
+    void testDeleteConsumerOffsetsDoesNotRequireSourceTableMetadata() throws Exception {
+        commitOffset(FIRST_GROUP, secondSourceBucket, 20L);
         grant(WRITE, Resource.group(FIRST_GROUP));
 
         TabletServerMetadataCache metadataCache =
                 cluster.getTabletServerById(clientNode.id()).getMetadataCache();
-        TableMetadata firstTableMetadata = metadataCache.getTableMetadata(SOURCE_TABLE).get();
         metadataCache.clearTableMetadata();
-        metadataCache.updateTableMetadata(firstTableMetadata);
 
         assertThat(cluster.getZooKeeperClient().tableExist(SECOND_SOURCE_TABLE)).isTrue();
-        assertThatThrownBy(
-                        () ->
-                                clientGateway
-                                        .deleteConsumerOffsets(deleteRequest(secondSourceBucket))
-                                        .get())
-                .rootCause()
-                .isInstanceOf(UnknownTableOrBucketException.class)
-                .hasMessageContaining("unknown");
+        assertThat(metadataCache.getTablePath(secondSourceBucket.getTableId())).isEmpty();
+        assertThat(lookupOffset(secondSourceBucket)).doesNotContainNull();
+        deleteOffsets(secondSourceBucket);
+        assertThat(lookupOffset(secondSourceBucket)).containsOnlyNulls();
     }
 
     @Test
@@ -366,18 +325,38 @@ class ConsumerGroupManagementAuthorizationITCase {
     }
 
     @Test
-    void testUnknownSourceTableStateFailsRetriably() throws Exception {
+    void testDeleteConsumerOffsetsForUnknownSourceTableIsNoOp() throws Exception {
         commitOffset(FIRST_GROUP, 10L);
         grant(WRITE, Resource.group(FIRST_GROUP));
 
-        assertThatThrownBy(
-                        () ->
-                                clientGateway
-                                        .deleteConsumerOffsets(deleteRequest(Long.MAX_VALUE))
-                                        .get())
-                .rootCause()
-                .isInstanceOf(UnknownTableOrBucketException.class)
-                .hasMessageContaining("unknown");
+        deleteOffsets(new TableBucket(Long.MAX_VALUE, 0));
+        assertThat(lookupOffset(sourceBucket)).doesNotContainNull();
+    }
+
+    private void deleteOffsets(TableBucket tableBucket) throws Exception {
+        DeleteConsumerOffsetsResponse response =
+                clientGateway.deleteConsumerOffsets(deleteRequest(tableBucket)).get();
+        assertThat(response.getTablesList()).hasSize(1);
+        assertThat(response.getTableAt(0).getTableId()).isEqualTo(tableBucket.getTableId());
+        assertThat(response.getTableAt(0).getBucketsList()).hasSize(1);
+        assertThat(response.getTableAt(0).getBucketAt(0).getBucketId())
+                .isEqualTo(tableBucket.getBucket());
+        assertThat(response.getTableAt(0).getBucketAt(0).hasErrorCode()).isFalse();
+    }
+
+    private List<ByteArraySlice> lookupOffset(TableBucket tableBucket) throws Exception {
+        // Read the stored key directly so source-table visibility cannot hide a failed deletion.
+        byte[] key =
+                new ConsumerOffsetSchema()
+                        .encodeOffsetKey(
+                                GroupId.of(FIRST_GROUP),
+                                tableBucket.getTableId(),
+                                tableBucket.getPartitionId(),
+                                tableBucket.getBucket());
+        return cluster.getTabletServerById(clientNode.id())
+                .getReplicaManager()
+                .getReplicaOrException(offsetsTableBucket)
+                .lookups(Collections.singletonList(key));
     }
 
     private void commitOffset(String groupId, long offset) throws Exception {
