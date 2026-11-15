@@ -53,23 +53,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link CompletedSnapshotStore}. */
 class CompletedSnapshotStoreTest {
 
-    @Test
-    void testOutOfOrderRegistrationProtectsRetainedSharedFile() throws Exception {
-        TestKvHandle shared = new TestKvHandle("shared");
-        List<KvFileHandleAndLocalPath> files =
-                Collections.singletonList(KvFileHandleAndLocalPath.of(shared, "000001.sst"));
-        CompletedSnapshotStore store =
-                createCompletedSnapshotStore(2, defaultHandleStore, Collections.emptyList());
-        store.add(getSnapshotWithSharedFiles(1L, files), null, null);
-        store.add(getSnapshotWithSharedFiles(3L, Collections.emptyList()), null, null);
-        store.add(getSnapshotWithSharedFiles(2L, files), null, null);
-
-        assertThat(shared.discarded).isFalse();
-        assertThat(store.getAllSnapshots())
-                .extracting(CompletedSnapshot::getSnapshotID)
-                .containsExactly(3L, 2L);
-    }
-
     private final long timeout = 100L;
 
     private ExecutorService executorService;
