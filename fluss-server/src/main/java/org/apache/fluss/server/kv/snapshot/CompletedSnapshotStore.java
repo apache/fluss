@@ -203,7 +203,7 @@ public class CompletedSnapshotStore {
             SnapshotsCleaner snapshotsCleaner,
             Runnable postCleanup)
             throws Exception {
-        CompletedSnapshotHandle completedSnapshotHandle = getOrCreateSnapshotHandle(snapshot);
+        CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(),
                 snapshot.getSnapshotID(),

@@ -171,7 +171,6 @@ class KvTabletSnapshotTargetTest {
 
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
-    private AtomicInteger coordinatorEpochGenerator;
     private AtomicLong updateMinRetainOffsetConsumer;
 
     static ZooKeeperClient zooKeeperClient;
@@ -193,7 +192,6 @@ class KvTabletSnapshotTargetTest {
         // init snapshot id and log offset generator
         snapshotIdGenerator = new AtomicLong(1);
         logOffsetGenerator = new AtomicLong(1);
-        coordinatorEpochGenerator = new AtomicInteger();
         updateMinRetainOffsetConsumer = new AtomicLong(Long.MAX_VALUE);
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
     }
@@ -632,7 +630,7 @@ class KvTabletSnapshotTargetTest {
 
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
-        Supplier<Integer> coordinatorEpochSupplier = coordinatorEpochGenerator::get;
+        Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
         return new KvTabletSnapshotTarget(
                 tableBucket,
@@ -670,7 +668,7 @@ class KvTabletSnapshotTargetTest {
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
         Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
-        Supplier<Integer> coordinatorEpochSupplier = coordinatorEpochGenerator::get;
+        Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
         return new KvTabletSnapshotTarget(
                 tableBucket,

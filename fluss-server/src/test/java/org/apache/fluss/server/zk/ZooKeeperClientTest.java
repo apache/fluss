@@ -1022,9 +1022,35 @@ class ZooKeeperClientTest {
                                         null))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
+        BucketSnapshot winner = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        ZooKeeperClient raced =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
+                    @Override
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket requested) throws Exception {
+                        Optional<VersionedData<Long>> captured =
+                                super.getRecoverySnapshotSelection(requested);
+                        zookeeperClient.registerTableBucketSnapshot(bucket, winner, 5L, null);
+                        return captured;
+                    }
+                };
+        assertThatThrownBy(
+                        () ->
+                                raced.registerTableBucketSnapshot(
+                                        bucket,
+                                        new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
+                                        5L,
+                                        null))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
         zookeeperClient.registerTableBucketSnapshot(
                 bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, null);
-        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
     }
 
     @Test
