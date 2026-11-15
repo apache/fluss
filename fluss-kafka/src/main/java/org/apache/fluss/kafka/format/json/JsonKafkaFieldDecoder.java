@@ -67,6 +67,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
     private final boolean nested;
     private final Map<String, Integer> projectedFields = new HashMap<>();
     private final JsonParserToFlussConverters.Converter[] converters;
+    private final String[] fieldPaths;
 
     /** Creates a decoder from the schema validated by the shared Kafka table contract. */
     public JsonKafkaFieldDecoder(KafkaTableSchema schema) {
@@ -83,9 +84,12 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
             projection = schema.valueProjection();
         }
         converters = new JsonParserToFlussConverters.Converter[projection.size()];
+        fieldPaths = new String[projection.size()];
         for (int i = 0; i < projection.size(); i++) {
             projectedFields.put(projection.nameAt(i), i);
-            converters[i] = JsonParserToFlussConverters.create(projection.dataTypeAt(i));
+            fieldPaths[i] = JsonPath.field(JsonPath.ROOT, projection.nameAt(i));
+            converters[i] =
+                    JsonParserToFlussConverters.create(projection.dataTypeAt(i), fieldPaths[i]);
         }
     }
 
@@ -128,7 +132,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
                 values[position] =
                         converters[position].convert(
                                 parser,
-                                JsonPath.field(JsonPath.ROOT, name),
+                                fieldPaths[position],
                                 rescuedFields == null
                                         ? null
                                         : rescued -> rescuedFields.add(name, rescued));
@@ -140,9 +144,7 @@ public final class JsonKafkaFieldDecoder implements KafkaFieldDecoder {
             }
             for (int i = 0; i < projection.size(); i++) {
                 if (!present[i]) {
-                    values[i] =
-                            converters[i].convertMissing(
-                                    JsonPath.field(JsonPath.ROOT, projection.nameAt(i)));
+                    values[i] = converters[i].convertMissing(fieldPaths[i]);
                 }
             }
             return new KafkaDecodedValue(

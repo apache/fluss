@@ -564,7 +564,7 @@ class JsonToFlussConvertersTest {
                 .hasMessage(message);
     }
 
-    private static Object convert(DataType type, String json) throws Exception {
+    protected Object convert(DataType type, String json) throws Exception {
         return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$.field");
     }
 }

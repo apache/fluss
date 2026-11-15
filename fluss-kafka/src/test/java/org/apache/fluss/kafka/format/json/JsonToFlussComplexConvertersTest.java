@@ -239,7 +239,7 @@ class JsonToFlussComplexConvertersTest {
         assertThat(path).hasSize(512).startsWith("$").endsWith("...\"]");
     }
 
-    private static Object convert(DataType type, String json) throws Exception {
+    protected Object convert(DataType type, String json) throws Exception {
         return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$");
     }
 }

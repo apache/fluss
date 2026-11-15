@@ -28,9 +28,11 @@ import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.Base64Variants;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonToken;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.exc.InputCoercionException;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BinaryType;
@@ -205,13 +207,18 @@ final class JsonParserToFlussConverters {
 
     /** Captures and consumes only the current value, preserving the spelling of number tokens. */
     static RescueValue capture(JsonParser parser) throws IOException {
+        return capture(parser, false);
+    }
+
+    private static RescueValue capture(JsonParser parser, boolean normalizeNumbers)
+            throws IOException {
         JsonToken token = parser.getCurrentToken();
         if (token == JsonToken.START_OBJECT) {
             ObjectRescue object = new ObjectRescue();
             while (parser.nextToken() != JsonToken.END_OBJECT) {
                 String name = parser.getCurrentName();
                 parser.nextToken();
-                object.add(name, capture(parser));
+                object.add(name, capture(parser, normalizeNumbers));
             }
             return object;
         }
@@ -219,7 +226,7 @@ final class JsonParserToFlussConverters {
             ArrayRescue array = new ArrayRescue();
             int index = 0;
             while (parser.nextToken() != JsonToken.END_ARRAY) {
-                array.set(index++, capture(parser));
+                array.set(index++, capture(parser, normalizeNumbers));
             }
             return array;
         }
@@ -227,7 +234,7 @@ final class JsonParserToFlussConverters {
             return new StringRescue(parser.getText());
         }
         if (token == JsonToken.VALUE_NUMBER_INT || token == JsonToken.VALUE_NUMBER_FLOAT) {
-            return new NumberRescue(parser.getText());
+            return new NumberRescue(normalizeNumbers ? scalarText(parser) : parser.getText());
         }
         if (token == JsonToken.VALUE_TRUE || token == JsonToken.VALUE_FALSE) {
             return new BooleanRescue(token == JsonToken.VALUE_TRUE);
@@ -239,16 +246,20 @@ final class JsonParserToFlussConverters {
     }
 
     static Converter create(DataType dataType) {
+        return create(dataType, null);
+    }
+
+    static Converter create(DataType dataType, @Nullable String fixedPath) {
         try {
             KafkaTableSchema.validateJsonType(dataType);
         } catch (InvalidTableException e) {
             throw new KafkaTopicSchemaException(e.getMessage());
         }
-        return createValidated(dataType);
+        return createValidated(dataType, fixedPath);
     }
 
-    private static Converter createValidated(DataType dataType) {
-        NotNullConverter notNullConverter = createNotNull(dataType);
+    private static Converter createValidated(DataType dataType, @Nullable String fixedPath) {
+        NotNullConverter notNullConverter = createNotNull(dataType, fixedPath);
         return new Converter() {
             @Nullable
             @Override
@@ -261,7 +272,7 @@ final class JsonParserToFlussConverters {
                     return notNullConverter.convert(parser, path, rescue);
                 } catch (KafkaRecordEncodingException e) {
                     throw e;
-                } catch (ConversionException | NumberFormatException e) {
+                } catch (ConversionException | NumberFormatException | InputCoercionException e) {
                     if (rescue != null && dataType.isNullable()) {
                         rescue.accept(capture(parser));
                         return null;
@@ -290,7 +301,7 @@ final class JsonParserToFlussConverters {
         return null;
     }
 
-    private static NotNullConverter createNotNull(DataType dataType) {
+    private static NotNullConverter createNotNull(DataType dataType, @Nullable String fixedPath) {
         switch (dataType.getTypeRoot()) {
             case BOOLEAN:
                 return booleanConverter();
@@ -328,7 +339,7 @@ final class JsonParserToFlussConverters {
             case MAP:
                 return mapConverter((MapType) dataType);
             case ROW:
-                return rowConverter((RowType) dataType);
+                return rowConverter((RowType) dataType, fixedPath);
             default:
                 throw new KafkaTopicSchemaException(
                         "Kafka JSON format does not support Fluss type "
@@ -344,7 +355,7 @@ final class JsonParserToFlussConverters {
                 return token == JsonToken.VALUE_TRUE;
             }
             if (token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY) {
-                parser.skipChildren();
+                skipValue(parser);
                 return false;
             }
             return Boolean.parseBoolean(parser.getText().trim());
@@ -352,15 +363,36 @@ final class JsonParserToFlussConverters {
     }
 
     private static NotNullConverter tinyIntConverter() {
-        return (parser, path, rescue) -> Byte.parseByte(parser.getText().trim());
+        return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT) {
+                int value = parser.getIntValue();
+                if (value < Byte.MIN_VALUE || value > Byte.MAX_VALUE) {
+                    throw new NumberFormatException("Integer outside signed byte range");
+                }
+                return (byte) value;
+            }
+            return Byte.parseByte(scalarText(parser).trim());
+        };
     }
 
     private static NotNullConverter smallIntConverter() {
-        return (parser, path, rescue) -> Short.parseShort(parser.getText().trim());
+        return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT) {
+                int value = parser.getIntValue();
+                if (value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
+                    throw new NumberFormatException("Integer outside signed short range");
+                }
+                return (short) value;
+            }
+            return Short.parseShort(scalarText(parser).trim());
+        };
     }
 
     private static NotNullConverter intConverter(DataType dataType) {
         return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT) {
+                return parser.getIntValue();
+            }
             if (!isNumber(parser.getCurrentToken())) {
                 return Integer.parseInt(parser.getText().trim());
             }
@@ -376,6 +408,9 @@ final class JsonParserToFlussConverters {
 
     private static NotNullConverter bigIntConverter(DataType dataType) {
         return (parser, path, rescue) -> {
+            if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT) {
+                return parser.getLongValue();
+            }
             if (!isNumber(parser.getCurrentToken())) {
                 return Long.parseLong(parser.getText().trim());
             }
@@ -391,7 +426,16 @@ final class JsonParserToFlussConverters {
 
     private static NotNullConverter floatConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            float value = Float.parseFloat(parser.getText().trim());
+            float value =
+                    isNumber(parser.getCurrentToken())
+                            ? parser.getFloatValue()
+                            : Float.parseFloat(parser.getText().trim());
+            // Jackson normalizes integer -0; the JSON contract retains its sign.
+            if (value == 0
+                    && parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT
+                    && parser.getText().startsWith("-")) {
+                value = -0.0F;
+            }
             require(Float.isFinite(value), path, dataType, "non-finite or overflowing number");
             return value;
         };
@@ -399,7 +443,16 @@ final class JsonParserToFlussConverters {
 
     private static NotNullConverter doubleConverter(DataType dataType) {
         return (parser, path, rescue) -> {
-            double value = Double.parseDouble(parser.getText().trim());
+            double value =
+                    isNumber(parser.getCurrentToken())
+                            ? parser.getDoubleValue()
+                            : Double.parseDouble(parser.getText().trim());
+            // Jackson normalizes integer -0; the JSON contract retains its sign.
+            if (value == 0
+                    && parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT
+                    && parser.getText().startsWith("-")) {
+                value = -0.0D;
+            }
             require(Double.isFinite(value), path, dataType, "non-finite or overflowing number");
             return value;
         };
@@ -433,9 +486,9 @@ final class JsonParserToFlussConverters {
         return (parser, path, rescue) -> {
             JsonToken token = parser.getCurrentToken();
             if (token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY) {
-                return BinaryString.fromString(capture(parser).toJson(OBJECT_MAPPER));
+                return BinaryString.fromString(capture(parser, true).toJson(OBJECT_MAPPER));
             }
-            return BinaryString.fromString(parser.getText());
+            return BinaryString.fromString(scalarText(parser));
         };
     }
 
@@ -525,7 +578,7 @@ final class JsonParserToFlussConverters {
     }
 
     private static NotNullConverter arrayConverter(ArrayType dataType) {
-        Converter elementConverter = createValidated(dataType.getElementType());
+        Converter elementConverter = createValidated(dataType.getElementType(), null);
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_ARRAY, path, dataType, "expected a JSON array");
             ArrayRescue rescued = rescue == null ? null : new ArrayRescue();
@@ -551,7 +604,7 @@ final class JsonParserToFlussConverters {
     }
 
     private static NotNullConverter mapConverter(MapType dataType) {
-        Converter valueConverter = createValidated(dataType.getValueType());
+        Converter valueConverter = createValidated(dataType.getValueType(), null);
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_OBJECT, path, dataType, "expected a JSON object");
             ObjectRescue rescued = rescue == null ? null : new ObjectRescue();
@@ -573,16 +626,18 @@ final class JsonParserToFlussConverters {
         };
     }
 
-    private static NotNullConverter rowConverter(RowType dataType) {
+    private static NotNullConverter rowConverter(RowType dataType, @Nullable String fixedPath) {
         List<DataField> fields = dataType.getFields();
         String[] fieldNames = new String[fields.size()];
+        String[] fieldPaths = new String[fields.size()];
         Map<String, Integer> fieldPositions = new HashMap<>();
         Converter[] fieldConverters = new Converter[fields.size()];
         for (int i = 0; i < fields.size(); i++) {
             DataField field = fields.get(i);
             fieldNames[i] = field.getName();
             fieldPositions.put(field.getName(), i);
-            fieldConverters[i] = createValidated(field.getType());
+            fieldPaths[i] = fixedPath == null ? null : JsonPath.field(fixedPath, field.getName());
+            fieldConverters[i] = createValidated(field.getType(), fieldPaths[i]);
         }
         return (parser, path, rescue) -> {
             requireToken(parser, JsonToken.START_OBJECT, path, dataType, "expected a JSON object");
@@ -595,7 +650,7 @@ final class JsonParserToFlussConverters {
                 Integer position = fieldPositions.get(name);
                 if (position == null) {
                     if (rescued == null) {
-                        parser.skipChildren();
+                        skipValue(parser);
                     } else {
                         rescued.add(name, capture(parser));
                     }
@@ -605,7 +660,9 @@ final class JsonParserToFlussConverters {
                         position,
                         fieldConverters[position].convert(
                                 parser,
-                                JsonPath.field(path, name),
+                                fieldPaths[position] == null
+                                        ? JsonPath.field(path, name)
+                                        : fieldPaths[position],
                                 rescued == null ? null : value -> rescued.add(name, value)));
                 present[position] = true;
             }
@@ -613,7 +670,10 @@ final class JsonParserToFlussConverters {
                 if (!present[i]) {
                     row.setField(
                             i,
-                            fieldConverters[i].convertMissing(JsonPath.field(path, fieldNames[i])));
+                            fieldConverters[i].convertMissing(
+                                    fieldPaths[i] == null
+                                            ? JsonPath.field(path, fieldNames[i])
+                                            : fieldPaths[i]));
                 }
             }
             if (rescued != null && !rescued.isEmpty()) {
@@ -621,6 +681,40 @@ final class JsonParserToFlussConverters {
             }
             return row;
         };
+    }
+
+    private static String scalarText(JsonParser parser) throws IOException {
+        if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_FLOAT) {
+            try {
+                BigDecimal value = new BigDecimal(parser.getText());
+                return value.signum() == 0 ? "0" : value.stripTrailingZeros().toString();
+            } catch (NumberFormatException | ArithmeticException e) {
+                // Extreme exponents have no BigDecimal representation; retain their spelling.
+                return parser.getText();
+            }
+        }
+        if (parser.getCurrentToken() == JsonToken.VALUE_NUMBER_INT
+                && "-0".equals(parser.getText())) {
+            return "0";
+        }
+        return parser.getText();
+    }
+
+    private static void skipValue(JsonParser parser) throws IOException {
+        JsonToken token = parser.getCurrentToken();
+        if (token == JsonToken.START_OBJECT || token == JsonToken.START_ARRAY) {
+            JsonToken end =
+                    token == JsonToken.START_OBJECT ? JsonToken.END_OBJECT : JsonToken.END_ARRAY;
+            while (parser.nextToken() != end) {
+                if (parser.getCurrentToken() == null) {
+                    throw new IOException("Unexpected end of JSON value.");
+                }
+                skipValue(parser);
+            }
+        } else if (token == JsonToken.VALUE_STRING) {
+            // Jackson's lazy skip does not enforce the string-length constraint.
+            parser.getText();
+        }
     }
 
     private static boolean isNumber(JsonToken token) {
@@ -633,16 +727,19 @@ final class JsonParserToFlussConverters {
         return parser.getText();
     }
 
-    private static byte[] decodeBase64(JsonParser parser, String path, DataType dataType) {
+    private static byte[] decodeBase64(JsonParser parser, String path, DataType dataType)
+            throws IOException {
         requireToken(
                 parser,
                 JsonToken.VALUE_STRING,
                 path,
                 dataType,
                 "expected a Base64 string or binary value");
+        // Complete JSON validation before a Base64 error can be rescued.
+        String text = parser.getText();
         try {
-            return parser.getBinaryValue();
-        } catch (IOException | IllegalArgumentException e) {
+            return Base64Variants.getDefaultVariant().decode(text);
+        } catch (IllegalArgumentException e) {
             throw invalid(path, dataType, "invalid Base64 string", e);
         }
     }
