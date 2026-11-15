@@ -289,8 +289,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                         ioExecutor,
                         zooKeeperClient,
                         coordinatorMetricGroup,
-                        kvSnapshotLeaseManager::snapshotLeaseExist,
-                        coordinatorContext.getCoordinatorZkVersion());
+                        kvSnapshotLeaseManager::snapshotLeaseExist);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;

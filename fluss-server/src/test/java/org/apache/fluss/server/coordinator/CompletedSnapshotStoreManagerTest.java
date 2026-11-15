@@ -37,7 +37,6 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -80,8 +79,6 @@ class CompletedSnapshotStoreManagerTest {
 
     private static ExecutorService ioExecutor;
 
-    private int coordinatorEpochZkVersion;
-
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
@@ -90,12 +87,6 @@ class CompletedSnapshotStoreManagerTest {
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         completedSnapshotHandleStore = new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient);
         ioExecutor = Executors.newFixedThreadPool(1);
-    }
-
-    @BeforeEach
-    void initializeCoordinatorEpoch() throws Exception {
-        coordinatorEpochZkVersion =
-                zookeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
     }
 
     @AfterEach
@@ -316,8 +307,7 @@ class CompletedSnapshotStoreManagerTest {
                 ioExecutor,
                 zookeeperClient,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                bucket -> true,
-                coordinatorEpochZkVersion);
+                bucket -> true);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(

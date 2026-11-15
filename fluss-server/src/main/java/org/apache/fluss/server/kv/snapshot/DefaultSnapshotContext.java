@@ -151,7 +151,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
             getLatestCompletedSnapshotProvider() {
         return (tableBucket) -> {
-            zooKeeperClient.syncTableBucket(tableBucket);
             Optional<CompletedSnapshotHandle> recovery =
                     completedSnapshotHandleStore.getRecoverySnapshot(tableBucket);
             Optional<CompletedSnapshotHandle> snapshotHandle = recovery;

@@ -48,17 +48,9 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
             LoggerFactory.getLogger(ZooKeeperCompletedSnapshotHandleStore.class);
 
     private final ZooKeeperClient client;
-    @Nullable private final Integer coordinatorEpochZkVersion;
 
     public ZooKeeperCompletedSnapshotHandleStore(ZooKeeperClient zooKeeperClient) {
-        this(zooKeeperClient, null);
-    }
-
-    /** Creates a store bound to the owning Coordinator's captured epoch. */
-    public ZooKeeperCompletedSnapshotHandleStore(
-            ZooKeeperClient zooKeeperClient, @Nullable Integer coordinatorEpochZkVersion) {
         this.client = zooKeeperClient;
-        this.coordinatorEpochZkVersion = coordinatorEpochZkVersion;
     }
 
     /**
@@ -84,22 +76,8 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
                         snapshotId,
                         snapshotHandle.getLogOffset(),
                         snapshotHandle.getMetadataFilePath().toString());
-        if (coordinatorEpochZkVersion == null) {
-            if (expectedRecoverySnapshotId != null
-                    || expectedLeaderEpoch != null
-                    || client.getRecoverySnapshot(tableBucket).isPresent()) {
-                throw new UnsupportedOperationException(
-                        "Recovery snapshot writes require a Coordinator epoch.");
-            }
-            client.registerTableBucketSnapshot(tableBucket, reference);
-        } else {
-            client.registerTableBucketSnapshot(
-                    tableBucket,
-                    reference,
-                    expectedRecoverySnapshotId,
-                    coordinatorEpochZkVersion,
-                    expectedLeaderEpoch);
-        }
+        client.registerTableBucketSnapshot(
+                tableBucket, reference, expectedRecoverySnapshotId, expectedLeaderEpoch);
     }
 
     @Override
@@ -112,24 +90,18 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     @Override
     public void selectRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
             throws Exception {
-        checkNotNull(coordinatorEpochZkVersion, "Coordinator epoch is required.");
         client.selectRecoverySnapshot(
                 bucket,
                 new BucketSnapshot(
                         handle.getSnapshotId(),
                         handle.getLogOffset(),
-                        handle.getMetadataFilePath().toString()),
-                coordinatorEpochZkVersion);
+                        handle.getMetadataFilePath().toString()));
     }
 
     @Override
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {
         checkNotNull(tableBucket, "Table bucket");
-        if (coordinatorEpochZkVersion == null) {
-            client.deleteTableBucketSnapshot(tableBucket, snapshotId);
-        } else {
-            client.deleteTableBucketSnapshot(tableBucket, snapshotId, coordinatorEpochZkVersion);
-        }
+        client.deleteTableBucketSnapshot(tableBucket, snapshotId);
     }
 
     @Override

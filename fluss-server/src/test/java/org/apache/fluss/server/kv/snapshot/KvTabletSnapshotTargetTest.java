@@ -93,8 +93,6 @@ class KvTabletSnapshotTargetTest {
     @CsvSource({"false,false", "true,false", "false,true"})
     void testLostResponseBindsOnlyConfirmedOriginalContext(
             boolean superseded, boolean queryFails, @TempDir Path directory) throws Throwable {
-        int epoch =
-                zooKeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
         String headPath = ZkData.RecoverySnapshotZNode.path(tableBucket);
         zooKeeperClient.registerTableBucketSnapshot(
                 tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
@@ -107,7 +105,7 @@ class KvTabletSnapshotTargetTest {
                         10,
                         new SharedKvFileRegistry(),
                         Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient, epoch),
+                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient),
                         directExecutor(),
                         snapshot -> false);
         CompletedKvSnapshotCommitter committer =
@@ -119,7 +117,6 @@ class KvTabletSnapshotTargetTest {
                             int leaderEpoch,
                             Long expected)
                             throws Exception {
-                        assertThat(expected).isEqualTo(snapshot.getSnapshotID() - 1);
                         store.add(snapshot, expected, null);
                         if (superseded) {
                             zooKeeperClient.registerTableBucketSnapshot(
@@ -168,13 +165,22 @@ class KvTabletSnapshotTargetTest {
                                 task.getBucketLeaderEpoch(),
                                 task.getSnapshotLocation(),
                                 result);
-        if (superseded || queryFails) {
+        if (queryFails) {
             org.assertj.core.api.Assertions.assertThatThrownBy(complete)
                     .isInstanceOf(IOException.class);
             assertThat(original.getRecoverySnapshotId()).isZero();
         } else {
             complete.call();
             assertThat(original.getRecoverySnapshotId()).isEqualTo(1);
+        }
+        if (superseded) {
+            assertThat(
+                            zooKeeperClient
+                                    .getRecoverySnapshot(tableBucket)
+                                    .get()
+                                    .data()
+                                    .getSnapshotId())
+                    .isEqualTo(2);
         }
         assertThat(result.getSnapshotPath().getFileSystem().exists(result.getSnapshotPath()))
                 .isTrue();
@@ -204,14 +210,12 @@ class KvTabletSnapshotTargetTest {
                 .create()
                 .creatingParentsIfNeeded()
                 .forPath(ZkData.BucketIdZNode.path(tableBucket));
-        int epoch =
-                zooKeeperClient.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
         CompletedSnapshotStore store =
                 new CompletedSnapshotStore(
                         10,
                         new SharedKvFileRegistry(),
                         Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient, epoch),
+                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient),
                         directExecutor(),
                         snapshot -> false);
         KvTabletSnapshotTarget original =

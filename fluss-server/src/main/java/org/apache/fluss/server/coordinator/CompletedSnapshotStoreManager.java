@@ -75,21 +75,17 @@ public class CompletedSnapshotStoreManager {
     private final SnapshotInUseChecker snapshotInUseChecker;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
-    /** Creates snapshot stores fenced by the owning Coordinator's captured epoch. */
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker,
-            int coordinatorEpochZkVersion) {
+            SnapshotInUseChecker snapshotInUseChecker) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
-                client ->
-                        new ZooKeeperCompletedSnapshotHandleStore(
-                                client, coordinatorEpochZkVersion),
+                ZooKeeperCompletedSnapshotHandleStore::new,
                 coordinatorMetricGroup,
                 snapshotInUseChecker);
     }

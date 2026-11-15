@@ -20,7 +20,6 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
@@ -259,7 +258,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         Long expectedRecoverySnapshotId = tabletState.getRecoverySnapshotId();
         try {
             if (expectedRecoverySnapshotId != null && !unconfirmedRecoverySnapshotIds.isEmpty()) {
-                zooKeeperClient.syncTableBucket(tableBucket);
                 Optional<ZooKeeperClient.VersionedData<RecoverySnapshot>> selected =
                         zooKeeperClient.getRecoverySnapshot(tableBucket);
                 if (selected.isPresent()
@@ -359,7 +357,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             return;
         }
         try {
-            zooKeeperClient.syncTableBucket(tableBucket);
             Optional<BucketSnapshot> selected =
                     zooKeeperClient.getRecoveryBucketSnapshot(tableBucket);
             updateMinRetainOffset.accept(
@@ -396,23 +393,10 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         try {
             Optional<BucketSnapshot> zkSnapshot =
                     zooKeeperClient.getTableBucketSnapshot(tableBucket, snapshotId);
-            if (zkSnapshot.isPresent()
-                    && zkSnapshot.get().getLogOffset() == completedSnapshot.getLogOffset()
-                    && zkSnapshot
-                            .get()
-                            .getMetadataPath()
-                            .equals(
-                                    CompletedSnapshot.getMetadataFilePath(
-                                                    completedSnapshot.getSnapshotLocation())
-                                            .toString())) {
+            if (zkSnapshot.isPresent()) {
                 if (expectedRecoverySnapshotId != null) {
-                    Optional<ZooKeeperClient.VersionedData<RecoverySnapshot>> selected =
-                            zooKeeperClient.getRecoverySnapshot(tableBucket);
-                    if (!selected.isPresent()
-                            || selected.get().data().getSnapshotId() != snapshotId) {
-                        throw new InvalidRequestException(
-                                "Snapshot is no longer the recovery source.");
-                    }
+                    // Recovery-aware publication registered this reference and selected it
+                    // atomically.
                     acceptRecoverySnapshotId(expectedRecoverySnapshotId, snapshotId);
                     unconfirmedRecoverySnapshotIds.clear();
                 }
@@ -428,11 +412,10 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 // Update local state as if the commit was successful
                 updateStateOnCommitSuccess(snapshotId, snapshotResult);
                 return; // Snapshot commit succeeded, return directly
-            } else if (snapshotResult.getTabletState().getRecoverySnapshotId() == null) {
+            } else {
                 snapshotsCleaner.cleanSnapshot(completedSnapshot, () -> {}, ioExecutor);
                 handleSnapshotFailure(snapshotId, snapshotLocation, t);
             }
-            // A recovery-aware commit may still become the selected source after a lost response.
         } catch (Exception zkException) {
             LOG.warn(
                     "Failed to query ZK for snapshot {} of TableBucket {}. "
@@ -448,9 +431,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             // connectors may already be reading, which would cause data loss or job failure.
         }
 
-        if (snapshotResult.getTabletState().getRecoverySnapshotId() != null) {
-            rocksIncrementalSnapshot.notifySnapshotAbort(snapshotId);
-        }
         // throw the exception to make PeriodicSnapshotManager can catch the exception
         throw t;
     }

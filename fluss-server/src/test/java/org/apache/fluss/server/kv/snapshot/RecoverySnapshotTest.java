@@ -47,14 +47,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.Collections;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -76,49 +71,7 @@ class RecoverySnapshotTest {
     @TempDir Path temporaryDirectory;
 
     @Test
-    void testRecoveryReadBarrierFailureDoesNotBecomeEmptyRecovery() throws Exception {
-        ExecutorService executor = Executors.newSingleThreadExecutor();
-        Configuration conf = new Configuration();
-        KvSnapshotResource resource = KvSnapshotResource.create(1, conf, executor);
-        try {
-            DefaultSnapshotContext context =
-                    DefaultSnapshotContext.create(
-                            client, (snapshot, cc, leader, recoveryId) -> {}, resource, conf);
-            TableBucket missing = new TableBucket(TABLE_IDS.incrementAndGet(), 0);
-            assertThatThrownBy(() -> context.getLatestCompletedSnapshotProvider().apply(missing))
-                    .hasRootCauseInstanceOf(KeeperException.NoNodeException.class);
-        } finally {
-            resource.close();
-            executor.shutdownNow();
-        }
-    }
-
-    @Test
-    void testRecoveryReadBarrierHasBoundedWaitWhenZooKeeperIsUnavailable() throws Exception {
-        Configuration conf = snapshotConfiguration();
-        conf.set(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT, Duration.ofMillis(50));
-        ZooKeeperClient unavailable = new ZooKeeperClient(sharedCurator(), conf);
-        ZOOKEEPER.getCustomExtension().stop();
-        try {
-            long started = System.nanoTime();
-            assertThatThrownBy(() -> unavailable.syncTableBucket(bucket))
-                    .isInstanceOfAny(TimeoutException.class, ExecutionException.class);
-            assertThatThrownBy(() -> unavailable.getTableLatestBucketSnapshot(bucket.getTableId()))
-                    .isInstanceOf(org.apache.fluss.exception.TimeoutException.class);
-            assertThat(Duration.ofNanos(System.nanoTime() - started))
-                    .isLessThan(Duration.ofSeconds(5));
-        } finally {
-            ZOOKEEPER.getCustomExtension().restart();
-            assertThat(client.getCuratorClient().blockUntilConnected(10, TimeUnit.SECONDS))
-                    .isTrue();
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testLeaderChangeDuringCommitCannotInvalidateNewRecoveryContext(boolean leaderChanged)
-            throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
+    void testOldLeaderCommitCannotInvalidateNewRecoveryContext() throws Exception {
         client.getCuratorClient()
                 .create()
                 .forPath(
@@ -131,7 +84,7 @@ class RecoverySnapshotTest {
                                         Collections.emptyList(),
                                         0,
                                         0)));
-        client.selectRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/source-4"), epoch);
+        client.selectRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/source-4"));
         AtomicInteger reads = new AtomicInteger();
         Configuration conf = snapshotConfiguration();
         ZooKeeperClient delayed =
@@ -146,11 +99,9 @@ class RecoverySnapshotTest {
                                             ZkData.LeaderAndIsrZNode.path(bucket),
                                             ZkData.LeaderAndIsrZNode.encode(
                                                     new LeaderAndIsr(
-                                                            leaderChanged ? 2 : 1,
-                                                            leaderChanged ? 1 : 0,
-                                                            leaderChanged
-                                                                    ? Collections.singletonList(2)
-                                                                    : java.util.Arrays.asList(1, 2),
+                                                            2,
+                                                            1,
+                                                            Collections.singletonList(2),
                                                             Collections.emptyList(),
                                                             0,
                                                             1)));
@@ -163,28 +114,19 @@ class RecoverySnapshotTest {
                         2,
                         new SharedKvFileRegistry(Runnable::run),
                         Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(delayed, epoch),
+                        new ZooKeeperCompletedSnapshotHandleStore(delayed),
                         Runnable::run,
                         snapshot -> false);
         CompletedSnapshot old = snapshot(temporaryDirectory, 5L, 40L, null);
         Throwable failure = catchThrowable(() -> store.add(old, 4L, 0));
-        assertThat(client.getRecoveryBucketSnapshot(bucket).get().getSnapshotId()).isEqualTo(4L);
+        store.add(snapshot(temporaryDirectory, 6L, 50L, null), 4L, 1);
+        assertThat(client.getRecoveryBucketSnapshot(bucket).get().getSnapshotId()).isEqualTo(6L);
         assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(client.getTableBucketSnapshot(bucket, 5L)).isEmpty();
-        if (leaderChanged) {
-            store.add(snapshot(temporaryDirectory, 6L, 50L, null), 4L, 1);
-            assertThat(client.getRecoveryBucketSnapshot(bucket).get().getSnapshotId())
-                    .isEqualTo(6L);
-        } else {
-            store.add(old, 4L, 0);
-            assertThat(client.getRecoveryBucketSnapshot(bucket).get().getSnapshotId())
-                    .isEqualTo(5L);
-        }
     }
 
     @Test
     void testRecoverySelectionAppearingDuringLegacyLookupCarriesItsIdentity() throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
         CompletedSnapshot selected = snapshot(temporaryDirectory, 2L, 20L, null);
         Path metadata = Paths.get(selected.getMetadataFilePath().toUri());
         Files.createDirectories(metadata.getParent());
@@ -198,8 +140,7 @@ class RecoverySnapshotTest {
                         client.selectRecoverySnapshot(
                                 bucket,
                                 new BucketSnapshot(
-                                        2L, 20L, selected.getMetadataFilePath().toString()),
-                                epoch);
+                                        2L, 20L, selected.getMetadataFilePath().toString()));
                         return super.getTableBucketLatestSnapshot(requested);
                     }
                 };
@@ -225,7 +166,6 @@ class RecoverySnapshotTest {
 
     @BeforeEach
     void setup() throws Exception {
-        client.ensureEpochZnodeExists();
         bucket = new TableBucket(TABLE_IDS.incrementAndGet(), 0);
         client.registerTableAssignment(
                 bucket.getTableId(),
@@ -276,28 +216,13 @@ class RecoverySnapshotTest {
     }
 
     @Test
-    void testSelectionAndReferenceAreAtomic() throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("old").getCoordinatorEpochZkVersion();
-        int nextEpoch = client.fenceBecomeCoordinatorLeader("new").getCoordinatorEpochZkVersion();
-        BucketSnapshot snapshot = new BucketSnapshot(4L, 30L, "file:/snapshot-4");
-        assertThatThrownBy(() -> client.selectRecoverySnapshot(bucket, snapshot, epoch))
-                .isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(client.getTableBucketSnapshot(bucket, 4L)).isEmpty();
-        assertThat(client.getRecoverySnapshot(bucket)).isEmpty();
-        client.selectRecoverySnapshot(bucket, snapshot, nextEpoch);
-        assertThat(client.getRecoveryBucketSnapshot(bucket)).contains(snapshot);
-    }
-
-    @Test
     void testOriginalContextAdvancesContinuouslyAndRejectsStaleSnapshot() throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
-        client.selectRecoverySnapshot(
-                bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"), epoch);
+        client.selectRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         BucketSnapshot next = new BucketSnapshot(5L, 40L, "file:/snapshot-5");
-        client.registerTableBucketSnapshot(bucket, next, 4L, epoch, null);
+        client.registerTableBucketSnapshot(bucket, next, 4L, null);
         assertThat(client.getRecoveryBucketSnapshot(bucket)).contains(next);
         BucketSnapshot equalOffset = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
-        client.registerTableBucketSnapshot(bucket, equalOffset, 5L, epoch, null);
+        client.registerTableBucketSnapshot(bucket, equalOffset, 5L, null);
         assertThat(client.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
         assertThatThrownBy(
                         () ->
@@ -305,33 +230,20 @@ class RecoverySnapshotTest {
                                         bucket,
                                         new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
                                         4L,
-                                        epoch,
                                         null))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(client.getTableBucketSnapshot(bucket, 7L)).isEmpty();
         client.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, epoch, null);
+                bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, null);
         assertThat(client.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
     }
 
     @Test
-    void testOldCoordinatorCannotPruneAfterTakeover() throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("old").getCoordinatorEpochZkVersion();
-        client.fenceBecomeCoordinatorLeader("new");
-        assertThatThrownBy(() -> client.deleteTableBucketSnapshot(bucket, 1L, epoch))
-                .isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(client.getTableBucketSnapshot(bucket, 1L)).isPresent();
-    }
-
-    @Test
     void testSelectionCannotMoveRecoveryOffsetBackwards() throws Exception {
-        int epoch = client.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
         assertThatThrownBy(
                         () ->
                                 client.selectRecoverySnapshot(
-                                        bucket,
-                                        new BucketSnapshot(4L, 19L, "file:/snapshot-4"),
-                                        epoch))
+                                        bucket, new BucketSnapshot(4L, 19L, "file:/snapshot-4")))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(client.getTableBucketSnapshot(bucket, 4L)).isEmpty();
         assertThat(client.getRecoverySnapshot(bucket)).isEmpty();
@@ -346,17 +258,15 @@ class RecoverySnapshotTest {
                 .create()
                 .creatingParentsIfNeeded()
                 .forPath(ZkData.BucketIdZNode.path(bucket));
-        int epoch = client.fenceBecomeCoordinatorLeader("test").getCoordinatorEpochZkVersion();
         Path root = temporaryDirectory;
         Path shared = root.resolve("shared.sst");
         Files.write(shared, new byte[] {1});
         ZooKeeperClient publisher =
                 new ZooKeeperClient(sharedCurator(), snapshotConfiguration()) {
                     @Override
-                    public void selectRecoverySnapshot(
-                            TableBucket bucket, BucketSnapshot snapshot, int capturedEpoch)
+                    public void selectRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot)
                             throws Exception {
-                        super.selectRecoverySnapshot(bucket, snapshot, capturedEpoch);
+                        super.selectRecoverySnapshot(bucket, snapshot);
                         if (responseLost) {
                             throw new KeeperException.ConnectionLossException();
                         }
@@ -367,7 +277,7 @@ class RecoverySnapshotTest {
                         2,
                         new SharedKvFileRegistry(Runnable::run),
                         Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(publisher, epoch),
+                        new ZooKeeperCompletedSnapshotHandleStore(publisher),
                         Runnable::run,
                         snapshot -> false);
         store.add(snapshot(root, 1L, 10L, shared), null, null);
@@ -390,61 +300,6 @@ class RecoverySnapshotTest {
         store.add(snapshot(root, 6L, 40L, null), 2L, null);
         assertThat(Files.exists(shared)).isFalse();
         assertThat(client.getTableBucketLatestSnapshot(bucket).get().getSnapshotId()).isEqualTo(6L);
-    }
-
-    @Test
-    void testEpochRejectedPrunePreservesNewSourceFiles() throws Exception {
-        bucket = new TableBucket(TABLE_IDS.incrementAndGet(), 0);
-        client.getCuratorClient()
-                .create()
-                .creatingParentsIfNeeded()
-                .forPath(ZkData.BucketIdZNode.path(bucket));
-        int epoch = client.fenceBecomeCoordinatorLeader("old").getCoordinatorEpochZkVersion();
-        Path root = temporaryDirectory;
-        Path shared = root.resolve("shared.sst");
-        Files.write(shared, new byte[] {1});
-        CompletedSnapshot imported = snapshot(root, 2L, 30L, shared);
-        Path metadata = Paths.get(imported.getMetadataFilePath().toUri());
-        Files.createDirectories(metadata.getParent());
-        Files.write(metadata, CompletedSnapshotJsonSerde.toJson(imported));
-        AtomicBoolean transfer = new AtomicBoolean();
-        CompletedSnapshotStore store =
-                new CompletedSnapshotStore(
-                        2,
-                        new SharedKvFileRegistry(Runnable::run),
-                        Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(client, epoch),
-                        Runnable::run,
-                        snapshot -> {
-                            if (snapshot.getSnapshotID() == 1L && transfer.get()) {
-                                try {
-                                    int nextEpoch =
-                                            client.fenceBecomeCoordinatorLeader("new")
-                                                    .getCoordinatorEpochZkVersion();
-                                    client.selectRecoverySnapshot(
-                                            bucket,
-                                            new BucketSnapshot(
-                                                    2L,
-                                                    30L,
-                                                    imported.getMetadataFilePath().toString()),
-                                            nextEpoch);
-                                    transfer.set(false);
-                                } catch (Exception e) {
-                                    throw new RuntimeException(e);
-                                }
-                            }
-                            return false;
-                        });
-        store.add(snapshot(root, 1L, 10L, shared), null, null);
-        store.add(snapshot(root, 3L, 20L, null), null, null);
-        transfer.set(true);
-        assertThatThrownBy(() -> store.add(snapshot(root, 4L, 30L, null), null, null))
-                .isInstanceOf(KeeperException.BadVersionException.class);
-
-        assertThat(client.getTableBucketSnapshot(bucket, 1L)).isPresent();
-        assertThat(store.getActiveSnapshotIds()).contains(1L);
-        assertThat(client.getTableBucketLatestSnapshot(bucket).get().getSnapshotId()).isEqualTo(2L);
-        assertThat(Files.exists(shared)).isTrue();
     }
 
     private Configuration snapshotConfiguration() {

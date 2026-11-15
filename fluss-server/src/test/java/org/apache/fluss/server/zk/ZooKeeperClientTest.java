@@ -24,7 +24,6 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -41,8 +40,6 @@ import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
-import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
@@ -80,7 +77,6 @@ import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
-import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.types.Tuple2;
@@ -106,7 +102,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -384,7 +379,7 @@ class ZooKeeperClientTest {
         DescribeBucketsRequest request = new DescribeBucketsRequest();
         request.setTablePath().setDatabaseName("db").setTableName("table");
         DescribeBucketsResponse response =
-                createRpcService(zookeeperClient, metadataManager, null)
+                createDescribeBucketsService(zookeeperClient, metadataManager)
                         .describeBuckets(request)
                         .get();
         assertThat(response.getBucketInfosList())
@@ -411,7 +406,7 @@ class ZooKeeperClientTest {
         try (ZooKeeperClient failingClient = createClientWithReadFailure(failedPath)) {
             assertThatThrownBy(
                             () ->
-                                    createRpcService(failingClient, metadataManager, null)
+                                    createDescribeBucketsService(failingClient, metadataManager)
                                             .describeBuckets(request)
                                             .get())
                     .hasRootCauseInstanceOf(KeeperException.ConnectionLossException.class);
@@ -922,7 +917,10 @@ class ZooKeeperClientTest {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         ZooKeeperClient raceTestingClient =
-                new SnapshotReadClient(configuration) {
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
                     @Override
                     List<ZkGetDataResponse> getDataInBackground(Collection<String> paths)
                             throws Exception {
@@ -941,16 +939,9 @@ class ZooKeeperClientTest {
     }
 
     @ParameterizedTest
-    @CsvSource({
-        "false,false,false",
-        "false,true,false",
-        "true,false,false",
-        "true,true,false",
-        "false,false,true"
-    })
+    @CsvSource({"false,false", "true,false", "false,true"})
     void testLatestSnapshotsObservePublishedSource(
-            boolean partitioned, boolean staleAssignment, boolean selectionAppearsDuringRead)
-            throws Exception {
+            boolean partitioned, boolean selectionAppearsDuringRead) throws Exception {
         long tableId = 1L;
         long partitionId = 2L;
         Map<Integer, BucketAssignment> assignments =
@@ -988,8 +979,11 @@ class ZooKeeperClientTest {
         }
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        SnapshotReadClient reader =
-                new SnapshotReadClient(configuration) {
+        ZooKeeperClient reader =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
                     private boolean publish = selectionAppearsDuringRead;
 
                     @Override
@@ -1003,8 +997,6 @@ class ZooKeeperClientTest {
                         return responses;
                     }
                 };
-        reader.staleAssignment = staleAssignment;
-        reader.staleRecoveryPath = ZkData.RecoverySnapshotZNode.path(bucket);
 
         Map<Integer, Optional<BucketSnapshot>> snapshots =
                 partitioned
@@ -1013,74 +1005,6 @@ class ZooKeeperClientTest {
 
         assertThat(snapshots).containsEntry(0, Optional.of(selectedSource));
         assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 1L)).contains(oldSource);
-    }
-
-    @Test
-    void testLatestSnapshotsFailWhenReadTransactionFails() throws Exception {
-        zookeeperClient.getCuratorClient().delete().forPath(ZkData.CoordinatorEpochZNode.path());
-        assertThatThrownBy(() -> zookeeperClient.getTableLatestBucketSnapshot(1L))
-                .hasRootCauseInstanceOf(KeeperException.NoNodeException.class);
-        assertThatThrownBy(() -> zookeeperClient.getPartitionLatestBucketSnapshot(2L))
-                .hasRootCauseInstanceOf(KeeperException.NoNodeException.class);
-    }
-
-    @Test
-    void testLatestSnapshotsRejectReplacedZooKeeperClient() throws Exception {
-        zookeeperClient.registerTableAssignment(
-                1L, TableAssignment.builder().add(0, BucketAssignment.of(0)).build());
-        zookeeperClient.registerTableBucketSnapshot(
-                new TableBucket(1L, 0), new BucketSnapshot(1L, 10L, "file:/source"));
-        Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        SnapshotReadClient reader = new SnapshotReadClient(configuration);
-        reader.replaceClientAfterRead = true;
-
-        assertThatThrownBy(() -> reader.getTableLatestBucketSnapshot(1L))
-                .isInstanceOf(NetworkException.class);
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testLatestSnapshotsUseIoExecutor(boolean transactionFails) throws Exception {
-        Configuration configuration = new Configuration();
-        try (LakeCatalogDynamicLoader loader =
-                new LakeCatalogDynamicLoader(configuration, null, true)) {
-            MetadataManager metadata = new MetadataManager(zookeeperClient, configuration, loader);
-            TablePath tablePath = TablePath.of("db", "snapshots");
-            metadata.createDatabase("db", DatabaseDescriptor.EMPTY, false);
-            long tableId =
-                    metadata.createTable(
-                            tablePath,
-                            remoteDataDir,
-                            TestData.DATA1_TABLE_DESCRIPTOR_PK,
-                            TableAssignment.builder().add(0, BucketAssignment.of(0)).build(),
-                            false);
-            zookeeperClient.registerTableBucketSnapshot(
-                    new TableBucket(tableId, 0), new BucketSnapshot(1L, 10L, "file:/source"));
-            if (transactionFails) {
-                zookeeperClient
-                        .getCuratorClient()
-                        .delete()
-                        .forPath(ZkData.CoordinatorEpochZNode.path());
-            }
-            ManuallyTriggeredScheduledExecutorService executor =
-                    new ManuallyTriggeredScheduledExecutorService();
-            GetLatestKvSnapshotsRequest request = new GetLatestKvSnapshotsRequest();
-            request.setTablePath().setDatabaseName("db").setTableName("snapshots");
-
-            CompletableFuture<GetLatestKvSnapshotsResponse> result =
-                    createRpcService(zookeeperClient, metadata, executor)
-                            .getLatestKvSnapshots(request);
-
-            assertThat(result).isNotDone();
-            executor.triggerAll();
-            if (transactionFails) {
-                assertThatThrownBy(() -> result.get(10, TimeUnit.SECONDS))
-                        .hasRootCauseInstanceOf(KeeperException.NoNodeException.class);
-            } else {
-                assertThat(result.get(10, TimeUnit.SECONDS).getTableId()).isEqualTo(tableId);
-            }
-        }
     }
 
     @Test
@@ -1484,61 +1408,10 @@ class ZooKeeperClientTest {
         }
     }
 
-    private static class SnapshotReadClient extends ZooKeeperClient {
-        private boolean fresh;
-        private boolean staleAssignment;
-        private String staleRecoveryPath;
-        private boolean replaceClientAfterRead;
-
-        private SnapshotReadClient(Configuration configuration) {
-            super(
-                    new CuratorFrameworkWithUnhandledErrorListener(
-                            zookeeperClient.getCuratorClient(), (message, error) -> {}),
-                    configuration);
-        }
-
-        @Override
-        void syncSnapshotReads() throws Exception {
-            super.syncSnapshotReads();
-            fresh = true;
-        }
-
-        @Override
-        public Optional<TableAssignment> getTableAssignment(long tableId) throws Exception {
-            return staleAssignment && !fresh ? Optional.empty() : super.getTableAssignment(tableId);
-        }
-
-        @Override
-        public Optional<PartitionAssignment> getPartitionAssignment(long partitionId)
-                throws Exception {
-            return staleAssignment && !fresh
-                    ? Optional.empty()
-                    : super.getPartitionAssignment(partitionId);
-        }
-
-        @Override
-        List<ZkGetDataResponse> getDataInBackground(Collection<String> paths) throws Exception {
-            List<ZkGetDataResponse> responses = super.getDataInBackground(paths);
-            if (replaceClientAfterRead) {
-                replaceClientAfterRead = false;
-                getCuratorClient().getZookeeperClient().reset();
-            }
-            if (!fresh && paths.contains(staleRecoveryPath)) {
-                return Collections.singletonList(
-                        new ZkGetDataResponse(
-                                staleRecoveryPath,
-                                KeeperException.Code.OK,
-                                new RecoverySnapshot(1L).toJson(),
-                                null));
-            }
-            return responses;
-        }
-    }
-
-    private static RpcServiceBase createRpcService(
-            ZooKeeperClient client, MetadataManager metadataManager, ExecutorService executor) {
+    private static RpcServiceBase createDescribeBucketsService(
+            ZooKeeperClient client, MetadataManager metadataManager) {
         return new RpcServiceBase(
-                null, ServerType.COORDINATOR, client, metadataManager, null, null, executor) {
+                null, ServerType.COORDINATOR, client, metadataManager, null, null, null) {
             @Override
             public String name() {
                 return "describe-buckets-test";

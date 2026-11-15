@@ -319,8 +319,7 @@ class KvReplicaRestoreITCase {
                 new BucketSnapshot(
                         selected.getSnapshotID(),
                         selected.getLogOffset(),
-                        selected.getMetadataFilePath().toString()),
-                processor.getCoordinatorZkVersion());
+                        selected.getMetadataFilePath().toString()));
 
         long lateId =
                 new ZkSequenceIDCounter(
