@@ -20,6 +20,7 @@ package org.apache.fluss.flink.lake;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.lake.source.LakeSource;
@@ -33,12 +34,20 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.PartitionUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -108,7 +117,8 @@ class LakeSplitGeneratorTest {
                 retriever,
                 OffsetsInitializer.latest(),
                 partitionBucketCount,
-                () -> Collections.singleton(partitionInfo));
+                () -> Collections.singleton(partitionInfo),
+                null);
     }
 
     private static class ZeroOffsetsRetriever implements OffsetsInitializer.BucketOffsetsRetriever {
@@ -224,7 +234,8 @@ class LakeSplitGeneratorTest {
                         retriever,
                         OffsetsInitializer.latest(),
                         2,
-                        () -> Collections.singleton(partition));
+                        () -> Collections.singleton(partition),
+                        null);
 
         List<SourceSplitBase> splits = generator.generateHybridLakeFlussSplits();
 
@@ -247,5 +258,121 @@ class LakeSplitGeneratorTest {
                                                 .get()
                                         : split.asLogSplit().getStoppingOffset().get())
                 .containsExactly(110L, 20L);
+    }
+
+    @Test
+    void testPartitionFilterKeepsMatchingLakeOnlyPartition() throws Exception {
+        // d1, d2 and d3 have all expired from Fluss and exist only in lake
+        TableInfo info = createPartitionedLogTable("day");
+        Predicate partitionFilter =
+                new PredicateBuilder(PartitionUtils.partitionRowType(info))
+                        .greaterOrEqual(0, BinaryString.fromString("d2"));
+
+        LakeSplitGenerator generator =
+                createGenerator(
+                        info,
+                        Arrays.asList(
+                                Collections.singletonList("d1"),
+                                Collections.singletonList("d2"),
+                                Collections.singletonList("d3")),
+                        partitionFilter);
+
+        assertThat(generator.generateHybridLakeFlussSplits())
+                .allMatch(split -> split instanceof LakeSnapshotSplit)
+                .extracting(SourceSplitBase::getPartitionName)
+                .containsExactlyInAnyOrder("d2", "d3");
+    }
+
+    @Test
+    void testNoPartitionFilterReadsAllLakeOnlyPartitions() throws Exception {
+        TableInfo info = createPartitionedLogTable("day");
+
+        LakeSplitGenerator generator =
+                createGenerator(
+                        info,
+                        Arrays.asList(
+                                Collections.singletonList("d1"),
+                                Collections.singletonList("d2"),
+                                Collections.singletonList("d3")),
+                        null);
+
+        assertThat(generator.generateHybridLakeFlussSplits())
+                .extracting(SourceSplitBase::getPartitionName)
+                .containsExactlyInAnyOrder("d1", "d2", "d3");
+    }
+
+    @Test
+    void testPartitionFilterOnMultiplePartitionKeys() throws Exception {
+        // the partition keys are declared as (region, day), the reverse of the column order, so
+        // the filter on "day" must be evaluated against the second partition value
+        TableInfo info = createPartitionedLogTable("region", "day");
+        Predicate partitionFilter =
+                new PredicateBuilder(PartitionUtils.partitionRowType(info))
+                        .equal(1, BinaryString.fromString("d2"));
+
+        LakeSplitGenerator generator =
+                createGenerator(
+                        info,
+                        Arrays.asList(
+                                Arrays.asList("eu", "d1"),
+                                Arrays.asList("eu", "d2"),
+                                Arrays.asList("us", "d2")),
+                        partitionFilter);
+
+        assertThat(generator.generateHybridLakeFlussSplits())
+                .extracting(SourceSplitBase::getPartitionName)
+                .containsExactlyInAnyOrder("eu$d2", "us$d2");
+    }
+
+    /**
+     * Creates a log table (schema: id INT, day STRING, region STRING) with a single bucket,
+     * partitioned by the given keys.
+     */
+    private static TableInfo createPartitionedLogTable(String... partitionKeys) {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("day", DataTypes.STRING())
+                                        .column("region", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy(partitionKeys)
+                        .distributedBy(1, "id")
+                        .build();
+        return TableInfo.of(
+                TablePath.of("db", "partitioned_log_table"), 1L, 1, descriptor, null, 1L, 1L);
+    }
+
+    /**
+     * Creates a generator whose lake planner returns one split in bucket 0 for each of the given
+     * lake partitions, none of which exist in Fluss anymore.
+     */
+    private static LakeSplitGenerator createGenerator(
+            TableInfo info,
+            List<List<String>> lakePartitions,
+            @Nullable Predicate partitionFilter) {
+        List<LakeSplit> lakeSplits = new ArrayList<>();
+        for (List<String> partition : lakePartitions) {
+            lakeSplits.add(new TestingLakeSplit(0, partition));
+        }
+        TestAdminAdapter admin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(
+                            TablePath ignored) {
+                        return CompletableFuture.completedFuture(
+                                new LakeSnapshot(1L, new HashMap<>()));
+                    }
+                };
+        return new LakeSplitGenerator(
+                info,
+                admin,
+                TestingLakeSource.fromSplits(lakeSplits),
+                new ZeroOffsetsRetriever(),
+                OffsetsInitializer.latest(),
+                1,
+                Collections::emptySet,
+                partitionFilter);
     }
 }

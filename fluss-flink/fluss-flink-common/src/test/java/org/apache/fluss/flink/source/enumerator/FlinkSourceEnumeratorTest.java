@@ -1724,6 +1724,123 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     /**
+     * Verifies that a partition filter also prunes lake partitions in union read. The lake holds
+     * three partitions: the one matching the filter, one that still exists in Fluss but does not
+     * match, and one that has expired from Fluss and does not match. Only splits of the matching
+     * partition should be assigned.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPartitionFilterPrunesLakePartitionsInUnionRead(
+            boolean isPrimaryKeyTable, @TempDir Path tempDir) throws Throwable {
+        int numSubtasks = 3;
+        TableDescriptor tableDescriptor =
+                isPrimaryKeyTable
+                        ? DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR
+                        : DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
+        String partitionKey = isPrimaryKeyTable ? "date" : "name";
+        long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map<Long, String> flussPartitions =
+                waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
+        assertThat(flussPartitions).hasSize(2);
+        List<Long> flussPartitionIds =
+                flussPartitions.keySet().stream().sorted().collect(Collectors.toList());
+        long matchingPartitionId = flussPartitionIds.get(0);
+        String matchingPartitionName = flussPartitions.get(matchingPartitionId);
+        long filteredOutPartitionId = flussPartitionIds.get(1);
+        // a dummy partition id since this partition has expired in Fluss
+        long expiredPartitionId = -1L;
+
+        Map<Long, String> lakePartitions = new HashMap<>(flussPartitions);
+        lakePartitions.put(expiredPartitionId, "expiredPartition");
+
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        List<PartitionInfo> lakePartitionInfos = new ArrayList<>();
+        for (Map.Entry<Long, String> partition : lakePartitions.entrySet()) {
+            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+                bucketLogEndOffset.put(new TableBucket(tableId, partition.getKey(), bucket), 50L);
+            }
+            lakePartitionInfos.add(
+                    new PartitionInfo(
+                            partition.getKey(),
+                            ResolvedPartitionSpec.fromPartitionName(
+                                    Collections.singletonList(partitionKey), partition.getValue()),
+                            DEFAULT_REMOTE_DATA_DIR,
+                            DEFAULT_BUCKET_NUM));
+        }
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zooKeeperClient, tempDir.toString());
+        lakeTableHelper.registerLakeTableSnapshotV1(
+                tableId, new LakeTableSnapshot(0, bucketLogEndOffset));
+        LakeSource<LakeSplit> lakeSource =
+                new TestingLakeSource(DEFAULT_BUCKET_NUM, lakePartitionInfos);
+
+        RowType partitionRowType =
+                RowType.builder().field(partitionKey, DataTypes.STRING()).build();
+        Predicate partitionFilter =
+                new PredicateBuilder(partitionRowType)
+                        .equal(
+                                0,
+                                PredicateBuilder.convertJavaObject(
+                                        partitionRowType.getTypeAt(0), matchingPartitionName));
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
+                MockWorkExecutor workExecutor = new MockWorkExecutor(context);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                isPrimaryKeyTable,
+                                true,
+                                context,
+                                Collections.emptySet(),
+                                Collections.emptyMap(),
+                                null,
+                                OffsetsInitializer.full(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                streaming,
+                                partitionFilter,
+                                lakeSource,
+                                workExecutor,
+                                LeaseContext.DEFAULT,
+                                false)) {
+            enumerator.start();
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            List<SourceSplitBase> assignedSplits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(assignedSplits).isNotEmpty();
+            assertThat(assignedSplits)
+                    .as(
+                            "splits of lake partitions %s and %s must be pruned by the filter",
+                            lakePartitions.get(filteredOutPartitionId),
+                            lakePartitions.get(expiredPartitionId))
+                    .extracting(SourceSplitBase::getPartitionName)
+                    .containsOnly(matchingPartitionName);
+            if (isPrimaryKeyTable) {
+                // one combined lake snapshot and change log split per bucket
+                assertThat(assignedSplits)
+                        .hasSize(DEFAULT_BUCKET_NUM)
+                        .allMatch(split -> split instanceof LakeSnapshotAndFlussLogSplit);
+            } else {
+                // one lake snapshot split and one log split per bucket
+                assertThat(assignedSplits).hasSize(DEFAULT_BUCKET_NUM * 2);
+                assertThat(assignedSplits)
+                        .filteredOn(split -> split instanceof LakeSnapshotSplit)
+                        .hasSize(DEFAULT_BUCKET_NUM);
+                assertThat(assignedSplits)
+                        .filteredOn(split -> split instanceof LogSplit)
+                        .hasSize(DEFAULT_BUCKET_NUM);
+            }
+        }
+    }
+
+    /**
      * Regression test: verifies that when a partition is dropped after splits are restored into
      * {@code unassignedSplits}, the stale splits are removed from both {@code unassignedSplits} and
      * {@code pendingSplitAssignment}. Without this fix, stale splits would survive in checkpoint
