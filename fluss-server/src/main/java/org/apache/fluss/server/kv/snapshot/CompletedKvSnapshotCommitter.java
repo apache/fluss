@@ -28,13 +28,13 @@ public interface CompletedKvSnapshotCommitter {
      * @param snapshot CompletedSnapshot to be reported
      * @param coordinatorEpoch the coordinator epoch when the snapshot is triggered
      * @param bucketLeaderEpoch the bucket leader epoch when the snapshot is triggered
-     * @param expectedRecoverySnapshotId recovery identity captured during snapshot preparation
+     * @param previousRecoverySnapshotId recovery snapshot this commit expects to replace
      * @throws Exception if report completed snapshot failed
      */
     void commitKvSnapshot(
             CompletedSnapshot snapshot,
             int coordinatorEpoch,
             int bucketLeaderEpoch,
-            @Nullable Long expectedRecoverySnapshotId)
+            @Nullable Long previousRecoverySnapshotId)
             throws Exception;
 }

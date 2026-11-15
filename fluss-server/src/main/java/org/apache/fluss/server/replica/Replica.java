@@ -1236,7 +1236,7 @@ public final class Replica {
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
             if (completedSnapshot != null) {
-                kvTabletSnapshotTarget.bindRecoverySnapshotId(
+                kvTabletSnapshotTarget.initializeRecoverySnapshotId(
                         completedSnapshot.getRecoverySnapshotId());
             }
             this.kvSnapshotManager =

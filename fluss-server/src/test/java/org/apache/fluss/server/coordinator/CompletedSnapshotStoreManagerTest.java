@@ -100,7 +100,7 @@ class CompletedSnapshotStoreManagerTest {
     }
 
     @Test
-    void testHistoricalPartitionCannotSelectKvRecoverySnapshot() throws Exception {
+    void testHistoricalPartitionCannotSetKvRecoverySnapshot() throws Exception {
         TableBucket historical = new TableBucket(1L, 123L, 0);
         zookeeperClient
                 .getCuratorClient()
@@ -111,10 +111,10 @@ class CompletedSnapshotStoreManagerTest {
                         ZkData.PartitionZNode.encode(new PartitionRegistration(1L, 123L, null, 1)));
         CompletedSnapshotStoreManager manager = createCompletedSnapshotStoreManager(2);
         CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, historical, 1);
-        assertThatThrownBy(() -> manager.selectRecoverySnapshot(DATA1_TABLE_PATH, snapshot))
+        assertThatThrownBy(() -> manager.setRecoverySnapshot(DATA1_TABLE_PATH, snapshot))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Historical partitions");
-        assertThat(zookeeperClient.getRecoverySnapshot(historical)).isEmpty();
+        assertThat(zookeeperClient.getRecoverySnapshotSelection(historical)).isEmpty();
         assertThat(zookeeperClient.getTableBucketSnapshot(historical, 1L)).isEmpty();
     }
 
@@ -396,7 +396,7 @@ class CompletedSnapshotStoreManagerTest {
                 TableBucket tableBucket,
                 long snapshotId,
                 CompletedSnapshotHandle completedSnapshotHandle,
-                Long expectedRecoverySnapshotId,
+                Long previousRecoverySnapshotId,
                 Integer expectedLeaderEpoch)
                 throws Exception {
             snapshotHandleMap

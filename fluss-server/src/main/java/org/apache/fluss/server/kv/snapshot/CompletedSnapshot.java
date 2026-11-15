@@ -123,7 +123,7 @@ public class CompletedSnapshot {
     }
 
     /** Marks the source actually loaded from the durable recovery selection. */
-    public void bindRecoverySnapshotId() {
+    public void markAsRecoverySource() {
         recoverySnapshotId = snapshotID;
     }
 

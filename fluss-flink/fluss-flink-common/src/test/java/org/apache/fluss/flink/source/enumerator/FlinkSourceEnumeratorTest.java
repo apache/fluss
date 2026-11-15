@@ -68,7 +68,7 @@ import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -517,7 +517,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     .create()
                     .forPath(
                             ZkData.RecoverySnapshotZNode.path(tableBucket),
-                            new RecoverySnapshot(selected.getSnapshotID()).toJson());
+                            new RecoverySnapshotSelection(selected.getSnapshotID()).toJson());
             long laterId =
                     new ZkSequenceIDCounter(
                                     zk.getCuratorClient(),

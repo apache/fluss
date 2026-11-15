@@ -57,7 +57,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
-import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -890,7 +890,7 @@ class ZooKeeperClientTest {
                     .create()
                     .forPath(
                             ZkData.RecoverySnapshotZNode.path(bucket),
-                            new RecoverySnapshot(selected.getSnapshotId()).toJson());
+                            new RecoverySnapshotSelection(selected.getSnapshotId()).toJson());
             zookeeperClient.registerTableBucketSnapshot(
                     bucket,
                     new BucketSnapshot(2L, selected.getLogOffset() + 1, "oss://test/newer"));
@@ -970,7 +970,7 @@ class ZooKeeperClientTest {
                     zookeeperClient
                             .getCuratorClient()
                             .create()
-                            .forPath(selectionPath, new RecoverySnapshot(2L).toJson());
+                            .forPath(selectionPath, new RecoverySnapshotSelection(2L).toJson());
                     zookeeperClient.registerTableBucketSnapshot(
                             bucket, new BucketSnapshot(3L, 30L, "file:/late-source"));
                 };

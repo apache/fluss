@@ -314,7 +314,7 @@ class KvReplicaRestoreITCase {
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         CoordinatorEventProcessor processor =
                 FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
-        zk.selectRecoverySnapshot(
+        zk.setRecoverySnapshot(
                 bucket,
                 new BucketSnapshot(
                         selected.getSnapshotID(),

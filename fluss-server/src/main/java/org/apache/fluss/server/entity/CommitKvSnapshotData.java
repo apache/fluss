@@ -34,21 +34,21 @@ public class CommitKvSnapshotData {
     /** The leader epoch of the bucket when the snapshot is triggered. */
     private final int bucketLeaderEpoch;
 
-    private final @Nullable Long expectedRecoverySnapshotId;
+    private final @Nullable Long previousRecoverySnapshotId;
 
     public CommitKvSnapshotData(
             CompletedSnapshot completedSnapshot,
             int coordinatorEpoch,
             int bucketLeaderEpoch,
-            @Nullable Long expectedRecoverySnapshotId) {
+            @Nullable Long previousRecoverySnapshotId) {
         this.completedSnapshot = completedSnapshot;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketLeaderEpoch = bucketLeaderEpoch;
-        this.expectedRecoverySnapshotId = expectedRecoverySnapshotId;
+        this.previousRecoverySnapshotId = previousRecoverySnapshotId;
     }
 
-    public @Nullable Long getExpectedRecoverySnapshotId() {
-        return expectedRecoverySnapshotId;
+    public @Nullable Long getPreviousRecoverySnapshotId() {
+        return previousRecoverySnapshotId;
     }
 
     public CompletedSnapshot getCompletedSnapshot() {

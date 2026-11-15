@@ -2515,15 +2515,15 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                                         tablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
-                        Long expectedRecoverySnapshotId =
-                                event.getAddCompletedSnapshotData().getExpectedRecoverySnapshotId();
+                        Long previousRecoverySnapshotId =
+                                event.getAddCompletedSnapshotData().getPreviousRecoverySnapshotId();
                         completedSnapshotStore.add(
                                 completedSnapshot,
-                                expectedRecoverySnapshotId,
+                                previousRecoverySnapshotId,
                                 event.getBucketLeaderEpoch());
                         try {
                             long offset = completedSnapshot.getLogOffset();
-                            if (expectedRecoverySnapshotId == null) {
+                            if (previousRecoverySnapshotId == null) {
                                 Optional<BucketSnapshot> selected =
                                         zooKeeperClient.getRecoveryBucketSnapshot(tb);
                                 if (selected.isPresent()) {

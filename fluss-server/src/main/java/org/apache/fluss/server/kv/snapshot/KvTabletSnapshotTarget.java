@@ -26,7 +26,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -89,7 +89,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private volatile long logOffsetOfLatestSnapshot;
 
     private volatile long snapshotSize;
-    private final AtomicReference<Long> recoverySnapshotId = new AtomicReference<>();
+    private final AtomicReference<Long> previousRecoverySnapshotId = new AtomicReference<>();
     private final Set<Long> unconfirmedRecoverySnapshotIds = new HashSet<>();
 
     @VisibleForTesting
@@ -165,21 +165,21 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     /** Binds a newly created target to the snapshot actually loaded into its KV instance. */
-    public void bindRecoverySnapshotId(@Nullable Long snapshotId) {
-        recoverySnapshotId.set(snapshotId);
+    public void initializeRecoverySnapshotId(@Nullable Long snapshotId) {
+        previousRecoverySnapshotId.set(snapshotId);
         unconfirmedRecoverySnapshotIds.clear();
     }
 
-    /** Returns the recovery identity of this target's original KV instance. */
+    /** Returns the recovery snapshot ID expected by this target's next commit. */
     @Nullable
-    public Long getRecoverySnapshotId() {
-        return recoverySnapshotId.get();
+    public Long getPreviousRecoverySnapshotId() {
+        return previousRecoverySnapshotId.get();
     }
 
-    private void acceptRecoverySnapshotId(Long expected, long snapshotId) {
-        Long current = recoverySnapshotId.get();
-        if (Objects.equals(current, expected)) {
-            recoverySnapshotId.compareAndSet(current, snapshotId);
+    private void advanceRecoverySnapshotId(Long previousSnapshotId, long committedSnapshotId) {
+        Long current = previousRecoverySnapshotId.get();
+        if (Objects.equals(current, previousSnapshotId)) {
+            previousRecoverySnapshotId.compareAndSet(current, committedSnapshotId);
         }
     }
 
@@ -201,7 +201,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
                         tabletState.getAutoIncIDRanges(),
-                        recoverySnapshotId.get());
+                        previousRecoverySnapshotId.get());
         long logOffset = tabletState.getFlushedLogOffset();
         if (logOffset <= logOffsetOfLatestSnapshot) {
             LOG.debug(
@@ -255,25 +255,25 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
                         tabletState.getAutoIncIDRanges());
-        Long expectedRecoverySnapshotId = tabletState.getRecoverySnapshotId();
+        Long previousRecoverySnapshotId = tabletState.getPreviousRecoverySnapshotId();
         try {
-            if (expectedRecoverySnapshotId != null && !unconfirmedRecoverySnapshotIds.isEmpty()) {
-                Optional<ZooKeeperClient.VersionedData<RecoverySnapshot>> selected =
-                        zooKeeperClient.getRecoverySnapshot(tableBucket);
+            if (previousRecoverySnapshotId != null && !unconfirmedRecoverySnapshotIds.isEmpty()) {
+                Optional<ZooKeeperClient.VersionedData<RecoverySnapshotSelection>> selected =
+                        zooKeeperClient.getRecoverySnapshotSelection(tableBucket);
                 if (selected.isPresent()
                         && !Objects.equals(
-                                expectedRecoverySnapshotId,
+                                previousRecoverySnapshotId,
                                 selected.get().data().getSnapshotId())) {
                     long selectedId = selected.get().data().getSnapshotId();
                     // Only this KV instance's own publications can advance its recovery identity.
                     if (unconfirmedRecoverySnapshotIds.contains(selectedId)) {
-                        acceptRecoverySnapshotId(expectedRecoverySnapshotId, selectedId);
-                        expectedRecoverySnapshotId = selectedId;
+                        advanceRecoverySnapshotId(previousRecoverySnapshotId, selectedId);
+                        previousRecoverySnapshotId = selectedId;
                     }
                     unconfirmedRecoverySnapshotIds.clear();
                 }
             }
-            if (expectedRecoverySnapshotId != null) {
+            if (previousRecoverySnapshotId != null) {
                 unconfirmedRecoverySnapshotIds.add(snapshotId);
             }
             // commit the completed snapshot
@@ -281,9 +281,9 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                     completedSnapshot,
                     coordinatorEpoch,
                     bucketLeaderEpoch,
-                    expectedRecoverySnapshotId);
-            if (expectedRecoverySnapshotId != null) {
-                acceptRecoverySnapshotId(expectedRecoverySnapshotId, snapshotId);
+                    previousRecoverySnapshotId);
+            if (previousRecoverySnapshotId != null) {
+                advanceRecoverySnapshotId(previousRecoverySnapshotId, snapshotId);
                 unconfirmedRecoverySnapshotIds.clear();
             }
             // update local state after successful commit
@@ -296,7 +296,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                     snapshotResult,
                     completedSnapshot,
                     snapshotLocation,
-                    expectedRecoverySnapshotId,
+                    previousRecoverySnapshotId,
                     t);
         }
     }
@@ -343,7 +343,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             // update LogTablet to notify the lowest offset that should be retained
             updateWalRetention(
                     flushedLogOffset,
-                    snapshotResult.getTabletState().getRecoverySnapshotId() != null);
+                    snapshotResult.getTabletState().getPreviousRecoverySnapshotId() != null);
         } finally {
             // notify the snapshot complete (must run last to preserve the ordering contract above,
             // and run in finally to guarantee internal SST bookkeeping is always cleaned up).
@@ -351,8 +351,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         }
     }
 
-    private void updateWalRetention(long flushedLogOffset, boolean selectedCommit) {
-        if (selectedCommit) {
+    private void updateWalRetention(long flushedLogOffset, boolean recoveryAwareCommit) {
+        if (recoveryAwareCommit) {
             updateMinRetainOffset.accept(flushedLogOffset);
             return;
         }
@@ -377,7 +377,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SnapshotResult snapshotResult,
             CompletedSnapshot completedSnapshot,
             SnapshotLocation snapshotLocation,
-            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Long previousRecoverySnapshotId,
             Throwable t)
             throws Throwable {
 
@@ -394,10 +394,10 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             Optional<BucketSnapshot> zkSnapshot =
                     zooKeeperClient.getTableBucketSnapshot(tableBucket, snapshotId);
             if (zkSnapshot.isPresent()) {
-                if (expectedRecoverySnapshotId != null) {
+                if (previousRecoverySnapshotId != null) {
                     // Recovery-aware publication registered this reference and selected it
                     // atomically.
-                    acceptRecoverySnapshotId(expectedRecoverySnapshotId, snapshotId);
+                    advanceRecoverySnapshotId(previousRecoverySnapshotId, snapshotId);
                     unconfirmedRecoverySnapshotIds.clear();
                 }
                 // Snapshot exists in ZK, indicating the commit was actually successful,

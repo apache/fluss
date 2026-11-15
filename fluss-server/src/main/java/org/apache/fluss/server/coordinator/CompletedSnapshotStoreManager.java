@@ -97,7 +97,7 @@ public class CompletedSnapshotStoreManager {
      * recovery-aware snapshot commit protocol and retention rules. Downgrading those servers while
      * explicit selections remain is unsupported.
      */
-    public void selectRecoverySnapshot(TablePath tablePath, CompletedSnapshot snapshot)
+    public void setRecoverySnapshot(TablePath tablePath, CompletedSnapshot snapshot)
             throws Exception {
         TableBucket bucket = snapshot.getTableBucket();
         if (bucket.getPartitionId() != null) {
@@ -109,7 +109,7 @@ public class CompletedSnapshotStoreManager {
                     "Historical partitions recover from lake progress and cannot select KV snapshots.");
         }
         getOrCreateCompletedSnapshotStore(tablePath, snapshot.getTableBucket())
-                .selectRecoverySnapshot(snapshot);
+                .setRecoverySnapshot(snapshot);
     }
 
     @VisibleForTesting

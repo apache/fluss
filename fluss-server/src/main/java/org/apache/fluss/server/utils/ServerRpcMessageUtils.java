@@ -1890,14 +1890,14 @@ public class ServerRpcMessageUtils {
             CompletedSnapshot completedSnapshot,
             int coordinatorEpoch,
             int bucketLeaderEpoch,
-            @Nullable Long expectedRecoverySnapshotId) {
+            @Nullable Long previousRecoverySnapshotId) {
         CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
         byte[] completedSnapshotBytes = CompletedSnapshotJsonSerde.toJson(completedSnapshot);
         request.setCompletedSnapshot(completedSnapshotBytes)
                 .setCoordinatorEpoch(coordinatorEpoch)
                 .setBucketLeaderEpoch(bucketLeaderEpoch);
-        if (expectedRecoverySnapshotId != null) {
-            request.setExpectedRecoverySnapshotId(expectedRecoverySnapshotId);
+        if (previousRecoverySnapshotId != null) {
+            request.setPreviousRecoverySnapshotId(previousRecoverySnapshotId);
         }
         return request;
     }

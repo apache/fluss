@@ -235,7 +235,7 @@ class CoordinatorServiceOrphanRpcsITCase {
                 TableBucket tableBucket,
                 long snapshotId,
                 CompletedSnapshotHandle completedSnapshotHandle,
-                Long expectedRecoverySnapshotId,
+                Long previousRecoverySnapshotId,
                 Integer expectedLeaderEpoch) {}
 
         @Override

@@ -63,11 +63,11 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
             CompletedSnapshot snapshot,
             int coordinatorEpoch,
             int bucketLeaderEpoch,
-            @Nullable Long expectedRecoverySnapshotId)
+            @Nullable Long previousRecoverySnapshotId)
             throws Exception {
         CommitKvSnapshotRequest request =
                 makeCommitKvSnapshotRequest(
-                        snapshot, coordinatorEpoch, bucketLeaderEpoch, expectedRecoverySnapshotId);
+                        snapshot, coordinatorEpoch, bucketLeaderEpoch, previousRecoverySnapshotId);
         coordinatorGateway.commitKvSnapshot(request).get();
     }
 

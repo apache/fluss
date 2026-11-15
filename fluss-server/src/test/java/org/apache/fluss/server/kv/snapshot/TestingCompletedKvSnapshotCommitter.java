@@ -45,7 +45,7 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
             CompletedSnapshot snapshot,
             int coordinatorEpoch,
             int bucketLeaderEpoch,
-            Long expectedRecoverySnapshotId) {
+            Long previousRecoverySnapshotId) {
         snapshots
                 .computeIfAbsent(snapshot.getTableBucket(), k -> new LinkedBlockingDeque<>())
                 .add(snapshot);

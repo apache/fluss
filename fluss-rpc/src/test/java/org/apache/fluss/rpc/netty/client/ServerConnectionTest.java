@@ -109,7 +109,7 @@ public class ServerConnectionTest {
         try {
             CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
             connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
-            request.setExpectedRecoverySnapshotId(0L);
+            request.setPreviousRecoverySnapshotId(0L);
             assertThatThrownBy(
                             () ->
                                     connection.validateVersionCompatibility(

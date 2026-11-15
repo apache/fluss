@@ -54,7 +54,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
-import org.apache.fluss.server.zk.data.RecoverySnapshot;
+import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -1415,20 +1415,21 @@ public class ZooKeeperClient implements AutoCloseable {
     public void registerTableBucketSnapshot(
             TableBucket bucket,
             BucketSnapshot snapshot,
-            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Long previousRecoverySnapshotId,
             @Nullable Integer expectedLeaderEpoch)
             throws Exception {
-        if (expectedRecoverySnapshotId == null) {
+        if (previousRecoverySnapshotId == null) {
             registerTableBucketSnapshot(bucket, snapshot);
             return;
         }
         CuratorOp leaderCheck =
                 expectedLeaderEpoch == null
                         ? null
-                        : snapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
         Optional<BucketSnapshot> existing =
                 getTableBucketSnapshot(bucket, snapshot.getSnapshotId());
-        Optional<VersionedData<RecoverySnapshot>> current = getRecoverySnapshot(bucket);
+        Optional<VersionedData<RecoverySnapshotSelection>> current =
+                getRecoverySnapshotSelection(bucket);
         if (existing.isPresent()) {
             checkState(existing.get().equals(snapshot), "Conflicting snapshot reference.");
             if (!current.isPresent()
@@ -1439,11 +1440,11 @@ public class ZooKeeperClient implements AutoCloseable {
             return;
         }
         if (!current.isPresent()
-                || current.get().data().getSnapshotId() != expectedRecoverySnapshotId) {
+                || current.get().data().getSnapshotId() != previousRecoverySnapshotId) {
             throw new KeeperException.BadVersionException(
                     ZkData.RecoverySnapshotZNode.path(bucket));
         }
-        checkRecoveryOffset(snapshot, getRecoveryBucketSnapshot(bucket));
+        checkNonDecreasingRecoveryOffset(snapshot, getRecoveryBucketSnapshot(bucket));
         List<CuratorOp> ops = new ArrayList<>();
         ops.add(
                 zkClient.transactionOp()
@@ -1457,14 +1458,14 @@ public class ZooKeeperClient implements AutoCloseable {
                         .withVersion(current.get().zkVersion())
                         .forPath(
                                 ZkData.RecoverySnapshotZNode.path(bucket),
-                                new RecoverySnapshot(snapshot.getSnapshotId()).toJson()));
+                                new RecoverySnapshotSelection(snapshot.getSnapshotId()).toJson()));
         if (leaderCheck != null) {
             ops.add(leaderCheck);
         }
         zkClient.transaction().forOperations(ops);
     }
 
-    private CuratorOp snapshotLeaderEpochCheck(TableBucket bucket, int expectedLeaderEpoch)
+    private CuratorOp createSnapshotLeaderEpochCheck(TableBucket bucket, int expectedLeaderEpoch)
             throws Exception {
         Stat stat = new Stat();
         String path = LeaderAndIsrZNode.path(bucket);
@@ -1479,13 +1480,13 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /**
      * Publishes and selects a recovery source under the bucket's snapshot-store lock. Use {@code
-     * CompletedSnapshotStoreManager.selectRecoverySnapshot} for eligibility checking.
+     * CompletedSnapshotStoreManager.setRecoverySnapshot} for eligibility checking.
      */
-    public void selectRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot)
-            throws Exception {
+    public void setRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot) throws Exception {
         ensureSnapshotDirectory(bucket);
-        Optional<VersionedData<RecoverySnapshot>> current = getRecoverySnapshot(bucket);
-        checkRecoveryOffset(snapshot, getTableBucketLatestSnapshot(bucket));
+        Optional<VersionedData<RecoverySnapshotSelection>> current =
+                getRecoverySnapshotSelection(bucket);
+        checkNonDecreasingRecoveryOffset(snapshot, getTableBucketLatestSnapshot(bucket));
         List<CuratorOp> ops = new ArrayList<>();
         String referencePath = BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId());
         if (!getTableBucketSnapshot(bucket, snapshot.getSnapshotId()).isPresent()) {
@@ -1494,7 +1495,7 @@ public class ZooKeeperClient implements AutoCloseable {
                             .create()
                             .forPath(referencePath, BucketSnapshotIdZNode.encode(snapshot)));
         }
-        byte[] selection = new RecoverySnapshot(snapshot.getSnapshotId()).toJson();
+        byte[] selection = new RecoverySnapshotSelection(snapshot.getSnapshotId()).toJson();
         if (current.isPresent()) {
             ops.add(
                     zkClient.transactionOp()
@@ -1518,7 +1519,7 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    private static void checkRecoveryOffset(
+    private static void checkNonDecreasingRecoveryOffset(
             BucketSnapshot snapshot, Optional<BucketSnapshot> previous) {
         checkArgument(
                 !previous.isPresent() || snapshot.getLogOffset() >= previous.get().getLogOffset(),
@@ -1531,8 +1532,8 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Reads the selected recovery identity together with its ZK CAS version. */
-    public Optional<VersionedData<RecoverySnapshot>> getRecoverySnapshot(TableBucket bucket)
-            throws Exception {
+    public Optional<VersionedData<RecoverySnapshotSelection>> getRecoverySnapshotSelection(
+            TableBucket bucket) throws Exception {
         Stat stat = new Stat();
         try {
             byte[] bytes =
@@ -1540,7 +1541,8 @@ public class ZooKeeperClient implements AutoCloseable {
                             .storingStatIn(stat)
                             .forPath(ZkData.RecoverySnapshotZNode.path(bucket));
             return Optional.of(
-                    new VersionedData<>(RecoverySnapshot.fromJson(bytes), stat.getVersion()));
+                    new VersionedData<>(
+                            RecoverySnapshotSelection.fromJson(bytes), stat.getVersion()));
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
@@ -1548,7 +1550,8 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Resolves the selected ordinary reference, never substituting another snapshot. */
     public Optional<BucketSnapshot> getRecoveryBucketSnapshot(TableBucket bucket) throws Exception {
-        Optional<VersionedData<RecoverySnapshot>> recovery = getRecoverySnapshot(bucket);
+        Optional<VersionedData<RecoverySnapshotSelection>> recovery =
+                getRecoverySnapshotSelection(bucket);
         if (!recovery.isPresent()) {
             return Optional.empty();
         }
@@ -1705,7 +1708,7 @@ public class ZooKeeperClient implements AutoCloseable {
             response.maybeThrow();
             selectedIds.put(
                     checkNotNull(paths.get(response.getPath())).getBucket(),
-                    RecoverySnapshot.fromJson(response.getData()).getSnapshotId());
+                    RecoverySnapshotSelection.fromJson(response.getData()).getSnapshotId());
         }
         return selectedIds;
     }

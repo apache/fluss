@@ -84,7 +84,7 @@ class RecoverySnapshotTest {
                                         Collections.emptyList(),
                                         0,
                                         0)));
-        client.selectRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/source-4"));
+        client.setRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/source-4"));
         AtomicInteger reads = new AtomicInteger();
         Configuration conf = snapshotConfiguration();
         ZooKeeperClient delayed =
@@ -137,7 +137,7 @@ class RecoverySnapshotTest {
                     @Override
                     public java.util.Optional<BucketSnapshot> getTableBucketLatestSnapshot(
                             TableBucket requested) throws Exception {
-                        client.selectRecoverySnapshot(
+                        client.setRecoverySnapshot(
                                 bucket,
                                 new BucketSnapshot(
                                         2L, 20L, selected.getMetadataFilePath().toString()));
@@ -217,7 +217,7 @@ class RecoverySnapshotTest {
 
     @Test
     void testOriginalContextAdvancesContinuouslyAndRejectsStaleSnapshot() throws Exception {
-        client.selectRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
+        client.setRecoverySnapshot(bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         BucketSnapshot next = new BucketSnapshot(5L, 40L, "file:/snapshot-5");
         client.registerTableBucketSnapshot(bucket, next, 4L, null);
         assertThat(client.getRecoveryBucketSnapshot(bucket)).contains(next);
@@ -242,11 +242,11 @@ class RecoverySnapshotTest {
     void testSelectionCannotMoveRecoveryOffsetBackwards() throws Exception {
         assertThatThrownBy(
                         () ->
-                                client.selectRecoverySnapshot(
+                                client.setRecoverySnapshot(
                                         bucket, new BucketSnapshot(4L, 19L, "file:/snapshot-4")))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(client.getTableBucketSnapshot(bucket, 4L)).isEmpty();
-        assertThat(client.getRecoverySnapshot(bucket)).isEmpty();
+        assertThat(client.getRecoverySnapshotSelection(bucket)).isEmpty();
     }
 
     @ParameterizedTest
@@ -264,9 +264,9 @@ class RecoverySnapshotTest {
         ZooKeeperClient publisher =
                 new ZooKeeperClient(sharedCurator(), snapshotConfiguration()) {
                     @Override
-                    public void selectRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot)
+                    public void setRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot)
                             throws Exception {
-                        super.selectRecoverySnapshot(bucket, snapshot);
+                        super.setRecoverySnapshot(bucket, snapshot);
                         if (responseLost) {
                             throw new KeeperException.ConnectionLossException();
                         }
@@ -284,11 +284,11 @@ class RecoverySnapshotTest {
         store.add(snapshot(root, 3L, 20L, null), null, null);
         CompletedSnapshot selected = snapshot(root, 2L, 20L, shared);
         if (responseLost) {
-            assertThatThrownBy(() -> store.selectRecoverySnapshot(selected))
+            assertThatThrownBy(() -> store.setRecoverySnapshot(selected))
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
         } else {
             store.add(selected, null, null);
-            store.selectRecoverySnapshot(selected);
+            store.setRecoverySnapshot(selected);
         }
         store.add(snapshot(root, 4L, 30L, null), null, null);
         store.add(snapshot(root, 5L, 40L, null), null, null);

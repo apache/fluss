@@ -1416,8 +1416,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         completedSnapshot,
                         request.getCoordinatorEpoch(),
                         request.getBucketLeaderEpoch(),
-                        request.hasExpectedRecoverySnapshotId()
-                                ? request.getExpectedRecoverySnapshotId()
+                        request.hasPreviousRecoverySnapshotId()
+                                ? request.getPreviousRecoverySnapshotId()
                                 : null);
         eventManagerSupplier.get().put(new CommitKvSnapshotEvent(commitKvSnapshotData, response));
         return response;

@@ -37,7 +37,7 @@ public interface CompletedSnapshotHandleStore {
     }
 
     /** Publishes the snapshot reference and recovery selection atomically. */
-    default void selectRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
+    default void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
             throws Exception {
         throw new UnsupportedOperationException("Recovery snapshot selection is not supported.");
     }
@@ -48,7 +48,7 @@ public interface CompletedSnapshotHandleStore {
      * @param tableBucket the table bucket the snapshot belongs to
      * @param snapshotId the snapshot id
      * @param completedSnapshotHandle CompletedSnapshotHandle to be added
-     * @param expectedRecoverySnapshotId recovery identity captured during snapshot preparation
+     * @param previousRecoverySnapshotId recovery snapshot this commit expects to replace
      * @param expectedLeaderEpoch leader epoch of the original KV instance, if available
      * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
@@ -56,7 +56,7 @@ public interface CompletedSnapshotHandleStore {
             TableBucket tableBucket,
             long snapshotId,
             CompletedSnapshotHandle completedSnapshotHandle,
-            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Long previousRecoverySnapshotId,
             @Nullable Integer expectedLeaderEpoch)
             throws Exception;
 

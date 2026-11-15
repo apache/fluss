@@ -390,7 +390,7 @@ final class ServerConnection {
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
         if (apiKey == ApiKeys.COMMIT_KV_SNAPSHOT
                 && version < 1
-                && ((CommitKvSnapshotRequest) rawRequest).hasExpectedRecoverySnapshotId()) {
+                && ((CommitKvSnapshotRequest) rawRequest).hasPreviousRecoverySnapshotId()) {
             throw new UnsupportedVersionException(
                     "Recovery-aware snapshot commits require version 1.");
         }

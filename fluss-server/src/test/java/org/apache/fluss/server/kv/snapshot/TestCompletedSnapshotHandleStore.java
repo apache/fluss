@@ -45,7 +45,7 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
             TableBucket tableBucket,
             long snapshotId,
             CompletedSnapshotHandle snapshotHandle,
-            Long expectedRecoverySnapshotId,
+            Long previousRecoverySnapshotId,
             Integer expectedLeaderEpoch)
             throws Exception {
         addFunction.apply(snapshotHandle);

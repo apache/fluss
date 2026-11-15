@@ -169,7 +169,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
             if (snapshotHandle.isPresent()) {
                 CompletedSnapshot snapshot = snapshotHandle.get().retrieveCompleteSnapshot();
                 if (selectedSource) {
-                    snapshot.bindRecoverySnapshotId();
+                    snapshot.markAsRecoverySource();
                 }
                 return snapshot;
             } else {

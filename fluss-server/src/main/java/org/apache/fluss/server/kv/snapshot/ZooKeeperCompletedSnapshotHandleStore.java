@@ -67,7 +67,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
             TableBucket tableBucket,
             long snapshotId,
             CompletedSnapshotHandle snapshotHandle,
-            @Nullable Long expectedRecoverySnapshotId,
+            @Nullable Long previousRecoverySnapshotId,
             @Nullable Integer expectedLeaderEpoch)
             throws Exception {
         checkNotNull(snapshotHandle, "completed snapshot handle");
@@ -77,7 +77,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
                         snapshotHandle.getLogOffset(),
                         snapshotHandle.getMetadataFilePath().toString());
         client.registerTableBucketSnapshot(
-                tableBucket, reference, expectedRecoverySnapshotId, expectedLeaderEpoch);
+                tableBucket, reference, previousRecoverySnapshotId, expectedLeaderEpoch);
     }
 
     @Override
@@ -88,9 +88,9 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     }
 
     @Override
-    public void selectRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
+    public void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
             throws Exception {
-        client.selectRecoverySnapshot(
+        client.setRecoverySnapshot(
                 bucket,
                 new BucketSnapshot(
                         handle.getSnapshotId(),

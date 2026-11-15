@@ -24,12 +24,12 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** The durable snapshot identity selected for a physical bucket's recovery. */
 @Internal
-public final class RecoverySnapshot {
+public final class RecoverySnapshotSelection {
 
     private final long snapshotId;
 
     /** Creates a selection without duplicating the ordinary reference's offset or path. */
-    public RecoverySnapshot(long snapshotId) {
+    public RecoverySnapshotSelection(long snapshotId) {
         checkArgument(snapshotId >= 0, "Invalid snapshot ID: %s", snapshotId);
         this.snapshotId = snapshotId;
     }
@@ -52,7 +52,7 @@ public final class RecoverySnapshot {
     }
 
     /** Decodes a supported record, failing closed on invalid formats. */
-    public static RecoverySnapshot fromJson(byte[] bytes) {
+    public static RecoverySnapshotSelection fromJson(byte[] bytes) {
         return JsonSerdeUtils.readValue(
                 bytes,
                 node -> {
@@ -67,7 +67,7 @@ public final class RecoverySnapshot {
                                     && node.get("snapshot_id").isIntegralNumber()
                                     && node.get("snapshot_id").canConvertToLong(),
                             "Invalid recovery snapshot ID.");
-                    return new RecoverySnapshot(node.get("snapshot_id").asLong());
+                    return new RecoverySnapshotSelection(node.get("snapshot_id").asLong());
                 });
     }
 }
