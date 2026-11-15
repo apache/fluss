@@ -292,7 +292,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                     ServerTablePropertyCache.Builder tableProperties =
                             tablePropertyCache.toBuilder();
-                    Set<TablePath> invalidatedTablePaths = new HashSet<>();
+                    Set<TablePath> removedTablePaths = new HashSet<>();
                     for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
@@ -300,7 +300,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
-                            invalidatedTablePaths.add(tablePath);
+                            removedTablePaths.add(tablePath);
                             if (removedTableId != null) {
                                 bucketMetadataMapForTables.remove(removedTableId);
                                 deletedTableIds.add(removedTableId);
@@ -313,7 +313,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     .ifPresent(
                                             path -> {
                                                 if (tableIdByPath.remove(path, tableId)) {
-                                                    invalidatedTablePaths.add(path);
+                                                    removedTablePaths.add(path);
                                                 }
                                             });
                             bucketMetadataMapForTables.remove(tableId);
@@ -341,7 +341,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                 tableProperties.remove(previousId);
                                 bucketMetadataMapForTables.remove(previousId);
                                 bucketCountEpochByTableId.remove(previousId);
-                                invalidatedTablePaths.add(tablePath);
+                                removedTablePaths.add(tablePath);
                             }
                             tableProperties.update(tableId, tableInfo.getProperties());
                             // Copy only the changed bucket map. Older snapshots retain their map.
@@ -369,7 +369,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     Map<TablePartition, Integer> partitionBucketCounts =
                             new HashMap<>(currentSnapshot.getPartitionBucketCounts());
                     removePartitionsOfTables(
-                            invalidatedTablePaths,
+                            removedTablePaths,
                             partitionIdByPath,
                             bucketMetadataMapForPartitions,
                             partitionBucketCounts);
@@ -695,11 +695,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     private static void removePartitionsOfTables(
-            Set<TablePath> tablePaths,
+            Set<TablePath> removedTablePaths,
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
             Map<TablePartition, Integer> partitionBucketCounts) {
-        if (tablePaths.isEmpty()) {
+        if (removedTablePaths.isEmpty()) {
             return;
         }
         Set<Long> removedPartitionIds = new HashSet<>();
@@ -707,7 +707,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                 .entrySet()
                 .removeIf(
                         entry -> {
-                            if (!tablePaths.contains(entry.getKey().getTablePath())) {
+                            if (!removedTablePaths.contains(entry.getKey().getTablePath())) {
                                 return false;
                             }
                             removedPartitionIds.add(entry.getValue());
