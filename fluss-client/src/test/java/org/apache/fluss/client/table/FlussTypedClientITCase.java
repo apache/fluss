@@ -54,6 +54,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** End-to-end tests for writing and scanning POJOs via client API. */
@@ -373,6 +375,66 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
         }
     }
 
+    /** Row for a table partitioned by region, with a primary key of (id, region). */
+    public static class PartitionedPojo {
+        public Integer id;
+        public String region;
+        public String payload;
+
+        public PartitionedPojo() {}
+
+        public PartitionedPojo(int id, String region, String payload) {
+            this.id = id;
+            this.region = region;
+            this.payload = payload;
+        }
+    }
+
+    @Test
+    void testTypedDeleteOnPartitionedTable() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "partitioned_delete");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .column("region", DataTypes.STRING())
+                        .primaryKey("id", "region")
+                        .build();
+        createTable(
+                path,
+                TableDescriptor.builder().schema(schema).partitionedBy("region").build(),
+                true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedUpsertWriter<PartitionedPojo> writer =
+                    table.newUpsert().createTypedWriter(PartitionedPojo.class);
+            PartitionedPojo a42 = new PartitionedPojo(42, "A", "first");
+            PartitionedPojo a43 = new PartitionedPojo(43, "A", "second");
+            PartitionedPojo b42 = new PartitionedPojo(42, "B", "third");
+            for (PartitionedPojo record : Arrays.asList(a42, a43, b42)) {
+                writer.upsert(record).get();
+            }
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            assertPartitionedRow(lookuper, schema, a42);
+            assertPartitionedRow(lookuper, schema, a43);
+            assertPartitionedRow(lookuper, schema, b42);
+
+            writer.delete(new PartitionedPojo(42, "A", null)).get();
+
+            assertThat(lookuper.lookup(row(42, "A")).get().getSingletonRow()).isNull();
+            assertPartitionedRow(lookuper, schema, a43);
+            assertPartitionedRow(lookuper, schema, b42);
+        }
+    }
+
+    private static void assertPartitionedRow(
+            Lookuper lookuper, Schema schema, PartitionedPojo expected) throws Exception {
+        assertThatRow(lookuper.lookup(row(expected.id, expected.region)).get().getSingletonRow())
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(expected.id, expected.payload, expected.region));
+    }
+
     @Test
     void testTypedLookups() throws Exception {
         Schema schema = allTypesPkSchema();
@@ -397,6 +459,11 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
             LookupResult lr = lookuper.lookup(new PLookupKey(1)).get();
             AllTypesPojo one = rowConv.fromRow(lr.getSingletonRow());
             assertThat(one).isEqualTo(newAllTypesPojo(1));
+
+            AllTypesPojo keyOnly = new AllTypesPojo();
+            keyOnly.a = 1;
+            writer.delete(keyOnly).get();
+            assertThat(lookuper.lookup(new PLookupKey(1)).get().getSingletonRow()).isNull();
         }
     }
 
