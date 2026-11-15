@@ -2030,6 +2030,18 @@ public class ConfigOptions {
                                     + "Fluss cluster. A value larger than the number of tablet servers in Fluss cluster "
                                     + "will result in an error when the new table is created.");
 
+    public static final ConfigOption<Integer> TABLE_MIN_IN_SYNC_REPLICAS =
+            key("table.min-in-sync-replicas")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of in-sync replicas, including the leader, required for writes to "
+                                    + "both primary-key and log tables with client.writer.acks set to all (-1). "
+                                    + "If not configured, the table uses the current value of "
+                                    + LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()
+                                    + ". The value must be positive and not larger than table.replication.factor. "
+                                    + "This option can only be configured when creating a table.");
+
     public static final ConfigOption<LogFormat> TABLE_LOG_FORMAT =
             key("table.log.format")
                     .enumType(LogFormat.class)
