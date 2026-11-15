@@ -650,7 +650,7 @@ pub struct GetConsumerOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsResponseTable>,
 }
-/// Delete consumer offsets request and response.
+/// Delete committed offsets for selected buckets. Requires Group WRITE and Table READ.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]
@@ -668,9 +668,10 @@ pub struct DeleteConsumerOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsResponseTable>,
 }
-/// Lists consumer groups currently owned by the tablet server receiving this request. This is not
-/// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
-/// merge the responses.
+/// Lists consumer groups currently owned by the tablet server receiving this request. Cluster
+/// DESCRIBE grants visibility to all locally owned groups; otherwise only groups with Group
+/// DESCRIBE are returned. This is not a cluster-wide listing; callers that need a cluster-wide
+/// view must query every tablet server and merge the responses.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListConsumerGroupsRequest {}
 /// All failures are returned through the RPC ErrorResponse envelope.
@@ -679,7 +680,8 @@ pub struct ListConsumerGroupsResponse {
     #[prost(message, repeated, tag = "1")]
     pub groups: ::prost::alloc::vec::Vec<PbListedGroup>,
 }
-/// Delete consumer-group metadata. Committed offsets are not removed by this request.
+/// Deletes consumer-group metadata and all committed offsets. A later offset commit may
+/// recreate a deleted group. No source-table permission is required.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteConsumerGroupsRequest {
     /// An empty list is a valid no-op and produces an empty successful response.

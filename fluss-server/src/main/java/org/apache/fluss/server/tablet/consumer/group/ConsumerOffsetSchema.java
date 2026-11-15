@@ -61,6 +61,12 @@ public final class ConsumerOffsetSchema {
     /** Sentinel used for non-partitioned tables because primary-key columns cannot be null. */
     public static final long NON_PARTITIONED_PARTITION_ID = -1L;
 
+    /** Sentinel table ID used by group metadata rows. */
+    private static final long GROUP_METADATA_TABLE_ID = -1L;
+
+    /** Sentinel bucket ID used by group metadata rows. */
+    private static final int GROUP_METADATA_BUCKET_ID = -1;
+
     private static final List<String> PRIMARY_KEYS =
             Collections.unmodifiableList(
                     Arrays.asList(
@@ -190,6 +196,12 @@ public final class ConsumerOffsetSchema {
     }
 
     /** Encodes the complete primary key of a group metadata row. */
+    public byte[] encodeGroupMetadataKey(GroupId groupId) {
+        return encodeGroupMetadataKey(
+                groupId, GROUP_METADATA_TABLE_ID, null, GROUP_METADATA_BUCKET_ID);
+    }
+
+    /** Encodes the complete primary key of a group metadata row with explicit source columns. */
     public byte[] encodeGroupMetadataKey(
             GroupId groupId, long tableId, Long partitionId, int bucketId) {
         return primaryKeyEncoder
@@ -201,6 +213,17 @@ public final class ConsumerOffsetSchema {
                                 tableId,
                                 partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId,
                                 bucketId));
+    }
+
+    /** Encodes a group metadata row. */
+    public CompactedRow encodeGroupMetadataRow(GroupId groupId) {
+        return encodeOffsetRow(
+                GROUP_METADATA_RECORD_TYPE,
+                groupId,
+                GROUP_METADATA_TABLE_ID,
+                null,
+                GROUP_METADATA_BUCKET_ID,
+                new ConsumerOffsetAndMetadata(-1L, null));
     }
 
     /** Encodes the complete primary key of an already materialized offset row. */

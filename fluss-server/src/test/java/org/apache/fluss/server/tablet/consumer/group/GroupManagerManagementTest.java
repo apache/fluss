@@ -67,21 +67,27 @@ class GroupManagerManagementTest {
                         valueDecoder());
 
         assertThat(keys)
-                .containsExactly(
-                        new ConsumerOffsetSchema().encodeGroupMetadataKey(groupId, -1L, null, -1));
+                .containsExactly(new ConsumerOffsetSchema().encodeGroupMetadataKey(groupId));
     }
 
     @Test
-    void testExistingKeysFiltersPresentValues() {
-        List<byte[]> keys = Arrays.asList(new byte[] {1}, new byte[] {2}, new byte[] {3});
-        List<ByteArraySlice> values =
-                Arrays.asList(
-                        ByteArraySlice.wrap(new byte[] {10}),
-                        null,
-                        ByteArraySlice.wrap(new byte[] {30}));
+    void testEncodeOffsetRowKeysUsesOffsetRows() throws Exception {
+        GroupId groupId = GroupId.of("group-1");
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+        List<byte[]> keys =
+                ConsumerGroupManager.encodeOffsetRowKeys(
+                        groupId,
+                        Arrays.asList(
+                                encodedGroupMetadata(groupId),
+                                encodedOffset(groupId, first),
+                                encodedOffset(groupId, second)),
+                        valueDecoder());
 
-        assertThat(ConsumerGroupManager.existingKeys(keys, values))
-                .containsExactly(keys.get(0), keys.get(2));
+        assertThat(keys)
+                .containsExactly(
+                        new ConsumerOffsetSchema().encodeOffsetKey(groupId, 1L, null, 0),
+                        new ConsumerOffsetSchema().encodeOffsetKey(groupId, 1L, null, 1));
     }
 
     private static ValueDecoder valueDecoder() {

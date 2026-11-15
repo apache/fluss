@@ -81,18 +81,11 @@ class ConsumerOffsetSchemaTest {
                         ConsumerOffsetSchema.getPrimaryKeys(),
                         null);
 
-        CompactedRow row =
-                offsetSchema.encodeOffsetRow(
-                        ConsumerOffsetSchema.GROUP_METADATA_RECORD_TYPE,
-                        groupId,
-                        -1L,
-                        null,
-                        -1,
-                        new ConsumerOffsetAndMetadata(-1L, ""));
+        CompactedRow row = offsetSchema.encodeGroupMetadataRow(groupId);
 
         assertThat(offsetSchema.encodeGroupMetadataPrefix(groupId))
                 .isEqualTo(prefixEncoder.encodeKey(row));
-        assertThat(offsetSchema.encodeGroupMetadataKey(groupId, -1L, null, -1))
+        assertThat(offsetSchema.encodeGroupMetadataKey(groupId))
                 .isEqualTo(keyEncoder.encodeKey(row));
     }
 

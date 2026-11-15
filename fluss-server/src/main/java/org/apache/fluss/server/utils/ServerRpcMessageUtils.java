@@ -230,8 +230,6 @@ import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
-import org.apache.fluss.server.tablet.consumer.group.result.DeleteConsumerOffsetsResult;
-import org.apache.fluss.server.tablet.consumer.group.result.ListConsumerGroupsResult;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -1535,15 +1533,10 @@ public class ServerRpcMessageUtils {
     }
 
     /** Builds the list-groups response. */
-    public static ListConsumerGroupsResponse makeListConsumerGroupsResponse(
-            ListConsumerGroupsResult result) {
-        if (result.getError() != Errors.NONE) {
-            throw result.getError().exception();
-        }
-
+    public static ListConsumerGroupsResponse makeListConsumerGroupsResponse(List<String> groupIds) {
         ListConsumerGroupsResponse response = new ListConsumerGroupsResponse();
         List<PbListedGroup> groups = new ArrayList<>();
-        for (String groupId : result.getGroupIds()) {
+        for (String groupId : groupIds) {
             groups.add(new PbListedGroup().setGroupId(groupId));
         }
         response.addAllGroups(groups);
@@ -1572,32 +1565,26 @@ public class ServerRpcMessageUtils {
 
     /** Builds the delete-offsets response. */
     public static DeleteConsumerOffsetsResponse makeDeleteConsumerOffsetsResponse(
-            DeleteConsumerOffsetsResult result) {
-        if (result.getError() != Errors.NONE) {
-            throw result.getError().exception();
-        }
-
+            Map<TableBucket, Errors> bucketErrors) {
         Map<Long, List<PbDeleteConsumerOffsetsResponseBucket>> bucketsByTable = new HashMap<>();
-        result.getBucketErrors()
-                .forEach(
-                        (tableBucket, error) -> {
-                            PbDeleteConsumerOffsetsResponseBucket bucket =
-                                    new PbDeleteConsumerOffsetsResponseBucket()
-                                            .setBucketId(tableBucket.getBucket());
-                            if (tableBucket.getPartitionId() != null) {
-                                bucket.setPartitionId(tableBucket.getPartitionId());
-                            }
-                            if (error != Errors.NONE) {
-                                bucket.setErrorCode(error.code());
-                                if (error.message() != null) {
-                                    bucket.setErrorMessage(error.message());
-                                }
-                            }
-                            bucketsByTable
-                                    .computeIfAbsent(
-                                            tableBucket.getTableId(), ignored -> new ArrayList<>())
-                                    .add(bucket);
-                        });
+        bucketErrors.forEach(
+                (tableBucket, error) -> {
+                    PbDeleteConsumerOffsetsResponseBucket bucket =
+                            new PbDeleteConsumerOffsetsResponseBucket()
+                                    .setBucketId(tableBucket.getBucket());
+                    if (tableBucket.getPartitionId() != null) {
+                        bucket.setPartitionId(tableBucket.getPartitionId());
+                    }
+                    if (error != Errors.NONE) {
+                        bucket.setErrorCode(error.code());
+                        if (error.message() != null) {
+                            bucket.setErrorMessage(error.message());
+                        }
+                    }
+                    bucketsByTable
+                            .computeIfAbsent(tableBucket.getTableId(), ignored -> new ArrayList<>())
+                            .add(bucket);
+                });
 
         DeleteConsumerOffsetsResponse response = new DeleteConsumerOffsetsResponse();
         bucketsByTable.forEach(

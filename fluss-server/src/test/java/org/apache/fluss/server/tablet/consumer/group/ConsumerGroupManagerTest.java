@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.tablet.consumer.group;
 
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -53,6 +54,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
@@ -69,6 +71,7 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
     private static final TableBucket SOURCE_BUCKET = new TableBucket(1L, 0);
 
     private LakeCatalogDynamicLoader lakeCatalogLoader;
+    private MetadataManager metadataManager;
     private ConsumerGroupManager groupManager;
     private TableInfo offsetsTableInfo;
     private TableBucket offsetsTableBucket;
@@ -82,7 +85,7 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
                 Collections.singletonList(ConsumerOffsetSchema.getBucketKeyColumn()),
                 Collections.emptyMap());
         lakeCatalogLoader = new LakeCatalogDynamicLoader(conf, null, true);
-        MetadataManager metadataManager = new MetadataManager(zkClient, conf, lakeCatalogLoader);
+        metadataManager = new MetadataManager(zkClient, conf, lakeCatalogLoader);
         offsetsTableInfo = metadataManager.getTable(SystemTables.CONSUMER_OFFSETS);
         groupManager =
                 new ConsumerGroupManager(
@@ -114,6 +117,30 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         if (lakeCatalogLoader != null) {
             lakeCatalogLoader.close();
         }
+    }
+
+    @Test
+    void testListConsumerGroupsDoesNotInitializeOffsetTable() {
+        AtomicInteger initializationTasks = new AtomicInteger();
+        ConsumerGroupManager uninitializedManager =
+                new ConsumerGroupManager(
+                        TABLET_SERVER_ID,
+                        replicaManager,
+                        ConsumerOffsetTableConfig.from(conf),
+                        zkClient,
+                        metadataManager,
+                        serverMetadataCache,
+                        new TabletServerMetadataProvider(
+                                zkClient, metadataManager, serverMetadataCache),
+                        testCoordinatorGateway,
+                        task -> {
+                            initializationTasks.incrementAndGet();
+                            task.run();
+                        });
+
+        assertThatThrownBy(uninitializedManager::handleListConsumerGroups)
+                .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class);
+        assertThat(initializationTasks).hasValue(0);
     }
 
     @Test

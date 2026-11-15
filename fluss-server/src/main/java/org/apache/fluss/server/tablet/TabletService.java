@@ -135,7 +135,6 @@ import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -820,37 +819,27 @@ public final class TabletService extends RpcServiceBase
             FindConsumerGroupOwnerRequest request) {
         // Copy request/session values before returning: the request buffer is released after this
         // method and the current session is bound to the RPC worker thread.
-        try {
-            final GroupId groupId = GroupId.of(request.getGroupId());
-            final String listenerName = currentListenerName();
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
-            }
-
-            return groupManager
-                    .findOwner(groupId, listenerName)
-                    .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        final String listenerName = currentListenerName();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
         }
+
+        return groupManager
+                .findOwner(groupId, listenerName)
+                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        final GroupId groupId;
-        final Replica offsetsReplica;
-        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
-        try {
-            groupId = GroupId.of(request.getGroupId());
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), READ, Resource.group(groupId));
-            }
-            offsetsReplica = groupManager.validateGroupId(groupId);
-            offsets = decodeCommitConsumerOffsetsRequest(request);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), READ, Resource.group(groupId));
         }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets =
+                decodeCommitConsumerOffsetsRequest(request);
         if (offsets.isEmpty()) {
             return CompletableFuture.completedFuture(
                     makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
@@ -872,19 +861,12 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        final GroupId groupId;
-        final Replica offsetsReplica;
-        final List<TableBucket> requestedBuckets;
-        try {
-            groupId = GroupId.of(request.getGroupId());
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
-            }
-            offsetsReplica = groupManager.validateGroupId(groupId);
-            requestedBuckets = decodeGetConsumerOffsetsRequest(request);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
         }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeGetConsumerOffsetsRequest(request);
 
         if (requestedBuckets != null && requestedBuckets.isEmpty()) {
             return CompletableFuture.completedFuture(new GetConsumerOffsetsResponse());
@@ -932,19 +914,12 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
             DeleteConsumerOffsetsRequest request) {
-        final GroupId groupId;
-        final Replica offsetsReplica;
-        final List<TableBucket> requestedBuckets;
-        try {
-            groupId = GroupId.of(request.getGroupId());
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), DROP, Resource.group(groupId));
-            }
-            offsetsReplica = groupManager.validateGroupId(groupId);
-            requestedBuckets = decodeDeleteConsumerOffsetsRequest(request);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.group(groupId));
         }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeDeleteConsumerOffsetsRequest(request);
         if (requestedBuckets.isEmpty()) {
             return CompletableFuture.completedFuture(new DeleteConsumerOffsetsResponse());
         }
@@ -967,12 +942,25 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
-        }
+        final Session session = currentSession();
         return groupManager
                 .handleListConsumerGroups()
-                .thenApply(ServerRpcMessageUtils::makeListConsumerGroupsResponse);
+                .thenApply(
+                        groupIds -> {
+                            if (authorizer != null) {
+                                List<Resource> resources =
+                                        groupIds.stream()
+                                                .map(Resource::group)
+                                                .collect(Collectors.toList());
+                                groupIds =
+                                        authorizer
+                                                .filterByAuthorized(session, DESCRIBE, resources)
+                                                .stream()
+                                                .map(Resource::getName)
+                                                .collect(Collectors.toList());
+                            }
+                            return ServerRpcMessageUtils.makeListConsumerGroupsResponse(groupIds);
+                        });
     }
 
     @Override
@@ -999,14 +987,9 @@ public final class TabletService extends RpcServiceBase
             }
         }
 
-        final Map<GroupId, Replica> offsetsReplicasByGroup;
-        try {
-            offsetsReplicasByGroup = new HashMap<>();
-            for (GroupId groupId : groupIds) {
-                offsetsReplicasByGroup.put(groupId, groupManager.validateGroupId(groupId));
-            }
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final Map<GroupId, Replica> offsetsReplicasByGroup = new HashMap<>();
+        for (GroupId groupId : groupIds) {
+            offsetsReplicasByGroup.put(groupId, groupManager.validateGroupId(groupId));
         }
 
         return groupManager
@@ -1245,6 +1228,11 @@ public final class TabletService extends RpcServiceBase
     private void authorizeLiveSourceTable(long tableId) {
         if (metadataCache.getTablePath(tableId).isPresent()) {
             authorizeTable(READ, tableId);
+        } else if (!metadataCache.isDeletedTable(tableId)) {
+            // A metadata cache miss is unknown state, not proof that the table was deleted. Keep
+            // Table READ mandatory until the cache observes either the table or its tombstone.
+            throw new UnknownTableOrBucketException(
+                    "The metadata state of table " + tableId + " is unknown; retry later.");
         }
     }
 

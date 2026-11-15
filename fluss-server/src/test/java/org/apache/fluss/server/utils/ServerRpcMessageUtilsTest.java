@@ -89,8 +89,6 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
-import org.apache.fluss.server.tablet.consumer.group.result.DeleteConsumerOffsetsResult;
-import org.apache.fluss.server.tablet.consumer.group.result.ListConsumerGroupsResult;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
@@ -258,7 +256,7 @@ class ServerRpcMessageUtilsTest {
     void testMakeListConsumerGroupsResponsePreservesOrder() {
         ListConsumerGroupsResponse response =
                 ServerRpcMessageUtils.makeListConsumerGroupsResponse(
-                        ListConsumerGroupsResult.success(Arrays.asList("group-b", "group-a")));
+                        Arrays.asList("group-b", "group-a"));
         assertThat(response.getGroupsList())
                 .extracting(PbListedGroup::getGroupId)
                 .containsExactly("group-b", "group-a");
@@ -320,8 +318,7 @@ class ServerRpcMessageUtilsTest {
         bucketErrors.put(failed, Errors.NOT_CONSUMER_GROUP_OWNER);
 
         DeleteConsumerOffsetsResponse response =
-                ServerRpcMessageUtils.makeDeleteConsumerOffsetsResponse(
-                        DeleteConsumerOffsetsResult.success(bucketErrors));
+                ServerRpcMessageUtils.makeDeleteConsumerOffsetsResponse(bucketErrors);
 
         assertThat(response.getTablesList().get(0).getBucketsList())
                 .extracting(bucket -> bucket.getBucketId())
