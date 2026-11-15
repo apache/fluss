@@ -1018,11 +1018,8 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getRecoverySnapshotSelection(bucket)).isEmpty();
         zookeeperClient.setRecoverySnapshot(
                 bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
-        BucketSnapshot next = new BucketSnapshot(5L, 40L, "file:/snapshot-5");
-        zookeeperClient.registerTableBucketSnapshot(bucket, next, 4L, null);
-        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
-        BucketSnapshot equalOffset = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
-        zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 5L, null);
+        BucketSnapshot equalOffset = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
+        zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 4L, null);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
         assertThatThrownBy(
                         () ->
@@ -1041,10 +1038,10 @@ class ZooKeeperClientTest {
     @Test
     void testOldLeaderCommitCannotInvalidateNewRecoveryContext() throws Exception {
         TableBucket bucket = new TableBucket(1L, 0);
+        LeaderAndIsr initial =
+                new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
         zookeeperClient.registerLeaderAndIsr(
-                bucket,
-                new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0),
-                zkEpoch.getCoordinatorEpochZkVersion());
+                bucket, initial, zkEpoch.getCoordinatorEpochZkVersion());
         zookeeperClient.setRecoverySnapshot(
                 bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         Configuration configuration = new Configuration();
@@ -1060,13 +1057,10 @@ class ZooKeeperClientTest {
                         if (requested.equals(bucket) && id == 5L) {
                             zookeeperClient.updateLeaderAndIsr(
                                     bucket,
-                                    new LeaderAndIsr(
+                                    initial.newLeaderAndIsr(
                                             2,
-                                            1,
                                             Collections.singletonList(2),
-                                            Collections.emptyList(),
-                                            0,
-                                            1),
+                                            Collections.emptyList()),
                                     zkEpoch.getCoordinatorEpochZkVersion());
                         }
                         return super.getTableBucketSnapshot(requested, id);

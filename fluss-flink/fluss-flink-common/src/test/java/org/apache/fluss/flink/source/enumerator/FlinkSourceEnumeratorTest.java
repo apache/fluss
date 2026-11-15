@@ -42,9 +42,6 @@ import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.flink.utils.FlinkTestBase;
-import org.apache.fluss.fs.FSDataOutputStream;
-import org.apache.fluss.fs.FileSystem;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.TestingLakeSource;
@@ -62,14 +59,7 @@ import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
-import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
-import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
@@ -507,44 +497,12 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 10);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        ZooKeeperCompletedSnapshotHandleStore handles =
-                new ZooKeeperCompletedSnapshotHandleStore(zk);
         for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
-            CompletedSnapshot selected =
-                    handles.get(tableBucket, 0L).get().retrieveCompleteSnapshot();
-            zk.getCuratorClient()
-                    .create()
-                    .forPath(
-                            ZkData.RecoverySnapshotZNode.path(tableBucket),
-                            new RecoverySnapshotSelection(selected.getSnapshotID()).toJson());
-            long laterId =
-                    new ZkSequenceIDCounter(
-                                    zk.getCuratorClient(),
-                                    ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket))
-                            .getAndIncrement();
-            CompletedSnapshot later =
-                    new CompletedSnapshot(
-                            tableBucket,
-                            laterId,
-                            new FsPath(
-                                    selected.getSnapshotLocation().getParent(),
-                                    String.valueOf(laterId)),
-                            selected.getKvSnapshotHandle(),
-                            selected.getLogOffset(),
-                            selected.getRowCount(),
-                            selected.getAutoIncIDRanges());
-            FsPath metadataPath = later.getMetadataFilePath();
-            try (FSDataOutputStream out =
-                    metadataPath
-                            .getFileSystem()
-                            .create(metadataPath, FileSystem.WriteMode.NO_OVERWRITE)) {
-                out.write(CompletedSnapshotJsonSerde.toJson(later));
-            }
-            zk.registerTableBucketSnapshot(
-                    tableBucket,
-                    new BucketSnapshot(laterId, later.getLogOffset(), metadataPath.toString()));
+            zk.setRecoverySnapshot(tableBucket, zk.getTableBucketSnapshot(tableBucket, 0L).get());
         }
+        putRows(DEFAULT_TABLE_PATH, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
 
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {

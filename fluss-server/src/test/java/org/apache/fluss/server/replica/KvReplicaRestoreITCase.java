@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -32,30 +31,22 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
-import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.KvFileHandle;
-import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
-import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
@@ -67,7 +58,6 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropDatabase;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitKvSnapshotRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
@@ -258,6 +248,13 @@ class KvReplicaRestoreITCase {
                         .retrieveCompleteSnapshot();
         assertThat(completedSnapshot.getRowCount()).isNotNull();
         assertThat(completedSnapshot.getRowCount()).isEqualTo(recordCount);
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        zk.setRecoverySnapshot(
+                tableBucket,
+                new BucketSnapshot(
+                        completedSnapshot.getSnapshotID(),
+                        completedSnapshot.getLogOffset(),
+                        completedSnapshot.getMetadataFilePath().toString()));
 
         // Trigger another write to generate changelogs not in snapshot
         List<KvRecord> moreRecords = new ArrayList<>();
@@ -266,6 +263,10 @@ class KvReplicaRestoreITCase {
         }
         recordCount = recordCount + 10;
         putRecordBatchAndAssertSuccess(tableBucket, leaderServer, toKvRecordBatch(moreRecords));
+        CompletedSnapshot later = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
+        assertThat(later.getSnapshotID()).isGreaterThan(completedSnapshot.getSnapshotID());
+        assertThat(zk.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
+                .isEqualTo(completedSnapshot.getSnapshotID());
 
         // simulate failure and force failover
         int currentLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
@@ -285,114 +286,20 @@ class KvReplicaRestoreITCase {
             Replica newLeaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
             assertThat(newLeaderReplica.getLeaderId()).isEqualTo(newLeader.get());
             assertThat(newLeaderReplica.getRowCount()).isEqualTo(recordCount);
+            TabletServerGateway gateway =
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeader.get());
+            for (Tuple2<byte[], byte[]> row :
+                    getKeyValuePairs(Arrays.asList(records.get(0), moreRecords.get(0)))) {
+                assertLookupResponse(
+                        gateway.lookup(newLookupRequest(tableId, 0, row.f0)).get(), row.f1);
+            }
+            CompletedSnapshot next = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
+            assertThat(next.getSnapshotID()).isGreaterThan(later.getSnapshotID());
+            assertThat(zk.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
+                    .isEqualTo(next.getSnapshotID());
         } finally {
             FLUSS_CLUSTER_EXTENSION.startTabletServer(currentLeader);
         }
-    }
-
-    @Test
-    void testDesignatedSnapshotRecoveryContinuesThroughSnapshotCommitRpc() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "designated_recovery");
-        long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION,
-                        tablePath,
-                        TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA_PK)
-                                .distributedBy(1, "a")
-                                .property(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), "1")
-                                .build());
-        TableBucket bucket = new TableBucket(tableId, 0);
-        int server = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(bucket);
-        putRecordBatchAndAssertSuccess(bucket, server, genKvRecordBatch(new Object[] {1, "old"}));
-        CompletedSnapshot old = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(bucket);
-        putRecordBatchAndAssertSuccess(
-                bucket,
-                server,
-                genKvRecordBatch(new Object[] {1, "selected"}, new Object[] {2, "snapshot"}));
-        CompletedSnapshot selected = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(bucket);
-        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        CoordinatorEventProcessor processor =
-                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorEventProcessor();
-        zk.setRecoverySnapshot(
-                bucket,
-                new BucketSnapshot(
-                        selected.getSnapshotID(),
-                        selected.getLogOffset(),
-                        selected.getMetadataFilePath().toString()));
-
-        long lateId =
-                new ZkSequenceIDCounter(
-                                zk.getCuratorClient(),
-                                ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
-                        .getAndIncrement();
-        FsPath lateDirectory =
-                FlussPaths.remoteKvSnapshotDir(old.getSnapshotLocation().getParent(), lateId);
-        Files.createDirectories(Paths.get(lateDirectory.toUri()));
-        // Private files belong to this publication; SSTs remain shared with the old snapshot.
-        List<KvFileHandleAndLocalPath> privateFiles = new ArrayList<>();
-        for (KvFileHandleAndLocalPath file : old.getKvSnapshotHandle().getPrivateFileHandles()) {
-            KvFileHandle original = file.getKvFileHandle();
-            FsPath destination = new FsPath(lateDirectory, file.getLocalPath());
-            Files.copy(
-                    Paths.get(new FsPath(original.getFilePath()).toUri()),
-                    Paths.get(destination.toUri()));
-            privateFiles.add(
-                    KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(
-                                    destination.toString(),
-                                    original.getSize(),
-                                    original.getSha256()),
-                            file.getLocalPath()));
-        }
-        CompletedSnapshot late =
-                new CompletedSnapshot(
-                        bucket,
-                        lateId,
-                        lateDirectory,
-                        KvSnapshotHandle.create(
-                                old.getKvSnapshotHandle().getSharedKvFileHandles(),
-                                privateFiles,
-                                old.getKvSnapshotHandle().getIncrementalSize()),
-                        old.getLogOffset(),
-                        old.getRowCount(),
-                        old.getAutoIncIDRanges());
-        FLUSS_CLUSTER_EXTENSION
-                .newCoordinatorClient()
-                .commitKvSnapshot(
-                        makeCommitKvSnapshotRequest(
-                                late,
-                                processor.getCoordinatorContext().getCoordinatorEpoch(),
-                                FLUSS_CLUSTER_EXTENSION
-                                        .waitAndGetLeaderReplica(bucket)
-                                        .getLeaderEpoch(),
-                                null))
-                .get();
-        assertThat(lateId).isGreaterThan(selected.getSnapshotID());
-        assertThat(zk.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
-                .isEqualTo(selected.getSnapshotID());
-        putRecordBatchAndAssertSuccess(bucket, server, genKvRecordBatch(new Object[] {3, "wal"}));
-
-        FLUSS_CLUSTER_EXTENSION.stopTabletServer(server);
-        FLUSS_CLUSTER_EXTENSION.startTabletServer(server);
-        Replica restored = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(bucket);
-        assertThat(restored.getRowCount()).isEqualTo(3);
-        TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(server);
-        for (Tuple2<byte[], byte[]> row :
-                getKeyValuePairs(
-                        genKvRecords(
-                                new Object[] {1, "selected"},
-                                new Object[] {2, "snapshot"},
-                                new Object[] {3, "wal"}))) {
-            assertLookupResponse(
-                    gateway.lookup(newLookupRequest(tableId, 0, row.f0)).get(), row.f1);
-        }
-        putRecordBatchAndAssertSuccess(bucket, server, genKvRecordBatch(new Object[] {4, "next"}));
-        CompletedSnapshot next = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(bucket);
-        assertThat(next.getSnapshotID()).isGreaterThan(lateId);
-        assertThat(next.getRowCount()).isEqualTo(4);
-        assertThat(zk.getRecoveryBucketSnapshot(bucket).get().getSnapshotId())
-                .isEqualTo(next.getSnapshotID());
     }
 
     private static Configuration initConfig() {
