@@ -37,6 +37,8 @@ import javax.annotation.Nullable;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /** The data and path stored in ZooKeeper nodes (znodes). */
 public final class ZkData {
 
@@ -588,6 +590,41 @@ public final class ZkData {
     public static final class RecoverySnapshotZNode {
         public static String path(TableBucket tableBucket) {
             return BucketIdZNode.path(tableBucket) + "/recovery_snapshot";
+        }
+
+        /** Encodes the selected snapshot ID in the persistent version 1 format. */
+        public static byte[] encode(long snapshotId) {
+            checkArgument(snapshotId >= 0, "Invalid snapshot ID: %s", snapshotId);
+            return JsonSerdeUtils.writeValueAsBytes(
+                    snapshotId,
+                    (value, out) -> {
+                        out.writeStartObject();
+                        out.writeNumberField("version", 1);
+                        out.writeNumberField("snapshot_id", value);
+                        out.writeEndObject();
+                    });
+        }
+
+        /** Decodes the selected snapshot ID from a supported record. */
+        public static long decode(byte[] bytes) {
+            return JsonSerdeUtils.readValue(
+                    bytes,
+                    node -> {
+                        checkArgument(
+                                node.has("version")
+                                        && node.get("version").isIntegralNumber()
+                                        && node.get("version").canConvertToInt()
+                                        && node.get("version").asInt() == 1,
+                                "Unsupported recovery snapshot format.");
+                        checkArgument(
+                                node.has("snapshot_id")
+                                        && node.get("snapshot_id").isIntegralNumber()
+                                        && node.get("snapshot_id").canConvertToLong(),
+                                "Invalid recovery snapshot ID.");
+                        long snapshotId = node.get("snapshot_id").asLong();
+                        checkArgument(snapshotId >= 0, "Invalid snapshot ID: %s", snapshotId);
+                        return snapshotId;
+                    });
         }
     }
 

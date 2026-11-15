@@ -57,7 +57,6 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
-import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -899,7 +898,7 @@ class ZooKeeperClientTest {
                     .create()
                     .forPath(
                             ZkData.RecoverySnapshotZNode.path(bucket),
-                            new RecoverySnapshotSelection(selected.getSnapshotId()).toJson());
+                            ZkData.RecoverySnapshotZNode.encode(selected.getSnapshotId()));
             zookeeperClient.registerTableBucketSnapshot(
                     bucket,
                     new BucketSnapshot(2L, selected.getLogOffset() + 1, "oss://test/newer"));
@@ -952,8 +951,10 @@ class ZooKeeperClientTest {
         TableBucket bucket = new TableBucket(1L, 0);
         zookeeperClient.registerTableAssignment(
                 1L, TableAssignment.builder().add(0, BucketAssignment.of(0)).build());
-        BucketSnapshot selected = new BucketSnapshot(2L, 20L, "file:/selected-source");
+        BucketSnapshot selected = new BucketSnapshot(1L, 20L, "file:/selected-source");
         zookeeperClient.registerTableBucketSnapshot(bucket, selected);
+        BucketSnapshot ordinary = new BucketSnapshot(2L, 20L, "file:/ordinary-source");
+        zookeeperClient.registerTableBucketSnapshot(bucket, ordinary);
         String selectionPath = ZkData.RecoverySnapshotZNode.path(bucket);
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
@@ -962,14 +963,11 @@ class ZooKeeperClientTest {
                         new CuratorFrameworkWithUnhandledErrorListener(
                                 zookeeperClient.getCuratorClient(), (message, error) -> {}),
                         configuration) {
-                    private boolean publish = true;
-
                     @Override
                     List<ZkGetDataResponse> getDataInBackground(Collection<String> paths)
                             throws Exception {
                         List<ZkGetDataResponse> responses = super.getDataInBackground(paths);
-                        if (publish && paths.contains(selectionPath)) {
-                            publish = false;
+                        if (paths.contains(selectionPath)) {
                             zookeeperClient.setRecoverySnapshot(bucket, selected);
                             zookeeperClient.registerTableBucketSnapshot(
                                     bucket, new BucketSnapshot(3L, 30L, "file:/late-source"));
@@ -977,7 +975,7 @@ class ZooKeeperClientTest {
                         return responses;
                     }
                 };
-        assertThat(reader.getTableLatestBucketSnapshot(1L)).containsEntry(0, Optional.of(selected));
+        assertThat(reader.getTableLatestBucketSnapshot(1L)).containsEntry(0, Optional.of(ordinary));
     }
 
     @ParameterizedTest
@@ -1052,9 +1050,9 @@ class ZooKeeperClientTest {
                                 zookeeperClient.getCuratorClient(), (message, error) -> {}),
                         configuration) {
                     @Override
-                    public Optional<BucketSnapshot> getTableBucketSnapshot(
-                            TableBucket requested, long id) throws Exception {
-                        if (requested.equals(bucket) && id == 5L) {
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket requested) throws Exception {
+                        if (requested.equals(bucket)) {
                             zookeeperClient.updateLeaderAndIsr(
                                     bucket,
                                     initial.newLeaderAndIsr(
@@ -1063,7 +1061,7 @@ class ZooKeeperClientTest {
                                             Collections.emptyList()),
                                     zkEpoch.getCoordinatorEpochZkVersion());
                         }
-                        return super.getTableBucketSnapshot(requested, id);
+                        return super.getRecoverySnapshotSelection(requested);
                     }
                 };
         Throwable failure =

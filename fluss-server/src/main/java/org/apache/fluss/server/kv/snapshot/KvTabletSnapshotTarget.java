@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.RecoverySnapshotSelection;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -258,13 +257,11 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         Long previousRecoverySnapshotId = tabletState.getPreviousRecoverySnapshotId();
         try {
             if (previousRecoverySnapshotId != null && !unconfirmedRecoverySnapshotIds.isEmpty()) {
-                Optional<ZooKeeperClient.VersionedData<RecoverySnapshotSelection>> selected =
+                Optional<ZooKeeperClient.VersionedData<Long>> selected =
                         zooKeeperClient.getRecoverySnapshotSelection(tableBucket);
                 if (selected.isPresent()
-                        && !Objects.equals(
-                                previousRecoverySnapshotId,
-                                selected.get().data().getSnapshotId())) {
-                    long selectedId = selected.get().data().getSnapshotId();
+                        && !Objects.equals(previousRecoverySnapshotId, selected.get().data())) {
+                    long selectedId = selected.get().data();
                     // Only this KV instance's own publications can advance its recovery identity.
                     if (unconfirmedRecoverySnapshotIds.contains(selectedId)) {
                         advanceRecoverySnapshotId(previousRecoverySnapshotId, selectedId);
