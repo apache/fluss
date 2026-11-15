@@ -42,12 +42,12 @@ import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
+import org.apache.fluss.rpc.messages.PbDeletedGroup;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -213,7 +213,7 @@ class ConsumerGroupManagementAuthorizationITCase {
     }
 
     @Test
-    void testDeleteConsumerGroupsDistinguishesEmptyAndMissingGroups() throws Exception {
+    void testDeleteConsumerGroupsSucceedsForEmptyAndMissingGroups() throws Exception {
         commitOffset(FIRST_GROUP, 10L);
         grant(WRITE, Resource.group(FIRST_GROUP));
         grant(DROP, Resource.group(FIRST_GROUP));
@@ -231,18 +231,9 @@ class ConsumerGroupManagementAuthorizationITCase {
                         .get();
 
         assertThat(response.getGroupsList())
-                .hasSize(2)
-                .anySatisfy(
-                        group -> {
-                            assertThat(group.getGroupId()).isEqualTo(FIRST_GROUP);
-                            assertThat(group.hasErrorCode()).isFalse();
-                        })
-                .anySatisfy(
-                        group -> {
-                            assertThat(group.getGroupId()).isEqualTo(SECOND_GROUP);
-                            assertThat(group.getErrorCode())
-                                    .isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
-                        });
+                .allSatisfy(group -> assertThat(group.hasErrorCode()).isFalse())
+                .extracting(PbDeletedGroup::getGroupId)
+                .containsExactlyInAnyOrder(FIRST_GROUP, SECOND_GROUP);
         assertThat(listGroups()).isEmpty();
     }
 
