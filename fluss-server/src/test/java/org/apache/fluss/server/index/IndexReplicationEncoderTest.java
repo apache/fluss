@@ -31,8 +31,12 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.row.BinaryString.fromString;
@@ -45,6 +49,49 @@ class IndexReplicationEncoderTest {
     private static final TablePath MAIN_PATH = TablePath.of("db", "main");
     private static final TablePath INDEX_PATH =
             TablePath.of("db", IndexTableUtils.indexTableName("main", "idx_name"));
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3})
+    void testIndexKeysPreserveCandidateAndSourceIdentity(int indexColumnCount) {
+        TableDescriptor main =
+                mainDescriptor(2, Arrays.asList("name", "id", "p").subList(0, indexColumnCount));
+        TableDescriptor index =
+                IndexTableDescriptorFactory.derive(main, 1L, main.getSchema().getIndexes().get(0));
+        TabletServerMetadataCache cache = indexCache(index);
+        TableInfo mainInfo = tableInfo(MAIN_PATH, 1L, main);
+        IndexReplicationEncoder encoder =
+                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 10L, 0), cache)
+                        .get(0);
+        GenericRow row = GenericRow.of(1, fromString("name"), fromString("p"));
+        byte[] key = encoder.encodeDataEntry(row).key();
+
+        assertThat(encoder.encodeDataEntry(row).key()).isEqualTo(key);
+        assertThat(
+                        encoder.encodeDataEntry(
+                                        GenericRow.of(2, fromString("name"), fromString("p")))
+                                .key())
+                .isNotEqualTo(key);
+        assertThat(
+                        encoder.encodeDataEntry(
+                                        GenericRow.of(1, fromString("other"), fromString("p")))
+                                .key())
+                .isNotEqualTo(key);
+
+        IndexReplicationEncoder recreatedPartition =
+                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 11L, 0), cache)
+                        .get(0);
+        assertThat(recreatedPartition.encodeDataEntry(row).key()).isNotEqualTo(key);
+        assertThat(recreatedPartition.encodeProgress(0, 1L).key())
+                .isNotEqualTo(encoder.encodeProgress(0, 1L).key());
+
+        IndexReplicationEncoder anotherBucket =
+                IndexReplicationEncoder.createAll(mainInfo, new TableBucket(1L, 10L, 1), cache)
+                        .get(0);
+        assertThat(anotherBucket.encodeProgress(0, 1L).key())
+                .isNotEqualTo(encoder.encodeProgress(0, 1L).key());
+        assertThat(encoder.encodeProgress(0, 2L).key())
+                .isEqualTo(encoder.encodeProgress(0, 1L).key());
+    }
 
     @Test
     void testMainTableRescalePreservesExplicitIndexRouting() {
@@ -93,6 +140,11 @@ class IndexReplicationEncoderTest {
     }
 
     private static TableDescriptor mainDescriptor(Integer indexBucketCount) {
+        return mainDescriptor(indexBucketCount, Collections.singletonList("name"));
+    }
+
+    private static TableDescriptor mainDescriptor(
+            Integer indexBucketCount, List<String> indexColumns) {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -102,7 +154,7 @@ class IndexReplicationEncoderTest {
                         .index(
                                 "idx_name",
                                 IndexType.SECONDARY,
-                                Collections.singletonList("name"),
+                                indexColumns,
                                 IndexVisibility.SYNC,
                                 indexBucketCount)
                         .build();

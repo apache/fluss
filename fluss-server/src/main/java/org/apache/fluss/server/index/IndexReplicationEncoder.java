@@ -48,6 +48,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -255,8 +256,14 @@ final class IndexReplicationEncoder {
         }
 
         KvFormat indexKvFormat = KvFormat.COMPACTED;
-        CompactedKeyEncoder identityKeyEncoder =
-                new CompactedKeyEncoder(RowType.of(identityFieldTypes));
+        // The outer key already contains the index columns and partition identity.
+        CompactedKeyEncoder primaryKeySuffixEncoder =
+                new CompactedKeyEncoder(
+                        mainRowType,
+                        Arrays.copyOfRange(
+                                indexValueColumnIndices,
+                                idxColumnIndices.length,
+                                indexValueColumnIndices.length));
         GenericRow identity = new GenericRow(totalColCount);
 
         int recordKindPosition = totalColCount;
@@ -297,7 +304,7 @@ final class IndexReplicationEncoder {
                             identity.setField(storedColCount, partitionId);
                         }
                         byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
-                        byte[] rowKey = identityKeyEncoder.encodeKey(identity);
+                        byte[] rowKey = primaryKeySuffixEncoder.encodeKey(row);
                         physicalRowEncoder.startNewRow();
                         for (int i = 0; i < totalColCount; i++) {
                             physicalRowEncoder.encodeField(i, identity.getField(i));
@@ -321,8 +328,9 @@ final class IndexReplicationEncoder {
                     }
                 };
 
-        byte[] sourceIdentity = encodeSourceBucket(sourceBucket);
-        ByteBuffer progressRoutingKey = ByteBuffer.allocate(Integer.BYTES);
+        byte[] sourceBucketKey =
+                ByteBuffer.allocate(Integer.BYTES).putInt(sourceBucket.getBucket()).array();
+        byte[] progressRoutingKey = new byte[0];
         ProgressEncoder progressEncoder =
                 (targetBucket, sourceEndOffset) -> {
                     checkArgument(
@@ -337,10 +345,9 @@ final class IndexReplicationEncoder {
                         physicalRowEncoder.encodeField(storedColCount, partitionId);
                     }
                     physicalRowEncoder.encodeField(recordKindPosition, PROGRESS_RECORD_KIND);
-                    // The row encoder copies the bytes before this buffer is reused.
-                    physicalRowEncoder.encodeField(
-                            routingKeyPosition, progressRoutingKey.putInt(0, targetBucket).array());
-                    physicalRowEncoder.encodeField(rowKeyPosition, sourceIdentity);
+                    // The request selects the target bucket; its local key needs no routing ID.
+                    physicalRowEncoder.encodeField(routingKeyPosition, progressRoutingKey);
+                    physicalRowEncoder.encodeField(rowKeyPosition, sourceBucketKey);
                     physicalRowEncoder.encodeField(sourceProgressPosition, sourceEndOffset);
                     BinaryRow value = physicalRowEncoder.finishRow();
                     return new IndexReplicationEncoder.IndexEntry(
@@ -356,20 +363,6 @@ final class IndexReplicationEncoder {
                 idxColumnIndices,
                 dataEncoder,
                 progressEncoder);
-    }
-
-    private static byte[] encodeSourceBucket(TableBucket sourceBucket) {
-        boolean partitioned = sourceBucket.getPartitionId() != null;
-        ByteBuffer buffer =
-                ByteBuffer.allocate(
-                        Long.BYTES + 1 + (partitioned ? Long.BYTES : 0) + Integer.BYTES);
-        buffer.putLong(sourceBucket.getTableId());
-        buffer.put((byte) (partitioned ? 1 : 0));
-        if (partitioned) {
-            buffer.putLong(sourceBucket.getPartitionId());
-        }
-        buffer.putInt(sourceBucket.getBucket());
-        return buffer.array();
     }
 
     /**
