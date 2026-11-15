@@ -1332,7 +1332,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         // A preceding KV context may publish a higher-offset reference without replacing recovery.
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         CompletedSnapshot selected = mockCompletedSnapshot(tempDir, tableBucket, 0);
-        eventProcessor.completedSnapshotStoreManager().setRecoverySnapshot(t1, selected);
+        eventProcessor
+                .completedSnapshotStoreManager()
+                .getOrCreateCompletedSnapshotStore(t1, tableBucket)
+                .setRecoverySnapshot(selected);
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
                         tableBucket,

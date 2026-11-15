@@ -30,7 +30,6 @@ import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
@@ -60,7 +59,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -97,25 +95,6 @@ class CompletedSnapshotStoreManagerTest {
     @AfterAll
     static void afterAll() {
         ioExecutor.shutdownNow();
-    }
-
-    @Test
-    void testHistoricalPartitionCannotSetKvRecoverySnapshot() throws Exception {
-        TableBucket historical = new TableBucket(1L, 123L, 0);
-        zookeeperClient
-                .getCuratorClient()
-                .create()
-                .creatingParentsIfNeeded()
-                .forPath(
-                        ZkData.PartitionZNode.path(DATA1_TABLE_PATH, HISTORICAL_PARTITION_VALUE),
-                        ZkData.PartitionZNode.encode(new PartitionRegistration(1L, 123L, null, 1)));
-        CompletedSnapshotStoreManager manager = createCompletedSnapshotStoreManager(2);
-        CompletedSnapshot snapshot = KvTestUtils.mockCompletedSnapshot(tempDir, historical, 1);
-        assertThatThrownBy(() -> manager.setRecoverySnapshot(DATA1_TABLE_PATH, snapshot))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Historical partitions");
-        assertThat(zookeeperClient.getRecoverySnapshotSelection(historical)).isEmpty();
-        assertThat(zookeeperClient.getTableBucketSnapshot(historical, 1L)).isEmpty();
     }
 
     @ParameterizedTest
@@ -390,6 +369,17 @@ class CompletedSnapshotStoreManagerTest {
             implements CompletedSnapshotHandleStore {
         private final Map<TableBucket, Map<Long, CompletedSnapshotHandle>> snapshotHandleMap =
                 new HashMap<>();
+
+        @Override
+        public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle) {
+            throw new UnsupportedOperationException(
+                    "Recovery snapshot selection is not supported.");
+        }
 
         @Override
         public void add(

@@ -71,7 +71,7 @@ public class CompletedSnapshotStore {
 
     private final Executor ioExecutor;
     private final SnapshotsCleaner snapshotsCleaner;
-    private final SnapshotInUseChecker snapshotInUseChecker;
+    private final SnapshotInUseChecker snapshotLeaseChecker;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -101,13 +101,13 @@ public class CompletedSnapshotStore {
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
             Executor executor,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
         this.completedSnapshots.addAll(completedSnapshots);
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
-        this.snapshotInUseChecker = snapshotInUseChecker;
+        this.snapshotLeaseChecker = snapshotLeaseChecker;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
     }
@@ -129,7 +129,13 @@ public class CompletedSnapshotStore {
                                 () -> {}));
     }
 
-    /** Publishes a snapshot reference and selects it for recovery atomically. */
+    /**
+     * Publishes a snapshot reference and selects it for recovery atomically.
+     *
+     * <p>All Coordinators and TabletServers must support the recovery-aware commit protocol and
+     * retention rules before explicit selection is enabled. Downgrading those servers while
+     * explicit selections remain is unsupported.
+     */
     public void setRecoverySnapshot(CompletedSnapshot snapshot) throws Exception {
         inLock(
                 lock,
@@ -321,7 +327,7 @@ public class CompletedSnapshotStore {
     private boolean isSnapshotInUse(CompletedSnapshot snapshot) {
         return (selectedRecoverySnapshotId != null
                         && selectedRecoverySnapshotId == snapshot.getSnapshotID())
-                || snapshotInUseChecker.isInUse(snapshot);
+                || snapshotLeaseChecker.isInUse(snapshot);
     }
 
     /**

@@ -1465,8 +1465,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /**
-     * Publishes and selects a recovery source under the bucket's snapshot-store lock. Use {@code
-     * CompletedSnapshotStoreManager.setRecoverySnapshot} for eligibility checking.
+     * Publishes and selects a recovery source. Callers must hold the bucket's snapshot-store lock.
      */
     public void setRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot) throws Exception {
         Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);

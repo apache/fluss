@@ -32,7 +32,6 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,13 +45,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
-import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -72,7 +69,7 @@ public class CompletedSnapshotStoreManager {
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
             makeZookeeperCompletedSnapshotHandleStore;
-    private final SnapshotInUseChecker snapshotInUseChecker;
+    private final SnapshotInUseChecker snapshotLeaseChecker;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
@@ -80,36 +77,14 @@ public class CompletedSnapshotStoreManager {
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
                 ZooKeeperCompletedSnapshotHandleStore::new,
                 coordinatorMetricGroup,
-                snapshotInUseChecker);
-    }
-
-    /**
-     * Selects a recovery source using the same bucket lock as ordinary publication and GC.
-     *
-     * <p>Callers must enable this only after all Coordinators and TabletServers support the
-     * recovery-aware snapshot commit protocol and retention rules. Downgrading those servers while
-     * explicit selections remain is unsupported.
-     */
-    public void setRecoverySnapshot(TablePath tablePath, CompletedSnapshot snapshot)
-            throws Exception {
-        TableBucket bucket = snapshot.getTableBucket();
-        if (bucket.getPartitionId() != null) {
-            Optional<PartitionRegistration> historical =
-                    zooKeeperClient.getPartition(tablePath, HISTORICAL_PARTITION_VALUE);
-            checkArgument(
-                    !historical.isPresent()
-                            || historical.get().getPartitionId() != bucket.getPartitionId(),
-                    "Historical partitions recover from lake progress and cannot select KV snapshots.");
-        }
-        getOrCreateCompletedSnapshotStore(tablePath, snapshot.getTableBucket())
-                .setRecoverySnapshot(snapshot);
+                snapshotLeaseChecker);
     }
 
     @VisibleForTesting
@@ -120,14 +95,14 @@ public class CompletedSnapshotStoreManager {
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
                     makeZookeeperCompletedSnapshotHandleStore,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new ConcurrentHashMap<>();
         this.ioExecutor = ioExecutor;
-        this.snapshotInUseChecker = snapshotInUseChecker;
+        this.snapshotLeaseChecker = snapshotLeaseChecker;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
 
@@ -265,7 +240,7 @@ public class CompletedSnapshotStoreManager {
                 retrievedSnapshots,
                 completedSnapshotHandleStore,
                 ioExecutor,
-                snapshotInUseChecker);
+                snapshotLeaseChecker);
     }
 
     /**

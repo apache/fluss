@@ -31,16 +31,10 @@ import java.util.Optional;
 public interface CompletedSnapshotHandleStore {
 
     /** Returns the explicitly selected source, or empty for legacy recovery. */
-    default Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket)
-            throws Exception {
-        return Optional.empty();
-    }
+    Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) throws Exception;
 
     /** Publishes the snapshot reference and recovery selection atomically. */
-    default void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
-            throws Exception {
-        throw new UnsupportedOperationException("Recovery snapshot selection is not supported.");
-    }
+    void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle) throws Exception;
 
     /**
      * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).

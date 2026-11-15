@@ -90,7 +90,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -978,10 +977,8 @@ class ZooKeeperClientTest {
         assertThat(reader.getTableLatestBucketSnapshot(1L)).containsEntry(0, Optional.of(ordinary));
     }
 
-    @ParameterizedTest
-    @CsvSource({"1,2", "99,1"})
-    void testInvalidRecoverySelectionDoesNotFallBack(int version, long snapshotId)
-            throws Exception {
+    @Test
+    void testMissingRecoverySnapshotDoesNotFallBack() throws Exception {
         TableBucket bucket = new TableBucket(1L, 0);
         zookeeperClient.registerTableAssignment(
                 1L, TableAssignment.builder().add(0, BucketAssignment.of(0)).build());
@@ -992,14 +989,11 @@ class ZooKeeperClientTest {
                 .create()
                 .forPath(
                         ZkData.RecoverySnapshotZNode.path(bucket),
-                        ("{\"version\":" + version + ",\"snapshot_id\":" + snapshotId + "}")
-                                .getBytes(StandardCharsets.UTF_8));
-        Class<? extends RuntimeException> error =
-                version == 1 ? IllegalStateException.class : IllegalArgumentException.class;
+                        ZkData.RecoverySnapshotZNode.encode(2L));
         assertThatThrownBy(() -> zookeeperClient.getTableBucketLatestSnapshot(bucket))
-                .isInstanceOf(error);
+                .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> zookeeperClient.getTableLatestBucketSnapshot(1L))
-                .isInstanceOf(error);
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

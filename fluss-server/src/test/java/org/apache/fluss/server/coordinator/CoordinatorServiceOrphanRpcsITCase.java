@@ -231,6 +231,17 @@ class CoordinatorServiceOrphanRpcsITCase {
     private static class NoOpSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
         @Override
+        public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle) {
+            throw new UnsupportedOperationException(
+                    "Recovery snapshot selection is not supported.");
+        }
+
+        @Override
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
