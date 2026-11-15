@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -46,6 +47,7 @@ import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbListedGroup;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -65,6 +67,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -207,6 +210,40 @@ class ConsumerGroupManagementAuthorizationITCase {
         commitOffset(FIRST_GROUP, 20L);
         assertThat(listGroups()).containsExactly(FIRST_GROUP);
         assertThat(getAllOffsets(FIRST_GROUP)).containsExactly(20L);
+    }
+
+    @Test
+    void testDeleteConsumerGroupsDistinguishesEmptyAndMissingGroups() throws Exception {
+        commitOffset(FIRST_GROUP, 10L);
+        grant(WRITE, Resource.group(FIRST_GROUP));
+        grant(DROP, Resource.group(FIRST_GROUP));
+        grant(DROP, Resource.group(SECOND_GROUP));
+
+        deleteOffsets(sourceBucket);
+        assertThat(lookupOffset(sourceBucket)).containsOnlyNulls();
+        assertThat(listGroups()).containsExactly(FIRST_GROUP);
+
+        DeleteConsumerGroupsResponse response =
+                clientGateway
+                        .deleteConsumerGroups(
+                                new DeleteConsumerGroupsRequest()
+                                        .addAllGroups(Arrays.asList(FIRST_GROUP, SECOND_GROUP)))
+                        .get();
+
+        assertThat(response.getGroupsList())
+                .hasSize(2)
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo(FIRST_GROUP);
+                            assertThat(group.hasErrorCode()).isFalse();
+                        })
+                .anySatisfy(
+                        group -> {
+                            assertThat(group.getGroupId()).isEqualTo(SECOND_GROUP);
+                            assertThat(group.getErrorCode())
+                                    .isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+                        });
+        assertThat(listGroups()).isEmpty();
     }
 
     @Test

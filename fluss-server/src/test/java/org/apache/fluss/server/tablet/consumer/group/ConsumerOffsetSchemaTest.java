@@ -68,13 +68,8 @@ class ConsumerOffsetSchemaTest {
     }
 
     @Test
-    void testGroupMetadataPrefixAndKeyUseRecordTypeAndGroupId() {
+    void testGroupMetadataKeyMatchesRowKeyEncoding() {
         GroupId groupId = GroupId.of("my-group");
-        KeyEncoder prefixEncoder =
-                KeyEncoder.ofBucketKeyEncoder(
-                        ConsumerOffsetSchema.getTableSchema().getRowType(),
-                        Arrays.asList("record_type", "group_id"),
-                        null);
         KeyEncoder keyEncoder =
                 KeyEncoder.ofBucketKeyEncoder(
                         ConsumerOffsetSchema.getTableSchema().getRowType(),
@@ -83,8 +78,6 @@ class ConsumerOffsetSchemaTest {
 
         CompactedRow row = offsetSchema.encodeGroupMetadataRow(groupId);
 
-        assertThat(offsetSchema.encodeGroupMetadataPrefix(groupId))
-                .isEqualTo(prefixEncoder.encodeKey(row));
         assertThat(offsetSchema.encodeGroupMetadataKey(groupId))
                 .isEqualTo(keyEncoder.encodeKey(row));
     }

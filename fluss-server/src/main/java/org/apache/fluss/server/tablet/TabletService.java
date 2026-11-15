@@ -932,25 +932,17 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request) {
-        final Session session = currentSession();
-        return groupManager
-                .handleListConsumerGroups()
-                .thenApply(
-                        groupIds -> {
-                            if (authorizer != null) {
-                                List<Resource> resources =
-                                        groupIds.stream()
-                                                .map(Resource::group)
-                                                .collect(Collectors.toList());
-                                groupIds =
-                                        authorizer
-                                                .filterByAuthorized(session, DESCRIBE, resources)
-                                                .stream()
-                                                .map(Resource::getName)
-                                                .collect(Collectors.toList());
-                            }
-                            return ServerRpcMessageUtils.makeListConsumerGroupsResponse(groupIds);
-                        });
+        List<String> groupIds = groupManager.handleListConsumerGroups();
+        if (authorizer != null) {
+            List<Resource> resources =
+                    groupIds.stream().map(Resource::group).collect(Collectors.toList());
+            groupIds =
+                    authorizer.filterByAuthorized(currentSession(), DESCRIBE, resources).stream()
+                            .map(Resource::getName)
+                            .collect(Collectors.toList());
+        }
+        return CompletableFuture.completedFuture(
+                ServerRpcMessageUtils.makeListConsumerGroupsResponse(groupIds));
     }
 
     @Override

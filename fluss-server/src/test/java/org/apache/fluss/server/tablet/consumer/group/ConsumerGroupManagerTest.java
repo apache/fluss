@@ -25,7 +25,9 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -39,6 +41,7 @@ import org.apache.fluss.server.replica.ReplicaManager.NoneReplica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkVersion;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +55,7 @@ import javax.annotation.Nullable;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -62,13 +66,14 @@ import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for consumer-group routing and local ownership checks. */
+/** Tests for consumer-group routing, local ownership checks, and management. */
 class ConsumerGroupManagerTest extends ReplicaTestBase {
 
     private static final String GROUP_ID = "ownership-test";
     private static final long OFFSETS_TABLE_ID = 100L;
     private static final int OTHER_SERVER_ID = TABLET_SERVER_ID + 1;
     private static final TableBucket SOURCE_BUCKET = new TableBucket(1L, 0);
+    private static final short SCHEMA_ID = 1;
 
     private LakeCatalogDynamicLoader lakeCatalogLoader;
     private MetadataManager metadataManager;
@@ -253,6 +258,26 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         assertThat(replica.getLogTablet().localLogEndOffset()).isEqualTo(logEndOffset);
     }
 
+    @Test
+    void testEncodeOffsetRowKeysUsesOffsetRows() {
+        GroupId groupId = GroupId.of("group-1");
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+        List<byte[]> keys =
+                groupManager.encodeOffsetRowKeys(
+                        groupId,
+                        Arrays.asList(
+                                encodedGroupMetadata(groupId),
+                                encodedOffset(groupId, first),
+                                encodedOffset(groupId, second)),
+                        valueDecoder());
+
+        assertThat(keys)
+                .containsExactly(
+                        new ConsumerOffsetSchema().encodeOffsetKey(groupId, 1L, null, 0),
+                        new ConsumerOffsetSchema().encodeOffsetKey(groupId, 1L, null, 1));
+    }
+
     private void cacheLeader(@Nullable Integer leaderId) {
         serverMetadataCache.updateTableMetadata(
                 new TableMetadata(
@@ -280,5 +305,33 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
         assertThat(result)
                 .succeedsWithin(Duration.ofSeconds(10))
                 .isEqualTo(Collections.singletonMap(SOURCE_BUCKET, expectedError));
+    }
+
+    private static ValueDecoder valueDecoder() {
+        return ConsumerOffsetSchema.createValueDecoder(
+                new TestingSchemaGetter(SCHEMA_ID, ConsumerOffsetSchema.getTableSchema()));
+    }
+
+    private static ByteArraySlice encodedGroupMetadata(GroupId groupId) {
+        return encodedRecord(
+                groupId, ConsumerOffsetSchema.GROUP_METADATA_RECORD_TYPE, new TableBucket(-1L, -1));
+    }
+
+    private static ByteArraySlice encodedOffset(GroupId groupId, TableBucket tableBucket) {
+        return encodedRecord(groupId, ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE, tableBucket);
+    }
+
+    private static ByteArraySlice encodedRecord(
+            GroupId groupId, int recordType, TableBucket tableBucket) {
+        CompactedRow row =
+                new ConsumerOffsetSchema()
+                        .encodeOffsetRow(
+                                recordType,
+                                groupId,
+                                tableBucket.getTableId(),
+                                tableBucket.getPartitionId(),
+                                tableBucket.getBucket(),
+                                new ConsumerOffsetAndMetadata(-1L, ""));
+        return ByteArraySlice.wrap(ValueEncoder.encodeValue(SCHEMA_ID, row));
     }
 }

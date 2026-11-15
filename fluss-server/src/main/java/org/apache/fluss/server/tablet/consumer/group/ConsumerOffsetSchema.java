@@ -79,12 +79,15 @@ public final class ConsumerOffsetSchema {
     private static final List<String> GROUP_LOOKUP_PREFIX_KEYS =
             Collections.unmodifiableList(Arrays.asList(RECORD_TYPE_COLUMN, GROUP_ID_COLUMN));
 
-    private static final List<String> GROUP_METADATA_PREFIX_KEYS =
-            Collections.singletonList(RECORD_TYPE_COLUMN);
-
     private static final Schema TABLE_SCHEMA = createTableSchema();
     private static final RowType ROW_TYPE = TABLE_SCHEMA.getRowType();
     private static final DataType[] DATA_TYPES = ROW_TYPE.getChildren().toArray(new DataType[0]);
+
+    /** Encoded prefix for all group metadata rows. Must not be modified. */
+    static final byte[] GROUP_METADATA_PREFIX =
+            KeyEncoder.ofBucketKeyEncoder(
+                            ROW_TYPE, Collections.singletonList(RECORD_TYPE_COLUMN), null)
+                    .encodeKey(GenericRow.of(GROUP_METADATA_RECORD_TYPE));
 
     private final ThreadLocal<CompactedRowEncoder> rowEncoder =
             ThreadLocal.withInitial(() -> new CompactedRowEncoder(DATA_TYPES));
@@ -102,11 +105,6 @@ public final class ConsumerOffsetSchema {
     private final ThreadLocal<KeyEncoder> groupLookupPrefixEncoder =
             ThreadLocal.withInitial(
                     () -> KeyEncoder.ofBucketKeyEncoder(ROW_TYPE, GROUP_LOOKUP_PREFIX_KEYS, null));
-    private final ThreadLocal<KeyEncoder> groupMetadataAllPrefixEncoder =
-            ThreadLocal.withInitial(
-                    () ->
-                            KeyEncoder.ofBucketKeyEncoder(
-                                    ROW_TYPE, GROUP_METADATA_PREFIX_KEYS, null));
 
     /** Returns the schema of the consumer-offset system table. */
     public static Schema getTableSchema() {
@@ -175,44 +173,17 @@ public final class ConsumerOffsetSchema {
                                 BinaryString.fromString(groupId.getGroupId())));
     }
 
-    /** Encodes the {@code record_type} prefix used to enumerate all group metadata rows. */
-    public byte[] encodeGroupMetadataPrefix() {
-        return groupMetadataAllPrefixEncoder
-                .get()
-                .encodeKey(GenericRow.of(GROUP_METADATA_RECORD_TYPE));
-    }
-
-    /**
-     * Encodes the {@code record_type} and {@code group_id} prefix used to enumerate one group's
-     * metadata rows.
-     */
-    public byte[] encodeGroupMetadataPrefix(GroupId groupId) {
-        return groupLookupPrefixEncoder
-                .get()
-                .encodeKey(
-                        GenericRow.of(
-                                GROUP_METADATA_RECORD_TYPE,
-                                BinaryString.fromString(groupId.getGroupId())));
-    }
-
     /** Encodes the complete primary key of a group metadata row. */
     public byte[] encodeGroupMetadataKey(GroupId groupId) {
-        return encodeGroupMetadataKey(
-                groupId, GROUP_METADATA_TABLE_ID, null, GROUP_METADATA_BUCKET_ID);
-    }
-
-    /** Encodes the complete primary key of a group metadata row with explicit source columns. */
-    public byte[] encodeGroupMetadataKey(
-            GroupId groupId, long tableId, Long partitionId, int bucketId) {
         return primaryKeyEncoder
                 .get()
                 .encodeKey(
                         GenericRow.of(
                                 GROUP_METADATA_RECORD_TYPE,
                                 BinaryString.fromString(groupId.getGroupId()),
-                                tableId,
-                                partitionId == null ? NON_PARTITIONED_PARTITION_ID : partitionId,
-                                bucketId));
+                                GROUP_METADATA_TABLE_ID,
+                                NON_PARTITIONED_PARTITION_ID,
+                                GROUP_METADATA_BUCKET_ID));
     }
 
     /** Encodes a group metadata row. */
