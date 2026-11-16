@@ -127,14 +127,10 @@ public class TieringSplitReader<WriteResult>
     private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
 
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
-    // the next offset to consume per log bucket, absent until the first records when reading from
-    // the earliest offset of a bucket whose log start offset is unknown; used to count consumed
-    // records and the remaining backlog
+    // the next offset to consume per log bucket, absent while the log start offset is unknown
     private final Map<TableBucket, Long> currentTableNextOffsets;
-    // records read so far from the current snapshot split
     private long currentSnapshotSplitRecordsRead;
-    // time the current fetch spent in a log scanner poll that returned nothing, excluded from the
-    // busy time
+    // time the current fetch waited in a poll that returned nothing, excluded from busy time
     private long currentFetchIdleNanos;
 
     private final Set<TieringSplit> currentEmptySplits;
@@ -239,8 +235,7 @@ public class TieringSplitReader<WriteResult>
                 if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
-                // a poll that returns no records only waited for new data, so it isn't busy time; a
-                // poll that returns records also decoded them, so it is
+                // a poll that returns records also decoded them, so only empty polls are idle
                 long pollStartNanos = System.nanoTime();
                 if (useRecordBatchPath()) {
                     try (ArrowScanRecords arrowScanRecords =
@@ -314,12 +309,8 @@ public class TieringSplitReader<WriteResult>
     }
 
     /**
-     * Publishes the number of log records this reader still has to tier: the rest of the current
-     * table's log and snapshot splits, and the splits of tables queued behind it.
-     *
-     * <p>Runs after every fetch, also a failed one, so it must not throw and mask the fetch's
-     * exception. It visits only this reader's splits, which the enumerator hands out one per split
-     * request, so the cost stays small.
+     * Publishes the log records this reader still has to tier. Runs after every fetch, also a
+     * failed one, so it must not throw. Cheap, as a reader holds about one split at a time.
      */
     private void updateBacklog() {
         try {
@@ -636,10 +627,8 @@ public class TieringSplitReader<WriteResult>
     }
 
     /**
-     * Counts the offsets of the bucket consumed since the last poll as consumed records. Offsets
-     * rather than records are counted, so the count matches the offset-based backlog, also across
-     * gaps such as expired log segments. When reading from the earliest offset, the position is
-     * known from the first polled records; a first poll without records only establishes it.
+     * Counts the offsets consumed since the last poll, so the count matches the offset-based
+     * backlog. A first poll of an unknown start position only establishes it.
      */
     private void recordConsumedUpTo(TableBucket bucket, long consumedUpToOffset) {
         Long nextOffset = currentTableNextOffsets.get(bucket);
@@ -987,7 +976,6 @@ public class TieringSplitReader<WriteResult>
         } else {
             currentTableStoppingOffsets.put(tableBucket, stoppingOffset);
             if (startingOffset >= 0 || logSplit.getLogStartOffset() >= 0) {
-                // a split read from the earliest offset starts at the bucket's log start offset
                 currentTableNextOffsets.put(tableBucket, TieringBacklog.startingOffset(logSplit));
             }
         }

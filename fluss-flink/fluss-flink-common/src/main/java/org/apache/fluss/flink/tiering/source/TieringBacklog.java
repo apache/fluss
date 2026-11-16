@@ -25,15 +25,9 @@ import org.apache.fluss.client.tiering.TieringSplit;
 import java.util.Collection;
 
 /**
- * Estimates the backlog of tiering splits, in log records.
- *
- * <p>The tiering source reports its backlog as {@code pendingRecords} and its progress as {@code
- * numRecordsIn}, both counted as log offsets consumed, so that autoscalers can compare them. A log
- * split is exact: the offsets between its starting and stopping offset, where a split read from the
- * earliest offset starts at the bucket's log start offset. A snapshot split, the first round of a
- * primary key bucket, is estimated by the log offset of its snapshot, an upper bound since updates
- * of the same key collapse into one row. Its rows are counted as they are read, like the records of
- * a compacted Kafka topic, and the rest of the estimate drops when the split finishes.
+ * Estimates the backlog of tiering splits in log offsets, the unit of {@code numRecordsIn}, so
+ * autoscalers can compare the two. A log split is exact. A snapshot split is estimated by the log
+ * offset of its snapshot, an upper bound since updates of the same key collapse into one row.
  */
 @Internal
 public final class TieringBacklog {

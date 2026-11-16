@@ -36,8 +36,7 @@ public class TieringLogSplit extends TieringSplit {
 
     private final long startingOffset;
     private final long stoppingOffset;
-    // the bucket's log start offset when the split was generated, only known for a split that reads
-    // from the earliest offset; it estimates the split's backlog and doesn't change what is read
+    // only used to estimate the backlog; the split still reads from startingOffset
     private final long logStartOffset;
 
     public TieringLogSplit(

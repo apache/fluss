@@ -74,7 +74,7 @@ public class TieringSplitGenerator {
     public List<TieringSplit> generateTableSplits(
             TableInfo tableInfo, List<PartitionInfo> partitionInfos) throws Exception {
         TablePath tablePath = tableInfo.getTablePath();
-        // fetches the earliest offsets to estimate the backlog of never tiered buckets
+        // fetches real earliest offsets, see withLogStartOffsets
         final BucketOffsetsRetriever bucketOffsetsRetriever =
                 new BucketOffsetsRetrieverImpl(flussAdmin, tablePath, true);
 
@@ -184,11 +184,8 @@ public class TieringSplitGenerator {
     }
 
     /**
-     * Sets the bucket's log start offset on the log splits that read from the earliest offset, so
-     * their backlog can be estimated: the log of a bucket that was never tiered doesn't start at
-     * offset 0 once old segments expired. The splits still read from the earliest offset, so a
-     * segment expiring meanwhile doesn't fail the read. Best effort, as only the estimate depends
-     * on it.
+     * Sets the bucket's log start offset on the splits that read from the earliest offset, as an
+     * old bucket's log no longer starts at 0. Best effort: only the backlog estimate depends on it.
      */
     private List<TieringSplit> withLogStartOffsets(
             List<TieringSplit> splits,

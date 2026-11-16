@@ -168,8 +168,7 @@ public final class TieringSourceReader<WriteResult>
     @Override
     public InputStatus pollNext(ReaderOutput<TableBucketWriteResult<WriteResult>> output)
             throws Exception {
-        // every fetch wakes the task thread up, so the consumed records are counted at least once
-        // per poll of the split reader, not only when a split finishes
+        // every fetch wakes the task thread, so consumed records are counted after each fetch
         tieringMetrics.flushRecordsConsumed();
         return super.pollNext(output);
     }

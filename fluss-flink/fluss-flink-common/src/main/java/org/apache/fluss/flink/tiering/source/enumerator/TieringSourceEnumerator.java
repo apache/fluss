@@ -150,8 +150,7 @@ public class TieringSourceEnumerator
     private boolean delayedPollScheduled = false;
 
     /**
-     * The estimated backlog of {@link #pendingSplits}, kept in step with it so that reporting it
-     * doesn't walk the queue on every assignment. Coordinator thread only.
+     * The estimated backlog of {@link #pendingSplits}, kept in step with it. Coordinator thread.
      */
     private long pendingSplitsBacklog = 0L;
 
@@ -321,8 +320,7 @@ public class TieringSourceEnumerator
             doAddReader(subtaskId);
         } finally {
             if (subtaskId == BACKLOG_READER) {
-                // a new reader attempt starts without the backlog; sent after a failover
-                // dropped the queued splits
+                // a new reader attempt starts without the backlog
                 reportedBacklog = -1L;
                 reportBacklog();
             }
@@ -453,8 +451,7 @@ public class TieringSourceEnumerator
                 if (tieringSplit.getTableBucket().getTableId() == tableId) {
                     // mark this tiering split to skip the current round since the tiering for
                     // this table has timed out, so the tiering source reader can skip them
-                    // directly;
-                    // a skipped split has no backlog left
+                    // directly; a skipped split has no backlog left
                     pendingSplitsBacklog -= TieringBacklog.estimate(tieringSplit);
                     tieringSplit.skipCurrentRound();
                 }
