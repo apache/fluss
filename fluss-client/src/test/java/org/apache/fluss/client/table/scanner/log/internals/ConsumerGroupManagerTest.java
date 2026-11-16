@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log.internals;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
@@ -42,6 +43,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -80,6 +82,35 @@ class ConsumerGroupManagerTest {
         manager.markOwnerUnknown();
         assertOwner(manager.getOrDiscoverOwner().get(), TestingMetadataUpdater.NODE3);
         assertThat(requests).hasValue(2);
+    }
+
+    @Test
+    void testCachedOwnerIsUsedWhenMetadataNoLongerContainsOwner() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        requests.incrementAndGet();
+                        return CompletableFuture.completedFuture(
+                                ownerResponse(TestingMetadataUpdater.NODE2));
+                    }
+                };
+        TestingMetadataUpdater metadataUpdater = metadataUpdater(gateway);
+        ConsumerGroupManager manager = new ConsumerGroupManager("group-1", metadataUpdater);
+
+        assertOwner(manager.getOrDiscoverOwner().get(), TestingMetadataUpdater.NODE2);
+
+        // The discovered owner remains usable even if the client metadata cache no longer
+        // contains the node; the owner response already provided the endpoint.
+        metadataUpdater.updateCluster(Cluster.empty());
+        CompletableFuture<ServerNode> cachedOwner = manager.getOrDiscoverOwner();
+
+        assertThat(cachedOwner).isCompleted();
+        assertOwner(cachedOwner.get(), TestingMetadataUpdater.NODE2);
+        assertThat(requests).hasValue(1);
+        assertThat(manager.cachedOwnerGateway()).isSameAs(gateway);
     }
 
     @Test
@@ -144,6 +175,165 @@ class ConsumerGroupManagerTest {
         assertThatThrownBy(() -> manager.getOrDiscoverOwner().get())
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(ConsumerGroupOwnerNotAvailableException.class);
+    }
+
+    @Test
+    void testDiscoveryCompletionMakesCacheUsable() {
+        CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        return rpcResponse;
+                    }
+                };
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        CompletableFuture<ServerNode> discovery = manager.getOrDiscoverOwner();
+        AtomicBoolean cacheIsUsableOnCompletion = new AtomicBoolean(false);
+        discovery.whenComplete(
+                (owner, error) ->
+                        cacheIsUsableOnCompletion.set(manager.cachedOwnerGateway() != null));
+
+        rpcResponse.complete(ownerResponse(TestingMetadataUpdater.NODE2));
+
+        assertThat(cacheIsUsableOnCompletion).isTrue();
+    }
+
+    @Test
+    void testDiscoveryFailureAllowsRetry() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        AtomicReference<CompletableFuture<FindConsumerGroupOwnerResponse>> rpcResponse =
+                new AtomicReference<>(new CompletableFuture<>());
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        requests.incrementAndGet();
+                        return rpcResponse.get();
+                    }
+                };
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        CompletableFuture<ServerNode> firstDiscovery = manager.getOrDiscoverOwner();
+        CompletableFuture<ServerNode> retryDiscovery;
+        rpcResponse.get().completeExceptionally(new RuntimeException("discovery failed"));
+
+        assertThatThrownBy(firstDiscovery::get)
+                .isInstanceOf(ExecutionException.class)
+                .hasMessageContaining("discovery failed");
+
+        rpcResponse.set(new CompletableFuture<>());
+        retryDiscovery = manager.getOrDiscoverOwner();
+
+        assertThat(retryDiscovery).isNotSameAs(firstDiscovery);
+        assertThat(requests).hasValue(2);
+
+        rpcResponse.get().complete(ownerResponse(TestingMetadataUpdater.NODE2));
+        assertOwner(retryDiscovery.get(), TestingMetadataUpdater.NODE2);
+        assertThat(manager.cachedOwnerGateway()).isNotNull();
+    }
+
+    @Test
+    void testCloseCancelsDiscoveryAndRejectsLateResponse() throws Exception {
+        CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        return rpcResponse;
+                    }
+                };
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        CompletableFuture<ServerNode> discovery = manager.getOrDiscoverOwner();
+        manager.close();
+        rpcResponse.complete(ownerResponse(TestingMetadataUpdater.NODE2));
+
+        assertThat(discovery).isCancelled();
+        assertThat(manager.cachedOwnerGateway()).isNull();
+    }
+
+    @Test
+    void testGetOrDiscoverOwnerAfterClose() {
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet());
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        manager.close();
+
+        assertThatThrownBy(manager::getOrDiscoverOwner)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Consumer group manager is closed.");
+    }
+
+    @Test
+    void testCancelledDiscoveryDoesNotCacheOwner() {
+        CompletableFuture<FindConsumerGroupOwnerResponse> rpcResponse = new CompletableFuture<>();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        return rpcResponse;
+                    }
+                };
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        CompletableFuture<ServerNode> discovery = manager.getOrDiscoverOwner();
+        discovery.cancel(false);
+        rpcResponse.complete(ownerResponse(TestingMetadataUpdater.NODE2));
+
+        assertThat(discovery).isCancelled();
+        assertThat(manager.cachedOwnerGateway()).isNull();
+    }
+
+    @Test
+    void testCancelledDiscoveryIsNotReturnedToLaterCallers() throws Exception {
+        CompletableFuture<FindConsumerGroupOwnerResponse> firstRpcResponse =
+                new CompletableFuture<>();
+        AtomicReference<CompletableFuture<FindConsumerGroupOwnerResponse>> rpcResponse =
+                new AtomicReference<>(firstRpcResponse);
+        AtomicInteger requests = new AtomicInteger();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+                            FindConsumerGroupOwnerRequest request) {
+                        requests.incrementAndGet();
+                        return rpcResponse.get();
+                    }
+                };
+        ConsumerGroupManager manager =
+                new ConsumerGroupManager("group-1", metadataUpdater(gateway));
+
+        CompletableFuture<ServerNode> firstDiscovery = manager.getOrDiscoverOwner();
+        firstDiscovery.cancel(false);
+
+        CompletableFuture<FindConsumerGroupOwnerResponse> secondRpcResponse =
+                new CompletableFuture<>();
+        rpcResponse.set(secondRpcResponse);
+        CompletableFuture<ServerNode> secondDiscovery = manager.getOrDiscoverOwner();
+
+        assertThat(secondDiscovery).isNotSameAs(firstDiscovery);
+        assertThat(secondDiscovery).isNotCancelled();
+        assertThat(requests).hasValue(2);
+
+        firstRpcResponse.complete(ownerResponse(TestingMetadataUpdater.NODE2));
+        assertThat(firstDiscovery).isCancelled();
+        assertThat(manager.cachedOwnerGateway()).isNull();
+
+        secondRpcResponse.complete(ownerResponse(TestingMetadataUpdater.NODE3));
+        assertOwner(secondDiscovery.get(), TestingMetadataUpdater.NODE3);
+        assertThat(manager.cachedOwnerGateway()).isNotNull();
     }
 
     @Test

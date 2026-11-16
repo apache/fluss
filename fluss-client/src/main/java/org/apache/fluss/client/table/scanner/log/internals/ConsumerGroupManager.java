@@ -29,7 +29,9 @@ import org.apache.fluss.rpc.messages.PbServerNode;
 
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+
+import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Discovers and caches the tablet server that owns a consumer group.
@@ -51,6 +53,9 @@ public final class ConsumerGroupManager implements AutoCloseable {
     /** The pending owner-discovery request; null while no discovery is in flight. */
     private CompletableFuture<ServerNode> ownerDiscovery;
 
+    /** Whether the manager has been closed; guarded by this object's monitor. */
+    private boolean closed;
+
     /**
      * Creates a manager that discovers and caches the owner of one consumer group.
      *
@@ -65,36 +70,31 @@ public final class ConsumerGroupManager implements AutoCloseable {
     }
 
     /** Returns the cached owner or shares the single in-flight owner-discovery request. */
-    public synchronized CompletableFuture<ServerNode> getOrDiscoverOwner() {
-        if (ownerNode != null
-                && metadataUpdater.newTabletServerClientForNode(ownerNode.id()) != null) {
-            return CompletableFuture.completedFuture(ownerNode);
-        }
-        if (ownerDiscovery != null) {
-            return ownerDiscovery;
+    public CompletableFuture<ServerNode> getOrDiscoverOwner() {
+        final CompletableFuture<ServerNode> discovery;
+
+        synchronized (this) {
+            checkState(!closed, "Consumer group manager is closed.");
+            if (ownerNode != null) {
+                return CompletableFuture.completedFuture(ownerNode);
+            }
+            if (ownerDiscovery != null && !ownerDiscovery.isCancelled()) {
+                return ownerDiscovery;
+            }
+
+            discovery = new CompletableFuture<>();
+            // Publish the future before initiating discovery, which may complete synchronously.
+            ownerDiscovery = discovery;
         }
 
-        // thenApply wraps decode errors in a CompletionException; unwrap them so async
-        // composition observes the declared retriable failure type directly. Blocking callers
-        // are unaffected either way because CompletableFuture.get() removes that wrapper.
-        CompletableFuture<ServerNode> created = unwrapFailure(discoverOwner());
-
-        // Publish the future before attaching the completion callback: when discovery fails
-        // synchronously, the callback runs on this calling thread and relies on seeing the
-        // published future so it can clear the slot for the next attempt.
-        ownerDiscovery = created;
-        created.whenComplete(
-                (owner, error) -> {
-                    synchronized (this) {
-                        if (error == null) {
-                            ownerNode = owner;
-                        }
-                        if (ownerDiscovery == created) {
-                            ownerDiscovery = null;
-                        }
-                    }
-                });
-        return created;
+        try {
+            discoverOwner()
+                    .whenComplete(
+                            (owner, error) -> completeOwnerDiscovery(discovery, owner, error));
+        } catch (Throwable error) {
+            completeOwnerDiscovery(discovery, null, error);
+        }
+        return discovery;
     }
 
     /** Clears a stale owner so that the next operation performs owner discovery again. */
@@ -107,11 +107,7 @@ public final class ConsumerGroupManager implements AutoCloseable {
         if (ownerNode == null) {
             return null;
         }
-        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(ownerNode.id());
-        if (gateway == null) {
-            markOwnerUnknown();
-        }
-        return gateway;
+        return metadataUpdater.newTabletServerClientForNode(ownerNode);
     }
 
     private CompletableFuture<ServerNode> discoverOwner() {
@@ -152,30 +148,27 @@ public final class ConsumerGroupManager implements AutoCloseable {
                 owner.getNodeId(), owner.getHost(), owner.getPort(), ServerType.TABLET_SERVER);
     }
 
-    /**
-     * Returns a future whose failure is the actual exception instead of the CompletionException
-     * wrapper added by dependent stages such as thenApply, so callers that compose asynchronously
-     * observe the declared failure type directly.
-     */
-    private static <T> CompletableFuture<T> unwrapFailure(CompletableFuture<T> future) {
-        CompletableFuture<T> unwrapped = new CompletableFuture<>();
-        future.whenComplete(
-                (value, error) -> {
-                    if (error == null) {
-                        unwrapped.complete(value);
-                    } else {
-                        unwrapped.completeExceptionally(unwrap(error));
-                    }
-                });
-        return unwrapped;
-    }
+    private void completeOwnerDiscovery(
+            CompletableFuture<ServerNode> discovery, ServerNode owner, Throwable error) {
+        synchronized (this) {
+            if (closed || ownerDiscovery != discovery) {
+                // A late response must not restore state after close().
+                return;
+            }
 
-    private static Throwable unwrap(Throwable error) {
-        Throwable cause = error;
-        while (cause instanceof CompletionException && cause.getCause() != null) {
-            cause = cause.getCause();
+            if (error == null && !discovery.isCancelled()) {
+                ownerNode = owner;
+            }
+            ownerDiscovery = null;
         }
-        return cause;
+
+        // Complete the caller-visible future only after the cache and in-flight state are ready
+        // for caller callbacks.
+        if (error == null) {
+            discovery.complete(owner);
+        } else {
+            discovery.completeExceptionally(stripCompletionException(error));
+        }
     }
 
     private static <T> CompletableFuture<T> failedFuture(Throwable error) {
@@ -186,10 +179,16 @@ public final class ConsumerGroupManager implements AutoCloseable {
 
     /** Forgets the cached owner and cancels the in-flight discovery, if any. */
     @Override
-    public synchronized void close() {
-        ownerNode = null;
-        CompletableFuture<ServerNode> discovery = ownerDiscovery;
-        ownerDiscovery = null;
+    public void close() {
+        final CompletableFuture<ServerNode> discovery;
+
+        synchronized (this) {
+            closed = true;
+            ownerNode = null;
+            discovery = ownerDiscovery;
+            ownerDiscovery = null;
+        }
+
         if (discovery != null) {
             // Waiting callers receive a CancellationException. The interrupt flag is false
             // because CompletableFuture cannot interrupt the underlying RPC.

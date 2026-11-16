@@ -163,6 +163,15 @@ public class MetadataUpdater {
         }
     }
 
+    /**
+     * Creates a tablet server client for the given node without consulting the cached cluster
+     * metadata. This is used when a response already contains the authoritative endpoint.
+     */
+    public TabletServerGateway newTabletServerClientForNode(ServerNode serverNode) {
+        return GatewayClientProxy.createGatewayProxy(
+                () -> serverNode, rpcClient, TabletServerGateway.class);
+    }
+
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
