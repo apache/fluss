@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -134,7 +135,6 @@ import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -142,6 +142,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -158,11 +159,13 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLooku
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
+import static org.apache.fluss.security.acl.OperationType.DROP;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
@@ -816,37 +819,27 @@ public final class TabletService extends RpcServiceBase
             FindConsumerGroupOwnerRequest request) {
         // Copy request/session values before returning: the request buffer is released after this
         // method and the current session is bound to the RPC worker thread.
-        try {
-            final GroupId groupId = GroupId.of(request.getGroupId());
-            final String listenerName = currentListenerName();
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
-            }
-
-            return groupManager
-                    .findOwner(groupId, listenerName)
-                    .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        final String listenerName = currentListenerName();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
         }
+
+        return groupManager
+                .findOwner(groupId, listenerName)
+                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        final GroupId groupId;
-        final Replica offsetsReplica;
-        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets;
-        try {
-            groupId = GroupId.of(request.getGroupId());
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), READ, Resource.group(groupId));
-            }
-            offsetsReplica = groupManager.validateGroupId(groupId);
-            offsets = decodeCommitConsumerOffsetsRequest(request);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), READ, Resource.group(groupId));
         }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets =
+                decodeCommitConsumerOffsetsRequest(request);
         if (offsets.isEmpty()) {
             return CompletableFuture.completedFuture(
                     makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
@@ -868,19 +861,12 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        final GroupId groupId;
-        final Replica offsetsReplica;
-        final List<TableBucket> requestedBuckets;
-        try {
-            groupId = GroupId.of(request.getGroupId());
-            if (authorizer != null) {
-                authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
-            }
-            offsetsReplica = groupManager.validateGroupId(groupId);
-            requestedBuckets = decodeGetConsumerOffsetsRequest(request);
-        } catch (ApiException e) {
-            return FutureUtils.completedExceptionally(e);
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
         }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeGetConsumerOffsetsRequest(request);
 
         if (requestedBuckets != null && requestedBuckets.isEmpty()) {
             return CompletableFuture.completedFuture(new GetConsumerOffsetsResponse());
@@ -928,28 +914,69 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
             DeleteConsumerOffsetsRequest request) {
-        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
-        return response;
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.group(groupId));
+        }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeDeleteConsumerOffsetsRequest(request);
+        if (requestedBuckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new DeleteConsumerOffsetsResponse());
+        }
+
+        return groupManager
+                .handleDeleteConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(ServerRpcMessageUtils::makeDeleteConsumerOffsetsResponse);
     }
 
     @Override
     public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request) {
-        CompletableFuture<ListConsumerGroupsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("listConsumerGroups is not supported yet"));
-        return response;
+        List<String> groupIds = groupManager.handleListConsumerGroups();
+        if (authorizer != null) {
+            List<Resource> resources =
+                    groupIds.stream().map(Resource::group).collect(Collectors.toList());
+            groupIds =
+                    authorizer.filterByAuthorized(currentSession(), DESCRIBE, resources).stream()
+                            .map(Resource::getName)
+                            .collect(Collectors.toList());
+        }
+        return CompletableFuture.completedFuture(
+                ServerRpcMessageUtils.makeListConsumerGroupsResponse(groupIds));
     }
 
     @Override
     public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
             DeleteConsumerGroupsRequest request) {
-        CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
-        return response;
+        List<GroupId> groupIds = new ArrayList<>();
+        for (String groupId : request.getGroupsList()) {
+            groupIds.add(GroupId.of(groupId));
+        }
+        if (new HashSet<>(groupIds).size() != groupIds.size()) {
+            CompletableFuture<DeleteConsumerGroupsResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new InvalidRequestException(
+                            "DeleteConsumerGroups request contains duplicate group IDs"));
+            return failed;
+        }
+        if (groupIds.isEmpty()) {
+            return CompletableFuture.completedFuture(new DeleteConsumerGroupsResponse());
+        }
+
+        if (authorizer != null) {
+            for (GroupId groupId : groupIds) {
+                authorizer.authorize(currentSession(), DROP, Resource.group(groupId));
+            }
+        }
+
+        final Map<GroupId, Replica> offsetsReplicasByGroup = new HashMap<>();
+        for (GroupId groupId : groupIds) {
+            offsetsReplicasByGroup.put(groupId, groupManager.validateGroupId(groupId));
+        }
+
+        return groupManager
+                .handleDeleteConsumerGroups(offsetsReplicasByGroup)
+                .thenApply(ServerRpcMessageUtils::makeDeleteConsumerGroupsResponse);
     }
 
     @Override

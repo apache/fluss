@@ -125,8 +125,8 @@ class ConsumerGroupManagerFetchTest {
         CompactedRow row =
                 new ConsumerOffsetSchema()
                         .encodeOffsetRow(
-                                GroupId.of(groupId),
                                 ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE,
+                                GroupId.of(groupId),
                                 tableBucket.getTableId(),
                                 tableBucket.getPartitionId(),
                                 tableBucket.getBucket(),

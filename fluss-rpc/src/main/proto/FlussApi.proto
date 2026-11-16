@@ -503,7 +503,7 @@ message GetConsumerOffsetsResponse {
   repeated PbGetConsumerOffsetsResponseTable tables = 1;
 }
 
-// Delete consumer offsets request and response.
+// Delete committed offsets for selected buckets. Requires Group WRITE; no source-table permission.
 message DeleteConsumerOffsetsRequest {
   required string group_id = 1;
   // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
@@ -518,9 +518,10 @@ message DeleteConsumerOffsetsResponse {
   repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
 }
 
-// Lists consumer groups currently owned by the tablet server receiving this request. This is not
-// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
-// merge the responses.
+// Lists consumer groups currently owned by the tablet server receiving this request. Cluster
+// DESCRIBE grants visibility to all locally owned groups; otherwise only groups with Group
+// DESCRIBE are returned. This is not a cluster-wide listing; callers that need a cluster-wide
+// view must query every tablet server and merge the responses.
 message ListConsumerGroupsRequest {}
 
 // All failures are returned through the RPC ErrorResponse envelope.
@@ -528,7 +529,8 @@ message ListConsumerGroupsResponse {
   repeated PbListedGroup groups = 1;
 }
 
-// Delete consumer groups request and response.
+// Deletes consumer-group metadata and all committed offsets. A later offset commit may
+// recreate a deleted group. No source-table permission is required.
 message DeleteConsumerGroupsRequest {
   // An empty list is a valid no-op and produces an empty successful response.
   repeated string groups = 1;

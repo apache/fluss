@@ -126,6 +126,9 @@ Below is a summary of the currently public protocols and their relationship with
 | FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |
 | COMMIT_CONSUMER_OFFSETS | READ | Group and source Tables | Requires `READ` on the consumer group and `READ` on every source table. Group authorization is checked before owner resolution and source-table authorization. |
 | GET_CONSUMER_OFFSETS | DESCRIBE | Group and source Tables | Requires `DESCRIBE` on the consumer group and every explicitly requested source table. `allOffsets` requests omit source tables the caller cannot describe. |
+| DELETE_CONSUMER_OFFSETS | WRITE | Group | No source-table permission is required. |
+| LIST_CONSUMER_GROUPS | DESCRIBE | Cluster or Group | Cluster permission grants visibility to all groups; otherwise, only authorized groups are visible. |
+| DELETE_CONSUMER_GROUPS | DROP | Group | No source-table permission is required. |
 | REGISTER_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the request. |
 | GET_PRODUCER_OFFSETS | READ | Table | Offsets for tables without `READ` permission are filtered out. |
 | DELETE_PRODUCER_OFFSETS | WRITE | Table | Requires `WRITE` on all tables in the producer offset snapshot. |
