@@ -69,6 +69,7 @@ public enum AggFunctionType {
 
     // Apache DataSketches aggregation
     HLL_SKETCH,
+    KLL_DOUBLE_SKETCH,
 
     // Array aggregation
     LAST_N;
@@ -157,6 +158,7 @@ public enum AggFunctionType {
             case RBM32:
             case RBM64:
             case HLL_SKETCH:
+            case KLL_DOUBLE_SKETCH:
                 return new DataTypeRoot[] {DataTypeRoot.BYTES};
             case LAST_N:
             case COLLECT:

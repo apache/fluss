@@ -68,6 +68,18 @@ class FlinkAggFunctionParserTest {
     }
 
     @Test
+    void testParseKllDoubleSketchFunction() {
+        Configuration options = new Configuration();
+        options.setString("fields.latency_kll.agg", "kll_double_sketch");
+
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("latency_kll", DataTypes.BYTES(), options);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualTo(AggFunctions.KLL_DOUBLE_SKETCH());
+    }
+
+    @Test
     void testParseFunctionWithParameters() {
         Configuration options = new Configuration();
         options.setString("fields.tags.agg", "listagg");
@@ -155,6 +167,20 @@ class FlinkAggFunctionParserTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid aggregation function configuration")
                 .hasMessageContaining("hll_sketch");
+    }
+
+    @Test
+    void testParseKllDoubleSketchFunctionWithInvalidType() {
+        Configuration options = new Configuration();
+        options.setString("fields.latency_kll.agg", "kll_double_sketch");
+
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "latency_kll", DataTypes.DOUBLE(), options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid aggregation function configuration")
+                .hasMessageContaining("kll_double_sketch");
     }
 
     @Test

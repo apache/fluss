@@ -335,6 +335,18 @@ public final class AggFunctions {
         return new AggFunction(AggFunctionType.HLL_SKETCH, null);
     }
 
+    /**
+     * Creates a KLL_DOUBLE_SKETCH aggregation function that merges serialized Apache DataSketches
+     * KLL doubles sketches.
+     *
+     * <p>Supported data types: BYTES
+     *
+     * @return a KLL_DOUBLE_SKETCH aggregation function
+     */
+    public static AggFunction KLL_DOUBLE_SKETCH() {
+        return new AggFunction(AggFunctionType.KLL_DOUBLE_SKETCH, null);
+    }
+
     // ===================================================================================
     // Array Aggregation Functions
     // ===================================================================================
