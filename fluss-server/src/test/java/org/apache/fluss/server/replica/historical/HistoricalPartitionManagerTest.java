@@ -374,7 +374,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(replica.tableMetrics().failedHistoricalPutKvRequests().getCount()).isZero();
             replicaManager.putHistoricalRecordsToKv(
                     10_000,
-                    1,
+                    -1,
                     Collections.singletonList(
                             new PutKvDataForBucket(TABLE_BUCKET, updateBatch, ORIGINAL_PARTITION)),
                     null,
