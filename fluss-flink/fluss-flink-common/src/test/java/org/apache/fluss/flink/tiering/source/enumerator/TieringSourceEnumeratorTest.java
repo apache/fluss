@@ -1017,9 +1017,16 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 TieringSourceEnumerator enumerator =
                         createTieringSourceEnumerator(flussConf, context, lakeTieringFactory)) {
             enumerator.start();
-            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
+            context.registerSourceReader(0, 0, "localhost-0");
+            enumerator.addReader(0);
 
-            assertThat(validatedTable.get()).isNotNull();
+            // createTable returns before the coordinator moves the table to Pending
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        context.runPeriodicCallable(0);
+                        assertThat(validatedTable.get()).isNotNull();
+                    });
             assertThat(validatedTable.get().getTablePath()).isEqualTo(tablePath);
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
         }
