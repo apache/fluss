@@ -23,6 +23,7 @@ import org.apache.fluss.types.DataTypeRoot;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -104,7 +105,7 @@ public enum AggFunctionType {
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
             };
 
-    /** Parameter name for distinct flag used in COLLECT function. */
+    /** Parameter name for the distinct flag used in array aggregations. */
     public static final String PARAM_DISTINCT = "distinct";
 
     /**
@@ -121,7 +122,8 @@ public enum AggFunctionType {
             case COLLECT:
                 return Collections.singleton(PARAM_DISTINCT);
             case LAST_N:
-                return Collections.singleton(PARAM_SIZE);
+                return Collections.unmodifiableSet(
+                        new HashSet<>(Arrays.asList(PARAM_SIZE, PARAM_DISTINCT)));
             default:
                 // All other functions do not accept parameters
                 return Collections.emptySet();
@@ -222,6 +224,7 @@ public enum AggFunctionType {
                 }
                 break;
             case COLLECT:
+            case LAST_N:
                 if (PARAM_DISTINCT.equals(parameterName)) {
                     if (parameterValue == null
                             || (!parameterValue.equalsIgnoreCase("true")
@@ -231,9 +234,8 @@ public enum AggFunctionType {
                                         "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
                                         parameterName, this));
                     }
+                    break;
                 }
-                break;
-            case LAST_N:
                 int size;
                 try {
                     size = Integer.parseInt(parameterValue);
