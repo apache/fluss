@@ -1223,7 +1223,6 @@ public final class Replica {
                             rocksIncrementalSnapshot,
                             remoteKvTabletDir,
                             snapshotContext.getSnapshotFsWriteBufferSize(),
-                            snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
                             kvTablet::getTabletState,
@@ -1232,10 +1231,6 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            if (completedSnapshot != null) {
-                kvTabletSnapshotTarget.initializeRecoverySnapshotId(
-                        completedSnapshot.getRecoverySnapshotId());
-            }
             this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
                             tableBucket,

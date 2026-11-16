@@ -979,21 +979,20 @@ class ZooKeeperClientTest {
         TableBucket bucket = new TableBucket(1L, 0);
         zookeeperClient.registerLeaderAndIsr(
                 bucket, new LeaderAndIsr(0, 0), zkEpoch.getCoordinatorEpochZkVersion());
-        registerRecoverySnapshot(
-                zookeeperClient, bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
-        BucketSnapshot equalOffset = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
-        zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 4L, 0);
-        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
-        assertThatThrownBy(
-                        () ->
-                                zookeeperClient.registerTableBucketSnapshot(
-                                        bucket,
-                                        new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
-                                        4L,
-                                        0))
+        BucketSnapshot initial = new BucketSnapshot(4L, 30L, "file:/snapshot-4");
+        zookeeperClient.registerTableBucketSnapshot(bucket, initial);
+        zookeeperClient.updateRecoverySnapshot(bucket, 4L, -1L, 0);
+        BucketSnapshot next = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
+        zookeeperClient.registerTableBucketSnapshot(bucket, next);
+        zookeeperClient.updateRecoverySnapshot(bucket, 5L, 4L, 0);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
+        BucketSnapshot rejected = new BucketSnapshot(7L, 50L, "file:/snapshot-7");
+        zookeeperClient.registerTableBucketSnapshot(bucket, rejected);
+        assertThatThrownBy(() -> zookeeperClient.updateRecoverySnapshot(bucket, 7L, 4L, 0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).contains(rejected);
         BucketSnapshot winner = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
+        zookeeperClient.registerTableBucketSnapshot(bucket, winner);
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         ZooKeeperClient raced =
@@ -1006,22 +1005,15 @@ class ZooKeeperClientTest {
                             TableBucket requested) throws Exception {
                         Optional<VersionedData<Long>> captured =
                                 super.getRecoverySnapshotSelection(requested);
-                        zookeeperClient.registerTableBucketSnapshot(bucket, winner, 5L, 0);
+                        zookeeperClient.updateRecoverySnapshot(bucket, 6L, 5L, 0);
                         return captured;
                     }
                 };
-        assertThatThrownBy(
-                        () ->
-                                raced.registerTableBucketSnapshot(
-                                        bucket,
-                                        new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
-                                        5L,
-                                        0))
+        assertThatThrownBy(() -> raced.updateRecoverySnapshot(bucket, 7L, 5L, 0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
-        zookeeperClient.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, 0);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
+        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 0);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(rejected);
     }
 
     @Test
@@ -1055,19 +1047,15 @@ class ZooKeeperClientTest {
                         return super.getRecoverySnapshotSelection(requested);
                     }
                 };
-        Throwable failure =
-                catchThrowable(
-                        () ->
-                                delayed.registerTableBucketSnapshot(
-                                        bucket,
-                                        new BucketSnapshot(5L, 40L, "file:/snapshot-5"),
-                                        4L,
-                                        0));
+        zookeeperClient.registerTableBucketSnapshot(
+                bucket, new BucketSnapshot(5L, 40L, "file:/snapshot-5"));
+        Throwable failure = catchThrowable(() -> delayed.updateRecoverySnapshot(bucket, 5L, 4L, 0));
         BucketSnapshot next = new BucketSnapshot(6L, 50L, "file:/snapshot-6");
-        zookeeperClient.registerTableBucketSnapshot(bucket, next, 4L, 1);
+        zookeeperClient.registerTableBucketSnapshot(bucket, next);
+        zookeeperClient.updateRecoverySnapshot(bucket, 6L, 4L, 1);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
         assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 5L)).isEmpty();
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 5L)).isPresent();
     }
 
     @Test

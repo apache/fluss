@@ -36,28 +36,14 @@ public class TabletState {
     private final long flushedLogOffset;
     @Nullable private final Long rowCount;
     @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
-    @Nullable private final Long previousRecoverySnapshotId;
 
     public TabletState(
             long flushedLogOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
-        this(flushedLogOffset, rowCount, autoIncIDRanges, null);
-    }
-
-    public TabletState(
-            long flushedLogOffset,
-            @Nullable Long rowCount,
-            @Nullable List<AutoIncIDRange> autoIncIDRanges,
-            @Nullable Long previousRecoverySnapshotId) {
         this.flushedLogOffset = flushedLogOffset;
         this.rowCount = rowCount;
         this.autoIncIDRanges = autoIncIDRanges;
-        this.previousRecoverySnapshotId = previousRecoverySnapshotId;
-    }
-
-    public @Nullable Long getPreviousRecoverySnapshotId() {
-        return previousRecoverySnapshotId;
     }
 
     public long getFlushedLogOffset() {

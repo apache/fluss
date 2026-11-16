@@ -221,9 +221,7 @@ class CompletedSnapshotStoreManagerTest {
                         new IOException(
                                 "Failed to open snapshot metadata.",
                                 new IOException(
-                                        "File does not exist: temporary standby response"))),
-                null,
-                0);
+                                        "File does not exist: temporary standby response"))));
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         10,
@@ -257,8 +255,8 @@ class CompletedSnapshotStoreManagerTest {
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new InMemoryCompletedSnapshotHandleStore();
-        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle, null, 0);
-        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle, null, 0);
+        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle);
+        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle);
 
         // CompletedSnapshotStoreManager
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
@@ -379,14 +377,19 @@ class CompletedSnapshotStoreManagerTest {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle,
-                Long previousRecoverySnapshotId,
-                int expectedLeaderEpoch)
+                CompletedSnapshotHandle completedSnapshotHandle)
                 throws Exception {
             snapshotHandleMap
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())
                     .put(snapshotId, completedSnapshotHandle);
         }
+
+        @Override
+        public void updateRecoverySnapshot(
+                TableBucket bucket,
+                long snapshotId,
+                Long previousSnapshotId,
+                int expectedLeaderEpoch) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) throws Exception {

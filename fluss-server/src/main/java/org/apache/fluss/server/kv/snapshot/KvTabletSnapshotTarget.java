@@ -34,16 +34,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
-import java.util.HashSet;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -79,17 +74,9 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
 
     private final SnapshotRunner snapshotRunner;
 
-    /** A cleaner to clean snapshots when fail to persistent snapshot. */
-    private final SnapshotsCleaner snapshotsCleaner;
-
-    /** The executor used for asynchronous calls, like potentially blocking I/O. */
-    private final Executor ioExecutor;
-
     private volatile long logOffsetOfLatestSnapshot;
 
     private volatile long snapshotSize;
-    private final AtomicReference<Long> previousRecoverySnapshotId = new AtomicReference<>();
-    private final Set<Long> unconfirmedRecoverySnapshotIds = new HashSet<>();
 
     @VisibleForTesting
     KvTabletSnapshotTarget(
@@ -98,7 +85,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             ZooKeeperClient zooKeeperClient,
             RocksIncrementalSnapshot rocksIncrementalSnapshot,
             FsPath remoteKvTabletDir,
-            Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
@@ -115,7 +101,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 rocksIncrementalSnapshot,
                 remoteKvTabletDir,
                 (int) ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE.defaultValue().getBytes(),
-                ioExecutor,
                 cancelStreamRegistry,
                 snapshotIdCounter,
                 tabletStateSupplier,
@@ -133,7 +118,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             RocksIncrementalSnapshot rocksIncrementalSnapshot,
             FsPath remoteKvTabletDir,
             int snapshotWriteBufferSize,
-            Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
@@ -158,22 +142,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.coordinatorEpochSupplier = coordinatorEpochSupplier;
         this.logOffsetOfLatestSnapshot = logOffsetOfLatestSnapshot;
         this.snapshotSize = snapshotSize;
-        this.ioExecutor = ioExecutor;
         this.snapshotRunner = createSnapshotRunner(cancelStreamRegistry);
-        this.snapshotsCleaner = new SnapshotsCleaner();
-    }
-
-    /** Binds a newly created target to the snapshot actually loaded into its KV instance. */
-    public void initializeRecoverySnapshotId(@Nullable Long snapshotId) {
-        previousRecoverySnapshotId.set(snapshotId);
-        unconfirmedRecoverySnapshotIds.clear();
-    }
-
-    private void advanceRecoverySnapshotId(Long previousSnapshotId, long committedSnapshotId) {
-        Long current = previousRecoverySnapshotId.get();
-        if (Objects.equals(current, previousSnapshotId)) {
-            previousRecoverySnapshotId.compareAndSet(current, committedSnapshotId);
-        }
     }
 
     @Override
@@ -189,12 +158,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     @Override
     public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
         TabletState tabletState = tabletStateSupplier.get();
-        tabletState =
-                new TabletState(
-                        tabletState.getFlushedLogOffset(),
-                        tabletState.getRowCount(),
-                        tabletState.getAutoIncIDRanges(),
-                        previousRecoverySnapshotId.get());
         long logOffset = tabletState.getFlushedLogOffset();
         if (logOffset <= logOffsetOfLatestSnapshot) {
             LOG.debug(
@@ -217,6 +180,27 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         coordinatorEpoch,
                         bucketLeaderEpoch,
                         snapshotLocation));
+    }
+
+    private long reconcileUnconfirmedSnapshot(long snapshotId, long previousSnapshotId)
+            throws Exception {
+        Set<Long> unconfirmed = rocksIncrementalSnapshot.getUnconfirmedSnapshotIds();
+        unconfirmed.remove(snapshotId);
+        if (unconfirmed.isEmpty()) {
+            return previousSnapshotId;
+        }
+        Optional<BucketSnapshot> selected =
+                zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+        if (selected.isPresent() && unconfirmed.contains(selected.get().getSnapshotId())) {
+            CompletedSnapshot snapshot =
+                    selected.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
+            updateStateOnCommitSuccess(
+                    snapshot.getSnapshotID(),
+                    snapshot.getLogOffset(),
+                    snapshot.getKvSnapshotHandle().getSnapshotSize());
+            return snapshot.getSnapshotID();
+        }
+        return previousSnapshotId;
     }
 
     private SnapshotLocation initSnapshotLocation(long snapshotId) {
@@ -247,47 +231,35 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
                         tabletState.getAutoIncIDRanges());
-        Long previousRecoverySnapshotId = tabletState.getPreviousRecoverySnapshotId();
         try {
-            if (previousRecoverySnapshotId != null && !unconfirmedRecoverySnapshotIds.isEmpty()) {
-                Optional<ZooKeeperClient.VersionedData<Long>> selected =
-                        zooKeeperClient.getRecoverySnapshotSelection(tableBucket);
-                if (selected.isPresent()
-                        && !Objects.equals(previousRecoverySnapshotId, selected.get().data())) {
-                    long selectedId = selected.get().data();
-                    // Only this KV instance's own publications can advance its recovery identity.
-                    if (unconfirmedRecoverySnapshotIds.contains(selectedId)) {
-                        advanceRecoverySnapshotId(previousRecoverySnapshotId, selectedId);
-                        previousRecoverySnapshotId = selectedId;
-                    }
-                    unconfirmedRecoverySnapshotIds.clear();
-                }
-            }
-            if (previousRecoverySnapshotId != null) {
-                unconfirmedRecoverySnapshotIds.add(snapshotId);
-            }
-            // commit the completed snapshot
             completedKvSnapshotCommitter.commitKvSnapshot(
                     completedSnapshot,
                     coordinatorEpoch,
                     bucketLeaderEpoch,
-                    previousRecoverySnapshotId);
-            if (previousRecoverySnapshotId != null) {
-                advanceRecoverySnapshotId(previousRecoverySnapshotId, snapshotId);
-                unconfirmedRecoverySnapshotIds.clear();
-            }
-            // update local state after successful commit
-            updateStateOnCommitSuccess(snapshotId, snapshotResult);
-        } catch (Exception e) {
-            Throwable t = ExceptionUtils.stripExecutionException(e);
-            // handle the exception with idempotent check
-            handleSnapshotCommitException(
+                    reconcileUnconfirmedSnapshot(
+                            snapshotId, snapshotResult.getPreviousSnapshotId()));
+            updateStateOnCommitSuccess(
                     snapshotId,
-                    snapshotResult,
-                    completedSnapshot,
-                    snapshotLocation,
-                    previousRecoverySnapshotId,
-                    t);
+                    tabletState.getFlushedLogOffset(),
+                    snapshotResult.getSnapshotSize());
+        } catch (Exception e) {
+            Throwable cause = ExceptionUtils.stripExecutionException(e);
+            try {
+                Optional<BucketSnapshot> selected =
+                        zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+                if (selected.isPresent() && selected.get().getSnapshotId() == snapshotId) {
+                    updateStateOnCommitSuccess(
+                            snapshotId,
+                            tabletState.getFlushedLogOffset(),
+                            snapshotResult.getSnapshotSize());
+                    return;
+                }
+            } catch (Exception queryFailure) {
+                cause.addSuppressed(queryFailure);
+            }
+            // CS may already own these files, including SSTs reused by a later snapshot.
+            // Leave reclamation to CS retention and orphan cleanup.
+            throw cause;
         }
     }
 
@@ -325,109 +297,14 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
      * before the outward state catches up — see FLUSS-2624. The {@code finally} block also
      * guarantees the internal SST bookkeeping cleanup runs even if any outward update throws.
      */
-    private void updateStateOnCommitSuccess(long snapshotId, SnapshotResult snapshotResult) {
-        long flushedLogOffset = snapshotResult.getTabletState().getFlushedLogOffset();
+    private void updateStateOnCommitSuccess(long snapshotId, long flushedLogOffset, long size) {
         try {
             logOffsetOfLatestSnapshot = flushedLogOffset;
-            snapshotSize = snapshotResult.getSnapshotSize();
-            // update LogTablet to notify the lowest offset that should be retained
-            updateWalRetention(
-                    flushedLogOffset,
-                    snapshotResult.getTabletState().getPreviousRecoverySnapshotId() != null);
+            snapshotSize = size;
+            updateMinRetainOffset.accept(flushedLogOffset);
         } finally {
-            // notify the snapshot complete (must run last to preserve the ordering contract above,
-            // and run in finally to guarantee internal SST bookkeeping is always cleaned up).
             rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
         }
-    }
-
-    private void updateWalRetention(long flushedLogOffset, boolean recoveryAwareCommit) {
-        if (recoveryAwareCommit) {
-            updateMinRetainOffset.accept(flushedLogOffset);
-            return;
-        }
-        try {
-            Optional<BucketSnapshot> selected =
-                    zooKeeperClient.getRecoveryBucketSnapshot(tableBucket);
-            updateMinRetainOffset.accept(
-                    selected.isPresent()
-                            ? Math.min(flushedLogOffset, selected.get().getLogOffset())
-                            : flushedLogOffset);
-        } catch (Exception e) {
-            LOG.warn(
-                    "Cannot confirm the recovery WAL boundary for {}; keeping existing logs.",
-                    tableBucket,
-                    e);
-        }
-    }
-
-    /** Checks whether a failed commit already published this snapshot as the recovery source. */
-    private void handleSnapshotCommitException(
-            long snapshotId,
-            SnapshotResult snapshotResult,
-            CompletedSnapshot completedSnapshot,
-            SnapshotLocation snapshotLocation,
-            @Nullable Long previousRecoverySnapshotId,
-            Throwable t)
-            throws Throwable {
-
-        // Fix for issue: https://github.com/apache/fluss/issues/1304
-        // Tablet server try to commit kv snapshot to coordinator server,
-        // coordinator server commit the kv snapshot to zk, then failover.
-        // Tablet server will get exception from coordinator server, but mistake it as a fail
-        // commit although coordinator server has committed to zk, then discard the committed kv
-        // snapshot.
-        //
-        // Idempotent check: Double check ZK to verify if the snapshot actually exists before
-        // cleanup
-        try {
-            Optional<BucketSnapshot> zkSnapshot =
-                    zooKeeperClient.getTableBucketSnapshot(tableBucket, snapshotId);
-            if (zkSnapshot.isPresent()) {
-                if (previousRecoverySnapshotId != null) {
-                    // Recovery-aware publication registered this reference and selected it
-                    // atomically.
-                    advanceRecoverySnapshotId(previousRecoverySnapshotId, snapshotId);
-                    unconfirmedRecoverySnapshotIds.clear();
-                }
-                // Snapshot exists in ZK, indicating the commit was actually successful,
-                // just response was lost
-                LOG.warn(
-                        "Snapshot {} for TableBucket {} already exists in ZK. "
-                                + "The commit was successful but response was lost due to coordinator failover. "
-                                + "Skipping cleanup and treating as successful.",
-                        snapshotId,
-                        tableBucket);
-
-                // Update local state as if the commit was successful
-                updateStateOnCommitSuccess(snapshotId, snapshotResult);
-                return; // Snapshot commit succeeded, return directly
-            } else {
-                LOG.warn(
-                        "Snapshot {} for TableBucket {} does not exist in ZK. "
-                                + "The commit truly failed, proceeding with cleanup.",
-                        snapshotId,
-                        tableBucket);
-                snapshotsCleaner.cleanSnapshot(completedSnapshot, () -> {}, ioExecutor);
-                handleSnapshotFailure(snapshotId, snapshotLocation, t);
-            }
-        } catch (Exception zkException) {
-            LOG.warn(
-                    "Failed to query ZK for snapshot {} of TableBucket {}. "
-                            + "Cannot determine actual snapshot status, keeping snapshot in current state "
-                            + "to avoid potential data loss.",
-                    snapshotId,
-                    tableBucket,
-                    zkException);
-            // When ZK query fails, we cannot determine the actual status.
-            // The snapshot might have succeeded or failed on the ZK side.
-            // Therefore, we must not clean up the snapshot files and not update local state.
-            // This avoids the risk of discarding a successfully committed snapshot that
-            // connectors may already be reading, which would cause data loss or job failure.
-        }
-
-        // throw the exception to make PeriodicSnapshotManager can catch the exception
-        throw t;
     }
 
     private SnapshotRunner createSnapshotRunner(CloseableRegistry cancelStreamRegistry) {

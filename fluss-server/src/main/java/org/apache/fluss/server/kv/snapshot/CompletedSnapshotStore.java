@@ -43,7 +43,6 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
@@ -74,7 +73,7 @@ public class CompletedSnapshotStore {
 
     private final ReentrantLock lock = new ReentrantLock();
 
-    @Nullable private Long selectedRecoverySnapshotId;
+    @Nullable private Long recoverySnapshotId;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -100,7 +99,8 @@ public class CompletedSnapshotStore {
             Collection<CompletedSnapshot> completedSnapshots,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
             Executor executor,
-            SnapshotInUseChecker snapshotLeaseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker)
+            throws Exception {
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.sharedKvFileRegistry = sharedKvFileRegistry;
         this.completedSnapshots = new ArrayDeque<>();
@@ -109,6 +109,14 @@ public class CompletedSnapshotStore {
         this.snapshotLeaseChecker = snapshotLeaseChecker;
         this.ioExecutor = executor;
         this.snapshotsCleaner = new SnapshotsCleaner();
+        if (!completedSnapshots.isEmpty()) {
+            recoverySnapshotId =
+                    completedSnapshotHandleStore
+                            .getRecoverySnapshot(
+                                    completedSnapshots.iterator().next().getTableBucket())
+                            .map(CompletedSnapshotHandle::getSnapshotId)
+                            .orElse(null);
+        }
     }
 
     /** Commits using the leader epoch captured when the original KV target was created. */
@@ -158,40 +166,52 @@ public class CompletedSnapshotStore {
             throws Exception {
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
-                snapshot.getTableBucket(),
-                snapshot.getSnapshotID(),
-                completedSnapshotHandle,
-                previousRecoverySnapshotId,
-                expectedLeaderEpoch);
-
-        adoptConfirmedSnapshot(snapshot);
-    }
-
-    private void adoptConfirmedSnapshot(CompletedSnapshot snapshot) throws Exception {
+                snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-        completedSnapshots.removeIf(
-                existing -> existing.getSnapshotID() == snapshot.getSnapshotID());
-        stillInUseSnapshots.remove(snapshot.getSnapshotID());
         completedSnapshots.addLast(snapshot);
-        Optional<CompletedSnapshotHandle> selected =
-                completedSnapshotHandleStore.getRecoverySnapshot(snapshot.getTableBucket());
-        checkState(
-                selectedRecoverySnapshotId == null || selected.isPresent(),
-                "Recovery snapshot selection disappeared.");
-        if (selected.isPresent() && !containsSnapshot(selected.get().getSnapshotId())) {
-            CompletedSnapshot source = selected.get().retrieveCompleteSnapshot();
-            source.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-            stillInUseSnapshots.put(source.getSnapshotID(), source);
+        Exception selectionFailure = null;
+        try {
+            completedSnapshotHandleStore.updateRecoverySnapshot(
+                    snapshot.getTableBucket(),
+                    snapshot.getSnapshotID(),
+                    previousRecoverySnapshotId,
+                    expectedLeaderEpoch);
+            recoverySnapshotId = snapshot.getSnapshotID();
+        } catch (Exception updateFailure) {
+            try {
+                recoverySnapshotId =
+                        completedSnapshotHandleStore
+                                .getRecoverySnapshot(snapshot.getTableBucket())
+                                .map(CompletedSnapshotHandle::getSnapshotId)
+                                .orElse(null);
+            } catch (Exception readFailure) {
+                updateFailure.addSuppressed(readFailure);
+                if (previousRecoverySnapshotId != null) {
+                    throw updateFailure;
+                }
+                LOG.warn("Snapshot registered but recovery selection is unknown.", updateFailure);
+                return;
+            }
+            if (previousRecoverySnapshotId != null
+                    && (recoverySnapshotId == null
+                            || recoverySnapshotId != snapshot.getSnapshotID())) {
+                selectionFailure = updateFailure;
+            }
+            LOG.warn(
+                    "Recovery selection update failed after snapshot registration.", updateFailure);
         }
-        selectedRecoverySnapshotId =
-                selected.map(CompletedSnapshotHandle::getSnapshotId).orElse(null);
-        subsumeOldSnapshots(snapshot);
-    }
-
-    private boolean containsSnapshot(long snapshotId) {
-        return stillInUseSnapshots.containsKey(snapshotId)
-                || completedSnapshots.stream()
-                        .anyMatch(snapshot -> snapshot.getSnapshotID() == snapshotId);
+        try {
+            subsumeOldSnapshots(snapshot);
+        } catch (Exception cleanupFailure) {
+            if (selectionFailure != null) {
+                selectionFailure.addSuppressed(cleanupFailure);
+            } else {
+                LOG.warn("Snapshot committed but retention failed.", cleanupFailure);
+            }
+        }
+        if (selectionFailure != null) {
+            throw selectionFailure;
+        }
     }
 
     private void subsumeOldSnapshots(CompletedSnapshot snapshot) throws Exception {
@@ -253,8 +273,7 @@ public class CompletedSnapshotStore {
     }
 
     private boolean isSnapshotInUse(CompletedSnapshot snapshot) {
-        return (selectedRecoverySnapshotId != null
-                        && selectedRecoverySnapshotId == snapshot.getSnapshotID())
+        return (recoverySnapshotId != null && recoverySnapshotId == snapshot.getSnapshotID())
                 || snapshotLeaseChecker.isInUse(snapshot);
     }
 

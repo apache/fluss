@@ -1409,40 +1409,38 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.delete().forPath(path);
     }
 
-    /** Registers a snapshot and advances its original KV context's recovery selection. */
-    public void registerTableBucketSnapshot(
+    /** Advances the recovery selection after its ordinary reference has been registered. */
+    public void updateRecoverySnapshot(
             TableBucket bucket,
-            BucketSnapshot snapshot,
-            @Nullable Long previousRecoverySnapshotId,
+            long snapshotId,
+            @Nullable Long previousSnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        if (previousRecoverySnapshotId == null) {
-            registerTableBucketSnapshot(bucket, snapshot);
-            return;
-        }
-        CuratorOp leaderCheck = createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+        CuratorOp leaderCheck =
+                previousSnapshotId == null
+                        ? null
+                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
         Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
-        if (!current.isPresent()
-                || current.get().data().longValue() != previousRecoverySnapshotId) {
-            throw new KeeperException.BadVersionException(
-                    ZkData.RecoverySnapshotZNode.path(bucket));
+        String path = ZkData.RecoverySnapshotZNode.path(bucket);
+        if (current.isPresent()
+                && previousSnapshotId != null
+                && current.get().data().longValue() != previousSnapshotId) {
+            throw new KeeperException.BadVersionException(path);
         }
-        List<CuratorOp> ops = new ArrayList<>();
-        ops.add(
-                zkClient.transactionOp()
-                        .create()
-                        .forPath(
-                                BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId()),
-                                BucketSnapshotIdZNode.encode(snapshot)));
-        ops.add(
-                zkClient.transactionOp()
-                        .setData()
-                        .withVersion(current.get().zkVersion())
-                        .forPath(
-                                ZkData.RecoverySnapshotZNode.path(bucket),
-                                ZkData.RecoverySnapshotZNode.encode(snapshot.getSnapshotId())));
-        ops.add(leaderCheck);
-        zkClient.transaction().forOperations(ops);
+        CuratorOp update =
+                current.isPresent()
+                        ? zkClient.transactionOp()
+                                .setData()
+                                .withVersion(current.get().zkVersion())
+                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId))
+                        : zkClient.transactionOp()
+                                .create()
+                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId));
+        if (leaderCheck == null) {
+            zkClient.transaction().forOperations(update);
+        } else {
+            zkClient.transaction().forOperations(update, leaderCheck);
+        }
     }
 
     private CuratorOp createSnapshotLeaderEpochCheck(TableBucket bucket, int expectedLeaderEpoch)

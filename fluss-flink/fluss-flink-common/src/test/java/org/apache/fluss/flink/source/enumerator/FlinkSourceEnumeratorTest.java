@@ -497,14 +497,14 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         // we can hava snapshot split
         Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 10);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
+        putRows(DEFAULT_TABLE_PATH, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
             registerRecoverySnapshot(
                     zk, tableBucket, zk.getTableBucketSnapshot(tableBucket, 0L).get());
         }
-        putRows(DEFAULT_TABLE_PATH, 10);
-        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
 
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {

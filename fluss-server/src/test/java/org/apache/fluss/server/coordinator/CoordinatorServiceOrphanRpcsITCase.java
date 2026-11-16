@@ -195,7 +195,7 @@ class CoordinatorServiceOrphanRpcsITCase {
     // -------------------------------------------------------------------------
 
     private CompletedSnapshotStore createTestStore(
-            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) throws Exception {
         return new CompletedSnapshotStore(
                 MAX_SNAPSHOTS_TO_RETAIN,
                 new SharedKvFileRegistry(),
@@ -239,8 +239,13 @@ class CoordinatorServiceOrphanRpcsITCase {
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
-                CompletedSnapshotHandle completedSnapshotHandle,
-                Long previousRecoverySnapshotId,
+                CompletedSnapshotHandle completedSnapshotHandle) {}
+
+        @Override
+        public void updateRecoverySnapshot(
+                TableBucket bucket,
+                long snapshotId,
+                Long previousSnapshotId,
                 int expectedLeaderEpoch) {}
 
         @Override

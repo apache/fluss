@@ -151,27 +151,10 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
             getLatestCompletedSnapshotProvider() {
         return (tableBucket) -> {
-            Optional<CompletedSnapshotHandle> recovery =
-                    completedSnapshotHandleStore.getRecoverySnapshot(tableBucket);
-            Optional<CompletedSnapshotHandle> snapshotHandle = recovery;
-            boolean selectedSource = recovery.isPresent();
-            if (!selectedSource) {
-                snapshotHandle =
-                        completedSnapshotHandleStore.getLatestCompletedSnapshotHandle(tableBucket);
-                // A selection may have appeared during the legacy lookup. Resolve that source
-                // together with its runtime identity before creating the KV instance.
-                recovery = completedSnapshotHandleStore.getRecoverySnapshot(tableBucket);
-                if (recovery.isPresent()) {
-                    snapshotHandle = recovery;
-                    selectedSource = true;
-                }
-            }
+            Optional<CompletedSnapshotHandle> snapshotHandle =
+                    completedSnapshotHandleStore.getLatestCompletedSnapshotHandle(tableBucket);
             if (snapshotHandle.isPresent()) {
-                CompletedSnapshot snapshot = snapshotHandle.get().retrieveCompleteSnapshot();
-                if (selectedSource) {
-                    snapshot.markAsRecoverySource();
-                }
-                return snapshot;
+                return snapshotHandle.get().retrieveCompleteSnapshot();
             } else {
                 return null;
             }

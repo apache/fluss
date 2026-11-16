@@ -39,15 +39,19 @@ public interface CompletedSnapshotHandleStore {
      * @param tableBucket the table bucket the snapshot belongs to
      * @param snapshotId the snapshot id
      * @param completedSnapshotHandle CompletedSnapshotHandle to be added
-     * @param previousRecoverySnapshotId recovery snapshot this commit expects to replace
-     * @param expectedLeaderEpoch leader epoch of the original KV instance
      * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
     void add(
             TableBucket tableBucket,
             long snapshotId,
-            CompletedSnapshotHandle completedSnapshotHandle,
-            @Nullable Long previousRecoverySnapshotId,
+            CompletedSnapshotHandle completedSnapshotHandle)
+            throws Exception;
+
+    /** Advances recovery selection independently of ordinary reference registration. */
+    void updateRecoverySnapshot(
+            TableBucket bucket,
+            long snapshotId,
+            @Nullable Long previousSnapshotId,
             int expectedLeaderEpoch)
             throws Exception;
 

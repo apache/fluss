@@ -88,9 +88,6 @@ public class CompletedSnapshot {
     /** The location where the snapshot is stored. */
     private final FsPath snapshotLocation;
 
-    // Runtime recovery identity; deliberately excluded from _METADATA.
-    @Nullable private Long recoverySnapshotId;
-
     public static final String SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE = "No such file or directory";
 
     private static final String HADOOP_SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE =
@@ -120,17 +117,6 @@ public class CompletedSnapshot {
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
         this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
-    }
-
-    /** Marks the source actually loaded from the durable recovery selection. */
-    public void markAsRecoverySource() {
-        recoverySnapshotId = snapshotID;
-    }
-
-    /** Returns the recovery identity carried into the original KV instance. */
-    @Nullable
-    public Long getRecoverySnapshotId() {
-        return recoverySnapshotId;
     }
 
     public long getSnapshotID() {

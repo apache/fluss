@@ -21,13 +21,11 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
-import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -52,7 +50,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
@@ -138,53 +136,6 @@ class ZooKeeperCompletedSnapshotStoreTest {
         assertThat(zooKeeperClient.getTableBucketSnapshot(bucket, 0L)).isEmpty();
     }
 
-    @Test
-    void testRecoverySelectionAppearingDuringLegacyLookupCarriesItsIdentity(@TempDir Path root)
-            throws Exception {
-        TableBucket bucket = new TableBucket(3L, 0);
-        CompletedSnapshot selected = mockCompletedSnapshot(root, bucket, 2L);
-        createZooKeeperSnapshotStore(zooKeeperClient, new SharedKvFileRegistry())
-                .add(selected, null, 0);
-        Configuration conf = new Configuration();
-        conf.set(ConfigOptions.REMOTE_DATA_DIR, root.toUri().toString());
-        ZooKeeperClient raced =
-                new ZooKeeperClient(
-                        new CuratorFrameworkWithUnhandledErrorListener(
-                                zooKeeperClient.getCuratorClient(), (message, error) -> {}),
-                        conf) {
-                    @Override
-                    public Optional<BucketSnapshot> getTableBucketLatestSnapshot(
-                            TableBucket requested) throws Exception {
-                        registerRecoverySnapshot(
-                                zooKeeperClient,
-                                bucket,
-                                new BucketSnapshot(
-                                        2L, 0L, selected.getMetadataFilePath().toString()));
-                        return super.getTableBucketLatestSnapshot(requested);
-                    }
-                };
-        ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
-        KvSnapshotResource resource = KvSnapshotResource.create(1, conf, executor);
-        try {
-            CompletedSnapshot loaded =
-                    DefaultSnapshotContext.create(
-                                    raced,
-                                    (snapshot,
-                                            coordinatorEpoch,
-                                            leaderEpoch,
-                                            previousSnapshotId) -> {},
-                                    resource,
-                                    conf)
-                            .getLatestCompletedSnapshotProvider()
-                            .apply(bucket);
-            assertThat(loaded.getSnapshotID()).isEqualTo(2L);
-            assertThat(loaded.getRecoverySnapshotId()).isEqualTo(2L);
-        } finally {
-            resource.close();
-            executor.shutdownNow();
-        }
-    }
-
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testSelectedSharedFilesSurviveOutsideRetentionWindow(
@@ -201,28 +152,42 @@ class ZooKeeperCompletedSnapshotStoreTest {
         Files.write(shared, new byte[] {1});
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, root.toUri().toString());
+        AtomicBoolean failSelectionReads = new AtomicBoolean();
         ZooKeeperClient publisher =
                 new ZooKeeperClient(
                         new CuratorFrameworkWithUnhandledErrorListener(
                                 zooKeeperClient.getCuratorClient(), (message, error) -> {}),
                         conf) {
                     @Override
-                    public void registerTableBucketSnapshot(
+                    public void updateRecoverySnapshot(
                             TableBucket bucket,
-                            BucketSnapshot snapshot,
+                            long snapshotId,
                             Long previousRecoverySnapshotId,
                             int expectedLeaderEpoch)
                             throws Exception {
-                        super.registerTableBucketSnapshot(
-                                bucket, snapshot, previousRecoverySnapshotId, expectedLeaderEpoch);
-                        if (responseLost && snapshot.getSnapshotId() == 2L) {
+                        super.updateRecoverySnapshot(
+                                bucket,
+                                snapshotId,
+                                previousRecoverySnapshotId,
+                                expectedLeaderEpoch);
+                        if (responseLost && snapshotId == 2L) {
+                            failSelectionReads.set(true);
                             throw new KeeperException.ConnectionLossException();
                         }
+                    }
+
+                    @Override
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket bucket) throws Exception {
+                        if (failSelectionReads.get()) {
+                            throw new KeeperException.ConnectionLossException();
+                        }
+                        return super.getRecoverySnapshotSelection(bucket);
                     }
                 };
         CompletedSnapshotStore store =
                 new CompletedSnapshotStore(
-                        2,
+                        1,
                         new SharedKvFileRegistry(Runnable::run),
                         Collections.emptyList(),
                         new ZooKeeperCompletedSnapshotHandleStore(publisher),
@@ -231,20 +196,30 @@ class ZooKeeperCompletedSnapshotStoreTest {
         store.add(snapshot(root, bucket, 1L, shared), null, 0);
         registerRecoverySnapshot(
                 zooKeeperClient, bucket, zooKeeperClient.getTableBucketSnapshot(bucket, 1L).get());
-        store.add(snapshot(root, bucket, 3L, null), null, 0);
+
         CompletedSnapshot selected = snapshot(root, bucket, 2L, shared);
         if (responseLost) {
             assertThatThrownBy(() -> store.add(selected, 1L, 0))
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
+            assertThatThrownBy(() -> store.add(snapshot(root, bucket, 3L, null), 1L, 0))
+                    .isInstanceOf(KeeperException.ConnectionLossException.class);
+            assertThat(Files.exists(shared)).isTrue();
+            assertThat(store.getActiveSnapshotIds()).contains(1L, 2L, 3L);
+            failSelectionReads.set(false);
         } else {
             store.add(selected, 1L, 0);
+            assertThatThrownBy(() -> store.add(snapshot(root, bucket, 3L, null), 1L, 0))
+                    .isInstanceOf(KeeperException.BadVersionException.class);
         }
-        store.add(snapshot(root, bucket, 4L, null), null, 0);
-        store.add(snapshot(root, bucket, 5L, null), null, 0);
+        for (long id = 4L; id <= 5L; id++) {
+            final long snapshotId = id;
+            assertThatThrownBy(() -> store.add(snapshot(root, bucket, snapshotId, null), 1L, 0))
+                    .isInstanceOf(KeeperException.BadVersionException.class);
+        }
         assertThat(Files.exists(shared)).isTrue();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
                 .isEqualTo(2L);
-        assertThat(store.getActiveSnapshotIds()).contains(2L, 4L, 5L);
+        assertThat(store.getActiveSnapshotIds()).containsExactlyInAnyOrder(2L, 5L);
         store.add(snapshot(root, bucket, 6L, null), 2L, 0);
         assertThat(Files.exists(shared)).isFalse();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
@@ -269,7 +244,8 @@ class ZooKeeperCompletedSnapshotStoreTest {
 
     @Nonnull
     private CompletedSnapshotStore createZooKeeperSnapshotStore(
-            ZooKeeperClient zooKeeperClient, SharedKvFileRegistry sharedKvFileRegistry) {
+            ZooKeeperClient zooKeeperClient, SharedKvFileRegistry sharedKvFileRegistry)
+            throws Exception {
         ZooKeeperCompletedSnapshotHandleStore snapshotsInZooKeeper =
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
         return new CompletedSnapshotStore(

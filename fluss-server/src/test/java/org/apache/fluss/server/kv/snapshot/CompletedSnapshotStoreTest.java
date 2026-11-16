@@ -145,7 +145,7 @@ class CompletedSnapshotStoreTest {
     }
 
     @Test
-    void testAddSnapshotFailedShouldNotRemoveOldOnes() {
+    void testAddSnapshotFailedShouldNotRemoveOldOnes() throws Exception {
         final int num = 1;
         final String errMsg = "Add to snapshot handle failed.";
         final TestCompletedSnapshotHandleStore handleStore =
@@ -713,7 +713,8 @@ class CompletedSnapshotStoreTest {
             int numToRetain,
             CompletedSnapshotHandleStore snapshotHandleStore,
             Collection<CompletedSnapshot> completedSnapshots,
-            CompletedSnapshotStore.SnapshotInUseChecker snapshotInUseChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker snapshotInUseChecker)
+            throws Exception {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         return new CompletedSnapshotStore(
@@ -779,7 +780,8 @@ class CompletedSnapshotStoreTest {
     private CompletedSnapshotStore createCompletedSnapshotStore(
             int numToRetain,
             CompletedSnapshotHandleStore snapshotHandleStore,
-            Collection<CompletedSnapshot> completedSnapshots) {
+            Collection<CompletedSnapshot> completedSnapshots)
+            throws Exception {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         return new CompletedSnapshotStore(

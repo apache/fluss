@@ -98,7 +98,7 @@ import static org.mockito.Mockito.when;
 public class ServerConnectionTest {
 
     @Test
-    void testRecoveryAwareSnapshotCannotDowngrade() throws Exception {
+    void testRecoveryAwareSnapshotSupportsLegacyProtocol() throws Exception {
         ServerConnection connection =
                 new ServerConnection(
                         bootstrap,
@@ -110,11 +110,7 @@ public class ServerConnectionTest {
             CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
             connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
             request.setPreviousRecoverySnapshotId(0L);
-            assertThatThrownBy(
-                            () ->
-                                    connection.validateVersionCompatibility(
-                                            ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request))
-                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
             connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 1, request);
         } finally {
             connection.close().get();
