@@ -374,7 +374,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(replica.tableMetrics().failedHistoricalPutKvRequests().getCount()).isZero();
             replicaManager.putHistoricalRecordsToKv(
                     10_000,
-                    1,
+                    -1,
                     Collections.singletonList(
                             new PutKvDataForBucket(TABLE_BUCKET, updateBatch, ORIGINAL_PARTITION)),
                     null,
@@ -390,8 +390,6 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
             assertThat(updateResults.get(TABLE_BUCKET).failed()).isFalse();
             assertThat(replica.tableMetrics().totalHistoricalPutKvRequests().getCount()).isOne();
             assertThat(replica.tableMetrics().failedHistoricalPutKvRequests().getCount()).isZero();
-            // Acks=1 does not wait for the asynchronous KV flush.
-            flushAndWait(kvTablet, Long.MAX_VALUE);
             assertHistoricalValue(
                     kvTablet,
                     ORIGINAL_PARTITION,
