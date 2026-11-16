@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Freezes the lake snapshot and server-issued log ranges within a partition scope.
+//! Freezes baseline references and server-issued log ranges within a partition scope.
 //!
 //! This module does not open a lake catalog, generate splits or schedule reads.
 
@@ -25,7 +25,10 @@ use crate::{
     FlussLakeError, FlussLakeLogRange, FlussLakePartitionIdentity, FlussLakeReadContext, Result,
 };
 use fluss::client::FlussAdmin;
-use fluss::metadata::{LakeSnapshotInfo, PartitionInfo, TableBucket, TableInfo, TablePath};
+use fluss::metadata::{
+    KvSnapshot, LakeSnapshotInfo, LatestKvSnapshots, PartitionInfo, TableBucket, TableInfo,
+    TablePath,
+};
 use fluss::predicate::Predicate;
 use fluss::rpc::message::OffsetSpec;
 use futures::StreamExt;
@@ -51,28 +54,10 @@ pub(crate) async fn freeze_read_context(
         )));
     }
 
-    let readable_snapshot = if table_info
-        .table_config
-        .is_datalake_enabled()
-        .map_err(|error| FlussLakeError::PlanningFailed(error.to_string()))?
-    {
-        match admin.get_lake_snapshot(table_path, None, Some(true)).await {
-            Ok(snapshot) => Some(snapshot),
-            Err(error)
-                if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) =>
-            {
-                None
-            }
-            Err(error) => {
-                return Err(planning_client_error("get readable lake snapshot", error));
-            }
-        }
-    } else {
-        None
-    };
+    let readable_snapshot = load_readable_snapshot(admin, table_info).await?;
 
     let snapshot_offsets =
-        collect_snapshot_offsets(table_path, table_info.table_id, readable_snapshot.as_ref())?;
+        collect_snapshot_offsets(table_info.table_id, readable_snapshot.as_ref())?;
     let partitions = if table_info.partition_keys.is_empty() {
         vec![(
             None,
@@ -112,6 +97,27 @@ pub(crate) async fn freeze_read_context(
             async move {
                 let result = async {
                     let bucket_ids: Vec<i32> = (0..count).collect();
+                    let needs_kv = table_info.has_primary_key()
+                        && bucket_ids.iter().any(|bucket_id| {
+                            !snapshot_offsets.contains_key(&TableBucket::new_with_partition(
+                                table_info.table_id,
+                                id,
+                                *bucket_id,
+                            ))
+                        });
+                    // Select the snapshot and its seam before querying stop offsets. Looking
+                    // up a newer snapshot afterward could put the baseline beyond the stop.
+                    let kv_snapshots = if needs_kv {
+                        let snapshots = admin
+                            .get_latest_kv_snapshots(table_path, name.as_deref())
+                            .await
+                            .map_err(|error| {
+                                planning_client_error("get latest KV snapshots", error)
+                            })?;
+                        collect_kv_snapshots(snapshots, table_info.table_id, id, count)?
+                    } else {
+                        HashMap::new()
+                    };
                     let (earliest_offsets, latest_offsets) =
                         load_server_offsets(admin, table_path, name.as_deref(), &bucket_ids)
                             .await?;
@@ -122,6 +128,18 @@ pub(crate) async fn freeze_read_context(
                             let earliest = required_offset(&earliest_offsets, &bucket, "earliest")?;
                             let stop = required_offset(&latest_offsets, &bucket, "latest")?;
                             let seam = snapshot_offsets.get(&bucket).copied();
+                            if seam.is_none()
+                                && let Some(snapshot) = kv_snapshots.get(&bucket_id)
+                            {
+                                return FlussLakeLogRange::from_kv_snapshot(
+                                    bucket,
+                                    crate::FlussLakeLogPartition::Ordinary(identity.clone()),
+                                    count,
+                                    snapshot,
+                                    stop,
+                                    earliest,
+                                );
+                            }
                             freeze_bucket_range(
                                 bucket,
                                 identity.clone(),
@@ -172,14 +190,83 @@ pub(crate) async fn freeze_read_context(
         bucket_ranges,
         partition_scope,
     )?;
-    // Name-based offset calls may also cross a table drop/recreate. Validate
-    // identity once after capture, without replacing the frozen schema.
+    validate_source_identity(admin, table_info, &context).await?;
+    Ok(context)
+}
+
+pub(crate) async fn freeze_lake_read_context(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+    scope: Option<&Predicate>,
+) -> Result<FlussLakeReadContext> {
+    if !table_info
+        .table_config
+        .is_datalake_enabled()
+        .map_err(|error| planning_client_error("check lake configuration", error))?
+    {
+        return Err(FlussLakeError::NotLakeReadable(
+            "lake-only read requires a lake-enabled table".into(),
+        ));
+    }
+    PartitionScope::bind(scope, table_info.row_type(), &table_info.partition_keys)?;
+    let snapshot = load_readable_snapshot(admin, table_info).await?;
+    let context = FlussLakeReadContext::from_lake_snapshot(
+        table_info,
+        snapshot.map(|snapshot| snapshot.snapshot_id),
+        scope,
+    )?;
+    validate_source_identity(admin, table_info, &context).await?;
+    Ok(context)
+}
+
+async fn load_readable_snapshot(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+) -> Result<Option<LakeSnapshotInfo>> {
+    let table_path = &table_info.table_path;
+    let snapshot = if table_info
+        .table_config
+        .is_datalake_enabled()
+        .map_err(|error| FlussLakeError::PlanningFailed(error.to_string()))?
+    {
+        match admin.get_lake_snapshot(table_path, None, Some(true)).await {
+            Ok(snapshot) => Some(snapshot),
+            Err(error)
+                if error.api_error() == Some(fluss::error::FlussError::LakeSnapshotNotExist) =>
+            {
+                None
+            }
+            Err(error) => {
+                return Err(planning_client_error("get readable lake snapshot", error));
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(snapshot) = &snapshot
+        && snapshot.table_id != table_info.table_id
+    {
+        return Err(FlussLakeError::PlanningFailed(format!(
+            "readable snapshot {} belongs to table id {}, but {table_path} resolved to table id {}",
+            snapshot.snapshot_id, snapshot.table_id, table_info.table_id
+        )));
+    }
+    Ok(snapshot)
+}
+
+async fn validate_source_identity(
+    admin: &FlussAdmin,
+    table_info: &TableInfo,
+    context: &FlussLakeReadContext,
+) -> Result<()> {
+    // Name-based metadata calls may cross a table drop/recreate. Recheck the
+    // source identity without replacing the captured schema or boundaries.
     let live_table = admin
-        .get_table_info(table_path)
+        .get_table_info(&table_info.table_path)
         .await
         .map_err(|error| planning_client_error("recheck source table identity", error))?;
-    context.validate_table(&live_table)?;
-    Ok(context)
+    context.validate_table(&live_table)
 }
 
 fn retain_live_ranges(
@@ -235,20 +322,12 @@ fn partition_identity(
 }
 
 fn collect_snapshot_offsets(
-    table_path: &TablePath,
     table_id: i64,
     readable_snapshot: Option<&LakeSnapshotInfo>,
 ) -> Result<HashMap<TableBucket, i64>> {
     let Some(snapshot) = readable_snapshot else {
         return Ok(HashMap::new());
     };
-    if snapshot.table_id != table_id {
-        return Err(FlussLakeError::PlanningFailed(format!(
-            "readable snapshot {} belongs to table id {}, but {table_path} resolved to table id {table_id}",
-            snapshot.snapshot_id, snapshot.table_id
-        )));
-    }
-
     let mut offsets = HashMap::new();
     for bucket_snapshot in &snapshot.bucket_snapshots {
         let Some(offset) = bucket_snapshot.log_offset else {
@@ -273,6 +352,41 @@ fn collect_snapshot_offsets(
         }
     }
     Ok(offsets)
+}
+
+fn collect_kv_snapshots(
+    snapshots: LatestKvSnapshots,
+    table_id: i64,
+    partition_id: Option<i64>,
+    bucket_count: i32,
+) -> Result<HashMap<i32, KvSnapshot>> {
+    if snapshots.table_id != table_id || snapshots.partition_id != partition_id {
+        return Err(FlussLakeError::DataUnavailable(
+            "table or partition was replaced while selecting KV snapshots".into(),
+        ));
+    }
+    let mut selected = HashMap::new();
+    for snapshot in snapshots.latest_snapshots {
+        match (snapshot.snapshot_id, snapshot.log_offset) {
+            (None, None) => continue,
+            (Some(id), Some(offset)) if id >= 0 && offset >= 0 => {}
+            _ => {
+                return Err(FlussLakeError::PlanningFailed(
+                    "KV snapshot has no valid ID and matching log seam".into(),
+                ));
+            }
+        }
+        let bucket_id = snapshot.bucket_id;
+        if bucket_id < 0
+            || bucket_id >= bucket_count
+            || selected.insert(bucket_id, snapshot).is_some()
+        {
+            return Err(FlussLakeError::PlanningFailed(
+                "KV snapshots contain an invalid or duplicate bucket".into(),
+            ));
+        }
+    }
+    Ok(selected)
 }
 
 async fn load_server_offsets(
@@ -383,6 +497,33 @@ fn freeze_bucket_range(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kv_selection_requires_matching_identity_and_seam() {
+        let snapshots = LatestKvSnapshots {
+            table_id: 5,
+            partition_id: Some(9),
+            latest_snapshots: vec![
+                KvSnapshot {
+                    bucket_id: 0,
+                    snapshot_id: Some(3),
+                    log_offset: Some(12),
+                },
+                KvSnapshot {
+                    bucket_id: 1,
+                    snapshot_id: None,
+                    log_offset: None,
+                },
+            ],
+        };
+        let selected = collect_kv_snapshots(snapshots.clone(), 5, Some(9), 2).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[&0].log_offset, Some(12));
+        assert!(collect_kv_snapshots(snapshots.clone(), 5, Some(10), 2).is_err());
+        let mut incomplete = snapshots;
+        incomplete.latest_snapshots[0].log_offset = None;
+        assert!(collect_kv_snapshots(incomplete, 5, Some(9), 2).is_err());
+    }
 
     #[test]
     fn partition_recheck_discards_only_confirmed_deleted_ids() {

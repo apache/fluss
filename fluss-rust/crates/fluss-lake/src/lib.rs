@@ -14,17 +14,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Reusable source boundaries for bounded lake and log reads.
+//! Source boundaries and format-extensible bounded UnionRead.
 
 #![doc = include_str!("../README.md")]
 
 mod boundary;
+mod bucket_pruning;
 mod error;
 mod partition;
+mod plan;
+mod planner;
+mod pruning;
 mod read_context;
+mod source;
+mod split;
+mod split_descriptor;
 mod table;
 
 pub use error::{FlussLakeError, Result};
 pub use partition::{FlussLakeLogPartition, FlussLakePartitionIdentity};
+pub use plan::{FlussLakePlanStatistics, FlussLakeReadPlan};
 pub use read_context::{FlussLakeBaseline, FlussLakeLogRange, FlussLakeReadContext};
-pub use table::FlussLakeTable;
+pub use source::{LakePlannerContext, LakeReadSemantics, LakeReaderContext, LakeSource, LakeSplit};
+pub use split::FlussLakeReadSplit;
+pub use split_descriptor::FlussLakeSplitDescriptor;
+pub use table::{FlussLakeScan, FlussLakeTable};
+
+/// A finite stream of Arrow record batches returned by a lake source.
+pub type RecordBatchStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<arrow::record_batch::RecordBatch>> + Send>>;

@@ -69,14 +69,23 @@ impl FlussLakeReadContext {
                         baseline: Some(match range.baseline {
                             FlussLakeBaseline::None => 0,
                             FlussLakeBaseline::Lake => 1,
+                            FlussLakeBaseline::KvSnapshot { .. } => 2,
                         }),
+                        kv_snapshot_id: match range.baseline {
+                            FlussLakeBaseline::KvSnapshot { snapshot_id } => Some(snapshot_id),
+                            _ => None,
+                        },
                         start_offset: Some(range.start_offset),
                         stop_offset: Some(range.stop_offset),
                         earliest_offset: Some(range.earliest_offset),
                     }
                 })
                 .collect(),
-            coverage: Some(i32::from(self.bucket_scoped)),
+            coverage: Some(if self.lake_only {
+                2
+            } else {
+                i32::from(self.bucket_scoped)
+            }),
         })
     }
 
@@ -90,14 +99,26 @@ impl FlussLakeReadContext {
         schema: &SchemaInfo,
     ) -> Result<Self> {
         validate_wire_identity(pb, live)?;
+        let context = Self::from_wire_schema(pb, schema)?;
+        context.validate_table(live)?;
+        Ok(context)
+    }
+
+    fn from_wire_schema(pb: &PbUnionReadContext, schema: &SchemaInfo) -> Result<Self> {
+        if pb.version != Some(1) {
+            return Err(invalid_context(
+                "unsupported or missing read boundary version",
+            ));
+        }
         if required(pb.schema_id, "schema_id")? != schema.schema_id() {
             return Err(invalid_context(
                 "resolved schema does not match the planned schema ID",
             ));
         }
-        let bucket_scoped = match pb.coverage {
-            Some(0) => false,
-            Some(1) => true,
+        let (bucket_scoped, lake_only) = match pb.coverage {
+            Some(0) => (false, false),
+            Some(1) => (true, false),
+            Some(2) => (false, true),
             _ => return Err(invalid_context("unknown or missing read coverage")),
         };
         let lake = pb
@@ -118,6 +139,9 @@ impl FlussLakeReadContext {
             .log_ranges
             .iter()
             .map(|range| {
+                if range.baseline != Some(2) && range.kv_snapshot_id.is_some() {
+                    return Err(invalid_context("KV snapshot ID requires a KV baseline"));
+                }
                 if range.partition_values.len() != pb.partition_keys.len() {
                     return Err(invalid_context(
                         "partition values do not match the captured keys",
@@ -136,7 +160,7 @@ impl FlussLakeReadContext {
                 };
                 Ok(FlussLakeLogRange {
                     table_bucket: TableBucket::new_with_partition(
-                        live.table_id,
+                        required(pb.table_id, "table_id")?,
                         range.partition_id,
                         required(range.bucket_id, "bucket_id")?,
                     ),
@@ -145,6 +169,9 @@ impl FlussLakeReadContext {
                     baseline: match range.baseline {
                         Some(0) => FlussLakeBaseline::None,
                         Some(1) => FlussLakeBaseline::Lake,
+                        Some(2) => FlussLakeBaseline::KvSnapshot {
+                            snapshot_id: required(range.kv_snapshot_id, "kv_snapshot_id")?,
+                        },
                         _ => return Err(invalid_context("unknown or missing baseline kind")),
                     },
                     start_offset: required(range.start_offset, "start_offset")?,
@@ -154,8 +181,11 @@ impl FlussLakeReadContext {
             })
             .collect::<Result<_>>()?;
         let context = Self {
-            table_path: live.table_path.clone(),
-            table_id: live.table_id,
+            table_path: TablePath::new(
+                required(pb.database_name.as_deref(), "database_name")?,
+                required(pb.table_name.as_deref(), "table_name")?,
+            ),
+            table_id: required(pb.table_id, "table_id")?,
             schema_id: schema.schema_id(),
             schema: schema.schema().clone(),
             partition_keys: pb.partition_keys.clone(),
@@ -168,6 +198,7 @@ impl FlussLakeReadContext {
                 })
                 .transpose()?,
             bucket_scoped,
+            lake_only,
             bucket_keys: pb.bucket_keys.clone(),
             num_buckets: required(pb.table_bucket_count, "table_bucket_count")?,
             merge_engine: pb.merge_engine.clone(),
@@ -175,7 +206,6 @@ impl FlussLakeReadContext {
             log_ranges: ranges,
         };
         context.validate()?;
-        context.validate_table(live)?;
         Ok(context)
     }
 }
