@@ -55,6 +55,7 @@ import java.util.concurrent.ExecutionException;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropTable;
@@ -230,6 +231,7 @@ public class TabletServerShutdownITCase {
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(oldLeader);
         assertThat(writeData(gateway, tableId, false).hasErrorCode()).isFalse();
         Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
+        flushAndWait(replica.getKvTablet(), Long.MAX_VALUE);
         try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
             replica.getKvTablet().getRocksDBKv().getDb().flush(flushOptions);
         }
@@ -282,6 +284,7 @@ public class TabletServerShutdownITCase {
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
         TabletServerGateway gateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         assertThat(writeData(gateway, tableId, false).hasErrorCode()).isFalse();
+        flushAndWait(replica.getKvTablet(), Long.MAX_VALUE);
         if (withSnapshot) {
             FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
         }
@@ -434,7 +437,7 @@ public class TabletServerShutdownITCase {
             return tabletServerGateway
                     .putKv(
                             newPutKvRequest(
-                                    tableId, 0, -1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                                    tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
                     .get()
                     .getBucketsRespAt(0);
         }
