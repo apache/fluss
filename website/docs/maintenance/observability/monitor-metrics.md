@@ -1366,6 +1366,18 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
             <td>Meter</td>
         </tr>
         <tr>
+            <td>fetcherBusyTimeMs</td>
+            <td>Flink Source Operator</td>
+            <td>The cumulative time in milliseconds the reader's split fetcher spent reading records, writing them to the lake and completing lake files. Time spent waiting for new log data is excluded.</td>
+            <td>Counter</td>
+        </tr>
+        <tr>
+            <td>fetcherBusyTimeMsPerSecond</td>
+            <td>Flink Source Operator</td>
+            <td>The busy milliseconds per second of the reader's split fetcher (0–1000), derived from the fetcherBusyTimeMs counter using a 60-second sliding window. The tiering work runs on the split fetcher thread, so Flink's <code>busyTimeMsPerSecond</code> of the source stays near 0 even when a reader is saturated; use this metric instead. A reader close to 1000 is limited by its CPU or by the lake writer.</td>
+            <td>Meter</td>
+        </tr>
+        <tr>
             <td>readersAwaitingSplitRatio</td>
             <td>Flink Source Enumerator</td>
             <td>The current ratio (0–1) of readers tracked by the enumerator as waiting for a split to the source parallelism.</td>
@@ -1373,6 +1385,49 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
         </tr>
     </tbody>
 </table>
+
+The tiering source also reports Flink's standard source metrics, which autoscalers such as the Flink Kubernetes Operator use to size the source. Both count log offsets rather than rows, so they can be compared, also across gaps such as expired log segments:
+
+<table class="table table-bordered">
+    <thead>
+    <tr>
+      <th class="text-left" style={{width: '225pt'}}>Metrics Name</th>
+      <th class="text-left" style={{width: '165pt'}}>Level</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '70pt'}}>Type</th>
+    </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>numRecordsIn</td>
+            <td>Flink Source Operator</td>
+            <td>The log offsets the reader has tiered. The write results the reader emits to the committer are not counted.</td>
+            <td>Counter</td>
+        </tr>
+        <tr>
+            <td>pendingRecords</td>
+            <td>Flink Source Operator</td>
+            <td>The log offsets still to be tiered: the rest of the reader's splits, plus, on the first reader (subtask 0), the splits of the current table not yet assigned to a reader. Tables waiting in the Fluss cluster to be tiered are not included. Snapshot splits, the first round of a primary key bucket, are estimated by the log offset of their snapshot, an upper bound since updates of the same key collapse into one row; a split read from the earliest offset is counted from offset 0 until its first records arrive.</td>
+            <td>Gauge</td>
+        </tr>
+    </tbody>
+</table>
+
+:::tip
+To autoscale the tiering service with the Flink Kubernetes Operator, keep in mind that it tiers one table at a time in rounds:
+- Set `pipeline.max-parallelism` to the largest number of splits of a table (buckets, times partitions for partitioned tables); more readers stay idle.
+- Use a metrics window (`job.autoscaler.metrics.window`) of at least twice the largest table freshness, so the gaps between rounds don't look like idle time.
+- Capacity is measured while the source catches up on a backlog. Lower `job.autoscaler.observed-true-processing-rate.lag-threshold` (e.g. to `5s`) if your tables rarely have more than 30 seconds of backlog.
+- A restart redoes the rounds in progress, so set `job.autoscaler.restart.time` to about the freshness and keep `job.autoscaler.scale-down.interval` long (e.g. 30 minutes or more).
+:::
+
+:::tip
+The autoscaler sizes parallelism from the record rates only: it doesn't see the CPU usage of the tiering job, and sees its memory only through optional heap and GC guards. Size the TaskManagers so that adding parallelism adds real capacity:
+- **CPU**: each reader tiers one split at a time on its split fetcher thread, which decodes the log, writes the lake files and, for formats that compact while writing, compacts them. Give each slot at least one CPU, and keep the slots per TaskManager at or below its CPU limit, so that every new reader gets a CPU of its own. Watch `fetcherBusyTimeMsPerSecond`: readers close to 1000 while CPU is throttled need more CPU per slot, not more parallelism.
+- **Memory**: size the TaskManager memory for one lake writer per slot, as each reader holds about one writer at a time. The lake formats buffer a whole file part in memory with their default settings, e.g. a Parquet row group (128 MB by default) or Paimon's write buffer (256 MB by default), plus the memory of compaction when it runs inside the tiering job.
+- Enable the autoscaler's memory guards, which are off by default (`1.0`): set `job.autoscaler.memory.gc-pressure.threshold` to about `0.5` and `job.autoscaler.memory.heap-usage.threshold` below `1.0`, e.g. `0.9`. The autoscaler then pauses scaling and reports the memory pressure while a job is short of memory, instead of adding readers that each need another writer's memory.
+- Keep `job.autoscaler.memory.tuning.enabled` off: it only sees the JVM heap, while lake writers also use off-heap memory such as Arrow and Parquet buffers.
+:::
 
 :::tip
 A tiering round that fails to commit is retried in the next round without failing the tiering job, so a table whose commits keep failing stops advancing in the lake while the job looks healthy.
