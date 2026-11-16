@@ -92,13 +92,22 @@ impl FlussLakeReadSplit {
         descriptor: FlussLakeSplitDescriptor,
         primary_key_indexes: Vec<usize>,
     ) -> Result<Self> {
-        let split = Self {
+        let split = Self::from_planned(table_info, descriptor, primary_key_indexes);
+        split.validate()?;
+        Ok(split)
+    }
+
+    // Planner inputs have already passed boundary and LakeSource validation.
+    pub(crate) fn from_planned(
+        table_info: Arc<TableInfo>,
+        descriptor: FlussLakeSplitDescriptor,
+        primary_key_indexes: Vec<usize>,
+    ) -> Self {
+        Self {
             table_info,
             descriptor: Arc::new(descriptor),
             primary_key_indexes: primary_key_indexes.into(),
-        };
-        split.validate()?;
-        Ok(split)
+        }
     }
 
     pub(crate) fn append_id(&mut self, suffix: &str) {
@@ -178,24 +187,26 @@ impl FlussLakeReadSplit {
                 "a partition that no longer exists in Fluss cannot carry a log range",
             ));
         }
-        if !lake_splits.is_empty() && snapshot_id.is_none() {
-            return Err(invalid_descriptor(
-                "lake splits require a pinned snapshot id",
-            ));
-        }
-        for task in lake_splits {
-            if task.format.is_empty()
-                || Some(task.snapshot_id) != *snapshot_id
-                || task.bucket_id != table_bucket.bucket_id()
-                || !task.has_valid_bucket()
-                || (self.is_primary_key() && task.bucket_id < 0)
-                || task.bucket_count != lake_splits[0].bucket_count
-                || task.payload_version == 0
-                || task.payload.is_empty()
-            {
-                return Err(invalid_descriptor(
-                    "lake task identity or payload does not match the logical split",
-                ));
+        if let Some(first) = lake_splits.first() {
+            let snapshot_id = snapshot_id
+                .ok_or_else(|| invalid_descriptor("lake splits require a pinned snapshot id"))?;
+            let format = table_info
+                .table_config
+                .get_datalake_format()
+                .map_err(|error| invalid_descriptor(error.to_string()))?
+                .ok_or_else(|| invalid_descriptor("lake task requires a lake format"))?
+                .to_string();
+            for task in lake_splits {
+                task.validate(&format, snapshot_id)
+                    .map_err(|error| invalid_descriptor(error.to_string()))?;
+                if task.bucket_id != table_bucket.bucket_id()
+                    || (self.is_primary_key() && task.bucket_id < 0)
+                    || task.bucket_count != first.bucket_count
+                {
+                    return Err(invalid_descriptor(
+                        "lake task identity does not match the logical split",
+                    ));
+                }
             }
         }
         let mut seen = HashSet::with_capacity(primary_key_indexes.len());

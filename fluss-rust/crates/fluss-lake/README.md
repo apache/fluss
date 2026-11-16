@@ -99,4 +99,6 @@ Tables with `table.datalake.historical-partition.enabled=true` are rejected duri
 
 Append lake tasks and bucket log tails are independent. PK tasks group a complete lake or KV baseline and log tail by partition and bucket. The source must reconcile lake versions and deletion vectors before returning a PK baseline. Partition and bucket pruning is conservative; execution must apply the exact filter after reconciliation.
 
+`LakePlannerContext` carries the exact partition scope and optional selected bucket to the backend. Sources should prune before expensive planning when supported; returned tasks are also checked against the captured scope. Partition identities use the core Fluss partition encoding. Lake filters may include mutable PK columns, provided the backend preserves its current-view merge/deletion semantics; the complete Fluss tail is folded before final exact filtering.
+
 Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.

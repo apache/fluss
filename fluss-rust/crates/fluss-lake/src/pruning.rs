@@ -18,16 +18,9 @@
 //! Conservative partition pruning over a schema-bound core predicate.
 
 use crate::FlussLakePartitionIdentity;
-use fluss::metadata::{DataType, RowType};
-use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal, Predicate};
+use fluss::metadata::RowType;
+use fluss::predicate::{BoundPredicate, Predicate};
 use std::collections::HashMap;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TruthValue {
-    True,
-    False,
-    Unknown,
-}
 
 /// Evaluates predicates only against fields represented by partition values.
 pub(crate) struct PartitionPruner {
@@ -59,31 +52,9 @@ impl PartitionPruner {
     /// String equality uses metadata values verbatim. Other types may have
     /// multiple encodings of an equal value; keep them for metadata-aware pruning.
     pub(crate) fn partition_scope(&self) -> Option<Predicate> {
-        let mut scope = HashMap::new();
-        let mut pending = vec![&self.predicate];
-        while let Some(predicate) = pending.pop() {
-            match predicate {
-                BoundPredicate::Compound {
-                    function: CompoundFunction::And,
-                    children,
-                } => pending.extend(children),
-                BoundPredicate::Leaf {
-                    field_index,
-                    field_name,
-                    data_type: DataType::String(_),
-                    function: LeafFunction::Equal,
-                    literals,
-                    ..
-                } if self.partition_fields.get(field_index) == Some(field_name) => {
-                    if let [Literal::String(value)] = literals.as_slice() {
-                        scope.insert(field_name.clone(), value.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        scope
+        crate::partition::string_equalities(&self.predicate)
             .into_iter()
+            .filter(|(name, _)| self.partition_fields.values().any(|field| field == name))
             .map(|(name, value)| fluss::predicate::col(name).eq(value))
             .reduce(Predicate::and)
     }
@@ -103,61 +74,25 @@ impl PartitionPruner {
     }
 
     fn partition_values_may_match(&self, values: &HashMap<&str, &str>) -> bool {
-        self.evaluate(&self.predicate, values) != TruthValue::False
-    }
-
-    fn evaluate(
-        &self,
-        predicate: &BoundPredicate,
-        partition_values: &HashMap<&str, &str>,
-    ) -> TruthValue {
-        match predicate {
-            BoundPredicate::AlwaysTrue => TruthValue::True,
-            BoundPredicate::Compound { function, children } => match function {
-                CompoundFunction::And => {
-                    let mut result = TruthValue::True;
-                    for child in children {
-                        match self.evaluate(child, partition_values) {
-                            TruthValue::False => return TruthValue::False,
-                            TruthValue::Unknown => result = TruthValue::Unknown,
-                            TruthValue::True => {}
-                        }
-                    }
-                    result
-                }
-                CompoundFunction::Or => {
-                    let mut result = TruthValue::False;
-                    for child in children {
-                        match self.evaluate(child, partition_values) {
-                            TruthValue::True => return TruthValue::True,
-                            TruthValue::Unknown => result = TruthValue::Unknown,
-                            TruthValue::False => {}
-                        }
-                    }
-                    result
-                }
-            },
-            BoundPredicate::Leaf {
+        crate::partition::evaluate_predicate(&self.predicate, &mut |leaf| {
+            let BoundPredicate::Leaf {
                 field_index,
                 field_name,
                 ..
-            } => {
-                let Some(partition_key) = self.partition_fields.get(field_index) else {
-                    return TruthValue::Unknown;
-                };
-                if partition_key != field_name {
-                    return TruthValue::Unknown;
-                }
-                let Some(value) = partition_values.get(partition_key.as_str()).copied() else {
-                    return TruthValue::Unknown;
-                };
-                match predicate.evaluate_partition_value(value) {
-                    Ok(true) => TruthValue::True,
-                    Ok(false) => TruthValue::False,
-                    Err(_) => TruthValue::Unknown,
-                }
+            } = leaf
+            else {
+                unreachable!()
+            };
+            if self.partition_fields.get(field_index) != Some(field_name) {
+                return Ok(None);
             }
-        }
+            Ok(values
+                .get(field_name.as_str())
+                .and_then(|value| leaf.evaluate_partition_value(value).ok()))
+        })
+        .ok()
+        .flatten()
+            != Some(false)
     }
 }
 
@@ -171,7 +106,7 @@ mod tests {
         RowType::new(vec![
             DataField::new("id", DataTypes::int(), None),
             DataField::new("region", DataTypes::string(), None),
-            DataField::new("day", DataTypes::int(), None),
+            DataField::with_field_id("day", DataTypes::int(), None, 2),
         ])
     }
 
@@ -273,6 +208,14 @@ mod tests {
             pruner(col("day").eq(1_i32))
                 .partition_identity_may_match(&partition("EU", "not-a-number"))
         );
+        let scope = crate::partition::PartitionScope::bind(
+            Some(&col("day").eq(1_i32)),
+            &row_type(),
+            &["day".into()],
+        )
+        .unwrap();
+        assert!(scope.matches(&partition("EU", "not-a-number")).is_err());
+        assert!(!scope.matches(&partition("EU", "2")).unwrap());
     }
 
     #[test]

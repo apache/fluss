@@ -25,14 +25,14 @@
 use crate::{FlussLakeError, FlussLakePartitionIdentity, RecordBatchStream, Result};
 use arrow::datatypes::SchemaRef;
 use fluss::metadata::TableInfo;
-use fluss::predicate::{BoundPredicate, CompoundFunction};
+use fluss::predicate::{BoundPredicate, Predicate};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 
 /// The baseline required by the UnionRead executor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LakeReadSemantics {
     /// Every selected append record, without introducing duplicates.
     /// Each planned task must be independently readable; the executor may
@@ -62,6 +62,7 @@ pub struct LakeSplit {
     /// Frozen lake snapshot from which this task was planned.
     pub snapshot_id: i64,
     /// Logical Fluss partition identity, including lake-only expired partitions.
+    /// Values must use Fluss partition encoding, not lake directory formatting.
     pub partition: FlussLakePartitionIdentity,
     /// Lake bucket identity, or -1 for a bucket-unaware append task.
     pub bucket_id: i32,
@@ -117,6 +118,7 @@ impl Debug for LakeSplit {
 }
 
 /// Immutable input to lake planning. The snapshot must never be refreshed.
+#[non_exhaustive]
 pub struct LakePlannerContext<'a> {
     /// Frozen Fluss schema and layout, with runtime lake properties supplied locally.
     pub table_info: &'a TableInfo,
@@ -127,12 +129,21 @@ pub struct LakePlannerContext<'a> {
     /// Whether the baseline must also support the default deduplicate tail
     /// overlay. False for append and lake-only reads.
     pub reconcile_primary_key: bool,
-    /// Only predicates safe before UnionRead reconciliation are supplied.
-    /// Backends may ignore them; the executor always evaluates the full filter.
+    /// Exact business-partition scope, including lake-only partitions.
+    /// Apply before expensive planning where supported; the planner also checks tasks.
+    pub partition_scope: Option<&'a Predicate>,
+    /// One selected Fluss bucket, with its partition identity and bucket count.
+    /// Prune by bucket only when the lake layout is Fluss-aligned.
+    pub selected_bucket: Option<&'a crate::FlussLakeLogRange>,
+    /// Optional pruning over the snapshot current view. Backends may ignore it.
+    /// PK sources must preserve version/merge/deletion semantics: filtering raw
+    /// versions must not resurrect older rows. The full log tail is reconciled
+    /// without filtering, and the executor applies the final exact filter.
     pub filter: &'a BoundPredicate,
 }
 
 /// Immutable lake-reader input from frozen tasks and the execution-side scan settings.
+#[non_exhaustive]
 pub struct LakeReaderContext<'a> {
     /// Frozen Fluss schema and layout, with runtime lake properties supplied locally.
     pub table_info: &'a TableInfo,
@@ -152,7 +163,8 @@ pub struct LakeReaderContext<'a> {
     /// Physical Arrow schema in `projection` order, to use for returned batches.
     /// Includes hidden columns and may differ from the final scan output schema.
     pub schema: SchemaRef,
-    /// A safe optional optimization, not permission to change the result.
+    /// Optional filtering of the snapshot current view, preserving merge and
+    /// deletion semantics. The executor applies the final exact filter.
     pub filter: &'a BoundPredicate,
 }
 
@@ -182,75 +194,6 @@ pub trait LakeSource: Send + Sync {
     ) -> BoxFuture<'a, Result<RecordBatchStream>>;
 }
 
-/// Selects the part of the exact core predicate that is safe to evaluate
-/// inside a lake baseline reader.
-///
-/// Append and lake-only reads may push the complete predicate. During a
-/// primary-key UnionRead, only primary-key predicates are immutable across
-/// the lake baseline and changelog tail. Mixed top-level `AND` expressions
-/// therefore contribute only their safe key conjuncts; `OR` is pushed only
-/// when every branch is key-only.
-pub(crate) fn lake_pushdown_filter(
-    predicate: &BoundPredicate,
-    table_info: &TableInfo,
-    reconcile_primary_key: bool,
-) -> Option<BoundPredicate> {
-    if matches!(predicate, BoundPredicate::AlwaysTrue) {
-        return None;
-    }
-    if !reconcile_primary_key {
-        return Some(predicate.clone());
-    }
-
-    let primary_key_indexes: HashSet<usize> = table_info
-        .primary_keys
-        .iter()
-        .filter_map(|key| table_info.row_type().get_field_index(key))
-        .collect();
-    if primary_key_indexes.len() != table_info.primary_keys.len() {
-        return None;
-    }
-    project_predicate_to_fields(predicate, &primary_key_indexes)
-}
-
-fn project_predicate_to_fields(
-    predicate: &BoundPredicate,
-    allowed_fields: &HashSet<usize>,
-) -> Option<BoundPredicate> {
-    match predicate {
-        BoundPredicate::AlwaysTrue => None,
-        BoundPredicate::Leaf { field_index, .. } => allowed_fields
-            .contains(field_index)
-            .then(|| predicate.clone()),
-        BoundPredicate::Compound {
-            function: CompoundFunction::And,
-            children,
-        } => {
-            let children: Vec<_> = children
-                .iter()
-                .filter_map(|child| project_predicate_to_fields(child, allowed_fields))
-                .collect();
-            (!children.is_empty()).then_some(BoundPredicate::Compound {
-                function: CompoundFunction::And,
-                children,
-            })
-        }
-        BoundPredicate::Compound {
-            function: CompoundFunction::Or,
-            children,
-        } => {
-            let children: Option<Vec<_>> = children
-                .iter()
-                .map(|child| project_predicate_to_fields(child, allowed_fields))
-                .collect();
-            Some(BoundPredicate::Compound {
-                function: CompoundFunction::Or,
-                children: children?,
-            })
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn testing_split() -> LakeSplit {
     LakeSplit {
@@ -263,60 +206,5 @@ pub(crate) fn testing_split() -> LakeSplit {
         estimated_size: None,
         payload_version: 1,
         payload: b"testing-task".to_vec(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use fluss::metadata::{DataTypes, Schema, TablePath};
-    use fluss::predicate::col;
-    use std::collections::HashMap;
-
-    #[test]
-    fn safe_pushdown_does_not_expose_mutable_pk_filters() {
-        let info = TableInfo::new(
-            TablePath::new("db", "table"),
-            7,
-            1,
-            Schema::builder()
-                .column("id", DataTypes::int())
-                .column("value", DataTypes::int())
-                .primary_key(["id"])
-                .unwrap()
-                .build()
-                .unwrap(),
-            vec!["id".into()],
-            vec![].into(),
-            1,
-            HashMap::new(),
-            HashMap::new(),
-            None,
-            0,
-            0,
-        );
-        let filter = BoundPredicate::bind(
-            Some(&col("id").eq(1).and(col("value").gt(10))),
-            info.row_type(),
-        )
-        .unwrap();
-        assert_eq!(
-            lake_pushdown_filter(&filter, &info, true)
-                .unwrap()
-                .referenced_field_indexes(),
-            vec![0]
-        );
-        assert_eq!(
-            lake_pushdown_filter(&filter, &info, false)
-                .unwrap()
-                .referenced_field_indexes(),
-            vec![0, 1]
-        );
-        let filter = BoundPredicate::bind(
-            Some(&col("id").eq(1).or(col("value").gt(10))),
-            info.row_type(),
-        )
-        .unwrap();
-        assert!(lake_pushdown_filter(&filter, &info, true).is_none());
     }
 }

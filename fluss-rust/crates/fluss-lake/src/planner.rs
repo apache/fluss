@@ -31,7 +31,6 @@ use crate::{
     LakeReadSemantics, Result,
 };
 use fluss::metadata::{RowType, TableInfo};
-use fluss::predicate::BoundPredicate;
 use fluss::record::to_arrow_schema;
 use std::sync::Arc;
 
@@ -104,19 +103,14 @@ async fn plan_prepared(
         context.partition_keys(),
         &filter,
     );
-    let lake_format = context
-        .lake_format()
-        .map(str::parse)
-        .transpose()
-        .map_err(|error| FlussLakeError::PlanningFailed(format!("invalid lake format: {error}")))?;
+    let lake_format = table_info
+        .table_config
+        .get_datalake_format()
+        .map_err(|error| planning_client_error("resolve bucket encoding", error))?;
     // Partitions retain their own hash modulus after a table-default change.
     // Cache once per distinct layout, rather than re-encoding keys per bucket.
     let mut bucket_pruners = std::collections::HashMap::new();
     let mut bucket_may_match = |bucket_id, bucket_count| {
-        // A Fluss-only context does not carry a lake hash-format contract.
-        if context.lake_format().is_none() {
-            return true;
-        }
         bucket_pruners
             .entry(bucket_count)
             .or_insert_with(|| {
@@ -155,12 +149,6 @@ async fn plan_prepared(
     let snapshot_id = context.lake_snapshot_id();
     let mut tasks = match (&lake_source, snapshot_id) {
         (Some(source), Some(snapshot_id)) => {
-            let safe_filter = crate::source::lake_pushdown_filter(
-                &filter,
-                table_info,
-                is_primary_key && !scan.lake_only(),
-            )
-            .unwrap_or(BoundPredicate::AlwaysTrue);
             source
                 .plan(LakePlannerContext {
                     table_info,
@@ -171,7 +159,9 @@ async fn plan_prepared(
                         LakeReadSemantics::Append
                     },
                     reconcile_primary_key: is_primary_key && !scan.lake_only(),
-                    filter: &safe_filter,
+                    partition_scope: context.partition_scope(),
+                    selected_bucket: context.is_bucket_scoped().then(|| &context.log_ranges()[0]),
+                    filter: &filter,
                 })
                 .await?
         }
@@ -429,7 +419,6 @@ fn append_lake_split(
 }
 
 /// Creates one opaque logical `(partition, bucket)` split.
-#[allow(clippy::too_many_arguments)]
 fn create_logical_split(
     table_info: &Arc<TableInfo>,
     bucket_range: &FlussLakeLogRange,
@@ -456,7 +445,7 @@ fn create_logical_split(
         "{table_path}:{partition}:{}",
         bucket_range.table_bucket.bucket_id()
     );
-    FlussLakeReadSplit::try_new(
+    Ok(FlussLakeReadSplit::from_planned(
         table_info.clone(),
         FlussLakeSplitDescriptor {
             kv_snapshot_id: match bucket_range.baseline() {
@@ -476,7 +465,7 @@ fn create_logical_split(
             estimated_size: statistics.estimated_size,
         },
         primary_key_indexes,
-    )
+    ))
 }
 
 fn partition_sort_key(partition: &crate::FlussLakePartitionIdentity) -> &[(String, String)] {
@@ -638,6 +627,46 @@ mod tests {
     use super::*;
     use fluss::metadata::{DataTypes, Schema, TableBucket, TablePath};
     use std::collections::{HashMap, HashSet};
+
+    #[test]
+    fn non_lake_boundaries_preserve_the_routing_format() {
+        for format in [None, Some("paimon")] {
+            let mut info = (*table_info(false, vec![], HashMap::new())).clone();
+            info.properties
+                .insert("table.datalake.enabled".into(), "false".into());
+            if let Some(format) = format {
+                info.properties
+                    .insert("table.datalake.format".into(), format.into());
+            } else {
+                info.properties.remove("table.datalake.format");
+            }
+            info.table_config =
+                fluss::metadata::TableConfig::from_properties(info.properties.clone());
+            let context = FlussLakeReadContext::from_boundary(
+                &info,
+                None,
+                (0..4)
+                    .map(|bucket| {
+                        FlussLakeLogRange::new(
+                            TableBucket::new(7, bucket),
+                            FlussLakeLogPartition::Ordinary(
+                                FlussLakePartitionIdentity::Unpartitioned,
+                            ),
+                            4,
+                            None,
+                            10,
+                            0,
+                        )
+                    })
+                    .collect(),
+            )
+            .unwrap();
+            // Workers reconstruct the frozen schema while retaining immutable routing properties.
+            let format = info.table_config.get_datalake_format().unwrap();
+            let info = context.table_info(&info).unwrap();
+            assert_eq!(info.table_config.get_datalake_format().unwrap(), format);
+        }
+    }
 
     fn lake_bucket(range: &FlussLakeLogRange) -> PlannedLakeBucket {
         let FlussLakeLogPartition::Ordinary(identity) = range.partition();

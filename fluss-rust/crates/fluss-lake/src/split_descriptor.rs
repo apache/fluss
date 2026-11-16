@@ -102,15 +102,6 @@ impl FlussLakeSplitDescriptor {
         scope: &PartitionScope,
         lake_only: bool,
     ) -> Result<()> {
-        if self.split_id.is_empty()
-            || self.table_bucket.table_id() != context.table_id()
-            || self.start_offset < 0
-            || self.stop_offset < self.start_offset
-        {
-            return Err(FlussLakeError::InvalidReadContext(
-                "invalid frozen UnionRead task identity or range".into(),
-            ));
-        }
         if !scope.matches(&self.partition)? {
             return Err(FlussLakeError::InvalidReadContext(
                 "task is outside the context partition scope".into(),
@@ -130,11 +121,6 @@ impl FlussLakeSplitDescriptor {
         if !self.lake_splits.is_empty() && self.snapshot_id != context.lake_snapshot_id() {
             return Err(FlussLakeError::InvalidReadContext(
                 "task lake snapshot does not match the frozen context".into(),
-            ));
-        }
-        if !self.partition.matches_keys(context.partition_keys()) {
-            return Err(FlussLakeError::InvalidReadContext(
-                "task partition layout mismatch".into(),
             ));
         }
         let pk_union = context.table_schema().primary_key().is_some() && !lake_only;

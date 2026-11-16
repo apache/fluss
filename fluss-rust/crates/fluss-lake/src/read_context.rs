@@ -524,10 +524,11 @@ impl FlussLakeReadContext {
         self.validate_table(live)?;
         let schema = self.schema.clone();
         let mut properties = live.properties.clone();
+        // The format fixes key encoding/bucketing at table creation, even when
+        // tiering is disabled. Retain it from identity-checked live metadata.
         for key in [
             "table.merge-engine",
             "table.datalake.enabled",
-            "table.datalake.format",
             "table.datalake.database-name",
             "table.datalake.table-name",
         ] {
