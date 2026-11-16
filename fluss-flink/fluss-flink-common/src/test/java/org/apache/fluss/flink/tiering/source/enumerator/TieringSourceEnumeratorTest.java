@@ -998,7 +998,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             .unwrap();
             long expectedBacklog = totalRecords - TieringBacklog.estimate(assignedSplit);
             assertThat(expectedBacklog).isGreaterThan(0L);
-            assertThat(lastBacklogEvent(context)).isEqualTo(expectedBacklog);
+            assertThat(lastBacklogEvent(context))
+                    .isEqualTo(new TieringBacklogEvent(expectedBacklog));
             assertThat(context.getSentSourceEvent()).containsOnlyKeys(BACKLOG_READER);
 
             // each further request assigns the next queued split, which leaves the backlog; one
@@ -1013,7 +1014,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 .get(0)
                                 .unwrap();
                 expectedBacklog -= TieringBacklog.estimate(nextSplit);
-                assertThat(lastBacklogEvent(context)).isEqualTo(expectedBacklog);
+                assertThat(lastBacklogEvent(context))
+                        .isEqualTo(new TieringBacklogEvent(expectedBacklog));
             }
             assertThat(expectedBacklog).isGreaterThan(0L);
 
@@ -1021,7 +1023,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // new reader attempt gets the backlog again
             context.registerSourceReader(0, 1, "localhost-0");
             enumerator.addReader(0);
-            assertThat(lastBacklogEvent(context)).isEqualTo(0L);
+            assertThat(lastBacklogEvent(context)).isEqualTo(new TieringBacklogEvent(0L));
         }
     }
 
@@ -1038,8 +1040,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
-    private static long lastBacklogEvent(FlussMockSplitEnumeratorContext<FlinkTieringSplit> context)
-            throws Exception {
+    private static TieringBacklogEvent lastBacklogEvent(
+            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context) throws Exception {
         List<SourceEvent> events =
                 context.getSentSourceEvent().getOrDefault(BACKLOG_READER, Collections.emptyList());
         List<TieringBacklogEvent> backlogEvents =
@@ -1048,7 +1050,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         .map(e -> (TieringBacklogEvent) e)
                         .collect(Collectors.toList());
         assertThat(backlogEvents).isNotEmpty();
-        return backlogEvents.get(backlogEvents.size() - 1).getBacklog();
+        return backlogEvents.get(backlogEvents.size() - 1);
     }
 
     private void registerReaderAndHandleSplitRequests(
