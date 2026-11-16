@@ -34,12 +34,14 @@ import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.ConnectionMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
@@ -321,8 +323,13 @@ final class ServerConnection {
                 try {
                     version = serverApiVersions.highestAvailableVersion(apiKey);
                     validateVersionCompatibility(apiKey, version, rawRequest);
-                } catch (Exception e) {
-                    responseFuture.completeExceptionally(e);
+                    if (apiKey == ApiKeys.UPDATE_METADATA && version == 0) {
+                        rawRequest =
+                                UpdateMetadataRequestCompat.toVersion0(
+                                        (UpdateMetadataRequest) rawRequest);
+                    }
+                } catch (Throwable t) {
+                    responseFuture.completeExceptionally(t);
                     return responseFuture;
                 }
             }

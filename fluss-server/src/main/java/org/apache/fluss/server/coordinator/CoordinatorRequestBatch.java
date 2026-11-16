@@ -66,7 +66,6 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
-import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
@@ -767,17 +766,16 @@ public class CoordinatorRequestBatch {
             List<TableMetadata> result, long tableId, List<BucketMetadata> buckets) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
-            // Keep the legacy deletion marker on the wire for older tablet servers.
             TableInfo tombstone =
                     TableInfo.of(
                             tableInfo == null ? DELETED_TABLE_PATH : tableInfo.getTablePath(),
-                            tableInfo == null ? tableId : DELETED_TABLE_ID,
+                            tableId,
                             0,
                             EMPTY_TABLE_DESCRIPTOR,
                             EMPTY_REMOTE_DATA_DIR,
                             -1L,
                             -1L);
-            result.add(new TableMetadata(tombstone, buckets, tableInfo == null ? null : tableId));
+            result.add(new TableMetadata(tombstone, buckets, true));
         } else if (tableInfo != null) {
             result.add(new TableMetadata(tableInfo, buckets));
         }

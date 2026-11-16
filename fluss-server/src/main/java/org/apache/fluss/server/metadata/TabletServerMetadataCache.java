@@ -307,15 +307,14 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                 bucketCountEpochByTableId.remove(removedTableId);
                                 tableProperties.remove(removedTableId);
                             }
-                        } else if (DELETED_TABLE_PATH.equals(tablePath)) {
-                            currentSnapshot
-                                    .getTablePath(tableId)
-                                    .ifPresent(
-                                            path -> {
-                                                if (tableIdByPath.remove(path, tableId)) {
-                                                    removedTablePaths.add(path);
-                                                }
-                                            });
+                        } else if (tableMetadata.isDeleted()) {
+                            TablePath deletedPath =
+                                    DELETED_TABLE_PATH.equals(tablePath)
+                                            ? currentSnapshot.getTablePath(tableId).orElse(null)
+                                            : tablePath;
+                            if (deletedPath != null && tableIdByPath.remove(deletedPath, tableId)) {
+                                removedTablePaths.add(deletedPath);
+                            }
                             bucketMetadataMapForTables.remove(tableId);
                             deletedTableIds.add(tableId);
                             bucketCountEpochByTableId.remove(tableId);
@@ -399,12 +398,17 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     .keySet()
                                     .removeIf(k -> k.getPartitionId() == partitionId);
                         } else {
-                            Long previousId = partitionIdByPath.put(physicalTablePath, partitionId);
-                            // Uncached tables share a null path, so they cannot identify a
-                            // same-name predecessor.
-                            if (tablePath != null
-                                    && previousId != null
-                                    && previousId != partitionId) {
+                            // Partition IDs increase on recreation. Uncached parents share a
+                            // null path, so only compare IDs when the parent is known.
+                            Long previousId =
+                                    tablePath == null
+                                            ? null
+                                            : partitionIdByPath.get(physicalTablePath);
+                            if (previousId != null && partitionId < previousId) {
+                                continue;
+                            }
+                            partitionIdByPath.put(physicalTablePath, partitionId);
+                            if (previousId != null && previousId != partitionId) {
                                 bucketMetadataMapForPartitions.remove(previousId);
                                 partitionBucketCounts.remove(
                                         new TablePartition(tableId, previousId));
@@ -619,6 +623,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     TablePath tablePath = tablePathOpt.get();
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, partitionName);
+                    Long previousId = currentSnapshot.getPartitionIdByPath().get(physicalTablePath);
+                    if (previousId != null && partitionId < previousId) {
+                        return;
+                    }
 
                     // Create new maps based on current state
                     Map<TablePath, Long> tableIdByPath =
@@ -632,7 +640,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(currentSnapshot.getPartitionBucketCounts());
 
                     // Update partition mapping
-                    Long previousId = partitionIdByPath.put(physicalTablePath, partitionId);
+                    partitionIdByPath.put(physicalTablePath, partitionId);
                     if (previousId != null && previousId != partitionId) {
                         bucketMetadataMapForPartitions.remove(previousId);
                         partitionBucketCounts.remove(new TablePartition(tableId, previousId));

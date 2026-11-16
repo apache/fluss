@@ -742,14 +742,14 @@ public class TabletServerMetadataCacheTest {
                 new TableMetadata(
                         TableInfo.of(
                                 partitionedTablePath,
-                                DELETED_TABLE_ID,
+                                partitionTableId,
                                 0,
                                 DATA1_PARTITIONED_TABLE_DESCRIPTOR,
                                 DEFAULT_REMOTE_DATA_DIR,
                                 -1L,
                                 -1L),
                         Collections.emptyList(),
-                        partitionTableId);
+                        true);
         long newPartitionId = partitionId1 + 100;
         PartitionMetadata newPartition =
                 new PartitionMetadata(
@@ -879,8 +879,80 @@ public class TabletServerMetadataCacheTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"true, false", "true, true", "false, false", "false, true"})
-    void testReplacedPartitionRemovesOldBuckets(boolean refillFromZk, boolean deleteOldPartition) {
+    @CsvSource({"false, false", "false, true", "true, false"})
+    void testDelayedPartitionUpdateCannotUndoReplacement(boolean refillFromZk, boolean sameBatch) {
+        updateMetadata(tableMetadataList, partitionMetadataList);
+        long replacementId = partitionId1 + 100;
+        PartitionMetadata replacement =
+                new PartitionMetadata(
+                        partitionTableId,
+                        partitionName1,
+                        replacementId,
+                        initialBucketMetadata,
+                        initialBucketMetadata.size());
+        PartitionMetadata stale = partitionMetadataList.get(0);
+        if (sameBatch) {
+            updateMetadata(Collections.emptyList(), Arrays.asList(replacement, stale));
+        } else {
+            updateMetadata(Collections.emptyList(), Collections.singletonList(replacement));
+            if (refillFromZk) {
+                serverMetadataCache.updatePartitionMetadata(
+                        Collections.singletonList(stale), serverMetadataCache.getSnapshot());
+            } else {
+                updateMetadata(Collections.emptyList(), Collections.singletonList(stale));
+            }
+        }
+        assertPartitionsRemoved(partitionId1);
+        updateMetadata(
+                Collections.emptyList(),
+                Collections.singletonList(
+                        new PartitionMetadata(
+                                partitionTableId,
+                                DELETED_PARTITION_NAME,
+                                partitionId1,
+                                Collections.emptyList(),
+                                null)));
+        assertPartitionMetadataEquals(
+                replacementId,
+                partitionTableId,
+                replacementId,
+                partitionName1,
+                initialBucketMetadata);
+
+        PartitionMetadata leaderChange =
+                new PartitionMetadata(
+                        partitionTableId,
+                        partitionName1,
+                        replacementId,
+                        afterChangeBucketMetadata,
+                        afterChangeBucketMetadata.size());
+        if (refillFromZk) {
+            serverMetadataCache.updatePartitionMetadata(
+                    Collections.singletonList(leaderChange), serverMetadataCache.getSnapshot());
+        } else {
+            updateMetadata(Collections.emptyList(), Collections.singletonList(leaderChange));
+        }
+        assertPartitionMetadataEquals(
+                replacementId,
+                partitionTableId,
+                replacementId,
+                partitionName1,
+                afterChangeBucketMetadata);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "true, false, false",
+        "true, false, true",
+        "false, false, false",
+        "false, false, true",
+        "true, true, false",
+        "true, true, true",
+        "false, true, false",
+        "false, true, true"
+    })
+    void testReplacedPartitionRemovesOldBuckets(
+            boolean refillFromZk, boolean deleteOldPartition, boolean recreateParent) {
         updateMetadata(tableMetadataList, partitionMetadataList);
         long replacementPartitionId = partitionId1 + 100;
         PartitionMetadata replacement =
@@ -922,6 +994,20 @@ public class TabletServerMetadataCacheTest {
                 .containsOnlyKeys(
                         new TablePartition(partitionTableId, replacementPartitionId),
                         new TablePartition(partitionTableId, partitionId2));
+
+        TableInfo parent =
+                TableInfo.of(
+                        recreateParent ? partitionedTablePath : DELETED_TABLE_PATH,
+                        recreateParent ? partitionTableId + 1 : partitionTableId,
+                        0,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        100L,
+                        100L);
+        updateMetadata(
+                Collections.singletonList(new TableMetadata(parent, Collections.emptyList())),
+                Collections.emptyList());
+        assertPartitionsRemoved(partitionId1, partitionId2, replacementPartitionId);
     }
 
     @ParameterizedTest

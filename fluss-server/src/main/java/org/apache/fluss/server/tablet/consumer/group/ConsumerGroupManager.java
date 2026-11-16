@@ -82,7 +82,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
-import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.GROUP_METADATA_PREFIX;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.GROUP_METADATA_RECORD_TYPE;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE;
@@ -149,19 +148,19 @@ public final class ConsumerGroupManager {
     public void onTableMetadataUpdate(List<TableMetadata> tables) {
         for (TableMetadata table : tables) {
             TableInfo info = table.getTableInfo();
-            if (SystemTables.CONSUMER_OFFSETS.equals(info.getTablePath())) {
+            if (table.isDeleted() && info.getTableId() != DELETED_TABLE_ID) {
+                CompletableFuture<TableInfo> current = tableInitFuture.get();
+                TableInfo cached = getInitializedTableOrNull(current);
+                if (cached != null && cached.getTableId() == info.getTableId()) {
+                    tableInitFuture.compareAndSet(current, null);
+                }
+            } else if (SystemTables.CONSUMER_OFFSETS.equals(info.getTablePath())) {
                 if (info.getTableId() == DELETED_TABLE_ID) {
                     tableInitFuture.set(null);
                 } else if (metadataCache.getBucketCountEpoch(info.getTableId()).orElse(-1L)
                         == info.getBucketCountEpoch()) {
                     // Use only a bucket layout accepted by the metadata cache.
                     tableInitFuture.set(CompletableFuture.completedFuture(info));
-                }
-            } else if (DELETED_TABLE_PATH.equals(info.getTablePath())) {
-                CompletableFuture<TableInfo> current = tableInitFuture.get();
-                TableInfo cached = getInitializedTableOrNull();
-                if (cached != null && cached.getTableId() == info.getTableId()) {
-                    tableInitFuture.compareAndSet(current, null);
                 }
             }
         }
@@ -176,15 +175,15 @@ public final class ConsumerGroupManager {
     }
 
     @Nullable
-    private TableInfo getInitializedTableOrNull() {
-        CompletableFuture<TableInfo> current = tableInitFuture.get();
+    private static TableInfo getInitializedTableOrNull(
+            @Nullable CompletableFuture<TableInfo> current) {
         return current == null
                 ? null
                 : current.handle((tableInfo, error) -> tableInfo).getNow(null);
     }
 
     private TableInfo getInitializedTableOrThrow() {
-        TableInfo info = getInitializedTableOrNull();
+        TableInfo info = getInitializedTableOrNull(tableInitFuture.get());
         if (info == null) {
             throw new ConsumerGroupOwnerNotAvailableException(
                     "Table metadata for "

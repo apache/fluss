@@ -1355,10 +1355,10 @@ pub struct PbTableMetadata {
     /// When present, bucket_count_epoch is also present, including epoch zero.
     #[prost(int32, optional, tag = "10")]
     pub bucket_count: ::core::option::Option<i32>,
-    /// Original ID of a deleted table. Keep the legacy table_id/path tombstone for older servers.
-    /// The ID prevents a delayed deletion from removing a newly created table with the same name.
-    #[prost(int64, optional, tag = "11")]
-    pub deleted_table_id: ::core::option::Option<i64>,
+    /// UPDATE_METADATA v1: a deletion applies only to the table instance identified by table_id.
+    /// Version 0 uses a sentinel table_id or table_path instead.
+    #[prost(bool, optional, tag = "11")]
+    pub deleted: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

@@ -31,6 +31,7 @@ import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -55,6 +56,7 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the {@link CoordinatorRequestBatch}. */
@@ -210,7 +212,8 @@ class CoordinatorRequestBatchTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testTableDeletionPreservesOriginalId(boolean tableInfoPresent) throws Exception {
+    void testTableDeletionEncodingForMixedVersionTabletServers(boolean tableInfoPresent)
+            throws Exception {
         long tableId = 100L;
         TablePath path = TablePath.of("db", "orders");
         if (tableInfoPresent) {
@@ -219,16 +222,34 @@ class CoordinatorRequestBatchTest {
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
 
         UpdateMetadataRequest request = sendMetadataUpdate(tableId, null);
-        PbTableMetadata wire = request.getTableMetadatasList().get(0);
-        // Older tablet servers still see the deletion marker they understand.
-        assertThat(wire.hasDeletedTableId()).isEqualTo(tableInfoPresent);
-        assertThat(wire.getTableId()).isEqualTo(tableInfoPresent ? DELETED_TABLE_ID : tableId);
-        assertThat(wire.getTablePath().getTableName())
-                .isEqualTo((tableInfoPresent ? path : DELETED_TABLE_PATH).getTableName());
-        TableInfo deleted =
-                getUpdateMetadataRequestData(request).getTableMetadataList().get(0).getTableInfo();
-        assertThat(deleted.getTableId()).isEqualTo(tableId);
-        assertThat(deleted.getTablePath()).isEqualTo(DELETED_TABLE_PATH);
+        UpdateMetadataRequest legacy = roundTrip(UpdateMetadataRequestCompat.toVersion0(request));
+        PbTableMetadata v0Table = legacy.getTableMetadataAt(0);
+        TablePath expectedPath = tableInfoPresent ? path : DELETED_TABLE_PATH;
+        long legacyId = tableInfoPresent ? DELETED_TABLE_ID : tableId;
+        assertThat(v0Table.hasDeleted()).isFalse();
+        assertThat(v0Table.getTableId()).isEqualTo(legacyId);
+        assertThat(toTablePath(v0Table.getTablePath())).isEqualTo(expectedPath);
+        TableInfo legacyDeletion =
+                getUpdateMetadataRequestData(legacy).getTableMetadataList().get(0).getTableInfo();
+        assertThat(legacyDeletion.getTableId()).isEqualTo(legacyId);
+        assertThat(legacyDeletion.getTablePath()).isEqualTo(expectedPath);
+
+        // The coordinator reuses the same request for the next tablet server.
+        UpdateMetadataRequest current = roundTrip(request);
+        PbTableMetadata v1Table = current.getTableMetadataAt(0);
+        assertThat(v1Table.isDeleted()).isTrue();
+        assertThat(v1Table.getTableId()).isEqualTo(tableId);
+        assertThat(toTablePath(v1Table.getTablePath())).isEqualTo(expectedPath);
+        TableInfo deletion =
+                getUpdateMetadataRequestData(current).getTableMetadataList().get(0).getTableInfo();
+        assertThat(deletion.getTableId()).isEqualTo(tableId);
+        assertThat(deletion.getTablePath()).isEqualTo(expectedPath);
+    }
+
+    private static UpdateMetadataRequest roundTrip(UpdateMetadataRequest request) {
+        UpdateMetadataRequest received = new UpdateMetadataRequest();
+        received.parseFrom(request.toByteArray());
+        return received;
     }
 
     @ParameterizedTest
@@ -251,7 +272,7 @@ class CoordinatorRequestBatchTest {
                 Collections.singleton(new TablePartition(tableId, partitionId)));
 
         ClusterMetadata update =
-                getUpdateMetadataRequestData(sendMetadataUpdate(tableId, partitionId));
+                getUpdateMetadataRequestData(roundTrip(sendMetadataUpdate(tableId, partitionId)));
         assertThat(update.getPartitionMetadataList())
                 .singleElement()
                 .satisfies(
@@ -289,9 +310,7 @@ class CoordinatorRequestBatchTest {
             batch.addUpdateMetadataRequestForTabletServers(
                     Collections.singleton(0), tableId, partitionId, Collections.emptySet());
             batch.sendUpdateMetadataRequest();
-            UpdateMetadataRequest received = new UpdateMetadataRequest();
-            received.parseFrom(sent.get().toByteArray());
-            return received;
+            return sent.get();
         } finally {
             channel.close();
         }
