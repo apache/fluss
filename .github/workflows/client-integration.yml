@@ -191,6 +191,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Integration tests
         run: cargo test --features integration_tests,kv-snapshot --test test_fluss -p fluss-rs
         env:
@@ -232,6 +233,7 @@ jobs:
           workspaces: |
             fluss-gateway
             fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Fluss test cluster helper
         run: cargo build --locked --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
       - name: Integration Test
@@ -276,6 +278,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
       - name: Build Python bindings
@@ -327,6 +330,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build Python bindings
         working-directory: fluss-rust/bindings/python
         run: |
@@ -370,6 +374,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Build fluss-test-cluster binary
@@ -427,6 +432,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Cache Mix deps
         uses: actions/cache@v4
         with:

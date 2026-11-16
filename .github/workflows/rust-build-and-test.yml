@@ -72,6 +72,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif --features fluss-rs/kv-snapshot
@@ -98,6 +99,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check default features on the declared MSRV
         run: cargo +1.91.0 check -p fluss-lake --locked --all-targets
@@ -129,6 +131,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Regenerate protobuf code
         run: ./crates/fluss/regen.sh

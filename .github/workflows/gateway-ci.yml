@@ -85,6 +85,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Without `--locked` Cargo rewrites a stale lockfile in the CI workspace, and the run would
       # validate a dependency graph the repository does not contain.
@@ -121,6 +122,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check on the declared MSRV
         run: cargo +1.88.0 check --locked --all-targets
@@ -162,6 +164,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-gateway
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --all -- --check
