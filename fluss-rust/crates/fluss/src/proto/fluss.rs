@@ -142,6 +142,8 @@ pub struct CreateTableRequest {
     pub table_json: ::prost::alloc::vec::Vec<u8>,
     #[prost(bool, required, tag = "3")]
     pub ignore_if_exists: bool,
+    #[prost(bool, optional, tag = "4")]
+    pub deduplicating_append: ::core::option::Option<bool>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateTableResponse {}
@@ -388,6 +390,8 @@ pub struct PutKvRequest {
     /// 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
     #[prost(int32, optional, tag = "6")]
     pub agg_mode: ::core::option::Option<i32>,
+    #[prost(bool, optional, tag = "7")]
+    pub deduplicating_append: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutKvResponse {

@@ -60,6 +60,8 @@ Java applications define the key with `Schema.Builder.deduplicationKey(...)`
 and write through the normal append API. A successful `AppendResult` means that
 the request succeeded, including when all rows were duplicates. Writer retries,
 acknowledgments, and recovery follow the primary-key table's existing behavior.
+A fully filtered write can produce an empty log batch, which advances the log
+offset and writer sequence without producing rows for readers.
 Internally, the table uses first-row semantics with a presence marker per key;
 complete rows are stored only in the log.
 

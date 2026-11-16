@@ -45,6 +45,7 @@ impl CreateTableRequest {
                 table_path: to_table_path(table_path),
                 table_json: serde_json::to_vec(&table_descriptor.serialize_json()?).unwrap(),
                 ignore_if_exists,
+                deduplicating_append: None,
             },
         })
     }
