@@ -1008,6 +1008,11 @@ helm upgrade fluss ./helm
 helm upgrade fluss ./helm -f values-new.yaml
 ```
 
+The server and JAAS ConfigMaps are hashed into a `checksum/config` pod annotation, so an upgrade
+that only changes configuration still rolls the servers onto it. Changes inside referenced Secrets
+are not tracked; restart the pods for those as described in
+[Secrets in Configuration Overrides](#secrets-in-configuration-overrides).
+
 ### Listener configuration overrides
 
 `bind.listeners` and `advertised.listeners` in `configurationOverrides` fail the render. The chart writes both from `listeners.*`. Move any existing overrides there before upgrading, or the upgrade stops with `VALUES VALIDATION`.
