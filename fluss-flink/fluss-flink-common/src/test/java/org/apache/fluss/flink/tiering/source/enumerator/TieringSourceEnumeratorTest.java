@@ -143,6 +143,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             offsets.put(bucket, CompletableFuture.completedFuture(0L));
         }
         ListOffsetsResult latestOffsets = new ListOffsetsResult(offsets);
+        Map<Integer, CompletableFuture<Long>> logStartOffsets = new HashMap<>();
+        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+            logStartOffsets.put(bucket, CompletableFuture.completedFuture(4L));
+        }
+        AtomicReference<ListOffsetsResult> earliestOffsets =
+                new AtomicReference<>(new ListOffsetsResult(logStartOffsets));
         AtomicReference<LakeSnapshot> lakeSnapshot = new AtomicReference<>();
         AtomicReference<KvSnapshots> kvSnapshots =
                 new AtomicReference<>(
@@ -165,7 +171,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     @Override
                     public ListOffsetsResult listOffsets(
                             TablePath path, Collection<Integer> buckets, OffsetSpec spec) {
-                        return latestOffsets;
+                        return spec instanceof OffsetSpec.EarliestSpec
+                                ? earliestOffsets.get()
+                                : latestOffsets;
                     }
 
                     @Override
@@ -174,7 +182,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             String partition,
                             Collection<Integer> buckets,
                             OffsetSpec spec) {
-                        return latestOffsets;
+                        return spec instanceof OffsetSpec.EarliestSpec
+                                ? earliestOffsets.get()
+                                : latestOffsets;
                     }
 
                     @Override
@@ -213,12 +223,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         committedOffsets.remove(bucket1);
         committedOffsets.remove(bucket2);
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
+        // splits read from the earliest offset carry the log start offset to estimate the backlog
         TieringLogSplit bucket1LogSplit =
                 new TieringLogSplit(
-                        DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
+                                DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0)
+                        .withLogStartOffset(4L);
         TieringLogSplit bucket2LogSplit =
                 new TieringLogSplit(
-                        DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
+                                DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0)
+                        .withLogStartOffset(4L);
         TieringSplit untieredBucketSplit =
                 historicalPartition
                         ? bucket2LogSplit
@@ -228,6 +241,26 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         assertThat(generator.generateTableSplits(tableInfo, partitions))
                 .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
         assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
+
+        // the log start offset only estimates the backlog, so failing to get it keeps the splits
+        earliestOffsets.set(
+                new ListOffsetsResult(
+                        Collections.singletonMap(
+                                1,
+                                FutureUtils.completedExceptionally(
+                                        new RuntimeException("Expected failure")))));
+        assertThat(generator.generateTableSplits(tableInfo, partitions))
+                .containsExactly(
+                        logSplit,
+                        bucket1LogSplit.withLogStartOffset(
+                                TieringLogSplit.UNKNOWN_LOG_START_OFFSET),
+                        historicalPartition
+                                ? bucket2LogSplit.withLogStartOffset(
+                                        TieringLogSplit.UNKNOWN_LOG_START_OFFSET)
+                                : untieredBucketSplit);
+        earliestOffsets.set(new ListOffsetsResult(logStartOffsets));
+        kvSnapshotRequests.set(historicalPartition ? 0 : 1);
+
         if (!historicalPartition) {
             kvSnapshots.set(
                     new KvSnapshots(
@@ -444,12 +477,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             for (int bucketId : bucketOffsetOfFirstWrite.keySet()) {
                 expectedAssignment.add(
                         new TieringLogSplit(
-                                tablePath,
-                                new TableBucket(tableId, bucketId),
-                                null,
-                                EARLIEST_OFFSET,
-                                bucketOffsetOfFirstWrite.get(bucketId),
-                                bucketOffsetOfFirstWrite.size()));
+                                        tablePath,
+                                        new TableBucket(tableId, bucketId),
+                                        null,
+                                        EARLIEST_OFFSET,
+                                        bucketOffsetOfFirstWrite.get(bucketId),
+                                        bucketOffsetOfFirstWrite.size())
+                                .withLogStartOffset(0L));
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
@@ -661,12 +695,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 for (int tableBucket : bucketOffsetOfFirstWrite.get(partitionId).keySet()) {
                     expectedAssignment.add(
                             new TieringLogSplit(
-                                    tablePath,
-                                    new TableBucket(tableId, partitionId, tableBucket),
-                                    partitionNameById.getKey(),
-                                    EARLIEST_OFFSET,
-                                    bucketOffsetOfFirstWrite.get(partitionId).get(tableBucket),
-                                    bucketOffsetOfFirstWrite.size()));
+                                            tablePath,
+                                            new TableBucket(tableId, partitionId, tableBucket),
+                                            partitionNameById.getKey(),
+                                            EARLIEST_OFFSET,
+                                            bucketOffsetOfFirstWrite
+                                                    .get(partitionId)
+                                                    .get(tableBucket),
+                                            bucketOffsetOfFirstWrite.size())
+                                    .withLogStartOffset(0L));
                 }
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
@@ -769,12 +806,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             for (int bucketId = 0; bucketId < DEFAULT_BUCKET_NUM; bucketId++) {
                 expectedAssignment.add(
                         new TieringLogSplit(
-                                tablePath,
-                                new TableBucket(tableId, bucketId),
-                                null,
-                                EARLIEST_OFFSET,
-                                bucketOffsetOfWrite.get(bucketId),
-                                expectNumberOfSplits));
+                                        tablePath,
+                                        new TableBucket(tableId, bucketId),
+                                        null,
+                                        EARLIEST_OFFSET,
+                                        bucketOffsetOfWrite.get(bucketId),
+                                        expectNumberOfSplits)
+                                .withLogStartOffset(0L));
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()

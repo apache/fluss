@@ -45,8 +45,12 @@ class TieringBacklogTest {
     }
 
     @Test
-    void testLogSplitFromEarliestOffsetCountsFromZero() {
-        assertThat(TieringBacklog.estimate(logSplit(0, EARLIEST_OFFSET, 80))).isEqualTo(80L);
+    void testLogSplitFromEarliestOffsetCountsFromLogStartOffset() {
+        // the log of a table tiered for the first time may no longer start at offset 0
+        TieringLogSplit split = logSplit(0, EARLIEST_OFFSET, 80);
+        assertThat(TieringBacklog.estimate(split.withLogStartOffset(50L))).isEqualTo(30L);
+        // counted from offset 0 if the log start offset is unknown
+        assertThat(TieringBacklog.estimate(split)).isEqualTo(80L);
     }
 
     @Test
@@ -82,7 +86,7 @@ class TieringBacklogTest {
         assertThat(TieringBacklog.remaining(30, 25)).isEqualTo(0L);
     }
 
-    private static TieringSplit logSplit(int bucket, long startingOffset, long stoppingOffset) {
+    private static TieringLogSplit logSplit(int bucket, long startingOffset, long stoppingOffset) {
         return new TieringLogSplit(
                 TABLE_PATH, new TableBucket(1L, bucket), null, startingOffset, stoppingOffset, 3);
     }

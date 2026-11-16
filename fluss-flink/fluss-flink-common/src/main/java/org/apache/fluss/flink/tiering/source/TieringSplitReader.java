@@ -127,13 +127,15 @@ public class TieringSplitReader<WriteResult>
     private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
 
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
-    // the next offset to consume per log bucket, absent until known when reading from the earliest
-    // offset; used to count consumed records and the remaining backlog
+    // the next offset to consume per log bucket, absent until the first records when reading from
+    // the earliest offset of a bucket whose log start offset is unknown; used to count consumed
+    // records and the remaining backlog
     private final Map<TableBucket, Long> currentTableNextOffsets;
     // records read so far from the current snapshot split
     private long currentSnapshotSplitRecordsRead;
-    // time the current fetch waited in a log scanner poll, excluded from the busy time
-    private long currentFetchPollNanos;
+    // time the current fetch spent in a log scanner poll that returned nothing, excluded from the
+    // busy time
+    private long currentFetchIdleNanos;
 
     private final Set<TieringSplit> currentEmptySplits;
 
@@ -195,12 +197,12 @@ public class TieringSplitReader<WriteResult>
     @Override
     public RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> fetch() throws IOException {
         long startNanos = System.nanoTime();
-        currentFetchPollNanos = 0L;
+        currentFetchIdleNanos = 0L;
         try {
             return doFetch();
         } finally {
             tieringMetrics.recordFetcherBusyTime(
-                    System.nanoTime() - startNanos - currentFetchPollNanos);
+                    System.nanoTime() - startNanos - currentFetchIdleNanos);
             updateBacklog();
         }
     }
@@ -237,16 +239,15 @@ public class TieringSplitReader<WriteResult>
                 if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
-                // the polls wait for new data, so they don't count as busy time
+                // a poll that returns no records only waited for new data, so it isn't busy time; a
+                // poll that returns records also decoded them, so it is
                 long pollStartNanos = System.nanoTime();
                 if (useRecordBatchPath()) {
-                    ArrowScanRecords polled;
-                    try {
-                        polled = ((LogScannerImpl) currentLogScanner).pollRecordBatch(pollTimeout);
-                    } finally {
-                        currentFetchPollNanos = System.nanoTime() - pollStartNanos;
-                    }
-                    try (ArrowScanRecords arrowScanRecords = polled) {
+                    try (ArrowScanRecords arrowScanRecords =
+                            ((LogScannerImpl) currentLogScanner).pollRecordBatch(pollTimeout)) {
+                        if (arrowScanRecords.isEmpty()) {
+                            currentFetchIdleNanos = System.nanoTime() - pollStartNanos;
+                        }
                         return processLogRecords(
                                 arrowScanRecords.buckets(),
                                 arrowScanRecords::records,
@@ -255,11 +256,9 @@ public class TieringSplitReader<WriteResult>
                                 arrowScanRecords::consumedUpToOffset);
                     }
                 } else {
-                    ScanRecords scanRecords;
-                    try {
-                        scanRecords = currentLogScanner.poll(pollTimeout);
-                    } finally {
-                        currentFetchPollNanos = System.nanoTime() - pollStartNanos;
+                    ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
+                    if (scanRecords.isEmpty()) {
+                        currentFetchIdleNanos = System.nanoTime() - pollStartNanos;
                     }
                     return processLogRecords(
                             scanRecords.buckets(),
@@ -326,7 +325,7 @@ public class TieringSplitReader<WriteResult>
         try {
             long backlog = 0L;
             for (Map.Entry<TableBucket, Long> entry : currentTableStoppingOffsets.entrySet()) {
-                // the earliest offset is unknown until the first poll, so count from offset 0
+                // count from 0 while the log start offset is unknown, until the first records
                 long nextOffset = currentTableNextOffsets.getOrDefault(entry.getKey(), 0L);
                 backlog += TieringBacklog.remaining(nextOffset, entry.getValue());
             }
@@ -489,10 +488,6 @@ public class TieringSplitReader<WriteResult>
                         logEndOffset,
                         timestamp);
                 currentTieringSplitsIterator.remove();
-                // the split is finished, so its remaining offsets are no longer this reader's
-                // backlog, and later polls of the bucket must not be written
-                currentTableStoppingOffsets.remove(bucket);
-                currentTableNextOffsets.remove(bucket);
             }
         }
         reachTieringMaxDurationTables.remove(this.currentTableId);
@@ -831,10 +826,6 @@ public class TieringSplitReader<WriteResult>
                         currentSnapshotSplit.getPartitionName(),
                         logEndOffset,
                         UNKNOWN_BUCKET_TIMESTAMP);
-        // the snapshot covers the log up to its offset, but updates of the same key collapse into
-        // one row; count the rest too, so the consumed records match the backlog drained
-        tieringMetrics.recordsConsumed(
-                TieringBacklog.remaining(currentSnapshotSplitRecordsRead, logEndOffset));
         LOG.info(
                 "Finish tier bucket {} for table {}, split: {}.",
                 tableBucket,
@@ -995,8 +986,9 @@ public class TieringSplitReader<WriteResult>
             return;
         } else {
             currentTableStoppingOffsets.put(tableBucket, stoppingOffset);
-            if (startingOffset >= 0) {
-                currentTableNextOffsets.put(tableBucket, startingOffset);
+            if (startingOffset >= 0 || logSplit.getLogStartOffset() >= 0) {
+                // a split read from the earliest offset starts at the bucket's log start offset
+                currentTableNextOffsets.put(tableBucket, TieringBacklog.startingOffset(logSplit));
             }
         }
 

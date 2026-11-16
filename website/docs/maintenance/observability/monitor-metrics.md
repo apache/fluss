@@ -1368,7 +1368,7 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
         <tr>
             <td>fetcherBusyTimeMs</td>
             <td>Flink Source Operator</td>
-            <td>The cumulative time in milliseconds the reader's split fetcher spent reading records, writing them to the lake and completing lake files. Time spent waiting for new log data is excluded.</td>
+            <td>The cumulative time in milliseconds the reader's split fetcher spent reading records, writing them to the lake and completing lake files. Polls that wait for new log data and return none are excluded.</td>
             <td>Counter</td>
         </tr>
         <tr>
@@ -1401,13 +1401,13 @@ The tiering source also reports Flink's standard source metrics, which autoscale
         <tr>
             <td>numRecordsIn</td>
             <td>Flink Source Operator</td>
-            <td>The log offsets the reader has tiered. The write results the reader emits to the committer are not counted.</td>
+            <td>The log offsets the reader has tiered; this is not a row count, as an offset range can include gaps such as expired log segments. Snapshot splits, the first round of a primary key bucket, count the rows read. The write results the reader emits to the committer are not counted.</td>
             <td>Counter</td>
         </tr>
         <tr>
             <td>pendingRecords</td>
             <td>Flink Source Operator</td>
-            <td>The log offsets still to be tiered: the rest of the reader's splits, plus, on the first reader (subtask 0), the splits of the current table not yet assigned to a reader. Tables waiting in the Fluss cluster to be tiered are not included. Snapshot splits, the first round of a primary key bucket, are estimated by the log offset of their snapshot, an upper bound since updates of the same key collapse into one row; a split read from the earliest offset is counted from offset 0 until its first records arrive.</td>
+            <td>The log offsets still to be tiered: the rest of the reader's splits, plus, on the first reader (subtask 0), the splits of the current table not yet assigned to a reader. Tables waiting in the Fluss cluster to be tiered are not included. Snapshot splits, the first round of a primary key bucket, are estimated by the log offset of their snapshot, an upper bound since updates of the same key collapse into one row, so the backlog drops by the collapsed updates when the split finishes. A split read from the earliest offset is counted from the bucket's log start offset.</td>
             <td>Gauge</td>
         </tr>
     </tbody>

@@ -29,9 +29,11 @@ import java.util.Collection;
  *
  * <p>The tiering source reports its backlog as {@code pendingRecords} and its progress as {@code
  * numRecordsIn}, both counted as log offsets consumed, so that autoscalers can compare them. A log
- * split is exact: the offsets between its starting and stopping offset. A snapshot split, the first
- * round of a primary key bucket, is estimated by the log offset of its snapshot, an upper bound
- * since updates of the same key collapse in the snapshot.
+ * split is exact: the offsets between its starting and stopping offset, where a split read from the
+ * earliest offset starts at the bucket's log start offset. A snapshot split, the first round of a
+ * primary key bucket, is estimated by the log offset of its snapshot, an upper bound since updates
+ * of the same key collapse into one row. Its rows are counted as they are read, like the records of
+ * a compacted Kafka topic, and the rest of the estimate drops when the split finishes.
  */
 @Internal
 public final class TieringBacklog {
@@ -45,9 +47,7 @@ public final class TieringBacklog {
         }
         if (split.isTieringLogSplit()) {
             TieringLogSplit logSplit = split.asTieringLogSplit();
-            // a negative starting offset means the earliest offset, which is unknown here
-            return remaining(
-                    Math.max(logSplit.getStartingOffset(), 0L), logSplit.getStoppingOffset());
+            return remaining(startingOffset(logSplit), logSplit.getStoppingOffset());
         }
         return Math.max(split.asTieringSnapshotSplit().getLogOffsetOfSnapshot(), 0L);
     }
@@ -59,6 +59,15 @@ public final class TieringBacklog {
             backlog += estimate(split);
         }
         return backlog;
+    }
+
+    /**
+     * Returns the offset a log split starts at. A split read from the earliest offset starts at the
+     * bucket's log start offset, or at offset 0 when that is unknown.
+     */
+    static long startingOffset(TieringLogSplit logSplit) {
+        long startingOffset = logSplit.getStartingOffset();
+        return startingOffset >= 0 ? startingOffset : Math.max(logSplit.getLogStartOffset(), 0L);
     }
 
     /** Returns the number of offsets from {@code nextOffset} up to {@code stoppingOffset}. */

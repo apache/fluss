@@ -59,6 +59,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -605,7 +606,59 @@ class TieringSplitReaderTest extends FlinkTestBase {
     }
 
     @Test
-    void testSnapshotSplitCountsCollapsedUpdatesOnFinish() throws Exception {
+    void testLogSplitFromEarliestOffsetCountsFromLogStartOffset() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_earliest_log_start_offset");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 30);
+        TableBucket bucket =
+                Collections.max(rows.keySet(), Comparator.comparingInt(b -> rows.get(b).size()));
+        long stoppingOffset = rows.get(bucket).size();
+        // as if the segments before this offset had expired when the split was generated
+        long logStartOffset = stoppingOffset / 2;
+
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        new TieringSplitReader<>(
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Thread.currentThread().getContextClassLoader(),
+                                tieringMetrics)) {
+            FlinkTieringSplit split =
+                    new FlinkTieringSplit(
+                            new TieringLogSplit(
+                                            tablePath,
+                                            bucket,
+                                            null,
+                                            EARLIEST_OFFSET,
+                                            stoppingOffset,
+                                            1)
+                                    .withLogStartOffset(logStartOffset));
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(split)));
+            assertThat(tieringMetrics.getPendingRecords())
+                    .isEqualTo(stoppingOffset - logStartOffset);
+
+            Set<String> finishedSplits = new HashSet<>();
+            while (!finishedSplits.contains(split.splitId())) {
+                finishedSplits.addAll(tieringSplitReader.fetch().finishedSplits());
+            }
+
+            // the consumed records are counted from the same offset as the backlog
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
+            tieringMetrics.flushRecordsConsumed();
+            assertThat(metricGroup.getIOMetricGroup().getNumRecordsInCounter().getCount())
+                    .isEqualTo(stoppingOffset - logStartOffset);
+        }
+    }
+
+    @Test
+    void testSnapshotSplitCountsRowsRead() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "tiering_snapshot_collapsed_updates");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
@@ -648,11 +701,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 }
             }
 
+            // the collapsed updates leave the backlog when the split finishes, without being
+            // counted as consumed, so the consumed records don't jump at the end of a snapshot
             assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
             tieringMetrics.flushRecordsConsumed();
-            // on finish, the collapsed updates are counted too, so the consumed records match
-            // the backlog the split drained
-            assertThat(numRecordsIn.getCount()).isEqualTo(logOffsetOfSnapshot);
+            assertThat(numRecordsIn.getCount()).isEqualTo(snapshotRows);
         }
     }
 

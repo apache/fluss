@@ -107,6 +107,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
             out.writeLong(tieringLogSplit.getStartingOffset());
             // write stopping offset
             out.writeLong(tieringLogSplit.getStoppingOffset());
+            // write log start offset
+            out.writeLong(tieringLogSplit.getLogStartOffset());
         }
 
         final byte[] result = out.getCopyOfBuffer();
@@ -169,8 +171,10 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
         } else if (splitKind == TIERING_LOG_SPLIT_FLAG) {
             // deserialize starting offset
             long startingOffset = in.readLong();
-            // deserialize starting offset
+            // deserialize stopping offset
             long stoppingOffset = in.readLong();
+            // deserialize log start offset
+            long logStartOffset = in.readLong();
             tieringSplit =
                     new TieringLogSplit(
                             tablePath,
@@ -181,7 +185,8 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTi
                             numberOfSplits,
                             skipCurrentRound,
                             splitIndex,
-                            tieringRoundTimestamp);
+                            tieringRoundTimestamp,
+                            logStartOffset);
         } else {
             throw new IOException("Unknown split kind " + splitKind);
         }

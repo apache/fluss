@@ -47,8 +47,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>{@code fluss.tieringService.readBytesPerSecond} - Meter: bytes-per-second rate derived from
  *       the counter using a 60-second sliding window.
  *   <li>{@code fluss.tieringService.fetcherBusyTimeMs} - Counter: cumulative time the split fetcher
- *       spent reading, writing to the lake and completing lake files, excluding the time it waited
- *       in log scanner polls for new data.
+ *       spent reading, writing to the lake and completing lake files, excluding log scanner polls
+ *       that returned no data.
  *   <li>{@code fluss.tieringService.fetcherBusyTimeMsPerSecond} - Meter: busy milliseconds per
  *       second of the split fetcher, between 0 and 1000, using a 60-second sliding window. The
  *       tiering work runs on the split fetcher thread rather than the task thread, so Flink's
@@ -61,9 +61,9 @@ import java.util.concurrent.atomic.AtomicLong;
  * (see {@link TieringBacklog}):
  *
  * <ul>
- *   <li>{@code numRecordsIn} - log records consumed, instead of the write results emitted; the
- *       source reader base counts every emitted write result, which is taken back with {@link
- *       #writeResultEmitted()}.
+ *   <li>{@code numRecordsIn} - log records consumed (rows for snapshot splits), instead of the
+ *       write results emitted; the source reader base counts every emitted write result, which is
+ *       taken back with {@link #writeResultEmitted()}.
  *   <li>{@code pendingRecords} - log records still to be tiered by this reader, plus the backlog
  *       the enumerator reports to this reader (splits not yet assigned).
  * </ul>

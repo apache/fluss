@@ -170,6 +170,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testReportsRecordsInAndPendingRecordsForAutoscalers() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "autoscaler_metrics_log_table");
         Schema schema =
