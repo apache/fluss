@@ -37,7 +37,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -146,9 +148,64 @@ class FieldLastNAggTest {
         assertThatThrownBy(() -> AggFunctionType.LAST_N.validateParameter("size", "x"))
                 .isInstanceOf(IllegalArgumentException.class);
         AggFunctionType.LAST_N.validateParameter("size", "1000");
+        AggFunctions.LAST_N(3, true).validateParameters();
+        AggFunctions.LAST_N(3, false).validateParameters();
+        AggFunctionType.LAST_N.validateParameter("distinct", "TRUE");
         AggFunctionType.LAST_N.validateDataType(BIGINTS);
         assertThatThrownBy(() -> new FieldLastNAgg(BIGINTS, 0))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest
+    @EnumSource(BinaryRowFormat.class)
+    void testDistinctAcrossUpdates(BinaryRowFormat format) {
+        Random random = new Random(86231);
+        for (int size : new int[] {1, 3, 10, Integer.MAX_VALUE}) {
+            FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, size, true);
+            Object acc = null;
+            LinkedHashSet<Long> expected = new LinkedHashSet<>();
+            for (int round = 0; round < 100; round++) {
+                Object[] input = new Object[random.nextInt(12)];
+                for (int i = 0; i < input.length; i++) {
+                    Long value = random.nextInt(7) == 0 ? null : (long) random.nextInt(20);
+                    input[i] = value;
+                    expected.remove(value);
+                    expected.add(value);
+                    if (expected.size() > size) {
+                        expected.remove(expected.iterator().next());
+                    }
+                }
+                InternalArray array = new GenericArray(input);
+                if (round % 2 == 0) {
+                    array = new ArraySerializer(DataTypes.BIGINT(), format).toBinaryArray(array);
+                }
+                acc = agg.agg(acc, array);
+                assertThat(toList(acc))
+                        .as("%s, size %s, round %s", format, size, round)
+                        .containsExactlyElementsOf(expected);
+            }
+        }
+    }
+
+    @Test
+    void testDistinctNormalizesRawAccumulators() {
+        FieldLastNAgg agg = new FieldLastNAgg(BIGINTS, 3, true);
+        assertThat(toList(agg.agg(longs(1, 1, 2), longs(2)))).containsExactly(1L, 2L);
+        assertThat(toList(agg.agg(longs(1, 2, 1, 3, 4, 4), longs()))).containsExactly(1L, 3L, 4L);
+        assertThat(toList(agg.aggReversed(longs(2), longs(1, 1, 3)))).containsExactly(1L, 3L, 2L);
+    }
+
+    @ParameterizedTest
+    @EnumSource(BinaryRowFormat.class)
+    void testDistinctByteArraysCompareByContent(BinaryRowFormat format) {
+        FieldLastNAgg agg = new FieldLastNAgg(DataTypes.ARRAY(DataTypes.BYTES()), 3, true);
+        InternalArray input =
+                new ArraySerializer(DataTypes.BYTES(), format)
+                        .toBinaryArray(GenericArray.of(new byte[] {2}, new byte[] {1}));
+        InternalArray result = (InternalArray) agg.agg(GenericArray.of(new byte[] {1}), input);
+        assertThat(result.size()).isEqualTo(2);
+        assertThat(result.getBytes(0)).containsExactly((byte) 2);
+        assertThat(result.getBytes(1)).containsExactly((byte) 1);
     }
 
     @ParameterizedTest
@@ -205,7 +262,7 @@ class FieldLastNAggTest {
         InternalArray a = (InternalArray) array;
         List<Long> out = new ArrayList<>();
         for (int i = 0; i < a.size(); i++) {
-            out.add(a.getLong(i));
+            out.add(a.isNullAt(i) ? null : a.getLong(i));
         }
         return out;
     }

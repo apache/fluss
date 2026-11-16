@@ -24,6 +24,8 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.configuration.Configuration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -179,6 +181,9 @@ class FlinkAggFunctionParserTest {
         FlinkAggFunctionParser.formatAggFunctionToOptions("col1", AggFunctions.SUM(), options);
         FlinkAggFunctionParser.formatAggFunctionToOptions(
                 "col2", AggFunctions.LISTAGG(";"), options);
+        FlinkAggFunctionParser.formatAggFunctionToOptions(
+                "events", AggFunctions.LAST_N(3, true), options);
+        assertThat(options).containsEntry("fields.events.last_n.distinct", "true");
 
         // Parse them back
         Configuration config = Configuration.fromMap(options);
@@ -193,36 +198,21 @@ class FlinkAggFunctionParserTest {
 
         assertThat(col2Func).isPresent();
         assertThat(col2Func.get()).isEqualTo(AggFunctions.LISTAGG(";"));
-    }
-
-    @Test
-    void testLastNDistinctRoundTrip() {
-        Map<String, String> options = new HashMap<>();
-        FlinkAggFunctionParser.formatAggFunctionToOptions(
-                "events", AggFunctions.LAST_N(3, true), options);
-        assertThat(options).containsEntry("fields.events.last_n.distinct", "true");
         assertThat(
                         FlinkAggFunctionParser.parseAggFunction(
-                                "events",
-                                DataTypes.ARRAY(DataTypes.STRING()),
-                                Configuration.fromMap(options)))
+                                "events", DataTypes.ARRAY(DataTypes.STRING()), config))
                 .contains(AggFunctions.LAST_N(3, true));
-        options.put("fields.events.last_n.distinct", "yes");
-        assertThatThrownBy(
-                        () ->
-                                FlinkAggFunctionParser.parseAggFunction(
-                                        "events",
-                                        DataTypes.ARRAY(DataTypes.STRING()),
-                                        Configuration.fromMap(options)))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("distinct");
     }
 
-    @Test
-    void testRejectInvalidCollectDistinctParameter() {
+    @ParameterizedTest
+    @ValueSource(strings = {"collect", "last_n"})
+    void testRejectInvalidDistinctParameter(String function) {
         Configuration options = new Configuration();
-        options.setString("fields.tags.agg", "collect");
-        options.setString("fields.tags.collect.distinct", "yes");
+        options.setString("fields.tags.agg", function);
+        options.setString("fields.tags." + function + ".distinct", "yes");
+        if (function.equals("last_n")) {
+            options.setString("fields.tags.last_n.size", "3");
+        }
         assertThatThrownBy(
                         () ->
                                 FlinkAggFunctionParser.parseAggFunction(
