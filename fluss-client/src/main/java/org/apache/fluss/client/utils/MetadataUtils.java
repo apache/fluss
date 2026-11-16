@@ -140,6 +140,35 @@ public class MetadataUtils {
                                 newBucketCountEpochByTableId =
                                         new HashMap<>(originCluster.getBucketCountEpochByTableId());
 
+                                // A reused name must not retain partitions from the old table.
+                                for (Map.Entry<TablePath, Long> update :
+                                        newTableMetadata.tablePathToTableId.entrySet()) {
+                                    TablePath path = update.getKey();
+                                    Long oldId = newTablePathToTableId.get(path);
+                                    if (oldId == null || oldId.equals(update.getValue())) {
+                                        continue;
+                                    }
+                                    newBucketLocations
+                                            .keySet()
+                                            .removeIf(p -> p.getTablePath().equals(path));
+                                    newPartitionIdByPath
+                                            .entrySet()
+                                            .removeIf(
+                                                    entry -> {
+                                                        if (entry.getKey()
+                                                                .getTablePath()
+                                                                .equals(path)) {
+                                                            newBucketCountByTableOrPartition.remove(
+                                                                    TableOrPartition.ofPartition(
+                                                                            entry.getValue()));
+                                                            return true;
+                                                        }
+                                                        return false;
+                                                    });
+                                    newBucketCountByTableOrPartition.remove(
+                                            TableOrPartition.ofTable(oldId));
+                                    newBucketCountEpochByTableId.remove(oldId);
+                                }
                                 newTablePathToTableId.putAll(newTableMetadata.tablePathToTableId);
                                 newBucketLocations.putAll(newTableMetadata.bucketLocations);
                                 newPartitionIdByPath.putAll(newTableMetadata.partitionIdByPath);
@@ -194,6 +223,11 @@ public class MetadataUtils {
                             new TablePath(
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
+                    if (cluster != null
+                            && cluster.getTableId(tablePath).orElse(tableId) > tableId) {
+                        throw new StaleMetadataException(
+                                "Received metadata for an old instance of table " + tablePath);
+                    }
                     newTablePathToTableId.put(tablePath, tableId);
                     newTablePathByTableId.put(tableId, tablePath);
 
@@ -271,10 +305,13 @@ public class MetadataUtils {
                     if (tablePath == null) {
                         tablePath =
                                 cluster == null ? null : cluster.getTablePath(tableId).orElse(null);
-                    }
-                    if (tablePath == null) {
-                        throw new StaleMetadataException(
-                                "Parent table metadata is unavailable for " + tableId);
+                        if (tablePath == null
+                                || newTablePathToTableId.getOrDefault(tablePath, tableId)
+                                        != tableId) {
+                            throw new StaleMetadataException(
+                                    "Partition metadata refers to an unknown or replaced table: "
+                                            + tableId);
+                        }
                     }
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());

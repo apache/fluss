@@ -21,6 +21,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
@@ -123,6 +124,9 @@ public class DynamicPartitionCreator {
             idExist = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (t instanceof StaleMetadataException) {
+                throw (StaleMetadataException) t;
+            }
             if (t instanceof PartitionNotExistException) {
                 if (!dynamicPartitionEnabled) {
                     throw new PartitionNotExistException(

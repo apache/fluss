@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -218,6 +219,9 @@ public class WriterClient {
             // A partition-creation failure may close the accumulator before this record is
             // registered. Preserve that failure instead of reporting only "Writer closed".
             Throwable fatalError = sender.getFatalError();
+            if (fatalError == null && e instanceof StaleMetadataException) {
+                throw (StaleMetadataException) e;
+            }
             throw new FlussRuntimeException(
                     String.format(
                             "Failed to send record to table %s. Writer state: %s",

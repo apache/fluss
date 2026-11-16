@@ -33,6 +33,7 @@ import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyPartitionsException;
@@ -150,6 +151,48 @@ final class SenderTest {
     @AfterEach
     public void teardown() throws Exception {
         sender.destroyResources();
+    }
+
+    @Test
+    void testStalePartitionMetadataDoesNotBlockReadyWrites() throws Exception {
+        sender.destroyResources();
+        TableInfo table = createHistoricalTableInfo();
+        PhysicalTablePath stale = PhysicalTablePath.of(table.getTablePath(), "stale");
+        PhysicalTablePath ready = PhysicalTablePath.of(table.getTablePath(), "ready");
+        Map<PhysicalTablePath, TableBucket> routes = new HashMap<>();
+        routes.put(stale, new TableBucket(table.getTableId(), 21L, 0));
+        routes.put(ready, new TableBucket(table.getTableId(), 22L, 0));
+        Cluster complete = partitionedCluster(table, routes);
+        AtomicInteger refreshes = new AtomicInteger();
+        metadataUpdater =
+                new TestingMetadataUpdater(Collections.singletonMap(table.getTablePath(), table)) {
+                    @Override
+                    public void updatePhysicalTableMetadata(Set<PhysicalTablePath> paths) {
+                        assertThat(paths).containsExactly(stale);
+                        if (refreshes.incrementAndGet() == 1) {
+                            throw new StaleMetadataException("Partition refers to the old table");
+                        }
+                        updateCluster(complete);
+                    }
+                };
+        metadataUpdater.updateCluster(complete);
+        sender = setupWithIdempotenceState();
+        appendKvRecord(table, stale, 1, complete);
+        appendKvRecord(table, ready, 2, complete);
+        routes.remove(stale);
+        metadataUpdater.updateCluster(partitionedCluster(table, routes));
+
+        sender.runOnce();
+        TestTabletServerGateway gateway = node1Gateway();
+        assertThat(((PutKvRequest) gateway.getRequest(0)).getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(22L);
+        assertThat(refreshes.get()).isOne();
+        sender.wakeup();
+        sender.runOnce();
+        assertThat(refreshes.get()).isEqualTo(2);
+        sender.runOnce();
+        assertThat(((PutKvRequest) gateway.getRequest(1)).getBucketsReqAt(0).getPartitionId())
+                .isEqualTo(21L);
     }
 
     @Test

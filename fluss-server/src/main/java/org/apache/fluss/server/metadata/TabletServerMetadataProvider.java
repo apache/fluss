@@ -98,11 +98,12 @@ public class TabletServerMetadataProvider extends ZkBasedMetadataProvider {
     }
 
     @Override
-    public List<PartitionMetadata> getPartitionsMetadataFromZK(
+    public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromZK(
             Collection<PhysicalTablePath> partitionPaths) {
         ServerMetadataSnapshot snapshot = metadataCache.getSnapshot();
-        List<PartitionMetadata> result = super.getPartitionsMetadataFromZK(partitionPaths);
-        metadataCache.updatePartitionMetadata(result, snapshot);
+        Map<PhysicalTablePath, PartitionMetadata> result =
+                super.getPartitionsMetadataFromZK(partitionPaths);
+        metadataCache.updatePartitionMetadata(result.values(), snapshot);
         return result;
     }
 }

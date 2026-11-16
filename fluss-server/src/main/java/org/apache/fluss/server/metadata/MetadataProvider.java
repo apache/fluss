@@ -86,8 +86,8 @@ public interface MetadataProvider {
      * Retrieves a batch of partition metadata from ZooKeeper.
      *
      * @param partitionPaths the physical path identifying the table partition
-     * @return an Optional containing the partition metadata if found in cache, empty otherwise
+     * @return the partition metadata keyed by the requested physical paths
      */
-    List<PartitionMetadata> getPartitionsMetadataFromZK(
+    Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromZK(
             Collection<PhysicalTablePath> partitionPaths);
 }

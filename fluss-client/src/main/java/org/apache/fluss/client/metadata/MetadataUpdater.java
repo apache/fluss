@@ -30,6 +30,7 @@ import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -54,6 +55,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -256,13 +258,8 @@ public class MetadataUpdater {
                     cluster = initializeCluster(conf, rpcClient);
                 } else {
                     cluster =
-                            sendMetadataRequestAndRebuildCluster(
-                                    cluster,
-                                    rpcClient,
-                                    tablePaths,
-                                    tablePartitionNames,
-                                    tablePartitionIds,
-                                    serverNode);
+                            fetchMetadataFromTablet(
+                                    serverNode, tablePaths, tablePartitionNames, tablePartitionIds);
                 }
             }
 
@@ -275,7 +272,18 @@ public class MetadataUpdater {
             }
         } catch (Exception e) {
             Throwable t = stripExecutionException(e);
+            if (t instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException("Interrupted while updating metadata", t);
+            }
             if (t instanceof RetriableException || t instanceof TimeoutException) {
+                boolean requestedRoutes =
+                        (tablePaths != null && !tablePaths.isEmpty())
+                                || (tablePartitionNames != null && !tablePartitionNames.isEmpty())
+                                || (tablePartitionIds != null && !tablePartitionIds.isEmpty());
+                if (requestedRoutes && isStaleMetadata(t)) {
+                    throw asStaleMetadataException(t);
+                }
                 if (serverNode != null) {
                     unavailableTabletServerIds.add(serverNode.id());
                     LOG.warn(
@@ -293,16 +301,72 @@ public class MetadataUpdater {
         }
     }
 
+    private Cluster fetchMetadataFromTablet(
+            ServerNode tablet,
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> partitions,
+            @Nullable Collection<Long> partitionIds)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        try {
+            return sendMetadataRequestAndRebuildCluster(
+                    cluster, rpcClient, tablePaths, partitions, partitionIds, tablet);
+        } catch (Exception e) {
+            if (partitions == null
+                    || partitions.isEmpty()
+                    || !isStaleMetadata(stripExecutionException(e))) {
+                throw e;
+            }
+        }
+
+        // Include the parents so the tablet can validate each partition's table ID.
+        Set<TablePath> parents = tablePaths == null ? new HashSet<>() : new HashSet<>(tablePaths);
+        partitions.forEach(partition -> parents.add(partition.getTablePath()));
+        Set<Integer> excluded = new HashSet<>(unavailableTabletServerIds);
+        excluded.add(tablet.id());
+        ServerNode other = getOneAvailableTabletServerNode(cluster, excluded);
+        try {
+            return sendMetadataRequestAndRebuildCluster(
+                    cluster,
+                    rpcClient,
+                    parents,
+                    partitions,
+                    partitionIds,
+                    other != null ? other : tablet);
+        } catch (Exception e) {
+            Throwable cause = stripExecutionException(e);
+            if (cause instanceof RetriableException || cause instanceof TimeoutException) {
+                // A failed recovery leaves the original metadata conflict unresolved.
+                throw asStaleMetadataException(cause);
+            }
+            throw e;
+        }
+    }
+
+    private static StaleMetadataException asStaleMetadataException(Throwable cause) {
+        if (cause instanceof StaleMetadataException) {
+            return (StaleMetadataException) cause;
+        }
+        StaleMetadataException stale =
+                new StaleMetadataException("Could not resolve metadata from a tablet server.");
+        stale.initCause(cause);
+        return stale;
+    }
+
+    private static boolean isStaleMetadata(Throwable t) {
+        // GET_METADATA encodes stale server-side metadata with this existing retriable wire error.
+        return t instanceof StaleMetadataException || t instanceof UnknownTableOrBucketException;
+    }
+
     /**
      * Refreshes the cluster node list until a live server is reached, falling back to a bootstrap
      * re-initialization when no tablet server is available.
      *
      * <p>This is the recovery entry point for stale server addresses (e.g., during rolling upgrades
-     * where every tablet server IP changes). Unlike {@link #updateMetadata}, which only probes a
-     * single server per call, this method loops: each failed server is marked unavailable so the
-     * next iteration picks a different one, and once all known servers are exhausted it
-     * re-initializes the cluster from the bootstrap servers. The loop is therefore bounded by the
-     * number of known servers (at most N attempts + 1 bootstrap) and always converges.
+     * where every tablet server IP changes). A node-only {@link #updateMetadata} call probes a
+     * single server. This method marks each failed server unavailable so the next iteration picks a
+     * different one, and once all known servers are exhausted it re-initializes the cluster from
+     * the bootstrap servers. The loop is therefore bounded by the number of known servers (at most
+     * N attempts + 1 bootstrap) and always converges.
      *
      * <p>No additional backoff is introduced here on purpose: each failed attempt already pays a
      * connection timeout, and the terminal bootstrap path ({@link

@@ -19,7 +19,10 @@ package org.apache.fluss.server;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -35,6 +38,7 @@ import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.netty.server.Session;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.util.CommonRpcMessageUtils;
 import org.apache.fluss.security.acl.AccessControlEntry;
@@ -49,15 +53,23 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metadata.PartitionMetadata;
+import org.apache.fluss.server.metadata.TableMetadata;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.InetAddress;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.server.RpcServiceBase.validateKvSnapshotMetadataVersion;
@@ -67,6 +79,76 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RpcServiceBase}. */
 class RpcServiceBaseTest {
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testJointMetadataRejectsPartitionFromReplacedTable(boolean cached) {
+        TableInfo table = tableInfo(KvValueLayout.TAGGED);
+        TableInfo other = tableInfo(KvValueLayout.PLAIN);
+        TablePath path = table.getTablePath();
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(path, "p");
+        PartitionMetadata old =
+                new PartitionMetadata(other.getTableId(), "p", 11, Collections.emptyList(), 1);
+        CoordinatorMetadataProvider provider =
+                new CoordinatorMetadataProvider(null, null, null) {
+                    @Override
+                    public Optional<TableMetadata> getTableMetadataFromCache(TablePath requested) {
+                        return Optional.of(
+                                new TableMetadata(
+                                        requested.equals(path) ? table : other,
+                                        Collections.emptyList()));
+                    }
+
+                    @Override
+                    public List<TableMetadata> getTablesMetadataFromZK(
+                            Collection<TablePath> unknown) {
+                        assertThat(unknown).isEmpty();
+                        return Collections.emptyList();
+                    }
+
+                    @Override
+                    public Optional<PartitionMetadata> getPartitionMetadataFromCache(
+                            PhysicalTablePath requested) {
+                        return cached ? Optional.of(old) : Optional.empty();
+                    }
+
+                    @Override
+                    public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromZK(
+                            Collection<PhysicalTablePath> unknown) {
+                        return unknown.contains(partitionPath)
+                                ? Collections.singletonMap(partitionPath, old)
+                                : Collections.emptyMap();
+                    }
+                };
+        MetadataRequest request = new MetadataRequest();
+        request.addTablePath()
+                .setDatabaseName(path.getDatabaseName())
+                .setTableName(path.getTableName());
+        // Both IDs occur in the response. The partition must match its own parent by path.
+        request.addTablePath()
+                .setDatabaseName(other.getTablePath().getDatabaseName())
+                .setTableName(other.getTablePath().getTableName());
+        request.addPartitionsPath()
+                .setDatabaseName(path.getDatabaseName())
+                .setTableName(path.getTableName())
+                .setPartitionName("p");
+        assertThatThrownBy(
+                        () ->
+                                new TestingRpcService(null)
+                                        .processMetadataRequest(
+                                                request,
+                                                "CLIENT",
+                                                session((short) 1),
+                                                null,
+                                                new CoordinatorMetadataCache(),
+                                                provider))
+                .hasCauseInstanceOf(StaleMetadataException.class)
+                .isInstanceOfSatisfying(
+                        UnknownTableOrBucketException.class,
+                        failure ->
+                                assertThat(ApiError.fromThrowable(failure).exception())
+                                        .isInstanceOf(UnknownTableOrBucketException.class));
+    }
 
     @Test
     void testValidateKvSnapshotMetadataVersion() {

@@ -102,7 +102,7 @@ class ZkBasedMetadataProviderTest {
             assertThat(
                             metadataProvider
                                     .getPartitionsMetadataFromZK(Collections.singleton(partition))
-                                    .get(0)
+                                    .get(partition)
                                     .getBucketCount())
                     .isEqualTo(3);
             zookeeperClient.deletePartitionAssignment(124);
@@ -298,11 +298,11 @@ class ZkBasedMetadataProviderTest {
         // Test getPartitionMetadataFromZkAsync
         PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
 
-        List<PartitionMetadata> partitionsMetadataFromZK =
+        Map<PhysicalTablePath, PartitionMetadata> partitionsMetadataFromZK =
                 metadataProvider.getPartitionsMetadataFromZK(Collections.singleton(partitionPath));
 
         assertThat(partitionsMetadataFromZK).hasSize(1);
-        PartitionMetadata partitionMetadata = partitionsMetadataFromZK.get(0);
+        PartitionMetadata partitionMetadata = partitionsMetadataFromZK.get(partitionPath);
 
         assertThat(partitionMetadata.getTableId()).isEqualTo(tableId);
         assertThat(partitionMetadata.getPartitionName()).isEqualTo(partitionName);
@@ -416,14 +416,14 @@ class ZkBasedMetadataProviderTest {
                         PhysicalTablePath.of(tablePath1, partitionName1),
                         PhysicalTablePath.of(tablePath1, partitionName2),
                         PhysicalTablePath.of(tablePath2, partitionName3));
-        List<PartitionMetadata> partitionsMetadataFromZK =
+        Map<PhysicalTablePath, PartitionMetadata> partitionsMetadataFromZK =
                 metadataProvider.getPartitionsMetadataFromZK(partitionPaths);
 
         assertThat(partitionsMetadataFromZK).hasSize(3);
 
         // Verify partition metadata
         Map<Long, PartitionMetadata> partitionMap =
-                partitionsMetadataFromZK.stream()
+                partitionsMetadataFromZK.values().stream()
                         .collect(Collectors.toMap(PartitionMetadata::getPartitionId, p -> p));
 
         // Verify partition 1

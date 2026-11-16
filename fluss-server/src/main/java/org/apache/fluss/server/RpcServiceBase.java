@@ -28,7 +28,9 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -113,6 +115,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -769,6 +772,24 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Authorizer authorizer,
             ServerMetadataCache metadataCache,
             MetadataProvider metadataProvider) {
+        try {
+            return lookupMetadata(
+                    request, listenerName, session, authorizer, metadataCache, metadataProvider);
+        } catch (StaleMetadataException e) {
+            // GET_METADATA has no separate stale-metadata wire code. A temporarily unknown
+            // table/bucket is retriable across client versions and does not imply a missing
+            // partition.
+            throw new UnknownTableOrBucketException(e.getMessage(), e);
+        }
+    }
+
+    private MetadataResponse lookupMetadata(
+            MetadataRequest request,
+            String listenerName,
+            Session session,
+            Authorizer authorizer,
+            ServerMetadataCache metadataCache,
+            MetadataProvider metadataProvider) {
         List<TablePath> authorizedTables = new ArrayList<>();
         for (PbTablePath pbTablePath : request.getTablePathsList()) {
             if (isTableMetadataAuthorized(
@@ -854,25 +875,45 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
         Map<PhysicalTablePath, PartitionMetadata> metadataFromCache =
                 metadataProvider.getPartitionsMetadataFromCache(authorizedPartitions);
-        List<PartitionMetadata> partitionsMetadata = new ArrayList<>();
-        List<PhysicalTablePath> unknownPartitions = new ArrayList<>();
-        for (PhysicalTablePath partitionPath : authorizedPartitions) {
-            PartitionMetadata cached = metadataFromCache.get(partitionPath);
-            if (cached != null) {
-                partitionsMetadata.add(cached);
-            } else {
-                unknownPartitions.add(partitionPath);
+        List<PhysicalTablePath> unknownPartitions = new ArrayList<>(authorizedPartitions);
+        unknownPartitions.removeAll(metadataFromCache.keySet());
+        Map<PhysicalTablePath, PartitionMetadata> partitionsMetadata = metadataFromCache;
+        if (!unknownPartitions.isEmpty()) {
+            partitionsMetadata = new HashMap<>(metadataFromCache);
+            partitionsMetadata.putAll(
+                    metadataProvider.getPartitionsMetadataFromZK(unknownPartitions));
+        }
+
+        if (!tablesMetadata.isEmpty() && !partitionsMetadata.isEmpty()) {
+            Map<TablePath, Long> parentIds = new HashMap<>();
+            for (TableMetadata table : tablesMetadata) {
+                TableInfo info = table.getTableInfo();
+                parentIds.put(info.getTablePath(), info.getTableId());
+            }
+            for (Map.Entry<PhysicalTablePath, PartitionMetadata> entry :
+                    partitionsMetadata.entrySet()) {
+                Long parentId = parentIds.get(entry.getKey().getTablePath());
+                if (parentId != null && parentId != entry.getValue().getTableId()) {
+                    throw new StaleMetadataException(
+                            "Partition '"
+                                    + entry.getKey()
+                                    + "' belongs to table "
+                                    + entry.getValue().getTableId()
+                                    + " but its parent now has ID "
+                                    + parentId);
+                }
             }
         }
-        // fetch unknown partition metadata from ZK
-        partitionsMetadata.addAll(metadataProvider.getPartitionsMetadataFromZK(unknownPartitions));
 
         // build response
         ServerNode coordinatorServer = metadataCache.getCoordinatorServer(listenerName);
         Set<ServerNode> aliveTabletServers =
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
         return buildMetadataResponse(
-                coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+                coordinatorServer,
+                aliveTabletServers,
+                tablesMetadata,
+                new ArrayList<>(partitionsMetadata.values()));
     }
 
     private boolean isPartitionAssignmentMissingFromZk(long partitionId) {

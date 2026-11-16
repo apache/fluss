@@ -926,9 +926,10 @@ public class TabletServerMetadataCacheTest {
                             zkClient, metadataManager, serverMetadataCache);
             assertThat(
                             provider.getPartitionsMetadataFromZK(
-                                    Collections.singletonList(
-                                            PhysicalTablePath.of(
-                                                    partitionedTablePath, partitionName1))))
+                                            Collections.singletonList(
+                                                    PhysicalTablePath.of(
+                                                            partitionedTablePath, partitionName1)))
+                                    .values())
                     .extracting(PartitionMetadata::getPartitionId)
                     .containsExactly(partitionId1);
         }

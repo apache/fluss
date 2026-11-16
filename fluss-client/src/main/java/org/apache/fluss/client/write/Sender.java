@@ -29,6 +29,7 @@ import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -271,6 +272,9 @@ public class Sender implements Runnable {
                 Throwable t = ExceptionUtils.stripExecutionException(e);
                 if (t instanceof PartitionNotExistException) {
                     handlePartitionNotExistException(readyCheckResult.unknownLeaderTables);
+                } else if (t instanceof StaleMetadataException) {
+                    // Retry on the next readiness check and send any already routable batches.
+                    LOG.debug("Partition metadata is still stale", t);
                 } else {
                     throw e;
                 }

@@ -86,11 +86,9 @@ public abstract class ZkBasedMetadataProvider implements MetadataProvider {
     }
 
     @Override
-    public List<PartitionMetadata> getPartitionsMetadataFromZK(
+    public Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromZK(
             Collection<PhysicalTablePath> partitionPaths) {
         try {
-            Map<Long, String> partitionId2PartitionName = new HashMap<>();
-            Map<Long, Long> partitionId2TableId = new HashMap<>();
             // Read the table epoch before registrations: the first rescale atomically backfills
             // legacy partition counts together with advancing that epoch.
             Map<TablePath, TableRegistration> tables =
@@ -107,9 +105,6 @@ public abstract class ZkBasedMetadataProvider implements MetadataProvider {
                     throw new PartitionNotExistException(
                             "Table partition '" + partitionPath + "' does not exist.");
                 }
-                partitionId2PartitionName.put(
-                        partition.getPartitionId(), checkNotNull(partitionPath.getPartitionName()));
-                partitionId2TableId.put(partition.getPartitionId(), partition.getTableId());
                 TableRegistration table = tables.get(partitionPath.getTablePath());
                 if (table == null || table.tableId != partition.getTableId()) {
                     throw new StaleMetadataException(
@@ -122,25 +117,25 @@ public abstract class ZkBasedMetadataProvider implements MetadataProvider {
                         partition.getBucketCountOrDefault(
                                 table.bucketCount, table.bucketCountEpoch));
             }
-            List<PartitionMetadata> result = new ArrayList<>();
-            // Fetch all table metadata from ZooKeeper
+            Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
+            // Load all requested partition assignments in one batch.
             Map<Long, List<BucketMetadata>> assignments =
-                    zkClient.getBucketMetadataForPartitions(partitionId2TableId.keySet());
-            counts.forEach(
-                    (partitionId, count) -> {
-                        List<BucketMetadata> bucketMetadataList = assignments.get(partitionId);
-                        long tableId = partitionId2TableId.get(partitionId);
-                        String partitionName = partitionId2PartitionName.get(partitionId);
-                        validateAssignment(bucketMetadataList, count, "partition " + partitionId);
-                        PartitionMetadata partitionMetadata =
-                                new PartitionMetadata(
-                                        tableId,
-                                        partitionName,
-                                        partitionId,
-                                        bucketMetadataList,
-                                        count);
-                        result.add(partitionMetadata);
-                    });
+                    zkClient.getBucketMetadataForPartitions(counts.keySet());
+            for (PhysicalTablePath path : partitionPaths) {
+                PartitionRegistration registration = registrations.get(path);
+                long id = registration.getPartitionId();
+                int count = counts.get(id);
+                List<BucketMetadata> buckets = assignments.get(id);
+                validateAssignment(buckets, count, "partition " + id);
+                result.put(
+                        path,
+                        new PartitionMetadata(
+                                registration.getTableId(),
+                                checkNotNull(path.getPartitionName()),
+                                id,
+                                buckets,
+                                count));
+            }
             return result;
         } catch (Exception e) {
             if (e instanceof RuntimeException) {
