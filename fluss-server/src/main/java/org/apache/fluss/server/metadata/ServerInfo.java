@@ -109,12 +109,11 @@ public class ServerInfo {
         if (endpoint == null) {
             return null;
         }
-        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType, rack);
+        return toServerNode(endpoint);
     }
 
     public ServerNode nodeOrThrow(String listenerName) {
-        Endpoint endpoint = endpointOrThrow(listenerName);
-        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType, rack);
+        return toServerNode(endpointOrThrow(listenerName));
     }
 
     public List<Endpoint> endpoints() {
@@ -125,9 +124,15 @@ public class ServerInfo {
         return resource;
     }
 
-    /** Returns the registered software version, or null if unavailable. */
-    public @Nullable String softwareVersion() {
-        return softwareVersion;
+    private ServerNode toServerNode(Endpoint endpoint) {
+        return new ServerNode(
+                id,
+                endpoint.getHost(),
+                endpoint.getPort(),
+                serverType,
+                rack,
+                null,
+                softwareVersion);
     }
 
     @Override

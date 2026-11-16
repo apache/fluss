@@ -39,19 +39,6 @@ public class TabletServerRegistration {
     private final TabletServerResource resource;
     private final @Nullable String softwareVersion;
 
-    public TabletServerRegistration(
-            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
-        this(rack, endpoints, registerTimestamp, TabletServerResource.unknown());
-    }
-
-    public TabletServerRegistration(
-            @Nullable String rack,
-            List<Endpoint> endpoints,
-            long registerTimestamp,
-            TabletServerResource resource) {
-        this(rack, endpoints, registerTimestamp, resource, null);
-    }
-
     /** Creates a registration with the software version of this tablet server process. */
     public TabletServerRegistration(
             @Nullable String rack,

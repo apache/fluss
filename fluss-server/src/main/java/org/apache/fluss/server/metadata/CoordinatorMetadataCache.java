@@ -94,7 +94,7 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
                                 node.serverType(),
                                 node.rack(),
                                 snapshot.serverTags.get(entry.getKey()),
-                                entry.getValue().softwareVersion()));
+                                node.softwareVersion()));
             }
         }
         return serverNodes;

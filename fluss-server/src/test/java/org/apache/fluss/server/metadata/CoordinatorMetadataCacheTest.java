@@ -63,7 +63,9 @@ public class CoordinatorMetadataCacheTest {
                                         "rack0",
                                         Endpoint.fromListenersString(
                                                 "CLIENT://localhost:101, INTERNAL://localhost:102"),
-                                        ServerType.TABLET_SERVER),
+                                        ServerType.TABLET_SERVER,
+                                        TabletServerResource.unknown(),
+                                        "1.1-SNAPSHOT"),
                                 new ServerInfo(
                                         1,
                                         "rack1",
@@ -114,6 +116,7 @@ public class CoordinatorMetadataCacheTest {
         assertThat(clientServers.get(0).port()).isEqualTo(101);
         assertThat(clientServers.get(0).rack()).isEqualTo("rack0");
         assertThat(clientServers.get(0).serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
+        assertThat(clientServers.get(0).softwareVersion()).isEqualTo("1.1-SNAPSHOT");
 
         Map<Integer, ServerNode> internalServers =
                 serverMetadataCache.getAllAliveTabletServersWithTags("INTERNAL");
@@ -121,6 +124,7 @@ public class CoordinatorMetadataCacheTest {
         assertThat(internalServers.get(0).serverTag()).isEqualTo(ServerTag.PERMANENT_OFFLINE);
         assertThat(internalServers.get(1).serverTag()).isEqualTo(ServerTag.TEMPORARY_OFFLINE);
         assertThat(internalServers.get(2).serverTag()).isNull();
+        assertThat(internalServers.get(2).softwareVersion()).isNull();
         // the same servers as without tags
         assertThat(internalServers)
                 .isEqualTo(serverMetadataCache.getAllAliveTabletServers("INTERNAL"));

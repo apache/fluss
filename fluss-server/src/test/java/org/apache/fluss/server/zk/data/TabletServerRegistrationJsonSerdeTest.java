@@ -45,13 +45,17 @@ public class TabletServerRegistrationJsonSerdeTest
                         null,
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
-                        10000);
+                        10000,
+                        TabletServerResource.unknown(),
+                        null);
         TabletServerRegistration tabletServerRegistration2 =
                 new TabletServerRegistration(
                         "cn-hangzhou-server10",
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
-                        10000);
+                        10000,
+                        TabletServerResource.unknown(),
+                        null);
         TabletServerRegistration tabletServerRegistration3 =
                 new TabletServerRegistration(
                         "cn-hangzhou-server10",
@@ -100,7 +104,11 @@ public class TabletServerRegistrationJsonSerdeTest
                 TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion1);
         TabletServerRegistration expectedTabletServerRegistration =
                 new TabletServerRegistration(
-                        null, Endpoint.fromListenersString("FLUSS://localhost:1001"), 10000);
+                        null,
+                        Endpoint.fromListenersString("FLUSS://localhost:1001"),
+                        10000,
+                        TabletServerResource.unknown(),
+                        null);
         assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
 
         // compatibility with version 2
@@ -117,7 +125,9 @@ public class TabletServerRegistrationJsonSerdeTest
                         null,
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
-                        10000);
+                        10000,
+                        TabletServerResource.unknown(),
+                        null);
         assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
 
         // compatibility with version 3
@@ -134,7 +144,9 @@ public class TabletServerRegistrationJsonSerdeTest
                         "cn-hangzhou-server10",
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
-                        10000);
+                        10000,
+                        TabletServerResource.unknown(),
+                        null);
         assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
     }
 }
