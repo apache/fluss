@@ -765,11 +765,10 @@ class CompletedSnapshotStoreTest {
             List<CompletedSnapshot> completed,
             List<CompletedSnapshot> expectedRetained)
             throws Exception {
-        List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(3);
-        final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
         final TestCompletedSnapshotHandleStore snapshotHandleStore = builder.build();
         final CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(numToRetain, snapshotHandleStore, completedSnapshots);
+                createCompletedSnapshotStore(
+                        numToRetain, snapshotHandleStore, Collections.emptyList());
 
         for (CompletedSnapshot c : completed) {
             completedSnapshotStore.add(c, null, 0);

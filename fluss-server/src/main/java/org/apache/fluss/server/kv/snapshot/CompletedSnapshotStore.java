@@ -216,25 +216,24 @@ public class CompletedSnapshotStore {
 
     private void subsumeOldSnapshots(CompletedSnapshot snapshot) throws Exception {
 
-        // Remove completed snapshot from queue and snapshotStateHandleStore, not
-        // discard.
-        subsume(
-                completedSnapshots,
-                maxNumberOfSnapshotsToRetain,
-                completedSnapshot -> {
-                    if (isSnapshotInUse(completedSnapshot)) {
-                        LOG.debug(
-                                "Snapshot {} is still in use, move it to stillInUseSnapshots",
-                                completedSnapshot.getSnapshotID());
-                        stillInUseSnapshots.put(
-                                completedSnapshot.getSnapshotID(), completedSnapshot);
-                    } else {
-                        remove(
-                                completedSnapshot.getTableBucket(),
-                                completedSnapshot.getSnapshotID());
-                        snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                    }
-                });
+        CompletedSnapshot latest = completedSnapshots.peekLast();
+        Iterator<CompletedSnapshot> iterator = completedSnapshots.iterator();
+        while (completedSnapshots.size() > maxNumberOfSnapshotsToRetain && iterator.hasNext()) {
+            CompletedSnapshot candidate = iterator.next();
+            if (recoverySnapshotId != null
+                    ? candidate.getSnapshotID() == recoverySnapshotId
+                    : candidate == latest) {
+                continue;
+            }
+            if (snapshotLeaseChecker.isInUse(candidate)) {
+                LOG.debug("Snapshot {} is leased, defer deletion", candidate.getSnapshotID());
+                stillInUseSnapshots.put(candidate.getSnapshotID(), candidate);
+            } else {
+                remove(candidate.getTableBucket(), candidate.getSnapshotID());
+                snapshotsCleaner.addSubsumedSnapshot(candidate);
+            }
+            iterator.remove();
+        }
 
         // Check if any previously still-in-use snapshots can now be released
         // (lease expired).
@@ -261,7 +260,7 @@ public class CompletedSnapshotStore {
         while (stillInUseIter.hasNext()) {
             Map.Entry<Long, CompletedSnapshot> entry = stillInUseIter.next();
             CompletedSnapshot snapshot = entry.getValue();
-            if (!isSnapshotInUse(snapshot)) {
+            if (!snapshotLeaseChecker.isInUse(snapshot)) {
                 remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
                 stillInUseIter.remove();
                 snapshotsCleaner.addSubsumedSnapshot(snapshot);
@@ -270,11 +269,6 @@ public class CompletedSnapshotStore {
                         snapshot.getSnapshotID());
             }
         }
-    }
-
-    private boolean isSnapshotInUse(CompletedSnapshot snapshot) {
-        return (recoverySnapshotId != null && recoverySnapshotId == snapshot.getSnapshotID())
-                || snapshotLeaseChecker.isInUse(snapshot);
     }
 
     /**
@@ -287,43 +281,10 @@ public class CompletedSnapshotStore {
         return inLock(lock, () -> new ArrayList<>(completedSnapshots));
     }
 
-    private static void subsume(
-            Deque<CompletedSnapshot> snapshots, int numRetain, SubsumeAction subsumeAction)
-            throws Exception {
-        if (snapshots.isEmpty()) {
-            return;
-        }
-
-        CompletedSnapshot latest = snapshots.peekLast();
-        Iterator<CompletedSnapshot> iterator = snapshots.iterator();
-        while (snapshots.size() > numRetain && iterator.hasNext()) {
-            CompletedSnapshot next = iterator.next();
-            if (canSubsume(next, latest)) {
-                subsumeAction.subsume(next);
-                iterator.remove();
-            }
-        }
-    }
-
-    @FunctionalInterface
-    interface SubsumeAction {
-        void subsume(CompletedSnapshot snapshot) throws Exception;
-    }
-
     /** A function to check whether a snapshot still in use. */
     @FunctionalInterface
     public interface SnapshotInUseChecker {
         boolean isInUse(CompletedSnapshot snapshot);
-    }
-
-    private static boolean canSubsume(CompletedSnapshot next, CompletedSnapshot latest) {
-        // if the snapshot is equal to the latest snapshot, it means it can't be subsumed
-        if (next == latest) {
-            return false;
-        }
-        // else, we always subsume it as we will only keep single one snapshot currently
-        // todo: consider some client are pining this snapshot in FLUSS-54730210
-        return true;
     }
 
     /**

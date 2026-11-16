@@ -50,12 +50,6 @@ public final class RecoverySnapshotJsonSerde
     @Override
     public Long deserialize(JsonNode node) {
         checkArgument(
-                node.has(VERSION_KEY)
-                        && node.get(VERSION_KEY).isIntegralNumber()
-                        && node.get(VERSION_KEY).canConvertToInt()
-                        && node.get(VERSION_KEY).asInt() == VERSION,
-                "Unsupported recovery snapshot format.");
-        checkArgument(
                 node.has(SNAPSHOT_ID)
                         && node.get(SNAPSHOT_ID).isIntegralNumber()
                         && node.get(SNAPSHOT_ID).canConvertToLong(),

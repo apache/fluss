@@ -138,7 +138,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testSelectedSharedFilesSurviveOutsideRetentionWindow(
+    void testRecoverySourceRemainsRetainedAfterRejectedCommits(
             boolean responseLost, @TempDir Path root) throws Exception {
         TableBucket bucket = new TableBucket(2L, responseLost ? 1 : 0);
         zooKeeperClient
@@ -219,7 +219,8 @@ class ZooKeeperCompletedSnapshotStoreTest {
         assertThat(Files.exists(shared)).isTrue();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
                 .isEqualTo(2L);
-        assertThat(store.getActiveSnapshotIds()).containsExactlyInAnyOrder(2L, 5L);
+        assertThat(store.getAllSnapshots()).containsExactly(selected);
+        assertThat(store.stillInUseSnapshots).isEmpty();
         store.add(snapshot(root, bucket, 6L, null), 2L, 0);
         assertThat(Files.exists(shared)).isFalse();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())

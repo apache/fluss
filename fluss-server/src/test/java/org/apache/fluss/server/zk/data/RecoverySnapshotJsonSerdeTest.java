@@ -25,7 +25,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests the persistent recovery snapshot ID format. */
 class RecoverySnapshotJsonSerdeTest extends JsonSerdeTestBase<Long> {
@@ -49,13 +49,11 @@ class RecoverySnapshotJsonSerdeTest extends JsonSerdeTestBase<Long> {
 
     @ParameterizedTest
     @ValueSource(strings = {"{\"snapshot_id\":1}", "{\"version\":2,\"snapshot_id\":1}"})
-    void testUnsupportedVersion(String json) {
-        assertThatThrownBy(
-                        () ->
-                                JsonSerdeUtils.readValue(
-                                        json.getBytes(StandardCharsets.UTF_8),
-                                        RecoverySnapshotJsonSerde.INSTANCE))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("Unsupported recovery snapshot format.");
+    void testReadCompatibleVersions(String json) {
+        assertThat(
+                        JsonSerdeUtils.readValue(
+                                json.getBytes(StandardCharsets.UTF_8),
+                                RecoverySnapshotJsonSerde.INSTANCE))
+                .isEqualTo(1L);
     }
 }
