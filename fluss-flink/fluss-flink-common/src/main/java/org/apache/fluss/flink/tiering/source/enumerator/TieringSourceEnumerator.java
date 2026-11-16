@@ -149,6 +149,12 @@ public class TieringSourceEnumerator
     /** Tracks a pending delayed poll, but not an in-flight request. */
     private boolean delayedPollScheduled = false;
 
+    /**
+     * The estimated backlog of {@link #pendingSplits}, kept in step with it so that reporting it
+     * doesn't walk the queue on every assignment. Coordinator thread only.
+     */
+    private long pendingSplitsBacklog = 0L;
+
     /** The backlog last sent to {@link #BACKLOG_READER}, -1 to send it again. */
     private long reportedBacklog = -1L;
 
@@ -258,7 +264,7 @@ public class TieringSourceEnumerator
      * #BACKLOG_READER} when it changed. Must be called from the coordinator thread.
      */
     private void reportBacklog() {
-        long backlog = TieringBacklog.estimate(pendingSplits);
+        long backlog = pendingSplitsBacklog;
         if (backlog == reportedBacklog
                 || !context.registeredReaders().containsKey(BACKLOG_READER)) {
             // an unregistered reader gets the backlog once it registers, see addReader
@@ -266,6 +272,11 @@ public class TieringSourceEnumerator
         }
         context.sendEventToSourceReader(BACKLOG_READER, new TieringBacklogEvent(backlog));
         reportedBacklog = backlog;
+    }
+
+    private void addPendingSplit(TieringSplit split) {
+        pendingSplits.addLast(split);
+        pendingSplitsBacklog += TieringBacklog.estimate(split);
     }
 
     @Override
@@ -299,7 +310,7 @@ public class TieringSourceEnumerator
     @Override
     public void addSplitsBack(List<FlinkTieringSplit> splits, int subtaskId) {
         readersAwaitingSplit.add(subtaskId);
-        splits.forEach(split -> pendingSplits.addLast(split.unwrap()));
+        splits.forEach(split -> addPendingSplit(split.unwrap()));
         assignSplits();
     }
 
@@ -422,6 +433,7 @@ public class TieringSourceEnumerator
         tieringReachMaxDurationsTables.clear();
         // also clean all pending splits since we mark all as failed
         pendingSplits.clear();
+        pendingSplitsBacklog = 0L;
         reportBacklog();
         if (!failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
@@ -440,11 +452,13 @@ public class TieringSourceEnumerator
             for (TieringSplit tieringSplit : pendingSplits) {
                 if (tieringSplit.getTableBucket().getTableId() == tableId) {
                     // mark this tiering split to skip the current round since the tiering for
-                    // this table has timed out, so the tiering source reader can skip them directly
+                    // this table has timed out, so the tiering source reader can skip them
+                    // directly;
+                    // a skipped split has no backlog left
+                    pendingSplitsBacklog -= TieringBacklog.estimate(tieringSplit);
                     tieringSplit.skipCurrentRound();
                 }
             }
-            // skipped splits have no backlog left
             reportBacklog();
 
             // broadcast the tiering reach max duration event to all readers,
@@ -493,6 +507,7 @@ public class TieringSourceEnumerator
                 }
                 TieringSplit tieringSplit = pendingSplits.pollFirst();
                 if (tieringSplit != null) {
+                    pendingSplitsBacklog -= TieringBacklog.estimate(tieringSplit);
                     context.assignSplit(new FlinkTieringSplit(tieringSplit), nextAwaitingReader);
                     LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
@@ -602,7 +617,7 @@ public class TieringSourceEnumerator
                 // An empty round has no split or completion event to drive the next table.
                 requestTableAndAssign(EMPTY_TABLE_POLL_DELAY_MS);
             } else {
-                pendingSplits.addAll(splitsWithMetadata);
+                splitsWithMetadata.forEach(this::addPendingSplit);
 
                 timerService.schedule(
                         () ->

@@ -1001,6 +1001,22 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(lastBacklogEvent(context)).isEqualTo(expectedBacklog);
             assertThat(context.getSentSourceEvent()).containsOnlyKeys(BACKLOG_READER);
 
+            // each further request assigns the next queued split, which leaves the backlog; one
+            // split stays queued for the failover below
+            for (int i = 1; i < bucketOffsets.size() - 1; i++) {
+                enumerator.handleSplitRequest(0, "localhost-0");
+                TieringSplit nextSplit =
+                        context.getSplitsAssignmentSequence()
+                                .get(i)
+                                .assignment()
+                                .get(0)
+                                .get(0)
+                                .unwrap();
+                expectedBacklog -= TieringBacklog.estimate(nextSplit);
+                assertThat(lastBacklogEvent(context)).isEqualTo(expectedBacklog);
+            }
+            assertThat(expectedBacklog).isGreaterThan(0L);
+
             // a restarted reader fails the round over: the queued splits are dropped, and the
             // new reader attempt gets the backlog again
             context.registerSourceReader(0, 1, "localhost-0");
