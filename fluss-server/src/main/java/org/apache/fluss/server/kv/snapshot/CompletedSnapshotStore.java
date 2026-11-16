@@ -116,17 +116,11 @@ public class CompletedSnapshotStore {
     public void add(
             CompletedSnapshot snapshot,
             @Nullable Long previousRecoverySnapshotId,
-            @Nullable Integer expectedLeaderEpoch)
+            int expectedLeaderEpoch)
             throws Exception {
         inLock(
                 lock,
-                () ->
-                        registerSnapshot(
-                                snapshot,
-                                previousRecoverySnapshotId,
-                                expectedLeaderEpoch,
-                                snapshotsCleaner,
-                                () -> {}));
+                () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
     /**
@@ -145,9 +139,9 @@ public class CompletedSnapshotStore {
                             snapshot.getTableBucket(), handle);
                     if (containsSnapshot(snapshot.getSnapshotID())) {
                         selectedRecoverySnapshotId = snapshot.getSnapshotID();
-                        subsumeOldSnapshots(snapshot, snapshotsCleaner, () -> {});
+                        subsumeOldSnapshots(snapshot);
                     } else {
-                        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, () -> {});
+                        adoptConfirmedSnapshot(snapshot);
                     }
                 });
     }
@@ -181,27 +175,10 @@ public class CompletedSnapshotStore {
                 });
     }
 
-    /**
-     * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
-     * older ones.
-     *
-     * @param snapshot Completed snapshot to add.
-     */
-    @VisibleForTesting
-    void addSnapshotAndSubsumeOldestOne(
-            final CompletedSnapshot snapshot,
-            SnapshotsCleaner snapshotsCleaner,
-            Runnable postCleanup)
-            throws Exception {
-        registerSnapshot(snapshot, null, null, snapshotsCleaner, postCleanup);
-    }
-
     private void registerSnapshot(
             CompletedSnapshot snapshot,
             @Nullable Long previousRecoverySnapshotId,
-            @Nullable Integer expectedLeaderEpoch,
-            SnapshotsCleaner snapshotsCleaner,
-            Runnable postCleanup)
+            int expectedLeaderEpoch)
             throws Exception {
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
@@ -211,7 +188,7 @@ public class CompletedSnapshotStore {
                 previousRecoverySnapshotId,
                 expectedLeaderEpoch);
 
-        adoptConfirmedSnapshot(snapshot, snapshotsCleaner, postCleanup);
+        adoptConfirmedSnapshot(snapshot);
     }
 
     private CompletedSnapshotHandle getOrCreateSnapshotHandle(CompletedSnapshot snapshot)
@@ -235,9 +212,7 @@ public class CompletedSnapshotStore {
         return completedSnapshotHandle;
     }
 
-    private void adoptConfirmedSnapshot(
-            CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
-            throws Exception {
+    private void adoptConfirmedSnapshot(CompletedSnapshot snapshot) throws Exception {
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
         completedSnapshots.removeIf(
                 existing -> existing.getSnapshotID() == snapshot.getSnapshotID());
@@ -255,7 +230,7 @@ public class CompletedSnapshotStore {
         }
         selectedRecoverySnapshotId =
                 selected.map(CompletedSnapshotHandle::getSnapshotId).orElse(null);
-        subsumeOldSnapshots(snapshot, snapshotsCleaner, postCleanup);
+        subsumeOldSnapshots(snapshot);
     }
 
     private boolean containsSnapshot(long snapshotId) {
@@ -264,9 +239,7 @@ public class CompletedSnapshotStore {
                         .anyMatch(snapshot -> snapshot.getSnapshotID() == snapshotId);
     }
 
-    private void subsumeOldSnapshots(
-            CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
-            throws Exception {
+    private void subsumeOldSnapshots(CompletedSnapshot snapshot) throws Exception {
 
         // Remove completed snapshot from queue and snapshotStateHandleStore, not
         // discard.
@@ -290,7 +263,7 @@ public class CompletedSnapshotStore {
 
         // Check if any previously still-in-use snapshots can now be released
         // (lease expired).
-        removeUnusedSnapshots(snapshotsCleaner);
+        removeUnusedSnapshots();
 
         // SST file cleanup: compute effective lowest from retained (non-leased)
         // snapshots only, and protect files referenced by still-in-use snapshots.
@@ -304,10 +277,10 @@ public class CompletedSnapshotStore {
         // KvSnapshotHandle.discard() only deletes private files and
         // metadata, not shared SST files registered in SharedKvFileRegistry.
         snapshotsCleaner.cleanSubsumedSnapshots(
-                snapshot.getSnapshotID() + 1, stillInUseIds, postCleanup, ioExecutor);
+                snapshot.getSnapshotID() + 1, stillInUseIds, () -> {}, ioExecutor);
     }
 
-    private void removeUnusedSnapshots(SnapshotsCleaner snapshotsCleaner) throws Exception {
+    private void removeUnusedSnapshots() throws Exception {
         Iterator<Map.Entry<Long, CompletedSnapshot>> stillInUseIter =
                 stillInUseSnapshots.entrySet().iterator();
         while (stillInUseIter.hasNext()) {

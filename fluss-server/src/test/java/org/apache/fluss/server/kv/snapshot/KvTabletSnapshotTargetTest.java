@@ -38,8 +38,10 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
@@ -102,7 +104,7 @@ class KvTabletSnapshotTargetTest {
                         snapshot -> false);
         CompletedKvSnapshotCommitter committer =
                 (snapshot, coordinatorEpoch, leaderEpoch, previousRecoverySnapshotId) -> {
-                    store.add(snapshot, previousRecoverySnapshotId, null);
+                    store.add(snapshot, previousRecoverySnapshotId, leaderEpoch);
                     throw new IOException("Commit response lost.");
                 };
         AtomicBoolean failQuery = new AtomicBoolean(true);
@@ -141,7 +143,6 @@ class KvTabletSnapshotTargetTest {
                                         task.getSnapshotLocation(),
                                         result))
                 .isInstanceOf(IOException.class);
-        assertThat(original.getPreviousRecoverySnapshotId()).isZero();
         logOffsetGenerator.set(2L);
         PeriodicSnapshotManager.SnapshotRunnable next = original.initSnapshot().get();
         next.getSnapshotRunnable().run();
@@ -152,7 +153,8 @@ class KvTabletSnapshotTargetTest {
                 next.getBucketLeaderEpoch(),
                 next.getSnapshotLocation(),
                 nextResult);
-        assertThat(original.getPreviousRecoverySnapshotId()).isEqualTo(2L);
+        assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
+                .isEqualTo(2L);
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(2L);
     }
 
@@ -188,7 +190,14 @@ class KvTabletSnapshotTargetTest {
     }
 
     @BeforeEach
-    void beforeEach() {
+    void beforeEach() throws Exception {
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        ZkData.LeaderAndIsrZNode.path(tableBucket),
+                        ZkData.LeaderAndIsrZNode.encode(new LeaderAndIsr(0, 0)));
         // init snapshot id and log offset generator
         snapshotIdGenerator = new AtomicLong(1);
         logOffsetGenerator = new AtomicLong(1);
@@ -360,11 +369,6 @@ class KvTabletSnapshotTargetTest {
 
     @Test
     void testAddToSnapshotToStoreFail(@TempDir Path kvTabletDir) throws Exception {
-        zooKeeperClient
-                .getCuratorClient()
-                .create()
-                .creatingParentsIfNeeded()
-                .forPath(ZkData.BucketIdZNode.path(tableBucket));
         final String errMsg = "Add to snapshot handle failed.";
         AtomicLong uploadedBytes = new AtomicLong();
         AtomicBoolean shouldFail = new AtomicBoolean(true);
@@ -439,7 +443,7 @@ class KvTabletSnapshotTargetTest {
     }
 
     @Test
-    void testIdempotentCheckWhenSnapshotExistsInZK(@TempDir Path kvTabletDir) throws Exception {
+    void testIdempotentCheckWhenSnapshotExistsInZK(@TempDir Path kvTabletDir) throws Throwable {
         // Test case: coordinator commits to ZK successfully but response is lost due to failover
         // The tablet server should detect the snapshot exists in ZK and skip cleanup
         zooKeeperClient.setRecoverySnapshot(
@@ -458,7 +462,7 @@ class KvTabletSnapshotTargetTest {
         // This simulates coordinator failover after ZK commit but before response
         CompletedKvSnapshotCommitter failingAfterZkCommitCommitter =
                 (snapshot, coordinatorEpoch, bucketLeaderEpoch, previousRecoverySnapshotId) -> {
-                    store.add(snapshot, previousRecoverySnapshotId, null);
+                    store.add(snapshot, previousRecoverySnapshotId, bucketLeaderEpoch);
                     zooKeeperClient.setRecoverySnapshot(
                             tableBucket, new BucketSnapshot(2L, 2L, "file:/next"));
 
@@ -496,9 +500,26 @@ class KvTabletSnapshotTargetTest {
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
         assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isTrue();
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(1L);
-        assertThat(kvTabletSnapshotTarget.getPreviousRecoverySnapshotId()).isEqualTo(1L);
         assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
                 .isEqualTo(2L);
+        snapshotIdGenerator.set(3L);
+        logOffsetGenerator.set(3L);
+        PeriodicSnapshotManager.SnapshotRunnable next = kvTabletSnapshotTarget.initSnapshot().get();
+        next.getSnapshotRunnable().run();
+        SnapshotResult result = next.getSnapshotRunnable().get();
+        assertThatThrownBy(
+                        () ->
+                                kvTabletSnapshotTarget.handleSnapshotResult(
+                                        next.getSnapshotId(),
+                                        next.getCoordinatorEpoch(),
+                                        next.getBucketLeaderEpoch(),
+                                        next.getSnapshotLocation(),
+                                        result))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zooKeeperClient.getTableBucketSnapshot(tableBucket, 3L)).isEmpty();
+        assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
+                .isEqualTo(2L);
+        assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(1L);
     }
 
     @Test
@@ -860,7 +881,7 @@ class KvTabletSnapshotTargetTest {
                 int bucketLeaderEpoch,
                 Long previousRecoverySnapshotId)
                 throws Exception {
-            completedSnapshotStore.add(snapshot, previousRecoverySnapshotId, null);
+            completedSnapshotStore.add(snapshot, previousRecoverySnapshotId, bucketLeaderEpoch);
         }
     }
 }

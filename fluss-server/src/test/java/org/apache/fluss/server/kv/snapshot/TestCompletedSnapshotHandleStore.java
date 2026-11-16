@@ -56,7 +56,7 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
             long snapshotId,
             CompletedSnapshotHandle snapshotHandle,
             Long previousRecoverySnapshotId,
-            Integer expectedLeaderEpoch)
+            int expectedLeaderEpoch)
             throws Exception {
         addFunction.apply(snapshotHandle);
     }

@@ -169,12 +169,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         unconfirmedRecoverySnapshotIds.clear();
     }
 
-    /** Returns the recovery snapshot ID expected by this target's next commit. */
-    @Nullable
-    public Long getPreviousRecoverySnapshotId() {
-        return previousRecoverySnapshotId.get();
-    }
-
     private void advanceRecoverySnapshotId(Long previousSnapshotId, long committedSnapshotId) {
         Long current = previousRecoverySnapshotId.get();
         if (Objects.equals(current, previousSnapshotId)) {

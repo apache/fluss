@@ -223,7 +223,7 @@ class CompletedSnapshotStoreManagerTest {
                                 new IOException(
                                         "File does not exist: temporary standby response"))),
                 null,
-                null);
+                0);
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         10,
@@ -257,8 +257,8 @@ class CompletedSnapshotStoreManagerTest {
         // create CompletedSnapshotHandleStore with real implementations
         CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new InMemoryCompletedSnapshotHandleStore();
-        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle, null, null);
-        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle, null, null);
+        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle, null, 0);
+        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle, null, 0);
 
         // CompletedSnapshotStoreManager
         CompletedSnapshotStoreManager completedSnapshotStoreManager =
@@ -305,7 +305,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                         DATA1_TABLE_PATH, tableBucket);
-        completedSnapshotStore.add(completedSnapshot, null, null);
+        completedSnapshotStore.add(completedSnapshot, null, 0);
     }
 
     private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId)
@@ -387,7 +387,7 @@ class CompletedSnapshotStoreManagerTest {
                 long snapshotId,
                 CompletedSnapshotHandle completedSnapshotHandle,
                 Long previousRecoverySnapshotId,
-                Integer expectedLeaderEpoch)
+                int expectedLeaderEpoch)
                 throws Exception {
             snapshotHandleMap
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())

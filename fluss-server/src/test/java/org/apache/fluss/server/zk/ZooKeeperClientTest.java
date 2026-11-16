@@ -999,6 +999,8 @@ class ZooKeeperClientTest {
     @Test
     void testRecoverySnapshotCas() throws Exception {
         TableBucket bucket = new TableBucket(1L, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                bucket, new LeaderAndIsr(0, 0), zkEpoch.getCoordinatorEpochZkVersion());
         zookeeperClient.registerTableBucketSnapshot(
                 bucket, new BucketSnapshot(3L, 20L, "file:/snapshot-3"));
         assertThatThrownBy(
@@ -1011,7 +1013,7 @@ class ZooKeeperClientTest {
         zookeeperClient.setRecoverySnapshot(
                 bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         BucketSnapshot equalOffset = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
-        zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 4L, null);
+        zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 4L, 0);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
         assertThatThrownBy(
                         () ->
@@ -1019,7 +1021,7 @@ class ZooKeeperClientTest {
                                         bucket,
                                         new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
                                         4L,
-                                        null))
+                                        0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
         BucketSnapshot winner = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
@@ -1035,7 +1037,7 @@ class ZooKeeperClientTest {
                             TableBucket requested) throws Exception {
                         Optional<VersionedData<Long>> captured =
                                 super.getRecoverySnapshotSelection(requested);
-                        zookeeperClient.registerTableBucketSnapshot(bucket, winner, 5L, null);
+                        zookeeperClient.registerTableBucketSnapshot(bucket, winner, 5L, 0);
                         return captured;
                     }
                 };
@@ -1045,11 +1047,11 @@ class ZooKeeperClientTest {
                                         bucket,
                                         new BucketSnapshot(7L, 50L, "file:/snapshot-7"),
                                         5L,
-                                        null))
+                                        0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).isEmpty();
         zookeeperClient.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, null);
+                bucket, new BucketSnapshot(8L, 60L, "file:/snapshot-8"), null, 0);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
     }
 

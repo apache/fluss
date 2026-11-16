@@ -43,7 +43,7 @@ public interface CompletedSnapshotHandleStore {
      * @param snapshotId the snapshot id
      * @param completedSnapshotHandle CompletedSnapshotHandle to be added
      * @param previousRecoverySnapshotId recovery snapshot this commit expects to replace
-     * @param expectedLeaderEpoch leader epoch of the original KV instance, if available
+     * @param expectedLeaderEpoch leader epoch of the original KV instance
      * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
     void add(
@@ -51,7 +51,7 @@ public interface CompletedSnapshotHandleStore {
             long snapshotId,
             CompletedSnapshotHandle completedSnapshotHandle,
             @Nullable Long previousRecoverySnapshotId,
-            @Nullable Integer expectedLeaderEpoch)
+            int expectedLeaderEpoch)
             throws Exception;
 
     /**

@@ -28,6 +28,8 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.concurrent.Executors;
@@ -42,12 +44,14 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nonnull;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -93,12 +97,12 @@ class ZooKeeperCompletedSnapshotStoreTest {
         SnapshotsCleanerTest.TestCompletedSnapshot snapshot1 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 0, snapshotPath);
 
-        snapshotStore.add(snapshot1, null, null);
+        snapshotStore.add(snapshot1, null, 0);
         assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot1);
 
         final SnapshotsCleanerTest.TestCompletedSnapshot snapshot2 =
                 SnapshotsCleanerTest.createSnapshot(tableBucket, 1, snapshotPath);
-        snapshotStore.add(snapshot2, null, null);
+        snapshotStore.add(snapshot2, null, 0);
         final List<CompletedSnapshot> allSnapshots = snapshotStore.getAllSnapshots();
         assertThat(allSnapshots).containsExactly(snapshot2);
 
@@ -106,41 +110,31 @@ class ZooKeeperCompletedSnapshotStoreTest {
         SnapshotsCleanerTest.verifySnapshotDiscarded(snapshot1);
     }
 
-    /**
-     * Tests that the snapshot does not exist in the store when we fail to add it into the store
-     * (i.e., there exists an exception thrown by the method).
-     */
     @Test
-    void testAddSnapshotWithFailedRemove(@TempDir Path tmpDir) throws Exception {
-        final Configuration configuration = new Configuration();
-        configuration.setString(
-                ConfigOptions.ZOOKEEPER_ADDRESS,
-                zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
-        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
-
-        SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
-        TableBucket tableBucket = new TableBucket(1, 2);
-        try (ZooKeeperClient zooKeeperClient =
-                ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE)) {
-            final CompletedSnapshotStore store =
-                    createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
-
-            CountDownLatch discardAttempted = new CountDownLatch(1);
-            for (long i = 0; i < 2; ++i) {
-                FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
-                CompletedSnapshot snapshotToAdd =
-                        SnapshotsCleanerTest.createSnapshot(tableBucket, i, snapshotPath);
-                // shouldn't fail despite the exception
-                store.addSnapshotAndSubsumeOldestOne(
-                        snapshotToAdd,
-                        new SnapshotsCleaner(),
-                        () -> {
-                            discardAttempted.countDown();
-                            throw new RuntimeException();
-                        });
-            }
-            discardAttempted.await();
-        }
+    void testAddSnapshotWithFailedDiscard(@TempDir Path tmpDir) throws Exception {
+        TableBucket bucket = new TableBucket(1L, 2);
+        CompletedSnapshotStore store =
+                createZooKeeperSnapshotStore(zooKeeperClient, new SharedKvFileRegistry());
+        CompletableFuture<Void> discard = new CompletableFuture<>();
+        CompletedSnapshot first =
+                new CompletedSnapshot(
+                        bucket,
+                        0L,
+                        new FsPath(tmpDir.resolve("snapshot-0").toUri()),
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0)) {
+                    @Override
+                    public CompletableFuture<Void> discardAsync(Executor executor) {
+                        discard.completeExceptionally(new IOException("Snapshot discard failed."));
+                        return discard;
+                    }
+                };
+        CompletedSnapshot second = mockCompletedSnapshot(tmpDir, bucket, 1L);
+        store.add(first, null, 0);
+        store.add(second, null, 0);
+        assertThat(discard).isCompletedExceptionally();
+        assertThat(store.getAllSnapshots()).containsExactly(second);
+        assertThat(zooKeeperClient.getTableBucketSnapshot(bucket, 0L)).isEmpty();
     }
 
     @Test
@@ -149,7 +143,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         TableBucket bucket = new TableBucket(3L, 0);
         CompletedSnapshot selected = mockCompletedSnapshot(root, bucket, 2L);
         createZooKeeperSnapshotStore(zooKeeperClient, new SharedKvFileRegistry())
-                .add(selected, null, null);
+                .add(selected, null, 0);
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, root.toUri().toString());
         ZooKeeperClient raced =
@@ -194,6 +188,13 @@ class ZooKeeperCompletedSnapshotStoreTest {
     void testSelectedSharedFilesSurviveOutsideRetentionWindow(
             boolean responseLost, @TempDir Path root) throws Exception {
         TableBucket bucket = new TableBucket(2L, responseLost ? 1 : 0);
+        zooKeeperClient
+                .getCuratorClient()
+                .create()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        ZkData.LeaderAndIsrZNode.path(bucket),
+                        ZkData.LeaderAndIsrZNode.encode(new LeaderAndIsr(0, 0)));
         Path shared = root.resolve("shared.sst");
         Files.write(shared, new byte[] {1});
         Configuration conf = new Configuration();
@@ -220,23 +221,23 @@ class ZooKeeperCompletedSnapshotStoreTest {
                         new ZooKeeperCompletedSnapshotHandleStore(publisher),
                         Runnable::run,
                         snapshot -> false);
-        store.add(snapshot(root, bucket, 1L, shared), null, null);
-        store.add(snapshot(root, bucket, 3L, null), null, null);
+        store.add(snapshot(root, bucket, 1L, shared), null, 0);
+        store.add(snapshot(root, bucket, 3L, null), null, 0);
         CompletedSnapshot selected = snapshot(root, bucket, 2L, shared);
         if (responseLost) {
             assertThatThrownBy(() -> store.setRecoverySnapshot(selected))
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
         } else {
-            store.add(selected, null, null);
+            store.add(selected, null, 0);
             store.setRecoverySnapshot(selected);
         }
-        store.add(snapshot(root, bucket, 4L, null), null, null);
-        store.add(snapshot(root, bucket, 5L, null), null, null);
+        store.add(snapshot(root, bucket, 4L, null), null, 0);
+        store.add(snapshot(root, bucket, 5L, null), null, 0);
         assertThat(Files.exists(shared)).isTrue();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
                 .isEqualTo(2L);
         assertThat(store.getActiveSnapshotIds()).contains(2L, 4L, 5L);
-        store.add(snapshot(root, bucket, 6L, null), 2L, null);
+        store.add(snapshot(root, bucket, 6L, null), 2L, 0);
         assertThat(Files.exists(shared)).isFalse();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
                 .isEqualTo(6L);

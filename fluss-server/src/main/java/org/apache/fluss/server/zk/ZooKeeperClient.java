@@ -1415,16 +1415,13 @@ public class ZooKeeperClient implements AutoCloseable {
             TableBucket bucket,
             BucketSnapshot snapshot,
             @Nullable Long previousRecoverySnapshotId,
-            @Nullable Integer expectedLeaderEpoch)
+            int expectedLeaderEpoch)
             throws Exception {
         if (previousRecoverySnapshotId == null) {
             registerTableBucketSnapshot(bucket, snapshot);
             return;
         }
-        CuratorOp leaderCheck =
-                expectedLeaderEpoch == null
-                        ? null
-                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+        CuratorOp leaderCheck = createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
         Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
         if (!current.isPresent()
                 || current.get().data().longValue() != previousRecoverySnapshotId) {
@@ -1445,9 +1442,7 @@ public class ZooKeeperClient implements AutoCloseable {
                         .forPath(
                                 ZkData.RecoverySnapshotZNode.path(bucket),
                                 ZkData.RecoverySnapshotZNode.encode(snapshot.getSnapshotId())));
-        if (leaderCheck != null) {
-            ops.add(leaderCheck);
-        }
+        ops.add(leaderCheck);
         zkClient.transaction().forOperations(ops);
     }
 

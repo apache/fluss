@@ -68,7 +68,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
             long snapshotId,
             CompletedSnapshotHandle snapshotHandle,
             @Nullable Long previousRecoverySnapshotId,
-            @Nullable Integer expectedLeaderEpoch)
+            int expectedLeaderEpoch)
             throws Exception {
         checkNotNull(snapshotHandle, "completed snapshot handle");
         BucketSnapshot reference =
