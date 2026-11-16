@@ -25,14 +25,16 @@
 use super::memory::{ReadMemoryBudget, Reservation, checked_bytes, hash_table_bytes};
 use crate::error::{Error, Result};
 use crate::record::ChangeType;
-use arrow::array::{Array, ArrayData, ArrayRef, BooleanArray, RecordBatch, UInt64Array};
+use arrow::array::{
+    Array, ArrayData, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, UInt64Array,
+};
 use arrow::compute::{filter_record_batch, interleave_record_batch, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::row::{RowConverter, Rows, SortField};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Location of one surviving changelog row inside a retained Arrow batch.
+/// A surviving changelog row, by its original row index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ChangelogRowRef {
     batch_index: usize,
@@ -42,8 +44,43 @@ struct ChangelogRowRef {
 struct RetainedBatch {
     batch: RecordBatch,
     live_rows: usize,
+    // Next compaction point.
+    compact_at: usize,
+    // Live bit per original row.
+    live: BooleanBufferBuilder,
+    // Original row of each position, sorted, once compacted.
+    rows: Option<Vec<usize>>,
     // Drop the batch before releasing its charge.
     _memory: Reservation,
+}
+
+impl RetainedBatch {
+    fn original_row(&self, position: usize) -> usize {
+        self.rows.as_ref().map_or(position, |rows| rows[position])
+    }
+
+    fn position(&self, original_row: usize) -> usize {
+        self.rows.as_ref().map_or(original_row, |rows| {
+            rows.binary_search(&original_row)
+                .expect("surviving row is retained")
+        })
+    }
+
+    fn bytes(&self) -> Result<usize> {
+        retained_bytes(&self.batch, &self.live, self.rows.as_deref())
+    }
+}
+
+fn retained_bytes(
+    batch: &RecordBatch,
+    live: &BooleanBufferBuilder,
+    rows: Option<&[usize]>,
+) -> Result<usize> {
+    checked_bytes(
+        retained_batch_bytes(batch)?
+            .checked_add(live.capacity().div_ceil(8))
+            .and_then(|n| n.checked_add(rows.map_or(0, size_of_val))),
+    )
 }
 
 /// Reconciles a deduplicate primary-key baseline with a bounded changelog tail.
@@ -176,6 +213,8 @@ impl DeduplicateCurrentView {
 
         let batch = self.normalize(&batch)?;
         let keys = self.encode_keys(&batch)?;
+        let mut live = BooleanBufferBuilder::new(batch.num_rows());
+        live.append_n(batch.num_rows(), false);
         let mut batch_memory = Reservation::new(self.memory.budget());
         let budgeted = self.memory.budget().is_some();
         if budgeted {
@@ -185,7 +224,7 @@ impl DeduplicateCurrentView {
                     .any(|kind| matches!(kind, ChangeType::Insert | ChangeType::UpdateAfter)),
             );
             if retain_batch != 0 {
-                batch_memory.resize(retained_batch_bytes(&batch)?)?;
+                batch_memory.resize(retained_bytes(&batch, &live, None)?)?;
             }
             let mut new_keys = 0usize;
             let mut new_bytes = 0usize;
@@ -252,6 +291,7 @@ impl DeduplicateCurrentView {
             let row = match change_type {
                 ChangeType::Insert | ChangeType::UpdateAfter => {
                     live_rows += 1;
+                    live.set_bit(row_index, true);
                     Some(ChangelogRowRef {
                         batch_index,
                         row_index,
@@ -273,13 +313,19 @@ impl DeduplicateCurrentView {
             if let Some(previous) = previous {
                 if previous.batch_index == batch_index {
                     live_rows -= 1;
-                } else if release_row(&mut self.changelog_batches, previous.batch_index) {
+                    live.set_bit(previous.row_index, false);
+                } else if release_row(
+                    &mut self.changelog_batches,
+                    previous.batch_index,
+                    previous.row_index,
+                ) {
                     compact.push(previous.batch_index);
                 }
             }
         }
         if live_rows > 0 {
-            if live_rows <= batch.num_rows() / 2 {
+            let compact_at = batch.num_rows() / 2;
+            if live_rows <= compact_at {
                 compact.push(batch_index);
             }
             self.changelog_batches.insert(
@@ -287,6 +333,9 @@ impl DeduplicateCurrentView {
                 RetainedBatch {
                     batch,
                     live_rows,
+                    compact_at,
+                    live,
+                    rows: None,
                     _memory: batch_memory,
                 },
             );
@@ -311,51 +360,40 @@ impl DeduplicateCurrentView {
         let Some(retained) = self.changelog_batches.get(&batch_id) else {
             return Ok(());
         };
-        let keys = self.encode_keys(&retained.batch)?;
-        let indices: Vec<u64> = keys
-            .iter()
-            .enumerate()
-            .filter_map(|(row_index, key)| {
-                (self.entries.get(key.as_ref())
-                    == Some(&Some(ChangelogRowRef {
-                        batch_index: batch_id,
-                        row_index,
-                    })))
-                .then_some(row_index as u64)
-            })
-            .collect();
-        let indices = UInt64Array::from(indices);
-        let batch = take_record_batch(&retained.batch, &indices)
+        let mut positions = Vec::with_capacity(retained.live_rows);
+        let mut rows = Vec::with_capacity(retained.live_rows);
+        for position in 0..retained.batch.num_rows() {
+            let original = retained.original_row(position);
+            if retained.live.get_bit(original) {
+                positions.push(position as u64);
+                rows.push(original);
+            }
+        }
+        debug_assert_eq!(rows.len(), retained.live_rows);
+        let batch = take_record_batch(&retained.batch, &UInt64Array::from(positions))
             .map_err(|error| arrow_error("failed to compact surviving changelog rows", error))?;
         let mut memory = Reservation::new(self.memory.budget());
+        let mut reserved = true;
         if self.memory.budget().is_some() {
-            let bytes = retained_batch_bytes(&batch)?;
-            if bytes >= retained_batch_bytes(&retained.batch)? {
-                return Ok(());
-            }
-            // Compaction is optional. Keep the old batch if both allocations
-            // cannot coexist within the budget; no row references have changed.
-            match memory.resize(bytes) {
-                Err(Error::BufferExhausted { .. }) => return Ok(()),
-                result => result?,
-            }
+            let bytes = retained_bytes(&batch, &retained.live, Some(&rows))?;
+            reserved = bytes < retained.bytes()?
+                && match memory.resize(bytes) {
+                    Ok(()) => true,
+                    Err(Error::BufferExhausted { .. }) => false,
+                    Err(error) => return Err(error),
+                };
         }
-        for (new_index, old_index) in indices.values().iter().enumerate() {
-            self.entries
-                .get_mut(keys.row(*old_index as usize).as_ref())
-                .expect("compacted row has an overlay entry")
-                .as_mut()
-                .expect("compacted row is live")
-                .row_index = new_index;
+        let retained = self
+            .changelog_batches
+            .get_mut(&batch_id)
+            .expect("compacted batch is retained");
+        // A skipped compaction retries at the next halving.
+        retained.compact_at = retained.live_rows / 2;
+        if reserved {
+            retained.batch = batch;
+            retained.rows = Some(rows);
+            retained._memory = memory;
         }
-        self.changelog_batches.insert(
-            batch_id,
-            RetainedBatch {
-                batch,
-                live_rows: indices.len(),
-                _memory: memory,
-            },
-        );
         Ok(())
     }
 
@@ -519,7 +557,7 @@ impl DeduplicateCurrentView {
                         batches.push(&retained[batch_id].batch);
                         position
                     });
-                    (position, *row)
+                    (position, retained[batch_id].position(*row))
                 })
                 .collect();
             let result = interleave_record_batch(&batches, &local_indices)
@@ -527,8 +565,8 @@ impl DeduplicateCurrentView {
             drop(batches);
             drop(positions);
             drop(local_indices);
-            for (batch_id, _) in selected {
-                release_row(retained, batch_id);
+            for (batch_id, row) in selected {
+                release_row(retained, batch_id, row);
             }
             if result.is_err() || indices.len() == 0 {
                 *indices = Vec::new().into_iter();
@@ -583,17 +621,22 @@ impl DeduplicateCurrentView {
     }
 }
 
-fn release_row(batches: &mut HashMap<usize, RetainedBatch>, batch_id: usize) -> bool {
+fn release_row(
+    batches: &mut HashMap<usize, RetainedBatch>,
+    batch_id: usize,
+    original_row: usize,
+) -> bool {
     let retained = batches
         .get_mut(&batch_id)
         .expect("surviving row has a retained batch");
+    retained.live.set_bit(original_row, false);
     retained.live_rows -= 1;
     if retained.live_rows == 0 {
         batches.remove(&batch_id);
         return false;
     }
     // Trigger once per halving, so repeated updates do not repeatedly copy a batch.
-    retained.live_rows == retained.batch.num_rows() / 2
+    retained.live_rows == retained.compact_at
 }
 
 /// Count each backing allocation once within a batch, including slices, null
@@ -643,8 +686,12 @@ fn arrow_error(message: impl Into<String>, source: arrow::error::ArrowError) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::LimitedReadMemoryBudget;
     use arrow::array::{ArrayRef, Int32Array, Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use std::sync::Arc;
 
     fn schema() -> SchemaRef {
@@ -756,9 +803,6 @@ mod tests {
 
     #[test]
     fn shared_ipc_body_fits_the_retained_budget_once() {
-        use super::super::memory::LimitedReadMemoryBudget;
-        use arrow::ipc::{reader::StreamReader, writer::StreamWriter};
-
         let input = batch(vec![1], vec![&"x".repeat(100_000)], vec![7]);
         let mut bytes = Vec::new();
         let mut writer = StreamWriter::try_new(&mut bytes, &schema()).unwrap();
@@ -783,8 +827,6 @@ mod tests {
 
     #[test]
     fn compaction_releases_obsolete_payloads_and_remaps_survivors() {
-        use super::super::memory::LimitedReadMemoryBudget;
-
         for allow_compaction in [true, false] {
             let budget = Arc::new(LimitedReadMemoryBudget::new(1 << 20));
             let mut view = DeduplicateCurrentView::try_new_with_memory_budget(
@@ -839,8 +881,6 @@ mod tests {
 
     #[test]
     fn tombstones_do_not_keep_growth_headroom_reserved() {
-        use super::super::memory::LimitedReadMemoryBudget;
-
         let budget = Arc::new(LimitedReadMemoryBudget::new(192_000));
         let mut view =
             DeduplicateCurrentView::try_new_with_memory_budget(schema(), vec![0], budget.clone())
@@ -866,8 +906,6 @@ mod tests {
 
     #[test]
     fn budget_charges_sliced_buffers_and_releases_superseded_batches() {
-        use crate::client::LimitedReadMemoryBudget;
-
         let budget = Arc::new(LimitedReadMemoryBudget::new(1 << 20));
         let mut view =
             DeduplicateCurrentView::try_new_with_memory_budget(schema(), vec![0], budget.clone())
@@ -892,8 +930,6 @@ mod tests {
 
     #[test]
     fn shared_budget_rejects_growth_without_overwriting_existing_rows() {
-        use crate::client::LimitedReadMemoryBudget;
-
         let budget = Arc::new(LimitedReadMemoryBudget::new(16_384));
         let mut first =
             DeduplicateCurrentView::try_new_with_memory_budget(schema(), vec![0], budget.clone())
@@ -933,8 +969,6 @@ mod tests {
 
     #[test]
     fn survivor_iterator_keeps_reservations_until_consumed_or_dropped() {
-        use crate::client::LimitedReadMemoryBudget;
-
         let budget = Arc::new(LimitedReadMemoryBudget::new(1 << 20));
         let mut view =
             DeduplicateCurrentView::try_new_with_memory_budget(schema(), vec![0], budget.clone())
@@ -1143,5 +1177,99 @@ mod tests {
             .unwrap();
 
         assert_eq!(kept, expected);
+    }
+
+    #[test]
+    fn skipped_compaction_retries_at_the_next_halving() {
+        let budget = Arc::new(LimitedReadMemoryBudget::new(1 << 20));
+        let mut view =
+            DeduplicateCurrentView::try_new_with_memory_budget(schema(), vec![0], budget.clone())
+                .unwrap();
+        let large = "x".repeat(10_000);
+        view.fold_changelog_batch(
+            batch((1..=8).collect(), vec![&large; 8], (1..=8).collect()),
+            &[ChangeType::Insert; 8],
+        )
+        .unwrap();
+        let used = budget.used_bytes();
+        let held_elsewhere = (1 << 20) - used;
+        budget.try_reserve(held_elsewhere).unwrap();
+        view.fold_changelog_batch(
+            batch((1..=4).collect(), vec![""; 4], vec![0; 4]),
+            &[ChangeType::Delete; 4],
+        )
+        .unwrap();
+        assert_eq!(budget.used_bytes(), 1 << 20);
+
+        budget.release(held_elsewhere);
+        view.fold_changelog_batch(
+            batch((5..=6).collect(), vec![""; 2], vec![0; 2]),
+            &[ChangeType::Delete; 2],
+        )
+        .unwrap();
+        assert!(budget.used_bytes() < used / 2);
+        assert_eq!(
+            reconcile(view, vec![]),
+            vec![(7, large.clone(), 7), (8, large, 8)]
+        );
+        assert_eq!(budget.used_bytes(), 0);
+    }
+
+    #[test]
+    fn random_changelogs_match_a_model() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for case in 0..500 {
+            let keys = rng.random_range(1..=40);
+            let mut view = if rng.random_bool(0.5) {
+                current_view()
+            } else {
+                DeduplicateCurrentView::try_new_with_memory_budget(
+                    schema(),
+                    vec![0],
+                    Arc::new(LimitedReadMemoryBudget::new(usize::MAX)),
+                )
+                .unwrap()
+            };
+            let mut model = HashMap::new();
+            let mut sequence = 0;
+            for _ in 0..rng.random_range(1..=30) {
+                let mut rows = Vec::new();
+                let mut change_types = Vec::new();
+                for _ in 0..rng.random_range(1..=25) {
+                    sequence += 1;
+                    let row = (rng.random_range(0..keys), format!("v{sequence}"), sequence);
+                    let change_type = ChangeType::from_byte_value(rng.random_range(1..=4)).unwrap();
+                    let live = matches!(change_type, ChangeType::Insert | ChangeType::UpdateAfter);
+                    model.insert(row.0, live.then(|| row.clone()));
+                    rows.push(row);
+                    change_types.push(change_type);
+                }
+                view.fold_changelog_batch(batch_of(&rows), &change_types)
+                    .unwrap();
+            }
+
+            let lake: Vec<_> = (0..keys).map(|id| (id, "lake".to_string(), -1)).collect();
+            let mut actual = Vec::new();
+            if let Some(kept) = view.reconcile_baseline_batch(&batch_of(&lake)).unwrap() {
+                actual.extend(rows_of(&kept));
+            }
+            for output in view.finish_batches(rng.random_range(1..=5)).unwrap() {
+                actual.extend(rows_of(&output.unwrap()));
+            }
+            actual.sort();
+            let expected: Vec<_> = lake
+                .into_iter()
+                .filter_map(|row| model.remove(&row.0).unwrap_or(Some(row)))
+                .collect();
+            assert_eq!(actual, expected, "case {case}");
+        }
+    }
+
+    fn batch_of(rows: &[(i32, String, i64)]) -> RecordBatch {
+        batch(
+            rows.iter().map(|row| row.0).collect(),
+            rows.iter().map(|row| row.1.as_str()).collect(),
+            rows.iter().map(|row| row.2).collect(),
+        )
     }
 }
