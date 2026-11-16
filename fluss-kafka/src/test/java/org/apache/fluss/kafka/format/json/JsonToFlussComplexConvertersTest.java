@@ -23,7 +23,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
@@ -44,8 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests recursive containers, nullability, and bounded conversion errors. */
 class JsonToFlussComplexConvertersTest {
-    private static final ObjectMapper MAPPER =
-            new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
     void testNestedRowsArraysAndMaps() throws Exception {
@@ -204,14 +203,14 @@ class JsonToFlussComplexConvertersTest {
     }
 
     @Test
-    void testConvertsAtSchemaNestingLimit() {
+    void testConvertsAtSchemaNestingLimit() throws Exception {
         DataType type = DataTypes.INT();
         JsonNode value = MAPPER.getNodeFactory().numberNode(42);
         for (int i = 0; i < KafkaTableSchema.MAX_JSON_SCHEMA_NESTING_DEPTH; i++) {
             type = DataTypes.ARRAY(type);
             value = MAPPER.createArrayNode().add(value);
         }
-        Object result = JsonToFlussConverters.create(type).convert(value, "$");
+        Object result = convert(type, MAPPER.writeValueAsString(value));
         for (int i = 0; i < KafkaTableSchema.MAX_JSON_SCHEMA_NESTING_DEPTH; i++) {
             result = ((GenericArray) result).toObjectArray()[0];
         }
@@ -219,15 +218,17 @@ class JsonToFlussComplexConvertersTest {
     }
 
     @Test
-    void testErrorPathsEscapeNamesAndStayBounded() {
+    void testErrorPathsEscapeNamesAndStayBounded() throws Exception {
         StringBuilder name = new StringBuilder("quoted\"\\\n\t\r\b\f");
         for (int i = 0; i < 1000; i++) {
             name.append('x');
         }
         ObjectNode object = MAPPER.createObjectNode().put(name.toString(), "invalid");
-        JsonToFlussConverter converter =
-                JsonToFlussConverters.create(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()));
-        assertThatThrownBy(() -> converter.convert(object, "$"))
+        assertThatThrownBy(
+                        () ->
+                                convert(
+                                        DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                                        MAPPER.writeValueAsString(object)))
                 .isInstanceOf(KafkaRecordEncodingException.class)
                 .hasMessageContaining("$[\"quoted\\\"\\\\\\n\\t\\r\\b\\f")
                 .hasMessageContaining("...")
@@ -239,7 +240,12 @@ class JsonToFlussComplexConvertersTest {
         assertThat(path).hasSize(512).startsWith("$").endsWith("...\"]");
     }
 
-    protected Object convert(DataType type, String json) throws Exception {
-        return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$");
+    private static Object convert(DataType type, String json) throws Exception {
+        try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
+            parser.nextToken();
+            Object value = JsonParserToFlussConverters.create(type).convert(parser, "$", null);
+            assertThat(parser.nextToken()).as("parser advancement").isNull();
+            return value;
+        }
     }
 }

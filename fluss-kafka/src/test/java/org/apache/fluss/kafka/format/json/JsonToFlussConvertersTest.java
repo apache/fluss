@@ -25,12 +25,8 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.DecimalNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.DoubleNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.FloatNode;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 
@@ -42,7 +38,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -55,8 +50,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Verifies scalar conversion, normalization, and storage bounds. */
 class JsonToFlussConvertersTest {
-    private static final ObjectMapper MAPPER =
-            new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
     void testNumericRepresentationsAndExactDecimals() throws Exception {
@@ -97,59 +91,22 @@ class JsonToFlussConvertersTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testFloatingPointPreservesZeroSignIncludingUnderflow(boolean negative) {
-        double zero = negative ? -0.0D : 0.0D;
-        for (JsonNode node :
-                new JsonNode[] {
-                    DoubleNode.valueOf(zero),
-                    FloatNode.valueOf((float) zero),
-                    DecimalNode.valueOf(new BigDecimal(negative ? "-1e-1000" : "1e-1000"))
-                }) {
-            float floatValue =
-                    (float) JsonToFlussConverters.create(DataTypes.FLOAT()).convert(node, "$.f");
-            double doubleValue =
-                    (double) JsonToFlussConverters.create(DataTypes.DOUBLE()).convert(node, "$.d");
-            assertThat(Float.floatToRawIntBits(floatValue))
-                    .isEqualTo(Float.floatToRawIntBits((float) zero));
-            assertThat(Double.doubleToRawLongBits(doubleValue))
-                    .isEqualTo(Double.doubleToRawLongBits(zero));
-        }
-    }
-
-    @ParameterizedTest
-    @MethodSource("nonFiniteNumbers")
-    void testRejectsNonFiniteNumericNodes(JsonNode node) {
-        for (DataType type :
-                new DataType[] {DataTypes.FLOAT(), DataTypes.DOUBLE(), DataTypes.DECIMAL(38, 18)}) {
-            assertThatThrownBy(() -> JsonToFlussConverters.create(type).convert(node, "$.number"))
-                    .isInstanceOf(KafkaRecordEncodingException.class)
-                    .hasMessageContaining("$.number")
-                    .hasMessageContaining(type.asSummaryString());
-        }
-    }
-
-    private static Stream<JsonNode> nonFiniteNumbers() {
-        return Stream.of(
-                DoubleNode.valueOf(Double.NaN),
-                DoubleNode.valueOf(Double.NEGATIVE_INFINITY),
-                DoubleNode.valueOf(Double.POSITIVE_INFINITY),
-                FloatNode.valueOf(Float.NaN),
-                FloatNode.valueOf(Float.NEGATIVE_INFINITY),
-                FloatNode.valueOf(Float.POSITIVE_INFINITY));
+    @ValueSource(strings = {"0.0", "-0.0", "0", "-0", "1e-1000", "-1e-1000"})
+    void testFloatingPointPreservesZeroSignIncludingUnderflow(String json) throws Exception {
+        double zero = json.startsWith("-") ? -0.0D : 0.0D;
+        assertThat(Float.floatToRawIntBits((float) convert(DataTypes.FLOAT(), json)))
+                .isEqualTo(Float.floatToRawIntBits((float) zero));
+        assertThat(Double.doubleToRawLongBits((double) convert(DataTypes.DOUBLE(), json)))
+                .isEqualTo(Double.doubleToRawLongBits(zero));
     }
 
     @ParameterizedTest
     @ValueSource(strings = {"A", "AQ", "AQI", "AQ===", "AQ==x", "A Q==", "_w=="})
     void testBase64RejectsInvalidPaddingAlphabetAndEmbeddedWhitespace(String value) {
         for (DataType type : new DataType[] {DataTypes.BYTES(), DataTypes.BINARY(1)}) {
-            assertThatThrownBy(
-                            () ->
-                                    JsonToFlussConverters.create(type)
-                                            .convert(
-                                                    MAPPER.getNodeFactory().textNode(value), "$.b"))
+            assertThatThrownBy(() -> convert(type, MAPPER.writeValueAsString(value)))
                     .isInstanceOf(KafkaRecordEncodingException.class)
-                    .hasMessageContaining("$.b")
+                    .hasMessageContaining("$.field")
                     .hasMessageContaining("invalid Base64");
         }
     }
@@ -186,16 +143,13 @@ class JsonToFlussConvertersTest {
 
     @Test
     void testMissingAndNullRespectNullability() throws Exception {
-        assertThat(JsonToFlussConverters.create(DataTypes.INT()).convert(null, "$.field")).isNull();
-        assertThat(convert(DataTypes.INT(), "null")).isNull();
-        assertThat(
-                        JsonToFlussConverters.create(DataTypes.INT())
-                                .convert(MAPPER.missingNode(), "$.field"))
+        assertThat(JsonParserToFlussConverters.create(DataTypes.INT()).convertMissing("$.field"))
                 .isNull();
+        assertThat(convert(DataTypes.INT(), "null")).isNull();
         assertThatThrownBy(
                         () ->
-                                JsonToFlussConverters.create(DataTypes.INT().copy(false))
-                                        .convert(null, "$.field"))
+                                JsonParserToFlussConverters.create(DataTypes.INT().copy(false))
+                                        .convertMissing("$.field"))
                 .isInstanceOf(KafkaRecordEncodingException.class)
                 .hasMessageContaining("$.field")
                 .hasMessageContaining("missing or null");
@@ -206,27 +160,14 @@ class JsonToFlussConvertersTest {
 
     @Test
     void testDecimalBoundsBeforeRescaling() throws Exception {
-        for (int scale : new int[] {100_000_000, Integer.MAX_VALUE, Integer.MIN_VALUE}) {
-            JsonNode value = DecimalNode.valueOf(new BigDecimal(BigInteger.ONE, scale));
-            JsonToFlussConverter converter = JsonToFlussConverters.create(DataTypes.DECIMAL(5, 2));
-            if (scale > 0) {
-                assertThat(((Decimal) converter.convert(value, "$.amount")).toBigDecimal())
-                        .isEqualTo(new BigDecimal("0.00"));
-            } else {
-                assertThatThrownBy(() -> converter.convert(value, "$.amount"))
-                        .isInstanceOf(KafkaRecordEncodingException.class)
-                        .hasMessageContaining("$.amount")
-                        .hasMessageContaining("precision");
-            }
-            Decimal zero =
-                    (Decimal)
-                            JsonToFlussConverters.create(DataTypes.DECIMAL(5, 2))
-                                    .convert(
-                                            DecimalNode.valueOf(
-                                                    new BigDecimal(BigInteger.ZERO, scale)),
-                                            "$.amount");
-            assertThat(zero.toBigDecimal()).isEqualTo(new BigDecimal("0.00"));
+        for (String json :
+                new String[] {"1e-100000000", "1e-2147483647", "0e-2147483647", "0e2147483647"}) {
+            assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), json)).toBigDecimal())
+                    .isEqualTo(new BigDecimal("0.00"));
         }
+        assertThatThrownBy(() -> convert(DataTypes.DECIMAL(5, 2), "1e2147483647"))
+                .isInstanceOf(KafkaRecordEncodingException.class)
+                .hasMessageContaining("$.field");
         for (String json : new String[] {"12.3400", "1.234e1", "-12.3400", "1e2", "1e-2"}) {
             Decimal decimal = (Decimal) convert(DataTypes.DECIMAL(5, 2), json);
             assertThat(decimal.toBigDecimal()).isEqualByComparingTo(new BigDecimal(json));
@@ -507,7 +448,7 @@ class JsonToFlussConvertersTest {
                     DataTypes.ROW(DataTypes.INT())
                 }) {
             KafkaTableSchema.validateJsonType(type);
-            assertThat(JsonToFlussConverters.create(type).convert(null, "$.field")).isNull();
+            assertThat(JsonParserToFlussConverters.create(type).convertMissing("$.field")).isNull();
         }
     }
 
@@ -517,7 +458,7 @@ class JsonToFlussConvertersTest {
         assertThatThrownBy(() -> KafkaTableSchema.validateJsonType(type))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("only supports STRING map keys");
-        assertThatThrownBy(() -> JsonToFlussConverters.create(type))
+        assertThatThrownBy(() -> JsonParserToFlussConverters.create(type))
                 .isInstanceOf(KafkaTopicSchemaException.class)
                 .hasMessageContaining("only supports STRING map keys");
     }
@@ -549,7 +490,7 @@ class JsonToFlussConvertersTest {
         // The top-level business field starts at zero; each child consumes one level.
         DataType atLimit = type;
         KafkaTableSchema.validateJsonType(atLimit);
-        assertThat(JsonToFlussConverters.create(atLimit)).isNotNull();
+        assertThat(JsonParserToFlussConverters.create(atLimit)).isNotNull();
 
         DataType tooDeep = DataTypes.ROW(atLimit);
         String message =
@@ -559,12 +500,18 @@ class JsonToFlussConvertersTest {
         assertThatThrownBy(() -> KafkaTableSchema.validateJsonType(tooDeep))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(message);
-        assertThatThrownBy(() -> JsonToFlussConverters.create(tooDeep))
+        assertThatThrownBy(() -> JsonParserToFlussConverters.create(tooDeep))
                 .isInstanceOf(KafkaTopicSchemaException.class)
                 .hasMessage(message);
     }
 
-    protected Object convert(DataType type, String json) throws Exception {
-        return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$.field");
+    private static Object convert(DataType type, String json) throws Exception {
+        try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
+            parser.nextToken();
+            Object value =
+                    JsonParserToFlussConverters.create(type).convert(parser, "$.field", null);
+            assertThat(parser.nextToken()).as("parser advancement").isNull();
+            return value;
+        }
     }
 }

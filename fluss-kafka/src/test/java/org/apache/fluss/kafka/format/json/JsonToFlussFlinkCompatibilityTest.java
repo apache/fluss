@@ -21,11 +21,7 @@ import org.apache.fluss.kafka.transcode.KafkaRecordEncodingException;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.BinaryNode;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.FloatNode;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -43,15 +39,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Covers scalar coercion rules from Flink 1.20 JsonToRowDataConverters. */
 class JsonToFlussFlinkCompatibilityTest {
-    private static final ObjectMapper MAPPER =
-            new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @ParameterizedTest
     @MethodSource("coercibleScalars")
     void testFlinkScalarCoercions(DataType type, String json, Object expected) throws Exception {
-        for (ConversionPath path : ConversionPath.values()) {
-            assertThat(convert(path, type, json)).as(path.name()).isEqualTo(expected);
-        }
+        assertThat(convert(type, json)).isEqualTo(expected);
     }
 
     private static Stream<Arguments> coercibleScalars() {
@@ -83,53 +76,22 @@ class JsonToFlussFlinkCompatibilityTest {
     }
 
     @Test
-    void testDecimalTextAndFloatingPointNodes() throws Exception {
-        for (ConversionPath path : ConversionPath.values()) {
-            assertThat(
-                            ((Decimal) convert(path, DataTypes.DECIMAL(5, 2), "\"12.345\""))
-                                    .toBigDecimal())
-                    .as(path.name())
-                    .isEqualByComparingTo("12.35");
-            assertThat(
-                            ((Decimal) convert(path, DataTypes.DECIMAL(5, 2), "\"1.2345e1\""))
-                                    .toBigDecimal())
-                    .as(path.name())
-                    .isEqualByComparingTo("12.35");
-            assertThat(
-                            ((Decimal) convert(path, DataTypes.DECIMAL(5, 2), "\"1e-2147483647\""))
-                                    .toBigDecimal())
-                    .as(path.name())
-                    .isEqualByComparingTo(BigDecimal.ZERO);
-        }
-        JsonNode floatNode = FloatNode.valueOf(0.1F);
-        Decimal decimal =
-                (Decimal)
-                        JsonToFlussConverters.create(DataTypes.DECIMAL(20, 10))
-                                .convert(floatNode, "$.field");
-        assertThat(decimal.toBigDecimal()).isEqualByComparingTo("0.1");
-        assertThat(JsonToFlussConverters.create(DataTypes.DOUBLE()).convert(floatNode, "$.field"))
-                .isEqualTo(0.1D);
+    void testDecimalText() throws Exception {
+        assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"12.345\"")).toBigDecimal())
+                .isEqualByComparingTo("12.35");
+        assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"1.2345e1\"")).toBigDecimal())
+                .isEqualByComparingTo("12.35");
+        assertThat(((Decimal) convert(DataTypes.DECIMAL(5, 2), "\"1e-2147483647\"")).toBigDecimal())
+                .isEqualByComparingTo(BigDecimal.ZERO);
     }
 
     @Test
-    void testJacksonBinaryNodesAndBase64Whitespace() throws Exception {
+    void testBase64Whitespace() throws Exception {
         byte[] bytes = {1, 2, 3, 4};
-        JsonNode binary = BinaryNode.valueOf(bytes);
-        assertThat((byte[]) JsonToFlussConverters.create(DataTypes.BYTES()).convert(binary, "$.b"))
-                .containsExactly(bytes);
-        assertThat(
-                        (byte[])
-                                JsonToFlussConverters.create(DataTypes.BINARY(2))
-                                        .convert(binary, "$.b"))
-                .containsExactly((byte) 1, (byte) 2);
-        for (ConversionPath path : ConversionPath.values()) {
-            assertThat((byte[]) convert(path, DataTypes.BYTES(), "\" AQID\\nBA== \""))
-                    .as(path.name())
-                    .containsExactly(bytes);
-            assertThat((byte[]) convert(path, DataTypes.BINARY(6), "\" AQID\\nBA== \""))
-                    .as(path.name())
-                    .containsExactly((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 0, (byte) 0);
-        }
+        assertThat((byte[]) convert(DataTypes.BYTES(), "\" AQID\\nBA== \"")).containsExactly(bytes);
+
+        assertThat((byte[]) convert(DataTypes.BINARY(6), "\" AQID\\nBA== \""))
+                .containsExactly((byte) 1, (byte) 2, (byte) 3, (byte) 4, (byte) 0, (byte) 0);
     }
 
     @Test
@@ -141,32 +103,25 @@ class JsonToFlussFlinkCompatibilityTest {
                         DataTypes.FIELD(
                                 "prices",
                                 DataTypes.MAP(DataTypes.STRING(), DataTypes.DECIMAL(5, 2))));
-        for (ConversionPath path : ConversionPath.values()) {
-            GenericRow row =
-                    (GenericRow)
-                            convert(
-                                    path,
-                                    type,
-                                    "{\"active\":\"TRUE\",\"counts\":[\"1\",-2.9,null],\"prices\":{\"a\":\"12.345\"}}");
-            assertThat(row.getBoolean(0)).as(path.name()).isTrue();
-            assertThat(row.getArray(1).getInt(0)).as(path.name()).isEqualTo(1);
-            assertThat(row.getArray(1).getInt(1)).as(path.name()).isEqualTo(-2);
-            assertThat(row.getArray(1).isNullAt(2)).as(path.name()).isTrue();
-            assertThat(row.getMap(2).valueArray().getDecimal(0, 5, 2).toBigDecimal())
-                    .as(path.name())
-                    .isEqualByComparingTo("12.35");
-        }
+        GenericRow row =
+                (GenericRow)
+                        convert(
+                                type,
+                                "{\"active\":\"TRUE\",\"counts\":[\"1\",-2.9,null],\"prices\":{\"a\":\"12.345\"}}");
+        assertThat(row.getBoolean(0)).isTrue();
+        assertThat(row.getArray(1).getInt(0)).isEqualTo(1);
+        assertThat(row.getArray(1).getInt(1)).isEqualTo(-2);
+        assertThat(row.getArray(1).isNullAt(2)).isTrue();
+        assertThat(row.getMap(2).valueArray().getDecimal(0, 5, 2).toBigDecimal())
+                .isEqualByComparingTo("12.35");
     }
 
     @ParameterizedTest
     @MethodSource("invalidScalarCoercions")
     void testRejectsInvalidTextAndOutOfRangeValues(DataType type, String json) {
-        for (ConversionPath path : ConversionPath.values()) {
-            assertThatThrownBy(() -> convert(path, type, json))
-                    .as(path.name())
-                    .isInstanceOf(KafkaRecordEncodingException.class)
-                    .hasMessageContaining("$.field");
-        }
+        assertThatThrownBy(() -> convert(type, json))
+                .isInstanceOf(KafkaRecordEncodingException.class)
+                .hasMessageContaining("$.field");
     }
 
     private static Stream<Arguments> invalidScalarCoercions() {
@@ -196,11 +151,7 @@ class JsonToFlussFlinkCompatibilityTest {
                 Arguments.of(DataTypes.BYTES(), "1"));
     }
 
-    private static Object convert(ConversionPath path, DataType type, String json)
-            throws Exception {
-        if (path == ConversionPath.TREE) {
-            return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$.field");
-        }
+    private static Object convert(DataType type, String json) throws Exception {
         try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
             parser.nextToken();
             Object value =
@@ -208,10 +159,5 @@ class JsonToFlussFlinkCompatibilityTest {
             assertThat(parser.nextToken()).as("parser advancement").isNull();
             return value;
         }
-    }
-
-    private enum ConversionPath {
-        TREE,
-        STREAMING
     }
 }

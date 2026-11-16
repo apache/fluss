@@ -28,7 +28,7 @@ import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -45,8 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Verifies converted JSON values through the Fluss Arrow writers and readers. */
 class JsonToFlussArrowTest {
-    private static final ObjectMapper MAPPER =
-            new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
@@ -147,8 +146,13 @@ class JsonToFlussArrowTest {
         }
     }
 
-    protected Object convert(DataType type, String json) throws Exception {
-        return JsonToFlussConverters.create(type).convert(MAPPER.readTree(json), "$");
+    private static Object convert(DataType type, String json) throws Exception {
+        try (JsonParser parser = MAPPER.getFactory().createParser(json)) {
+            parser.nextToken();
+            Object value = JsonParserToFlussConverters.create(type).convert(parser, "$", null);
+            assertThat(parser.nextToken()).as("parser advancement").isNull();
+            return value;
+        }
     }
 
     private static ArrowReader reader(VectorSchemaRoot root, RowType schema) {

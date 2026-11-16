@@ -28,10 +28,10 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonParser;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.util.JsonParserDelegate;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.DeserializationFeature;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.TextNode;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -234,23 +234,25 @@ class JsonKafkaRescueTest {
     }
 
     @Test
-    void testInternalErrorsAreNotRescued() {
+    void testInternalErrorsAreNotRescued() throws Exception {
         IllegalStateException failure = new IllegalStateException("internal error");
-        JsonNode brokenNode =
-                new TextNode("value") {
+        List<JsonParserToFlussConverters.RescueValue> rescued = new ArrayList<>();
+        try (JsonParser parser =
+                new JsonParserDelegate(new ObjectMapper().getFactory().createParser("\"value\"")) {
                     @Override
-                    public String asText() {
+                    public String getText() {
                         throw failure;
                     }
-                };
-        List<JsonNode> rescued = new ArrayList<>();
-        assertThatThrownBy(
-                        () ->
-                                JsonToFlussConverters.create(DataTypes.INT())
-                                        .convert(brokenNode, "$", rescued::add))
-                .isInstanceOf(KafkaRecordEncodingException.class)
-                .hasCause(failure);
-        assertThat(rescued).isEmpty();
+                }) {
+            parser.nextToken();
+            assertThatThrownBy(
+                            () ->
+                                    JsonParserToFlussConverters.create(DataTypes.INT())
+                                            .convert(parser, "$", rescued::add))
+                    .isInstanceOf(KafkaRecordEncodingException.class)
+                    .hasCause(failure);
+            assertThat(rescued).isEmpty();
+        }
     }
 
     private static KafkaFieldDecoder decoder(boolean nested, boolean rescue) {
