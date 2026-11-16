@@ -43,7 +43,6 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -123,29 +122,6 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
-    /**
-     * Publishes a snapshot reference and selects it for recovery atomically.
-     *
-     * <p>All Coordinators and TabletServers must support the recovery-aware commit protocol and
-     * retention rules before explicit selection is enabled. Downgrading those servers while
-     * explicit selections remain is unsupported.
-     */
-    public void setRecoverySnapshot(CompletedSnapshot snapshot) throws Exception {
-        inLock(
-                lock,
-                () -> {
-                    CompletedSnapshotHandle handle = getOrCreateSnapshotHandle(snapshot);
-                    completedSnapshotHandleStore.setRecoverySnapshot(
-                            snapshot.getTableBucket(), handle);
-                    if (containsSnapshot(snapshot.getSnapshotID())) {
-                        selectedRecoverySnapshotId = snapshot.getSnapshotID();
-                        subsumeOldSnapshots(snapshot);
-                    } else {
-                        adoptConfirmedSnapshot(snapshot);
-                    }
-                });
-    }
-
     public long getPhysicalStorageRemoteKvSize() {
         return sharedKvFileRegistry.getFileSize();
     }
@@ -189,27 +165,6 @@ public class CompletedSnapshotStore {
                 expectedLeaderEpoch);
 
         adoptConfirmedSnapshot(snapshot);
-    }
-
-    private CompletedSnapshotHandle getOrCreateSnapshotHandle(CompletedSnapshot snapshot)
-            throws Exception {
-        checkNotNull(snapshot, "Snapshot");
-        Optional<CompletedSnapshotHandle> previous =
-                completedSnapshotHandleStore.get(
-                        snapshot.getTableBucket(), snapshot.getSnapshotID());
-        CompletedSnapshotHandle completedSnapshotHandle;
-        if (previous.isPresent()) {
-            completedSnapshotHandle = previous.get();
-            checkState(
-                    completedSnapshotHandle.getLogOffset() == snapshot.getLogOffset()
-                            && completedSnapshotHandle
-                                    .getMetadataFilePath()
-                                    .equals(snapshot.getMetadataFilePath()),
-                    "Conflicting snapshot reference.");
-        } else {
-            completedSnapshotHandle = store(snapshot);
-        }
-        return completedSnapshotHandle;
     }
 
     private void adoptConfirmedSnapshot(CompletedSnapshot snapshot) throws Exception {

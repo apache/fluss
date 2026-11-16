@@ -1209,9 +1209,6 @@ public final class Replica {
                             zkClient.getCuratorClient(),
                             ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
 
-            // This target must not adopt the epoch of a replacement KV instance.
-            final int snapshotLeaderEpoch = leaderEpoch;
-            Supplier<Integer> bucketLeaderEpochSupplier = () -> snapshotLeaderEpoch;
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
 
             FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
@@ -1231,7 +1228,7 @@ public final class Replica {
                             snapshotIDCounter,
                             kvTablet::getTabletState,
                             logTablet::updateMinRetainOffset,
-                            bucketLeaderEpochSupplier,
+                            leaderEpoch,
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);

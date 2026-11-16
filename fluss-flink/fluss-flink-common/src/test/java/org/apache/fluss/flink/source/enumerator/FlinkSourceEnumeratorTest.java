@@ -96,6 +96,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -499,7 +500,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
-            zk.setRecoverySnapshot(tableBucket, zk.getTableBucketSnapshot(tableBucket, 0L).get());
+            registerRecoverySnapshot(
+                    zk, tableBucket, zk.getTableBucketSnapshot(tableBucket, 0L).get());
         }
         putRows(DEFAULT_TABLE_PATH, 10);
         FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);

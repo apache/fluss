@@ -46,11 +46,6 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
     }
 
     @Override
-    public void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle) {
-        throw new UnsupportedOperationException("Recovery snapshot selection is not supported.");
-    }
-
-    @Override
     public void add(
             TableBucket tableBucket,
             long snapshotId,

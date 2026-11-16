@@ -74,7 +74,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private final SequenceIDCounter snapshotIdCounter;
     private final Supplier<TabletState> tabletStateSupplier;
     private final Consumer<Long> updateMinRetainOffset;
-    private final Supplier<Integer> bucketLeaderEpochSupplier;
+    private final int bucketLeaderEpoch;
     private final Supplier<Integer> coordinatorEpochSupplier;
 
     private final SnapshotRunner snapshotRunner;
@@ -103,7 +103,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
             Consumer<Long> updateMinRetainOffset,
-            Supplier<Integer> bucketLeaderEpochSupplier,
+            int bucketLeaderEpoch,
             Supplier<Integer> coordinatorEpochSupplier,
             long logOffsetOfLatestSnapshot,
             long snapshotSize)
@@ -120,7 +120,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 snapshotIdCounter,
                 tabletStateSupplier,
                 updateMinRetainOffset,
-                bucketLeaderEpochSupplier,
+                bucketLeaderEpoch,
                 coordinatorEpochSupplier,
                 logOffsetOfLatestSnapshot,
                 snapshotSize);
@@ -138,7 +138,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
             Consumer<Long> updateMinRetainOffset,
-            Supplier<Integer> bucketLeaderEpochSupplier,
+            int bucketLeaderEpoch,
             Supplier<Integer> coordinatorEpochSupplier,
             long logOffsetOfLatestSnapshot,
             long snapshotSize)
@@ -154,7 +154,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.snapshotIdCounter = snapshotIdCounter;
         this.tabletStateSupplier = tabletStateSupplier;
         this.updateMinRetainOffset = updateMinRetainOffset;
-        this.bucketLeaderEpochSupplier = bucketLeaderEpochSupplier;
+        this.bucketLeaderEpoch = bucketLeaderEpoch;
         this.coordinatorEpochSupplier = coordinatorEpochSupplier;
         this.logOffsetOfLatestSnapshot = logOffsetOfLatestSnapshot;
         this.snapshotSize = snapshotSize;
@@ -208,7 +208,6 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         // init snapshot stream factory for this snapshot
         long currentSnapshotId = snapshotIdCounter.getAndIncrement();
         // get the bucket leader and coordinator epoch when the snapshot is triggered
-        int bucketLeaderEpoch = bucketLeaderEpochSupplier.get();
         int coordinatorEpoch = coordinatorEpochSupplier.get();
         SnapshotLocation snapshotLocation = initSnapshotLocation(currentSnapshotId);
         return Optional.of(
@@ -404,6 +403,11 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 updateStateOnCommitSuccess(snapshotId, snapshotResult);
                 return; // Snapshot commit succeeded, return directly
             } else {
+                LOG.warn(
+                        "Snapshot {} for TableBucket {} does not exist in ZK. "
+                                + "The commit truly failed, proceeding with cleanup.",
+                        snapshotId,
+                        tableBucket);
                 snapshotsCleaner.cleanSnapshot(completedSnapshot, () -> {}, ioExecutor);
                 handleSnapshotFailure(snapshotId, snapshotLocation, t);
             }

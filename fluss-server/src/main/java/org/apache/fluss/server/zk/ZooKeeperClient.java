@@ -134,7 +134,6 @@ import java.util.stream.Collectors;
 import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -1457,48 +1456,6 @@ public class ZooKeeperClient implements AutoCloseable {
             throw new FencedLeaderEpochException("The snapshot belongs to a previous KV leader.");
         }
         return zkClient.transactionOp().check().withVersion(stat.getVersion()).forPath(path);
-    }
-
-    /**
-     * Publishes and selects a recovery source. Callers must hold the bucket's snapshot-store lock.
-     */
-    public void setRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot) throws Exception {
-        Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
-        Optional<BucketSnapshot> previous = getTableBucketLatestSnapshot(bucket);
-        checkArgument(
-                !previous.isPresent() || snapshot.getLogOffset() >= previous.get().getLogOffset(),
-                "Recovery offset cannot move backwards.");
-        List<CuratorOp> ops = new ArrayList<>();
-        String referencePath = BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId());
-        if (!getTableBucketSnapshot(bucket, snapshot.getSnapshotId()).isPresent()) {
-            ensureSnapshotDirectory(bucket);
-            ops.add(
-                    zkClient.transactionOp()
-                            .create()
-                            .forPath(referencePath, BucketSnapshotIdZNode.encode(snapshot)));
-        }
-        byte[] selection = ZkData.RecoverySnapshotZNode.encode(snapshot.getSnapshotId());
-        if (current.isPresent()) {
-            ops.add(
-                    zkClient.transactionOp()
-                            .setData()
-                            .withVersion(current.get().zkVersion())
-                            .forPath(ZkData.RecoverySnapshotZNode.path(bucket), selection));
-        } else {
-            ops.add(
-                    zkClient.transactionOp()
-                            .create()
-                            .forPath(ZkData.RecoverySnapshotZNode.path(bucket), selection));
-        }
-        zkClient.transaction().forOperations(ops);
-    }
-
-    private void ensureSnapshotDirectory(TableBucket bucket) throws Exception {
-        try {
-            zkClient.create().creatingParentsIfNeeded().forPath(BucketSnapshotsZNode.path(bucket));
-        } catch (KeeperException.NodeExistsException ignored) {
-            // The snapshot directory already exists.
-        }
     }
 
     public OptionalLong getTableBucketLatestSnapshotId(TableBucket tableBucket) throws Exception {

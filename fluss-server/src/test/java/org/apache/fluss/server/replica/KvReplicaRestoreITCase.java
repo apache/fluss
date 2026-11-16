@@ -54,6 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropDatabase;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -249,7 +250,8 @@ class KvReplicaRestoreITCase {
         assertThat(completedSnapshot.getRowCount()).isNotNull();
         assertThat(completedSnapshot.getRowCount()).isEqualTo(recordCount);
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        zk.setRecoverySnapshot(
+        registerRecoverySnapshot(
+                zk,
                 tableBucket,
                 new BucketSnapshot(
                         completedSnapshot.getSnapshotID(),

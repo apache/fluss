@@ -105,6 +105,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -784,7 +785,7 @@ class ZooKeeperClientTest {
                 .containsExactlyInAnyOrderElementsOf(
                         Collections.singletonList(Tuple2.of(snapshot21, 1L)));
 
-        zookeeperClient.setRecoverySnapshot(table1Bucket2, snapshot2);
+        registerRecoverySnapshot(zookeeperClient, table1Bucket2, snapshot2);
         zookeeperClient.registerTableBucketSnapshot(
                 table1Bucket2, new BucketSnapshot(3L, 30L, "oss://test/cp3"));
         assertThat(zookeeperClient.getTableBucketLatestSnapshot(table1Bucket2)).contains(snapshot2);
@@ -867,7 +868,7 @@ class ZooKeeperClientTest {
                 partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
         BucketSnapshot partitionSnapshot = new BucketSnapshot(5L, 50L, "oss://test/partition-cp5");
-        zookeeperClient.setRecoverySnapshot(partitionBucket, partitionSnapshot);
+        registerRecoverySnapshot(zookeeperClient, partitionBucket, partitionSnapshot);
         zookeeperClient.registerTableBucketSnapshot(
                 partitionBucket, new BucketSnapshot(6L, 60L, "oss://test/partition-cp6"));
 
@@ -967,7 +968,7 @@ class ZooKeeperClientTest {
                             throws Exception {
                         List<ZkGetDataResponse> responses = super.getDataInBackground(paths);
                         if (paths.contains(selectionPath)) {
-                            zookeeperClient.setRecoverySnapshot(bucket, selected);
+                            registerRecoverySnapshot(zookeeperClient, bucket, selected);
                             zookeeperClient.registerTableBucketSnapshot(
                                     bucket, new BucketSnapshot(3L, 30L, "file:/late-source"));
                         }
@@ -1001,17 +1002,8 @@ class ZooKeeperClientTest {
         TableBucket bucket = new TableBucket(1L, 0);
         zookeeperClient.registerLeaderAndIsr(
                 bucket, new LeaderAndIsr(0, 0), zkEpoch.getCoordinatorEpochZkVersion());
-        zookeeperClient.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(3L, 20L, "file:/snapshot-3"));
-        assertThatThrownBy(
-                        () ->
-                                zookeeperClient.setRecoverySnapshot(
-                                        bucket, new BucketSnapshot(4L, 19L, "file:/snapshot-4")))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 4L)).isEmpty();
-        assertThat(zookeeperClient.getRecoverySnapshotSelection(bucket)).isEmpty();
-        zookeeperClient.setRecoverySnapshot(
-                bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
+        registerRecoverySnapshot(
+                zookeeperClient, bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         BucketSnapshot equalOffset = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
         zookeeperClient.registerTableBucketSnapshot(bucket, equalOffset, 4L, 0);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(equalOffset);
@@ -1062,8 +1054,8 @@ class ZooKeeperClientTest {
                 new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
         zookeeperClient.registerLeaderAndIsr(
                 bucket, initial, zkEpoch.getCoordinatorEpochZkVersion());
-        zookeeperClient.setRecoverySnapshot(
-                bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
+        registerRecoverySnapshot(
+                zookeeperClient, bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         ZooKeeperClient delayed =

@@ -56,6 +56,7 @@ import java.util.concurrent.ExecutorService;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -154,7 +155,8 @@ class ZooKeeperCompletedSnapshotStoreTest {
                     @Override
                     public Optional<BucketSnapshot> getTableBucketLatestSnapshot(
                             TableBucket requested) throws Exception {
-                        zooKeeperClient.setRecoverySnapshot(
+                        registerRecoverySnapshot(
+                                zooKeeperClient,
                                 bucket,
                                 new BucketSnapshot(
                                         2L, 0L, selected.getMetadataFilePath().toString()));
@@ -205,10 +207,15 @@ class ZooKeeperCompletedSnapshotStoreTest {
                                 zooKeeperClient.getCuratorClient(), (message, error) -> {}),
                         conf) {
                     @Override
-                    public void setRecoverySnapshot(TableBucket bucket, BucketSnapshot snapshot)
+                    public void registerTableBucketSnapshot(
+                            TableBucket bucket,
+                            BucketSnapshot snapshot,
+                            Long previousRecoverySnapshotId,
+                            int expectedLeaderEpoch)
                             throws Exception {
-                        super.setRecoverySnapshot(bucket, snapshot);
-                        if (responseLost) {
+                        super.registerTableBucketSnapshot(
+                                bucket, snapshot, previousRecoverySnapshotId, expectedLeaderEpoch);
+                        if (responseLost && snapshot.getSnapshotId() == 2L) {
                             throw new KeeperException.ConnectionLossException();
                         }
                     }
@@ -222,14 +229,15 @@ class ZooKeeperCompletedSnapshotStoreTest {
                         Runnable::run,
                         snapshot -> false);
         store.add(snapshot(root, bucket, 1L, shared), null, 0);
+        registerRecoverySnapshot(
+                zooKeeperClient, bucket, zooKeeperClient.getTableBucketSnapshot(bucket, 1L).get());
         store.add(snapshot(root, bucket, 3L, null), null, 0);
         CompletedSnapshot selected = snapshot(root, bucket, 2L, shared);
         if (responseLost) {
-            assertThatThrownBy(() -> store.setRecoverySnapshot(selected))
+            assertThatThrownBy(() -> store.add(selected, 1L, 0))
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
         } else {
-            store.add(selected, null, 0);
-            store.setRecoverySnapshot(selected);
+            store.add(selected, 1L, 0);
         }
         store.add(snapshot(root, bucket, 4L, null), null, 0);
         store.add(snapshot(root, bucket, 5L, null), null, 0);

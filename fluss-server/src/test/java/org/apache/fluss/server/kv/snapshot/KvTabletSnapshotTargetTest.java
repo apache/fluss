@@ -80,6 +80,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
@@ -93,7 +94,8 @@ class KvTabletSnapshotTargetTest {
     @Test
     void testLostCommitResponseAndFailedQueryAllowNextSnapshot(@TempDir Path directory)
             throws Throwable {
-        zooKeeperClient.setRecoverySnapshot(tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
+        registerRecoverySnapshot(
+                zooKeeperClient, tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
         CompletedSnapshotStore store =
                 new CompletedSnapshotStore(
                         10,
@@ -257,7 +259,8 @@ class KvTabletSnapshotTargetTest {
         }
 
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(1L);
-        zooKeeperClient.setRecoverySnapshot(
+        registerRecoverySnapshot(
+                zooKeeperClient,
                 tableBucket,
                 new BucketSnapshot(
                         snapshot.getSnapshotID(),
@@ -446,8 +449,8 @@ class KvTabletSnapshotTargetTest {
     void testIdempotentCheckWhenSnapshotExistsInZK(@TempDir Path kvTabletDir) throws Throwable {
         // Test case: coordinator commits to ZK successfully but response is lost due to failover
         // The tablet server should detect the snapshot exists in ZK and skip cleanup
-        zooKeeperClient.setRecoverySnapshot(
-                tableBucket, new BucketSnapshot(0L, 0L, "file:/initial"));
+        registerRecoverySnapshot(
+                zooKeeperClient, tableBucket, new BucketSnapshot(0L, 0L, "file:/initial"));
         CompletedSnapshotStore store =
                 new CompletedSnapshotStore(
                         10,
@@ -463,8 +466,8 @@ class KvTabletSnapshotTargetTest {
         CompletedKvSnapshotCommitter failingAfterZkCommitCommitter =
                 (snapshot, coordinatorEpoch, bucketLeaderEpoch, previousRecoverySnapshotId) -> {
                     store.add(snapshot, previousRecoverySnapshotId, bucketLeaderEpoch);
-                    zooKeeperClient.setRecoverySnapshot(
-                            tableBucket, new BucketSnapshot(2L, 2L, "file:/next"));
+                    registerRecoverySnapshot(
+                            zooKeeperClient, tableBucket, new BucketSnapshot(2L, 2L, "file:/next"));
 
                     // Then throw exception - simulating coordinator failover after ZK commit
                     throw new FlussException("Coordinator failover after ZK commit");
@@ -650,7 +653,6 @@ class KvTabletSnapshotTargetTest {
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
 
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
-        Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
         Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
         return new KvTabletSnapshotTarget(
@@ -664,7 +666,7 @@ class KvTabletSnapshotTargetTest {
                 testingSnapshotIdCounter,
                 this::getCurrentTabletState,
                 updateMinRetainOffsetConsumer::set,
-                bucketLeaderEpochSupplier,
+                0,
                 coordinatorEpochSupplier,
                 0,
                 0L);
@@ -688,7 +690,6 @@ class KvTabletSnapshotTargetTest {
                 createIncrementalSnapshot(SnapshotFailType.NONE);
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
         TestingSnapshotIDCounter testingSnapshotIdCounter = new TestingSnapshotIDCounter();
-        Supplier<Integer> bucketLeaderEpochSupplier = () -> 0;
         Supplier<Integer> coordinatorEpochSupplier = () -> 0;
 
         return new KvTabletSnapshotTarget(
@@ -702,7 +703,7 @@ class KvTabletSnapshotTargetTest {
                 testingSnapshotIdCounter,
                 this::getCurrentTabletState,
                 updateMinRetainOffsetConsumer::set,
-                bucketLeaderEpochSupplier,
+                0,
                 coordinatorEpochSupplier,
                 0,
                 0L);

@@ -88,17 +88,6 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     }
 
     @Override
-    public void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle)
-            throws Exception {
-        client.setRecoverySnapshot(
-                bucket,
-                new BucketSnapshot(
-                        handle.getSnapshotId(),
-                        handle.getLogOffset(),
-                        handle.getMetadataFilePath().toString()));
-    }
-
-    @Override
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {
         checkNotNull(tableBucket, "Table bucket");
         client.deleteTableBucketSnapshot(tableBucket, snapshotId);

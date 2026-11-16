@@ -33,9 +33,6 @@ public interface CompletedSnapshotHandleStore {
     /** Returns the explicitly selected source, or empty for legacy recovery. */
     Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) throws Exception;
 
-    /** Publishes the snapshot reference and recovery selection atomically. */
-    void setRecoverySnapshot(TableBucket bucket, CompletedSnapshotHandle handle) throws Exception;
-
     /**
      * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).
      *
