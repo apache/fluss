@@ -185,7 +185,7 @@ pub struct Config {
 
     /// Whether to check the CRC of fetched log batches, except the ones the server projected.
     /// Default: true (matching Java CLIENT_SCANNER_LOG_CHECK_CRC)
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub scanner_log_check_crc: bool,
 
     /// Whether to enable idempotent writes. When enabled, each batch is tagged with
@@ -783,6 +783,18 @@ mod tests {
             "false"
         ]));
         assert!(parse(&["--writer-dynamic-create-partition-enabled=true"]));
+    }
+
+    #[test]
+    fn test_scanner_log_check_crc_from_cli() {
+        let parse = |args: &[&str]| {
+            Config::try_parse_from(std::iter::once("fluss").chain(args.iter().copied()))
+                .expect("parse")
+                .scanner_log_check_crc
+        };
+        assert!(parse(&[]));
+        assert!(!parse(&["--scanner-log-check-crc", "false"]));
+        assert!(parse(&["--scanner-log-check-crc=true"]));
     }
 
     #[test]

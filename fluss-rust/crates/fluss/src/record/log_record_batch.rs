@@ -532,7 +532,7 @@ impl LogRecordBatch {
     /// Rejects unsupported magic versions and batches shorter than their
     /// magic's fixed header, so the fixed-offset accessors cannot slice past
     /// the buffer. Mirrors the guard in Java's `DefaultLogRecordBatch`.
-    fn ensure_header_complete(&self) -> Result<usize> {
+    pub(crate) fn ensure_header_complete(&self) -> Result<usize> {
         if self.data.len() <= MAGIC_OFFSET {
             return Err(Error::UnexpectedError {
                 message: format!(

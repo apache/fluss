@@ -256,24 +256,11 @@ impl KvRecordBatch {
         ]))
     }
 
-    /// Create an iterable collection of records in this batch.
-    ///
-    /// This validates the batch checksum before returning the records.
-    /// For trusted data paths, use `records_unchecked()` to skip validation.
+    /// Create an iterable collection of records in this batch. Doesn't check the CRC,
+    /// call [`Self::is_valid`] first.
     ///
     /// Mirrors: KvRecordBatch.records(ReadContext)
     pub fn records(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
-        if !self.is_valid() {
-            return Err(crate::error::Error::IoUnexpectedError {
-                message: "Invalid batch checksum".to_string(),
-                source: io::Error::new(io::ErrorKind::InvalidData, "Invalid batch checksum"),
-            });
-        }
-        self.records_unchecked(read_context)
-    }
-
-    /// Create an iterable collection of records in this batch without validating the checksum.
-    pub fn records_unchecked(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
         let size = self.size_in_bytes()?;
         let count = self.record_count()?;
         let schema_id = self.schema_id()?;
@@ -452,5 +439,19 @@ mod tests {
         assert!(record2.is_deletion());
 
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_records_does_not_check_crc() {
+        let mut builder = KvRecordBatchBuilder::new(42, 4096, KvFormat::COMPACTED);
+        builder.append_row(b"key", None).unwrap();
+        let mut bytes = builder.build().unwrap().to_vec();
+        bytes[CRC_OFFSET] ^= 1;
+
+        let batch = KvRecordBatch::new(Bytes::from(bytes), 0);
+        assert!(!batch.is_valid());
+        let read_context = TestReadContext::compacted(vec![DataTypes::bytes()]);
+        let mut records = batch.records(&read_context).unwrap().into_iter();
+        assert_eq!(records.next().unwrap().unwrap().key().as_ref(), b"key");
     }
 }

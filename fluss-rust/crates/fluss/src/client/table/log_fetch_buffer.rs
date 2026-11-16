@@ -692,13 +692,19 @@ impl DefaultCompletedFetch {
         }
     }
 
-    /// Reads the next batch and checks its CRC unless the resolver skips it.
     fn next_log_batch(&mut self) -> Option<Result<LogRecordBatch>> {
         let batch = self.log_record_batch.next()?;
-        if !self.resolver.checks_crc(self.is_remote) {
-            return Some(batch);
+        Some(batch.and_then(|batch| self.maybe_ensure_valid(&batch).map(|()| batch)))
+    }
+
+    /// Java `CompletedFetch.maybeEnsureValid`, plus a header check when the CRC is
+    /// skipped: schema resolution reads the header.
+    fn maybe_ensure_valid(&self, batch: &LogRecordBatch) -> Result<()> {
+        if self.resolver.checks_crc(self.is_remote) {
+            batch.ensure_valid()
+        } else {
+            batch.ensure_header_complete().map(drop)
         }
-        Some(batch.and_then(|batch| batch.ensure_valid().map(|()| batch)))
     }
 
     /// Advances past the range the server scanned and pruned, guarding on the
@@ -1101,13 +1107,13 @@ mod tests {
     };
     use crate::record::{
         BASE_OFFSET_LENGTH, BASE_OFFSET_OFFSET, COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET,
-        LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET,
-        ReadContext, to_arrow_schema,
+        LENGTH_LENGTH, LENGTH_OFFSET, LOG_OVERHEAD, MemoryLogRecordsArrowBuilder,
+        RECORD_BATCH_HEADER_SIZE, RECORDS_OFFSET, ReadContext, SCHEMA_ID_OFFSET, to_arrow_schema,
     };
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::{
-        build_table_info, build_table_info_with_columns, splice_change_type_vector,
-        uncompressed_arrow_batch_config, update_crc,
+        build_append_only_batch, build_table_info, build_table_info_with_columns,
+        splice_change_type_vector, uncompressed_arrow_batch_config, update_crc,
     };
     use arrow::array::{Array, Int32Array, StringArray};
     use std::future::Future;
@@ -1286,7 +1292,77 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("id column");
         assert_eq!(ids.value(0), value ^ 1);
+        assert!(LogRecordBatch::new(data.into()).ensure_valid().is_err());
         Ok(())
+    }
+
+    #[test]
+    fn crc_is_checked_before_schema_resolution() -> Result<()> {
+        let (_, mut data) = build_append_only_batch(&[(1, "a")]);
+        data[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2].copy_from_slice(&99_i16.to_le_bytes());
+        for batches in [false, true] {
+            let mut fetch = DefaultCompletedFetch::new(
+                TableBucket::new(1, 0),
+                LogRecordsBatches::new(data.clone()),
+                data.len(),
+                test_resolver()?,
+                false,
+                0,
+                1,
+            );
+            let error = fetch_first(&mut fetch, batches).expect("crc error, not schema 99");
+            let cause = fetch_error_cause(&error);
+            assert!(
+                cause.contains("Record batch is corrupt (stored crc = "),
+                "{cause}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn truncated_batch_fails_without_crc_check() -> Result<()> {
+        let (_, valid) = build_append_only_batch(&[(1, "a")]);
+        let mut short_header = valid[..RECORD_BATCH_HEADER_SIZE - 8].to_vec();
+        let length = (short_header.len() - LOG_OVERHEAD) as i32;
+        short_header[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+            .copy_from_slice(&length.to_le_bytes());
+        for data in [vec![0; LOG_OVERHEAD], short_header] {
+            for batches in [false, true] {
+                let mut fetch = DefaultCompletedFetch::new(
+                    TableBucket::new(1, 0),
+                    LogRecordsBatches::new(data.clone()),
+                    data.len(),
+                    test_resolver_with_check_crc(false)?,
+                    false,
+                    0,
+                    1,
+                );
+                let error = fetch_first(&mut fetch, batches).expect("truncated batch must fail");
+                let cause = fetch_error_cause(&error);
+                assert!(cause.contains("Corrupt log record batch"), "{cause}");
+            }
+        }
+        Ok(())
+    }
+
+    fn fetch_first(fetch: &mut DefaultCompletedFetch, batches: bool) -> Option<Error> {
+        if batches {
+            fetch.fetch_batches(1).err()
+        } else {
+            fetch.fetch_records(1).err()
+        }
+    }
+
+    fn fetch_error_cause(error: &Error) -> String {
+        let Error::UnexpectedError {
+            source: Some(cause),
+            ..
+        } = error
+        else {
+            panic!("unexpected error {error}");
+        };
+        cause.to_string()
     }
 
     fn test_resolver() -> Result<Arc<ReadContextResolver>> {
