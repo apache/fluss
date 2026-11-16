@@ -36,7 +36,6 @@ public class FieldLastNAgg extends FieldAggregator {
     private static final long serialVersionUID = 1L;
 
     private final int size;
-    private final boolean distinct;
     private final ArrayDistinctCollector distinctCollector;
     private final DataType elementType;
     private final boolean spliceable;
@@ -66,7 +65,6 @@ public class FieldLastNAgg extends FieldAggregator {
         this.elementType = dataType.getElementType();
         this.spliceable = BinaryArraySplicer.supports(elementType);
         this.elementGetter = InternalArray.createElementGetter(elementType);
-        this.distinct = distinct;
         this.distinctCollector = distinct ? new ArrayDistinctCollector(elementType) : null;
     }
 
@@ -77,7 +75,7 @@ public class FieldLastNAgg extends FieldAggregator {
         }
         InternalArray older = (InternalArray) accumulator;
         InternalArray newer = (InternalArray) inputField;
-        if (distinct) {
+        if (distinctCollector != null) {
             return distinct(older, newer);
         }
         if (older != null && newer.size() == 0) {

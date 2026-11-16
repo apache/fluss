@@ -232,19 +232,19 @@ public enum AggFunctionType {
                                         "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
                                         parameterName, this));
                     }
-                    break;
-                }
-                int size;
-                try {
-                    size = Integer.parseInt(parameterValue);
-                } catch (NumberFormatException e) {
-                    size = -1;
-                }
-                if (size <= 0) {
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Parameter '%s' for aggregation function '%s' must be a positive integer, but was '%s'",
-                                    parameterName, this, parameterValue));
+                } else if (AggFunctions.PARAM_SIZE.equals(parameterName)) {
+                    int size;
+                    try {
+                        size = Integer.parseInt(parameterValue);
+                    } catch (NumberFormatException e) {
+                        size = -1;
+                    }
+                    if (size <= 0) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Parameter '%s' for aggregation function '%s' must be a positive integer, but was '%s'",
+                                        parameterName, this, parameterValue));
+                    }
                 }
                 break;
             default:
