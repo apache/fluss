@@ -1575,9 +1575,15 @@ public class ZooKeeperClient implements AutoCloseable {
             snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(bucket), bucket);
         }
 
-        Map<Integer, Long> snapshotIds = new HashMap<>();
-        for (ZkGetChildrenResponse response :
-                getChildrenInBackground(snapshotPathToTableBucket.keySet())) {
+        Map<Integer, Long> selectedIds = getRecoverySnapshotIds(snapshotPathToTableBucket.values());
+        Map<Integer, Long> snapshotIds = new HashMap<>(selectedIds);
+        Set<String> fallbackPaths = new HashSet<>();
+        for (Map.Entry<String, TableBucket> entry : snapshotPathToTableBucket.entrySet()) {
+            if (!selectedIds.containsKey(entry.getValue().getBucket())) {
+                fallbackPaths.add(entry.getKey());
+            }
+        }
+        for (ZkGetChildrenResponse response : getChildrenInBackground(fallbackPaths)) {
             if (response.getResultCode() == KeeperException.Code.NONODE) {
                 continue;
             }
@@ -1590,8 +1596,6 @@ public class ZooKeeperClient implements AutoCloseable {
                         latestId.getAsLong());
             }
         }
-        Map<Integer, Long> selectedIds = getRecoverySnapshotIds(snapshotPathToTableBucket.values());
-        snapshotIds.putAll(selectedIds);
         Map<String, Integer> referencePaths = new HashMap<>();
         for (Map.Entry<Integer, Long> snapshot : snapshotIds.entrySet()) {
             referencePaths.put(

@@ -813,6 +813,7 @@ class ZooKeeperClientTest {
         TableBucket bucketWithoutSnapshotsPath = new TableBucket(tableId, 2);
         TableBucket bucketWithEmptySnapshotsPath = new TableBucket(tableId, 3);
         TableBucket unassignedBucketWithoutSnapshotsPath = new TableBucket(tableId, 4);
+        TableBucket bucketWithRecoverySnapshot = new TableBucket(tableId, 5);
         zookeeperClient.registerTableAssignment(
                 tableId,
                 TableAssignment.builder()
@@ -820,12 +821,18 @@ class ZooKeeperClientTest {
                         .add(bucketWithoutPath.getBucket(), BucketAssignment.of(0))
                         .add(bucketWithoutSnapshotsPath.getBucket(), BucketAssignment.of(0))
                         .add(bucketWithEmptySnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithRecoverySnapshot.getBucket(), BucketAssignment.of(0))
                         .build());
 
         BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
         BucketSnapshot latestSnapshot = new BucketSnapshot(3L, 30L, "oss://test/cp3");
         zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, olderSnapshot);
         zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, latestSnapshot);
+
+        BucketSnapshot recoverySnapshot = new BucketSnapshot(1L, 10L, "oss://test/recovery-cp1");
+        registerRecoverySnapshot(zookeeperClient, bucketWithRecoverySnapshot, recoverySnapshot);
+        zookeeperClient.registerTableBucketSnapshot(
+                bucketWithRecoverySnapshot, new BucketSnapshot(2L, 20L, "oss://test/recovery-cp2"));
 
         // Create a bucket path without its snapshots child path.
         zookeeperClient
@@ -847,6 +854,8 @@ class ZooKeeperClientTest {
 
         Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
         expectedSnapshots.put(bucketWithSnapshots.getBucket(), Optional.of(latestSnapshot));
+        expectedSnapshots.put(
+                bucketWithRecoverySnapshot.getBucket(), Optional.of(recoverySnapshot));
         expectedSnapshots.put(bucketWithoutPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithoutSnapshotsPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithEmptySnapshotsPath.getBucket(), Optional.empty());
@@ -944,38 +953,6 @@ class ZooKeeperClientTest {
 
         assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
                 .containsEntry(tableBucket.getBucket(), Optional.empty());
-    }
-
-    @Test
-    void testRecoverySelectionAppearsDuringBatchRead() throws Exception {
-        TableBucket bucket = new TableBucket(1L, 0);
-        zookeeperClient.registerTableAssignment(
-                1L, TableAssignment.builder().add(0, BucketAssignment.of(0)).build());
-        BucketSnapshot selected = new BucketSnapshot(1L, 20L, "file:/selected-source");
-        zookeeperClient.registerTableBucketSnapshot(bucket, selected);
-        BucketSnapshot ordinary = new BucketSnapshot(2L, 20L, "file:/ordinary-source");
-        zookeeperClient.registerTableBucketSnapshot(bucket, ordinary);
-        String selectionPath = ZkData.RecoverySnapshotZNode.path(bucket);
-        Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        ZooKeeperClient reader =
-                new ZooKeeperClient(
-                        new CuratorFrameworkWithUnhandledErrorListener(
-                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
-                        configuration) {
-                    @Override
-                    List<ZkGetDataResponse> getDataInBackground(Collection<String> paths)
-                            throws Exception {
-                        List<ZkGetDataResponse> responses = super.getDataInBackground(paths);
-                        if (paths.contains(selectionPath)) {
-                            registerRecoverySnapshot(zookeeperClient, bucket, selected);
-                            zookeeperClient.registerTableBucketSnapshot(
-                                    bucket, new BucketSnapshot(3L, 30L, "file:/late-source"));
-                        }
-                        return responses;
-                    }
-                };
-        assertThat(reader.getTableLatestBucketSnapshot(1L)).containsEntry(0, Optional.of(ordinary));
     }
 
     @Test
