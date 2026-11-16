@@ -34,7 +34,13 @@ import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.Metric;
+import org.apache.flink.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.testutils.InMemoryReporter;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -161,6 +167,60 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                             - localBytesOutBefore;
             assertThat(localBytesOut).isEqualTo(localTailBytes);
         }
+    }
+
+    @Test
+    void testReportsRecordsInAndPendingRecordsForAutoscalers() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "autoscaler_metrics_log_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        createTable(tablePath, schema);
+        int recordCount = 30;
+        writeRows(tablePath, createRows(0, recordCount), true);
+
+        InMemoryReporter reporter = InMemoryReporter.createWithRetainedMetrics();
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(
+                        reporter.addToConfiguration(
+                                new org.apache.flink.configuration.Configuration()));
+        env.setParallelism(1).setRuntimeMode(RuntimeExecutionMode.STREAMING);
+        try (TieringJobScope tiering = startTieringJob(env)) {
+            waitUntilFullyTiered(tablePath, recordCount);
+            JobID jobId = tiering.client().getJobID();
+            // the tables of the other tests are fully tiered when they end, so the job only
+            // consumes this table's records; later rounds find nothing new and must not add
+            // their write results to numRecordsIn
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        assertThat(sumTieringSourceMetric(reporter, jobId, "numRecordsIn"))
+                                .isEqualTo(recordCount);
+                        assertThat(sumTieringSourceMetric(reporter, jobId, "pendingRecords"))
+                                .isEqualTo(0L);
+                    });
+        }
+    }
+
+    /** Sums a metric of the tiering source over its subtasks, failing if a subtask lacks it. */
+    private static long sumTieringSourceMetric(
+            InMemoryReporter reporter, JobID jobId, String metricName) {
+        List<OperatorMetricGroup> groups =
+                reporter.findOperatorMetricGroups(jobId, ".*TieringSource.*");
+        assertThat(groups).isNotEmpty();
+        long sum = 0L;
+        for (OperatorMetricGroup group : groups) {
+            Metric metric = reporter.getMetricsByGroup(group).get(metricName);
+            assertThat(metric).as(metricName).isNotNull();
+            if (metric instanceof Counter) {
+                sum += ((Counter) metric).getCount();
+            } else {
+                sum += ((Number) ((Gauge<?>) metric).getValue()).longValue();
+            }
+        }
+        return sum;
     }
 
     private List<InternalRow> createRows(int start, int count) {

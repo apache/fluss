@@ -26,6 +26,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
+import org.apache.fluss.flink.tiering.event.TieringBacklogEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
@@ -36,6 +37,11 @@ import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderOutput;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
+import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
@@ -174,6 +180,82 @@ class TieringSourceReaderTest extends FlinkTestBase {
                             assertThat(result.writeResult()).isNull();
                         });
             }
+        }
+    }
+
+    @Test
+    void testBacklogEventSetsPendingRecords() throws Exception {
+        MetricListener metricListener = new MetricListener();
+        TestingReaderContext readerContext =
+                new TestingReaderContext(
+                        new org.apache.flink.configuration.Configuration(),
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSourceReader<TestingWriteResult> reader =
+                        new TieringSourceReader<>(
+                                new FutureCompletingBlockingQueue<>(16),
+                                readerContext,
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Duration.ofMillis(500))) {
+            reader.start();
+            Gauge<Long> pendingRecords =
+                    metricListener.<Long>getGauge(MetricNames.PENDING_RECORDS).get();
+            // an idle reader without splits reports no backlog
+            assertThat(pendingRecords.getValue()).isEqualTo(0L);
+
+            // the backlog only the enumerator knows about
+            reader.handleSourceEvents(new TieringBacklogEvent(42L));
+            assertThat(pendingRecords.getValue()).isEqualTo(42L);
+
+            // replaced, not added up
+            reader.handleSourceEvents(new TieringBacklogEvent(7L));
+            assertThat(pendingRecords.getValue()).isEqualTo(7L);
+            reader.handleSourceEvents(new TieringBacklogEvent(0L));
+            assertThat(pendingRecords.getValue()).isEqualTo(0L);
+        }
+    }
+
+    @Test
+    void testEmittedWriteResultsAreNotCountedAsRecordsIn() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_tiering_write_results_not_records");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TestingReaderContext readerContext =
+                new TestingReaderContext(
+                        new org.apache.flink.configuration.Configuration(), metricGroup);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSourceReader<TestingWriteResult> reader =
+                        new TieringSourceReader<>(
+                                new FutureCompletingBlockingQueue<>(16),
+                                readerContext,
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Duration.ofMillis(500))) {
+            reader.start();
+            // an empty bucket, force finished: one write result is emitted, no record is read
+            TieringLogSplit split =
+                    new TieringLogSplit(
+                            tablePath, new TableBucket(tableId, 0), null, EARLIEST_OFFSET, 100);
+            reader.addSplits(Collections.singletonList(new FlinkTieringSplit(split)));
+            reader.handleSourceEvents(new TieringReachMaxDurationEvent(tableId));
+
+            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>> output =
+                    new TestingReaderOutput<>();
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(1);
+                    });
+            assertThat(metricGroup.getIOMetricGroup().getNumRecordsInCounter().getCount())
+                    .isEqualTo(0L);
         }
     }
 

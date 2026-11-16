@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
@@ -47,11 +48,14 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
+import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.testutils.MetricListener;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
+import org.apache.flink.runtime.metrics.groups.UnregisteredMetricGroups;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -61,6 +65,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
@@ -536,6 +541,219 @@ class TieringSplitReaderTest extends FlinkTestBase {
                                     + "with duplicate keys. Finished: %s, expected: %s",
                             finished, splitIds)
                     .containsAll(splitIds);
+        }
+    }
+
+    @Test
+    void testReportsConsumedRecordsAndBacklog() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_consumed_records_and_backlog");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 30);
+
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        new TieringSplitReader<>(
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Thread.currentThread().getContextClassLoader(),
+                                tieringMetrics)) {
+            List<FlinkTieringSplit> logSplits = new ArrayList<>();
+            Set<String> splitIds = new HashSet<>();
+            long expectedRecords = 0;
+            for (Map.Entry<TableBucket, List<InternalRow>> bucketRows : rows.entrySet()) {
+                // each new key is one +I changelog record
+                long stoppingOffset = bucketRows.getValue().size();
+                // a bucket never tiered starts at the earliest offset, unknown before its first
+                // poll, so it counts from offset 0 and its first polled records count too
+                long startingOffset = logSplits.isEmpty() ? EARLIEST_OFFSET : 0;
+                FlinkTieringSplit split =
+                        createLogSplit(
+                                tablePath,
+                                tableId,
+                                bucketRows.getKey().getBucket(),
+                                startingOffset,
+                                stoppingOffset);
+                logSplits.add(split);
+                splitIds.add(split.splitId());
+                expectedRecords += stoppingOffset;
+            }
+            assertThat(expectedRecords).isEqualTo(30L);
+
+            tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(expectedRecords);
+
+            Set<String> finishedSplits = new HashSet<>();
+            long previousBacklog = expectedRecords;
+            while (!finishedSplits.containsAll(splitIds)) {
+                finishedSplits.addAll(tieringSplitReader.fetch().finishedSplits());
+                // the backlog only shrinks while the splits are read
+                assertThat(tieringMetrics.getPendingRecords()).isLessThanOrEqualTo(previousBacklog);
+                previousBacklog = tieringMetrics.getPendingRecords();
+            }
+
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
+            tieringMetrics.flushRecordsConsumed();
+            assertThat(metricGroup.getIOMetricGroup().getNumRecordsInCounter().getCount())
+                    .isEqualTo(expectedRecords);
+        }
+    }
+
+    @Test
+    void testSnapshotSplitCountsCollapsedUpdatesOnFinish() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_snapshot_collapsed_updates");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+        TableBucket bucket = rows.keySet().iterator().next();
+        long snapshotRows = rows.get(bucket).size();
+        // the snapshot holds one row per key, while the log up to its offset also holds updates
+        long logOffsetOfSnapshot = snapshotRows + 7;
+
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        new TieringSplitReader<>(
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Thread.currentThread().getContextClassLoader(),
+                                tieringMetrics)) {
+            FlinkTieringSplit split =
+                    new FlinkTieringSplit(
+                            new TieringSnapshotSplit(
+                                    tablePath, bucket, null, 0L, logOffsetOfSnapshot, 1));
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(split)));
+            // a snapshot split is estimated by its log offset, an upper bound
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(logOffsetOfSnapshot);
+
+            Counter numRecordsIn = metricGroup.getIOMetricGroup().getNumRecordsInCounter();
+            Set<String> finishedSplits = new HashSet<>();
+            while (!finishedSplits.contains(split.splitId())) {
+                finishedSplits.addAll(tieringSplitReader.fetch().finishedSplits());
+                if (!finishedSplits.contains(split.splitId())) {
+                    tieringMetrics.flushRecordsConsumed();
+                    // while reading, only the rows read are counted
+                    assertThat(numRecordsIn.getCount()).isBetween(0L, snapshotRows);
+                }
+            }
+
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
+            tieringMetrics.flushRecordsConsumed();
+            // on finish, the collapsed updates are counted too, so the consumed records match
+            // the backlog the split drained
+            assertThat(numRecordsIn.getCount()).isEqualTo(logOffsetOfSnapshot);
+        }
+    }
+
+    @Test
+    void testForceFinishedSplitLeavesBacklogAndCountsNoLaterPolls() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_force_finish_backlog");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
+        TableBucket bucket = rows.keySet().iterator().next();
+        long writtenRecords = rows.get(bucket).size();
+        // beyond the written records, so the split only finishes when forced
+        long stoppingOffset = 100L;
+
+        InternalSourceReaderMetricGroup metricGroup =
+                InternalSourceReaderMetricGroup.wrap(
+                        UnregisteredMetricGroups.createUnregisteredOperatorMetricGroup());
+        TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        new TieringSplitReader<>(
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Thread.currentThread().getContextClassLoader(),
+                                tieringMetrics)) {
+            FlinkTieringSplit split =
+                    createLogSplit(tablePath, tableId, bucket.getBucket(), 0, stoppingOffset);
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(split)));
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(stoppingOffset);
+
+            // read what was written; the rest of the split is still backlog
+            while (tieringMetrics.getPendingRecords() > stoppingOffset - writtenRecords) {
+                assertThat(tieringSplitReader.fetch().finishedSplits()).isEmpty();
+            }
+            assertThat(tieringMetrics.getPendingRecords())
+                    .isEqualTo(stoppingOffset - writtenRecords);
+
+            tieringSplitReader.handleTableReachTieringMaxDuration(tableId);
+            assertThat(tieringSplitReader.fetch().finishedSplits())
+                    .containsExactly(split.splitId());
+            // the remaining offsets are left to the next round, not this reader's backlog
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
+
+            // new records of the force finished bucket are neither read nor counted
+            putRows(tableId, tablePath, 10);
+            tieringSplitReader.fetch();
+            assertThat(tieringMetrics.getPendingRecords()).isEqualTo(0L);
+            tieringMetrics.flushRecordsConsumed();
+            assertThat(metricGroup.getIOMetricGroup().getNumRecordsInCounter().getCount())
+                    .isEqualTo(writtenRecords);
+        }
+    }
+
+    @Test
+    void testCountsFetcherBusyTime() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_fetcher_busy_time");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 30);
+
+        MetricListener metricListener = new MetricListener();
+        TieringMetrics tieringMetrics =
+                new TieringMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+        Counter busyTime =
+                metricListener
+                        .getCounter(
+                                TieringMetrics.FLUSS_METRIC_GROUP,
+                                TieringMetrics.TIERING_SERVICE_GROUP,
+                                MetricNames.TIERING_SERVICE_FETCHER_BUSY_TIME)
+                        .get();
+        // a long poll timeout, which must not count as busy time
+        Duration pollTimeout = Duration.ofSeconds(1);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        new TieringSplitReader<>(
+                                connection,
+                                new TestingLakeTieringFactory(),
+                                Thread.currentThread().getContextClassLoader(),
+                                pollTimeout,
+                                tieringMetrics)) {
+            TableBucket bucket = rows.keySet().iterator().next();
+            // beyond the written records, so the reader keeps polling an idle bucket
+            FlinkTieringSplit split =
+                    createLogSplit(tablePath, tableId, bucket.getBucket(), 0, 1000L);
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<>(Collections.singletonList(split)));
+
+            long startNanos = System.nanoTime();
+            // the first fetches read the records, the last ones wait out the poll timeout for
+            // data that never comes
+            for (int i = 0; i < 3; i++) {
+                tieringSplitReader.fetch();
+            }
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+            assertThat(elapsedMs).isGreaterThanOrEqualTo(pollTimeout.toMillis());
+            // at least one poll timeout was spent waiting, which isn't busy time
+            assertThat(busyTime.getCount()).isLessThanOrEqualTo(elapsedMs - pollTimeout.toMillis());
         }
     }
 

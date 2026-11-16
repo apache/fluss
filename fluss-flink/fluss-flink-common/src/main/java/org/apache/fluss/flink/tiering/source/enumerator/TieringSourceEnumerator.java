@@ -30,7 +30,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringBacklogEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.TieringBacklog;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -109,6 +111,12 @@ public class TieringSourceEnumerator
     /** Delay between claims when draining consecutive empty tables, to pace the claim RPC rate. */
     private static final long EMPTY_TABLE_POLL_DELAY_MS = 1000L;
 
+    /**
+     * The reader that reports the backlog only the enumerator knows about. Subtask 0 exists at any
+     * parallelism, and autoscalers sum {@code pendingRecords} over all subtasks.
+     */
+    @VisibleForTesting static final int BACKLOG_READER = 0;
+
     private final Configuration flussConf;
     private final Configuration lakeTieringConfig;
     private final SplitEnumeratorContext<FlinkTieringSplit> context;
@@ -140,6 +148,9 @@ public class TieringSourceEnumerator
 
     /** Tracks a pending delayed poll, but not an in-flight request. */
     private boolean delayedPollScheduled = false;
+
+    /** The backlog last sent to {@link #BACKLOG_READER}, -1 to send it again. */
+    private long reportedBacklog = -1L;
 
     public TieringSourceEnumerator(
             Configuration flussConf,
@@ -242,6 +253,21 @@ public class TieringSourceEnumerator
                 pollTieringTableIntervalMs);
     }
 
+    /**
+     * Sends the backlog only the enumerator knows about, the splits not yet assigned, to {@link
+     * #BACKLOG_READER} when it changed. Must be called from the coordinator thread.
+     */
+    private void reportBacklog() {
+        long backlog = TieringBacklog.estimate(pendingSplits);
+        if (backlog == reportedBacklog
+                || !context.registeredReaders().containsKey(BACKLOG_READER)) {
+            // an unregistered reader gets the backlog once it registers, see addReader
+            return;
+        }
+        context.sendEventToSourceReader(BACKLOG_READER, new TieringBacklogEvent(backlog));
+        reportedBacklog = backlog;
+    }
+
     @Override
     public void handleSplitRequest(int subtaskId, @Nullable String requesterHostname) {
         if (!context.registeredReaders().containsKey(subtaskId)) {
@@ -280,6 +306,19 @@ public class TieringSourceEnumerator
     @Override
     public void addReader(int subtaskId) {
         LOG.info("Adding reader: {} to Tiering Source enumerator.", subtaskId);
+        try {
+            doAddReader(subtaskId);
+        } finally {
+            if (subtaskId == BACKLOG_READER) {
+                // a new reader attempt starts without the backlog; sent after a failover
+                // dropped the queued splits
+                reportedBacklog = -1L;
+                reportBacklog();
+            }
+        }
+    }
+
+    private void doAddReader(int subtaskId) {
         Map<Integer, ReaderInfo> readerByAttempt =
                 context.registeredReadersOfAttempts().get(subtaskId);
         if (readerByAttempt != null && !readerByAttempt.isEmpty()) {
@@ -383,6 +422,7 @@ public class TieringSourceEnumerator
         tieringReachMaxDurationsTables.clear();
         // also clean all pending splits since we mark all as failed
         pendingSplits.clear();
+        reportBacklog();
         if (!failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
             requestTableAndAssign(0);
@@ -404,6 +444,8 @@ public class TieringSourceEnumerator
                     tieringSplit.skipCurrentRound();
                 }
             }
+            // skipped splits have no backlog left
+            reportBacklog();
 
             // broadcast the tiering reach max duration event to all readers,
             // we broadcast all for simplicity
@@ -430,6 +472,14 @@ public class TieringSourceEnumerator
     }
 
     private void assignSplits() {
+        try {
+            doAssignSplits();
+        } finally {
+            reportBacklog();
+        }
+    }
+
+    private void doAssignSplits() {
         // we don't assign splits during failover
         if (isFailOvering) {
             return;
