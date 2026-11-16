@@ -60,7 +60,7 @@ public class TaskWriterFactory {
 
         if (equalityFieldIds.length == 0) {
             FileAppenderFactory<Record> fileAppenderFactory =
-                    new GenericAppenderFactory(schema, table.spec());
+                    new GenericAppenderFactory(schema, table.spec()).setAll(table.properties());
             return new GenericRecordAppendOnlyWriter(
                     table,
                     format,
@@ -73,8 +73,8 @@ public class TaskWriterFactory {
 
         } else {
             FileAppenderFactory<Record> appenderFactory =
-                    new GenericAppenderFactory(
-                            schema, table.spec(), equalityFieldIds, schema, null);
+                    new GenericAppenderFactory(schema, table.spec(), equalityFieldIds, schema, null)
+                            .setAll(table.properties());
             List<String> columns = new ArrayList<>();
             for (Integer fieldId : schema.identifierFieldIds()) {
                 columns.add(schema.findField(fieldId).name());

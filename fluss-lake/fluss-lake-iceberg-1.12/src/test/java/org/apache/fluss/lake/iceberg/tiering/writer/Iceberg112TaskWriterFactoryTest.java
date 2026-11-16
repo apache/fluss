@@ -46,7 +46,7 @@ import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for the Iceberg 1.12 {@link TaskWriterFactory}. */
-class TaskWriterFactoryTest {
+class Iceberg112TaskWriterFactoryTest {
 
     /** A primary key table with a non-key column. */
     private static final Schema PK_SCHEMA =
