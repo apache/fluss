@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
@@ -517,9 +518,13 @@ public class FileLogProjection {
         // client reconstructs the target schema; the server only sends stored columns.
         int fieldCount = rowType.getFieldCount();
         int validationFieldCount = fieldCount;
-        if (Arrays.stream(selectedFieldPositions).anyMatch(p -> p >= fieldCount)) {
-            validationFieldCount =
-                    schemaGetter.getLatestSchemaInfo().getSchema().getRowType().getFieldCount();
+        int maxRequestedIndex = Arrays.stream(selectedFieldPositions).max().orElse(-1);
+        if (maxRequestedIndex >= fieldCount) {
+            SchemaInfo latest = schemaGetter.getLatestSchemaInfo();
+            if (maxRequestedIndex >= latest.getSchema().getRowType().getFieldCount()) {
+                latest = schemaGetter.refreshLatestSchemaInfo();
+            }
+            validationFieldCount = latest.getSchema().getRowType().getFieldCount();
         }
         toBitSet(validationFieldCount, selectedFieldPositions);
         int[] existingFields =

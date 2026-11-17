@@ -210,6 +210,35 @@ class FileLogProjectionTest {
     }
 
     @Test
+    void testMissingHistoricalColumnUsesCachedLatestSchema() throws Exception {
+        testingSchemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(TestData.DATA1_SCHEMA, 1)) {
+                    @Override
+                    public SchemaInfo refreshLatestSchemaInfo() {
+                        throw new AssertionError(
+                                "A column present in the cached latest schema must not trigger a refresh");
+                    }
+                };
+        testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA2_SCHEMA, 2));
+        try (FileLogRecords records =
+                createFileLogRecords(
+                        1, LOG_MAGIC_VALUE_V1, TestData.DATA1_ROW_TYPE, TestData.DATA1)) {
+            List<Object[]> rows =
+                    doProjection(
+                            1L,
+                            2,
+                            new FileLogProjection(new ProjectionPushdownCache()),
+                            records,
+                            new int[] {0, 2},
+                            Integer.MAX_VALUE);
+            assertThat(rows).hasSize(TestData.DATA1.size());
+            for (Object[] row : rows) {
+                assertThat(row[1]).isNull();
+            }
+        }
+    }
+
+    @Test
     void testProjectionOldDataWithNewSchema() throws Exception {
         // Currently, we only support add column at last.
         short schemaId = 1;

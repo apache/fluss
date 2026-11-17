@@ -28,12 +28,17 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.metadata.ServerSchemaCache;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -48,14 +53,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newFetchLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -561,6 +569,141 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                 pollAndVerifyArrowBatches(
                         scanner2, totalRecords - subscribeOffset, subscribeOffset);
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedHistoricalReadBeforeSchemaNotification(boolean arrowBatches)
+            throws Exception {
+        TablePath path = TablePath.of("test_db_1", "delayed_schema_notification_" + arrowBatches);
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA)
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        false);
+        TableInfo oldTableInfo = admin.getTableInfo(path).get();
+        try (Table table = conn.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+            writer.append(row(17, "old"));
+            writer.flush();
+        }
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(new TableBucket(tableId, 0));
+        ServerSchemaCache leaderCache =
+                FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getMetadataCache()
+                        .getServerSchemaCache();
+        CountDownLatch eventThreadBlocked = new CountDownLatch(1);
+        CountDownLatch releaseEventThread = new CountDownLatch(1);
+        AccessContextEvent<Void> blockEvent =
+                new AccessContextEvent<>(
+                        context -> {
+                            eventThreadBlocked.countDown();
+                            try {
+                                if (!releaseEventThread.await(60, TimeUnit.SECONDS)) {
+                                    throw new IllegalStateException(
+                                            "Timed out holding schema notifications");
+                                }
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new IllegalStateException(e);
+                            }
+                            return null;
+                        });
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(blockEvent);
+        try {
+            assertThat(eventThreadBlocked.await(30, TimeUnit.SECONDS)).isTrue();
+            admin.alterTable(
+                            path,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "c",
+                                            DataTypes.STRING(),
+                                            null,
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+            TableInfo newTableInfo = admin.getTableInfo(path).get();
+            assertThat(leaderCache.getLatestSchemaByTableId().get(tableId).getSchemaId())
+                    .isEqualTo(oldTableInfo.getSchemaId());
+            // No rows are written after ALTER. The reader must refresh before the held
+            // notification.
+            try (Table table = conn.getTable(path);
+                    LogScannerImpl scanner =
+                            (LogScannerImpl)
+                                    table.newScan().project(new int[] {0, 2}).createLogScanner()) {
+                scanner.subscribeFromBeginning(0);
+                long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+                int count = 0;
+                while (count == 0) {
+                    assertThat(System.nanoTime())
+                            .as("Projected historical read must make progress")
+                            .isLessThan(deadline);
+                    if (arrowBatches) {
+                        try (ArrowScanRecords records =
+                                scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                            for (ArrowBatchData batch : records) {
+                                try (ArrowBatchData b = batch) {
+                                    assertThat(b.getBaseLogOffset()).isZero();
+                                    assertThat(b.getRecordCount()).isEqualTo(1);
+                                    assertThat(
+                                                    ((IntVector)
+                                                                    b.getVectorSchemaRoot()
+                                                                            .getVector(0))
+                                                            .get(0))
+                                            .isEqualTo(17);
+                                    assertThat(b.getVectorSchemaRoot().getVector(1).isNull(0))
+                                            .isTrue();
+                                    count += b.getRecordCount();
+                                }
+                            }
+                        }
+                    } else {
+                        for (ScanRecord record : scanner.poll(Duration.ofSeconds(1))) {
+                            assertThat(record.logOffset()).isZero();
+                            assertThat(record.getRow().getInt(0)).isEqualTo(17);
+                            assertThat(record.getRow().isNullAt(1)).isTrue();
+                            count++;
+                        }
+                    }
+                }
+                assertThat(count).isEqualTo(1);
+                assertThat(FLUSS_CLUSTER_EXTENSION.getTabletServers())
+                        .anySatisfy(
+                                server ->
+                                        assertThat(
+                                                        server.getMetadataCache()
+                                                                .getServerSchemaCache()
+                                                                .getLatestSchemaByTableId()
+                                                                .get(tableId)
+                                                                .getSchemaId())
+                                                .isEqualTo(newTableInfo.getSchemaId()));
+            }
+            // Bypass client-side projection validation to check a truly invalid server request.
+            FetchLogResponse response =
+                    FLUSS_CLUSTER_EXTENSION
+                            .newTabletServerClientForNode(leader)
+                            .fetchLog(newFetchLogRequest(-1, tableId, 0, 0L, new int[] {0, 3}))
+                            .get();
+            assertThat(
+                            response.getTablesRespsList()
+                                    .get(0)
+                                    .getBucketsRespsList()
+                                    .get(0)
+                                    .getErrorCode())
+                    .isEqualTo(Errors.INVALID_COLUMN_PROJECTION.code());
+        } finally {
+            releaseEventThread.countDown();
+            blockEvent.getResultFuture().get(30, TimeUnit.SECONDS);
         }
     }
 
