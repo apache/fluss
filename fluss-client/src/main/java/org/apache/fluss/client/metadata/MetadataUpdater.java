@@ -258,7 +258,7 @@ public class MetadataUpdater {
                     cluster = initializeCluster(conf, rpcClient);
                 } else {
                     cluster =
-                            fetchMetadataFromTablet(
+                            fetchMetadataFromTabletServer(
                                     serverNode, tablePaths, tablePartitionNames, tablePartitionIds);
                 }
             }
@@ -304,15 +304,15 @@ public class MetadataUpdater {
         }
     }
 
-    private Cluster fetchMetadataFromTablet(
-            ServerNode tablet,
+    private Cluster fetchMetadataFromTabletServer(
+            ServerNode tabletServer,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> partitions,
             @Nullable Collection<Long> partitionIds)
             throws ExecutionException, InterruptedException, TimeoutException {
         try {
             return sendMetadataRequestAndRebuildCluster(
-                    cluster, rpcClient, tablePaths, partitions, partitionIds, tablet);
+                    cluster, rpcClient, tablePaths, partitions, partitionIds, tabletServer);
         } catch (Exception e) {
             if (partitions == null
                     || partitions.isEmpty()
@@ -321,11 +321,11 @@ public class MetadataUpdater {
             }
         }
 
-        // Include the parents so the tablet can validate each partition's table ID.
+        // Include the parents so the tablet server can validate each partition's table ID.
         Set<TablePath> parents = tablePaths == null ? new HashSet<>() : new HashSet<>(tablePaths);
         partitions.forEach(partition -> parents.add(partition.getTablePath()));
         Set<Integer> excluded = new HashSet<>(unavailableTabletServerIds);
-        excluded.add(tablet.id());
+        excluded.add(tabletServer.id());
         ServerNode other = getOneAvailableTabletServerNode(cluster, excluded);
         try {
             return sendMetadataRequestAndRebuildCluster(
@@ -334,7 +334,7 @@ public class MetadataUpdater {
                     parents,
                     partitions,
                     partitionIds,
-                    other != null ? other : tablet);
+                    other != null ? other : tabletServer);
         } catch (Exception e) {
             Throwable cause = stripExecutionException(e);
             if (cause instanceof RetriableException || cause instanceof TimeoutException) {
