@@ -284,6 +284,9 @@ public class MetadataUpdater {
                 if (requestedRoutes && isStaleMetadata(t)) {
                     throw asStaleMetadataException(t);
                 }
+                // TODO: Keep initial partition lookup failures retriable so writers only create a
+                // partition on an explicit PartitionNotExistException.
+                // https://github.com/apache/fluss/issues/5260
                 if (serverNode != null) {
                     unavailableTabletServerIds.add(serverNode.id());
                     LOG.warn(

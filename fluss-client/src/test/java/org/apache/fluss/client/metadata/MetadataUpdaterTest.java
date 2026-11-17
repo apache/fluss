@@ -82,6 +82,9 @@ public class MetadataUpdaterTest {
     private static final ServerNode TS_NODE =
             new ServerNode(1, "localhost", 8080, ServerType.TABLET_SERVER);
 
+    private static final TablePath RECREATED_TABLE = TablePath.of("db", "recreated");
+    private static final PhysicalTablePath PARTITION = PhysicalTablePath.of(RECREATED_TABLE, "p");
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testLegacyTableCountDoesNotDependOnLocations(boolean partialUpdate) throws Exception {
@@ -550,21 +553,20 @@ public class MetadataUpdaterTest {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testStalePartitionMetadataRetriesTabletWithParent(boolean includesTable) {
-        TablePath tablePath = TablePath.of("db", "recreated");
-        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "p");
-        Cluster original = metadataCluster(tablePath, 2L);
+    @ValueSource(longs = {0L, 2L, 1L})
+    void testStalePartitionMetadataRetriesTabletWithParent(long responseTableId) {
+        // The response can omit the parent, include the current parent, or be entirely stale.
+        Cluster original = clusterWithRecreatedTable();
         TestingMetadataRpcClient client =
                 new TestingMetadataRpcClient(
-                        tableAndPartitionMetadata(tablePath, includesTable ? 2L : 0L, 1L),
-                        tableAndPartitionMetadata(tablePath, 2L, 2L));
+                        tableAndPartitionMetadata(responseTableId, 1L),
+                        tableAndPartitionMetadata(2L, 2L));
         MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
 
-        assertThat(updater.checkAndUpdatePartitionMetadata(partitionPath)).isTrue();
-        assertThat(updater.getCluster().getTableId(tablePath)).contains(2L);
-        assertThat(updater.getPartitionId(partitionPath)).contains(20L);
-        assertThat(original.getPartitionId(partitionPath)).isEmpty();
+        assertThat(updater.checkAndUpdatePartitionMetadata(PARTITION)).isTrue();
+        assertThat(updater.getCluster().getTableId(RECREATED_TABLE)).contains(2L);
+        assertThat(updater.getPartitionId(PARTITION)).contains(20L);
+        assertThat(original.getPartitionId(PARTITION)).isEmpty();
         assertThat(client.nodes).containsExactly(TS_NODE, TS_NODE);
         assertThat(client.requests.get(0).getTablePathsList()).isEmpty();
         assertThat(client.requests.get(1).getPartitionsPathsList())
@@ -572,7 +574,7 @@ public class MetadataUpdaterTest {
                 .hasSize(1);
         assertThat(client.requests.get(1).getTablePathsList()).hasSize(1);
         assertThat(client.requests.get(1).getTablePathsList().get(0).getTableName())
-                .isEqualTo(tablePath.getTableName());
+                .isEqualTo(RECREATED_TABLE.getTableName());
     }
 
     @Test
@@ -581,24 +583,22 @@ public class MetadataUpdaterTest {
         Map<Integer, ServerNode> tablets = new HashMap<>();
         tablets.put(TS_NODE.id(), TS_NODE);
         tablets.put(other.id(), other);
-        TablePath table = TablePath.of("db", "recreated");
         Cluster original =
                 new Cluster(
                         tablets,
                         CS_NODE,
                         Collections.emptyMap(),
-                        Collections.singletonMap(table, 2L),
+                        Collections.singletonMap(RECREATED_TABLE, 2L),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
                         Collections.emptyMap());
         TestingMetadataRpcClient client =
                 new TestingMetadataRpcClient(
-                        new MetadataResponse(), tableAndPartitionMetadata(table, 2L, 2L));
+                        new MetadataResponse(), tableAndPartitionMetadata(2L, 2L));
         client.firstFailure = new UnknownTableOrBucketException("Parent replaced");
         MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
 
-        assertThat(updater.checkAndUpdatePartitionMetadata(PhysicalTablePath.of(table, "p")))
-                .isTrue();
+        assertThat(updater.checkAndUpdatePartitionMetadata(PARTITION)).isTrue();
         assertThat(client.nodes).containsExactlyInAnyOrder(TS_NODE, other);
         MetadataRequest retry = client.requests.get(1);
         assertThat(retry.getTablePathsCount()).isOne();
@@ -629,59 +629,45 @@ public class MetadataUpdaterTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testFailedTabletRecoveryDoesNotReportPartitionMissing(boolean networkFailure) {
-        TablePath tablePath = TablePath.of("db", "recreated");
-        Cluster original = metadataCluster(tablePath, 2L);
-        MetadataResponse stale = tableAndPartitionMetadata(tablePath, 2L, 1L);
+        Cluster original = clusterWithRecreatedTable();
+        MetadataResponse stale = tableAndPartitionMetadata(2L, 1L);
         TestingMetadataRpcClient client = new TestingMetadataRpcClient(stale, stale);
         if (networkFailure) {
             client.recoveryFailure = new NetworkException("Tablet unavailable");
         }
         MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
 
-        assertThatThrownBy(
-                        () ->
-                                updater.checkAndUpdatePartitionMetadata(
-                                        PhysicalTablePath.of(tablePath, "p")))
+        assertThatThrownBy(() -> updater.checkAndUpdatePartitionMetadata(PARTITION))
                 .isInstanceOf(StaleMetadataException.class);
-        assertThat(updater.getCluster().getTableId(tablePath)).contains(2L);
+        assertThat(updater.getCluster().getTableId(RECREATED_TABLE)).contains(2L);
         assertThat(client.nodes).containsExactly(TS_NODE, TS_NODE);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testPartitionLookupTimeout(boolean duringRecovery) {
-        TablePath table = TablePath.of("db", "recreated");
-        PhysicalTablePath partition = PhysicalTablePath.of(table, "p");
-        Cluster original = metadataCluster(table, 2L);
-        MetadataResponse stale = tableAndPartitionMetadata(table, 0L, 1L);
+    @Test
+    void testPartitionRecoveryTimeoutPreservesConflict() {
+        Cluster original = clusterWithRecreatedTable();
+        MetadataResponse stale = tableAndPartitionMetadata(0L, 1L);
         TestingMetadataRpcClient client = new TestingMetadataRpcClient(stale, stale);
-        MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
         TimeoutException timeout = new TimeoutException();
-        if (duringRecovery) {
-            client.recoveryFailure = timeout;
-            assertThatThrownBy(() -> updater.checkAndUpdatePartitionMetadata(partition))
-                    .isInstanceOf(StaleMetadataException.class)
-                    .hasCause(timeout);
-            assertThat(client.nodes).containsExactly(TS_NODE, TS_NODE);
-        } else {
-            client.firstFailure = timeout;
-            assertThat(updater.checkAndUpdatePartitionMetadata(partition)).isFalse();
-            assertThat(client.nodes).containsExactly(TS_NODE);
-        }
+        client.recoveryFailure = timeout;
+        MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
+
+        assertThatThrownBy(() -> updater.checkAndUpdatePartitionMetadata(PARTITION))
+                .isInstanceOf(StaleMetadataException.class)
+                .hasCause(timeout);
+        assertThat(client.nodes).containsExactly(TS_NODE, TS_NODE);
         assertThat(updater.getCluster()).isSameAs(original);
     }
 
     @Test
     void testMissingPartitionDuringRecovery() {
-        TablePath table = TablePath.of("db", "recreated");
-        PhysicalTablePath partition = PhysicalTablePath.of(table, "p");
-        MetadataResponse stale = tableAndPartitionMetadata(table, 0L, 1L);
+        MetadataResponse stale = tableAndPartitionMetadata(0L, 1L);
         TestingMetadataRpcClient client = new TestingMetadataRpcClient(stale, stale);
         client.recoveryFailure = new PartitionNotExistException("Partition was deleted");
         MetadataUpdater updater =
-                new MetadataUpdater(client, new Configuration(), metadataCluster(table, 2L));
+                new MetadataUpdater(client, new Configuration(), clusterWithRecreatedTable());
 
-        assertThatThrownBy(() -> updater.checkAndUpdatePartitionMetadata(partition))
+        assertThatThrownBy(() -> updater.checkAndUpdatePartitionMetadata(PARTITION))
                 .isSameAs(client.recoveryFailure);
         assertThat(client.nodes).containsExactly(TS_NODE, TS_NODE);
     }
@@ -689,24 +675,21 @@ public class MetadataUpdaterTest {
     @Test
     void testPersistentTableIdConflictDoesNotCreatePartition() {
         TableInfo table = partitionedTableForWrite();
-        TablePath path = table.getTablePath();
         TestingMetadataRpcClient rpc =
                 new TestingMetadataRpcClient(
-                        tableAndPartitionMetadata(path, 0L, 1L),
-                        tableAndPartitionMetadata(path, table.getTableId(), 1L));
+                        tableAndPartitionMetadata(0L, 1L),
+                        tableAndPartitionMetadata(table.getTableId(), 1L));
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
         conf.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
-        MetadataUpdater updater =
-                new MetadataUpdater(rpc, conf, metadataCluster(path, table.getTableId()));
+        MetadataUpdater updater = new MetadataUpdater(rpc, conf, clusterWithRecreatedTable());
         List<ApiKeys> adminRequests = new ArrayList<>();
         try (FlussAdmin admin = recordingPartitionAdmin(updater, adminRequests)) {
             WriterClient writer =
                     new WriterClient(conf, updater, TestingWriterMetricGroup.newInstance(), admin);
             try {
                 WriteRecord record =
-                        WriteRecord.forArrowAppend(
-                                table, PhysicalTablePath.of(path, "p"), row(1, "p"), null);
+                        WriteRecord.forArrowAppend(table, PARTITION, row(1, "p"), null);
                 assertThatThrownBy(() -> writer.send(record, (bucket, offset, error) -> {}))
                         .isInstanceOf(StaleMetadataException.class);
                 assertThat(adminRequests).isEmpty();
@@ -720,19 +703,16 @@ public class MetadataUpdaterTest {
     }
 
     @Test
-    void testPartitionLookupReturningFalseStillCreatesPartition() {
+    void testExplicitlyMissingPartitionTriggersCreation() {
         TableInfo table = partitionedTableForWrite();
-        MetadataResponse empty =
-                buildMetadataResponse(
-                        CS_NODE,
-                        Collections.singleton(TS_NODE),
-                        Collections.emptyList(),
-                        Collections.emptyList());
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) ->
+                                completedExceptionally(
+                                        new PartitionNotExistException(
+                                                "Partition p does not exist")));
         MetadataUpdater updater =
-                new MetadataUpdater(
-                        new TestingMetadataRpcClient(empty, empty),
-                        new Configuration(),
-                        metadataCluster(table.getTablePath(), table.getTableId()));
+                new MetadataUpdater(client, new Configuration(), clusterWithRecreatedTable());
         List<ApiKeys> adminRequests = new ArrayList<>();
         try (FlussAdmin admin = recordingPartitionAdmin(updater, adminRequests)) {
             DynamicPartitionCreator creator =
@@ -743,15 +723,14 @@ public class MetadataUpdaterTest {
                             error -> {
                                 throw new AssertionError(error);
                             });
-            creator.checkAndCreatePartitionAsync(
-                    PhysicalTablePath.of(table.getTablePath(), "p"), table);
+            creator.checkAndCreatePartitionAsync(PARTITION, table);
             assertThat(adminRequests).containsExactly(ApiKeys.CREATE_PARTITION);
         }
     }
 
     private static TableInfo partitionedTableForWrite() {
         return TableInfo.of(
-                TablePath.of("db", "recreated"),
+                RECREATED_TABLE,
                 2L,
                 0,
                 TableDescriptor.builder(DATA1_TABLE_DESCRIPTOR).partitionedBy("b").build(),
@@ -773,8 +752,7 @@ public class MetadataUpdaterTest {
 
     @Test
     void testTableRecreationRemovesClientPartitionMetadata() {
-        TablePath tablePath = TablePath.of("db", "recreated");
-        PhysicalTablePath oldPartition = PhysicalTablePath.of(tablePath, "old");
+        PhysicalTablePath oldPartition = PhysicalTablePath.of(RECREATED_TABLE, "old");
         Map<TableOrPartition, Integer> counts = new HashMap<>();
         counts.put(TableOrPartition.ofTable(1L), 10);
         counts.put(TableOrPartition.ofPartition(10L), 10);
@@ -783,16 +761,16 @@ public class MetadataUpdaterTest {
                         Collections.singletonMap(TS_NODE.id(), TS_NODE),
                         CS_NODE,
                         Collections.singletonMap(oldPartition, Collections.emptyList()),
-                        Collections.singletonMap(tablePath, 1L),
+                        Collections.singletonMap(RECREATED_TABLE, 1L),
                         Collections.singletonMap(oldPartition, 10L),
                         counts,
                         Collections.singletonMap(1L, 0L));
-        MetadataResponse fresh = tableAndPartitionMetadata(tablePath, 2L, 2L);
+        MetadataResponse fresh = tableAndPartitionMetadata(2L, 2L);
         TestingMetadataRpcClient client = new TestingMetadataRpcClient(fresh, fresh);
         MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), original);
-        updater.updateMetadata(Collections.singleton(tablePath), null, null);
+        updater.updateMetadata(Collections.singleton(RECREATED_TABLE), null, null);
 
-        assertThat(updater.getCluster().getTableId(tablePath)).contains(2L);
+        assertThat(updater.getCluster().getTableId(RECREATED_TABLE)).contains(2L);
         assertThat(updater.getCluster().getPartitionId(oldPartition)).isEmpty();
         assertThat(updater.getCluster().getBucketLocationsByPath()).doesNotContainKey(oldPartition);
         assertThat(updater.getCluster().getBucketCount(TableOrPartition.ofTable(1L))).isEmpty();
@@ -802,19 +780,18 @@ public class MetadataUpdaterTest {
         assertThat(original.getPartitionId(oldPartition)).contains(10L);
     }
 
-    private static Cluster metadataCluster(TablePath tablePath, long tableId) {
+    private static Cluster clusterWithRecreatedTable() {
         return new Cluster(
                 Collections.singletonMap(TS_NODE.id(), TS_NODE),
                 CS_NODE,
                 Collections.emptyMap(),
-                Collections.singletonMap(tablePath, tableId),
+                Collections.singletonMap(RECREATED_TABLE, 2L),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap());
     }
 
-    private static MetadataResponse tableAndPartitionMetadata(
-            TablePath tablePath, long tableId, long partitionTableId) {
+    private static MetadataResponse tableAndPartitionMetadata(long tableId, long partitionTableId) {
         MetadataResponse response = new MetadataResponse();
         response.addTabletServer()
                 .setNodeId(TS_NODE.id())
@@ -830,8 +807,8 @@ public class MetadataUpdaterTest {
                     .setBucketCount(2)
                     .setBucketCountEpoch(0)
                     .setTablePath()
-                    .setDatabaseName(tablePath.getDatabaseName())
-                    .setTableName(tablePath.getTableName());
+                    .setDatabaseName(RECREATED_TABLE.getDatabaseName())
+                    .setTableName(RECREATED_TABLE.getTableName());
         }
         response.addPartitionMetadata()
                 .setTableId(partitionTableId)
