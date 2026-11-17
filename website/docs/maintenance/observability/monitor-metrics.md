@@ -1366,18 +1366,6 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
             <td>Meter</td>
         </tr>
         <tr>
-            <td>fetcherBusyTimeMs</td>
-            <td>Flink Source Operator</td>
-            <td>The cumulative time in milliseconds the reader's split fetcher spent reading records, writing them to the lake and completing lake files. Polls that wait for new log data and return none are excluded.</td>
-            <td>Counter</td>
-        </tr>
-        <tr>
-            <td>fetcherBusyTimeMsPerSecond</td>
-            <td>Flink Source Operator</td>
-            <td>The busy milliseconds per second of the reader's split fetcher (0–1000), derived from the fetcherBusyTimeMs counter using a 60-second sliding window. The tiering work runs on the split fetcher thread, so Flink's <code>busyTimeMsPerSecond</code> of the source stays near 0 even when a reader is saturated. This is a diagnostic metric: a reader close to 1000 is limited by its CPU or by the lake writer. Autoscalers don't read it.</td>
-            <td>Meter</td>
-        </tr>
-        <tr>
             <td>readersAwaitingSplitRatio</td>
             <td>Flink Source Enumerator</td>
             <td>The current ratio (0–1) of readers tracked by the enumerator as waiting for a split to the source parallelism.</td>
@@ -1386,7 +1374,7 @@ All metrics are registered under the `fluss.tieringService` metric group, as a c
     </tbody>
 </table>
 
-The tiering source also reports Flink's standard source metrics, which autoscalers such as the Flink Kubernetes Operator use to size the source. Both count log offsets rather than rows, so they can be compared, also across gaps such as expired log segments:
+The tiering source also reports Flink's standard source metric `numRecordsIn`, which counts log offsets rather than rows:
 
 <table class="table table-bordered">
     <thead>
@@ -1401,27 +1389,11 @@ The tiering source also reports Flink's standard source metrics, which autoscale
         <tr>
             <td>numRecordsIn</td>
             <td>Flink Source Operator</td>
-            <td>The log offsets the reader has tiered; this is not a row count, as an offset range can include gaps such as expired log segments. Snapshot splits, the first round of a primary key bucket, count the rows read. The write results the reader emits to the committer are not counted.</td>
+            <td>The log offsets the reader has tiered, the same unit as the tablet servers' <code>pendingRecords</code> lake lag. It is not a row count, as an offset range can include gaps such as expired log segments. Snapshot splits, the first round of a primary key bucket, count the rows read. The write results the reader emits to the committer are not counted.</td>
             <td>Counter</td>
-        </tr>
-        <tr>
-            <td>pendingRecords</td>
-            <td>Flink Source Operator</td>
-            <td>The log offsets still to be tiered: the rest of the reader's splits, plus, on the first reader (subtask 0), the splits of the current table not yet assigned to a reader. Tables waiting in the Fluss cluster to be tiered are not included. Snapshot splits, the first round of a primary key bucket, are estimated by the log offset of their snapshot, an upper bound since updates of the same key collapse into one row, so the backlog drops by the collapsed updates when the split finishes. A split read from the earliest offset is counted from the bucket's log start offset.</td>
-            <td>Gauge</td>
         </tr>
     </tbody>
 </table>
-
-:::note
-The Flink Kubernetes Operator's autoscaler estimates a source's capacity as `numRecordsIn` per second divided by Flink's own `busyTimeMsPerSecond`, unless it has enough samples of the observed processing rate taken while the source catches up on a backlog. Because the tiering work runs on the split fetcher thread, `busyTimeMsPerSecond` stays low. Without enough catch-up samples, for example between tables, which `pendingRecords` doesn't include, the autoscaler can overestimate the capacity of the tiering job and scale it down. See the [autoscaler's capacity estimation](https://nightlies.apache.org/flink/flink-kubernetes-operator-docs-main/docs/internals/autoscaler/#estimate-capacity-the-true-processing-rate). This describes operator 1.16 with Flink 2.3; autoscaling the tiering service end to end has not been validated yet.
-:::
-
-:::tip
-Size the tiering job so that each reader has the resources of one lake writer:
-- **CPU**: each reader tiers one split at a time on its split fetcher thread, which decodes the log, writes the lake files and, for formats that compact while writing, compacts them. Give each slot at least one CPU. Readers whose `fetcherBusyTimeMsPerSecond` is close to 1000 while CPU is throttled need more CPU per slot, not more parallelism.
-- **Memory**: each reader holds about one lake writer at a time. The lake formats buffer a whole file part in memory with their default settings, e.g. a Parquet row group (128 MB by default) or Paimon's write buffer (256 MB by default), plus the memory of compaction when it runs inside the tiering job.
-:::
 
 :::tip
 A tiering round that fails to commit is retried in the next round without failing the tiering job, so a table whose commits keep failing stops advancing in the lake while the job looks healthy.

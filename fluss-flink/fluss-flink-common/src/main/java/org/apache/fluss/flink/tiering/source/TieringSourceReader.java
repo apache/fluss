@@ -23,7 +23,6 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
-import org.apache.fluss.flink.tiering.event.TieringBacklogEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
@@ -208,8 +207,6 @@ public final class TieringSourceReader<WriteResult>
             LOG.info("Received reach max duration for table {}", tableId);
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
                     .markTableReachTieringMaxDuration(tableId);
-        } else if (sourceEvent instanceof TieringBacklogEvent) {
-            tieringMetrics.setEnumeratorBacklog(((TieringBacklogEvent) sourceEvent).getBacklog());
         }
     }
 

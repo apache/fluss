@@ -18,8 +18,6 @@
 package org.apache.fluss.flink.tiering.source.metrics;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.flink.tiering.source.TieringBacklog;
 import org.apache.fluss.metrics.MetricNames;
 
 import org.apache.flink.metrics.Counter;
@@ -46,27 +44,14 @@ import java.util.concurrent.atomic.AtomicLong;
  *       since the job started (actual Fluss records size).
  *   <li>{@code fluss.tieringService.readBytesPerSecond} - Meter: bytes-per-second rate derived from
  *       the counter using a 60-second sliding window.
- *   <li>{@code fluss.tieringService.fetcherBusyTimeMs} - Counter: cumulative time the split fetcher
- *       spent reading, writing to the lake and completing lake files, excluding log scanner polls
- *       that returned no data.
- *   <li>{@code fluss.tieringService.fetcherBusyTimeMsPerSecond} - Meter: busy milliseconds per
- *       second of the split fetcher, between 0 and 1000, using a 60-second sliding window. The
- *       tiering work runs on the split fetcher thread rather than the task thread, so Flink's
- *       {@code busyTimeMsPerSecond} of the source stays near 0 even when the reader is saturated.
  *   <li>{@code fluss.tieringService.readersAwaitingSplitRatio} - Gauge: fraction of source readers
  *       waiting for splits, reported by the enumerator.
  * </ul>
  *
- * <p>It also feeds the standard source metrics that autoscalers read, both counted in log records
- * (see {@link TieringBacklog}):
- *
- * <ul>
- *   <li>{@code numRecordsIn} - log records consumed (rows for snapshot splits), instead of the
- *       write results emitted; the source reader base counts every emitted write result, which is
- *       taken back with {@link #writeResultEmitted()}.
- *   <li>{@code pendingRecords} - log records still to be tiered by this reader, plus the backlog
- *       the enumerator reports to this reader (splits not yet assigned).
- * </ul>
+ * <p>It also feeds the standard source metric {@code numRecordsIn} with the log records consumed,
+ * counted as offsets (rows for snapshot splits), instead of the write results emitted. The source
+ * reader base counts every emitted write result, which is taken back with {@link
+ * #writeResultEmitted()}.
  *
  * <p>The tiering work runs on the split fetcher thread, while Flink's counters must only be updated
  * on the task thread. So the split reader accumulates consumed records with {@link
@@ -80,21 +65,11 @@ public class TieringMetrics {
     public static final String FLUSS_METRIC_GROUP = "fluss";
     public static final String TIERING_SERVICE_GROUP = "tieringService";
 
-    private static final long NANOS_PER_MILLI = 1_000_000L;
-
     private final Counter readBytesCounter;
     private final Counter numRecordsInCounter;
-    // only updated by the split fetcher thread
-    private final Counter fetcherBusyTimeCounter;
 
-    // busy time below one millisecond not yet counted; split fetcher thread only
-    private long fetcherBusyNanosRemainder;
     // written by the split fetcher thread, read by the task thread
     private final AtomicLong recordsConsumedToFlush = new AtomicLong();
-    // written by the split fetcher thread, read by the metric reporter
-    private volatile long splitReaderBacklog;
-    // written by the task thread, read by the metric reporter
-    private volatile long enumeratorBacklog;
 
     public TieringMetrics(SourceReaderMetricGroup sourceReaderMetricGroup) {
         MetricGroup tieringServiceGroup =
@@ -105,16 +80,9 @@ public class TieringMetrics {
         this.readBytesCounter = tieringServiceGroup.counter(MetricNames.TIERING_SERVICE_READ_BYTES);
         tieringServiceGroup.meter(
                 MetricNames.TIERING_SERVICE_READ_BYTES_RATE, new MeterView(readBytesCounter));
-        this.fetcherBusyTimeCounter =
-                tieringServiceGroup.counter(MetricNames.TIERING_SERVICE_FETCHER_BUSY_TIME);
-        tieringServiceGroup.meter(
-                MetricNames.TIERING_SERVICE_FETCHER_BUSY_TIME_RATE,
-                new MeterView(fetcherBusyTimeCounter));
 
         this.numRecordsInCounter =
                 sourceReaderMetricGroup.getIOMetricGroup().getNumRecordsInCounter();
-        // registered up front, so an idle reader reports 0 rather than no metric
-        sourceReaderMetricGroup.setPendingRecordsGauge(this::getPendingRecords);
     }
 
     /** Records bytes read from Fluss records. Called per batch or record processing. */
@@ -127,16 +95,6 @@ public class TieringMetrics {
         if (records > 0) {
             recordsConsumedToFlush.addAndGet(records);
         }
-    }
-
-    /** Sets the backlog of the split reader's splits. Called from the split fetcher thread. */
-    public void setSplitReaderBacklog(long backlog) {
-        this.splitReaderBacklog = Math.max(backlog, 0L);
-    }
-
-    /** Sets the backlog the enumerator reports to this reader. Called from the task thread. */
-    public void setEnumeratorBacklog(long backlog) {
-        this.enumeratorBacklog = Math.max(backlog, 0L);
     }
 
     /** Moves the records consumed so far into {@code numRecordsIn}. Called from the task thread. */
@@ -153,27 +111,6 @@ public class TieringMetrics {
      */
     public void writeResultEmitted() {
         numRecordsInCounter.dec();
-    }
-
-    /**
-     * Adds time the split fetcher was busy. Called from the split fetcher thread. Sub-millisecond
-     * fetches are carried over, so frequent short fetches still add up.
-     */
-    public void recordFetcherBusyTime(long nanos) {
-        if (nanos <= 0) {
-            return;
-        }
-        long totalNanos = fetcherBusyNanosRemainder + nanos;
-        long millis = totalNanos / NANOS_PER_MILLI;
-        fetcherBusyNanosRemainder = totalNanos % NANOS_PER_MILLI;
-        if (millis > 0) {
-            fetcherBusyTimeCounter.inc(millis);
-        }
-    }
-
-    @VisibleForTesting
-    public long getPendingRecords() {
-        return splitReaderBacklog + enumeratorBacklog;
     }
 
     /** Registers the waiting reader ratio and returns a handle to close its metric subgroup. */

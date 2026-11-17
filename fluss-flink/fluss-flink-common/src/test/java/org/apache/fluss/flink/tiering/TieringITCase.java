@@ -37,7 +37,6 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.Metric;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.runtime.testutils.InMemoryReporter;
@@ -171,8 +170,8 @@ abstract class TieringITCase extends FlinkTieringTestBase {
 
     @Test
     @MultiVersionTest
-    void testReportsRecordsInAndPendingRecordsForAutoscalers() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "autoscaler_metrics_log_table");
+    void testReportsTieredRecordsAsRecordsIn() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "records_in_metrics_log_table");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -196,30 +195,22 @@ abstract class TieringITCase extends FlinkTieringTestBase {
             // their write results to numRecordsIn
             retry(
                     Duration.ofMinutes(1),
-                    () -> {
-                        assertThat(sumTieringSourceMetric(reporter, jobId, "numRecordsIn"))
-                                .isEqualTo(recordCount);
-                        assertThat(sumTieringSourceMetric(reporter, jobId, "pendingRecords"))
-                                .isEqualTo(0L);
-                    });
+                    () ->
+                            assertThat(sumTieringSourceRecordsIn(reporter, jobId))
+                                    .isEqualTo(recordCount));
         }
     }
 
-    /** Sums a metric of the tiering source over its subtasks, failing if a subtask lacks it. */
-    private static long sumTieringSourceMetric(
-            InMemoryReporter reporter, JobID jobId, String metricName) {
+    /** Sums numRecordsIn of the tiering source over its subtasks. */
+    private static long sumTieringSourceRecordsIn(InMemoryReporter reporter, JobID jobId) {
         List<OperatorMetricGroup> groups =
                 reporter.findOperatorMetricGroups(jobId, ".*TieringSource.*");
         assertThat(groups).isNotEmpty();
         long sum = 0L;
         for (OperatorMetricGroup group : groups) {
-            Metric metric = reporter.getMetricsByGroup(group).get(metricName);
-            assertThat(metric).as(metricName).isNotNull();
-            if (metric instanceof Counter) {
-                sum += ((Counter) metric).getCount();
-            } else {
-                sum += ((Number) ((Gauge<?>) metric).getValue()).longValue();
-            }
+            Metric metric = reporter.getMetricsByGroup(group).get("numRecordsIn");
+            assertThat(metric).isInstanceOf(Counter.class);
+            sum += ((Counter) metric).getCount();
         }
         return sum;
     }

@@ -31,13 +31,8 @@ public class TieringLogSplit extends TieringSplit {
 
     private static final String TIERING_LOG_SPLIT_PREFIX = "tiering-log-split-";
 
-    /** The log start offset of a bucket that is unknown. */
-    public static final long UNKNOWN_LOG_START_OFFSET = -1L;
-
     private final long startingOffset;
     private final long stoppingOffset;
-    // only used to estimate the backlog; the split still reads from startingOffset
-    private final long logStartOffset;
 
     public TieringLogSplit(
             TablePath tablePath,
@@ -122,30 +117,6 @@ public class TieringLogSplit extends TieringSplit {
             boolean skipCurrentRound,
             int splitIndex,
             long tieringRoundTimestamp) {
-        this(
-                tablePath,
-                tableBucket,
-                partitionName,
-                startingOffset,
-                stoppingOffset,
-                numberOfSplits,
-                skipCurrentRound,
-                splitIndex,
-                tieringRoundTimestamp,
-                UNKNOWN_LOG_START_OFFSET);
-    }
-
-    public TieringLogSplit(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long startingOffset,
-            long stoppingOffset,
-            int numberOfSplits,
-            boolean skipCurrentRound,
-            int splitIndex,
-            long tieringRoundTimestamp,
-            long logStartOffset) {
         super(
                 tablePath,
                 tableBucket,
@@ -156,7 +127,6 @@ public class TieringLogSplit extends TieringSplit {
                 tieringRoundTimestamp);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
-        this.logStartOffset = logStartOffset;
     }
 
     @Override
@@ -170,29 +140,6 @@ public class TieringLogSplit extends TieringSplit {
 
     public long getStoppingOffset() {
         return stoppingOffset;
-    }
-
-    /**
-     * Returns the bucket's log start offset when the split was generated, or {@link
-     * #UNKNOWN_LOG_START_OFFSET}. Only known for a split that reads from the earliest offset.
-     */
-    public long getLogStartOffset() {
-        return logStartOffset;
-    }
-
-    /** Returns a copy of this split with the bucket's log start offset. */
-    public TieringLogSplit withLogStartOffset(long logStartOffset) {
-        return new TieringLogSplit(
-                tablePath,
-                tableBucket,
-                partitionName,
-                startingOffset,
-                stoppingOffset,
-                numberOfSplits,
-                skipCurrentRound,
-                splitIndex,
-                tieringRoundTimestamp,
-                logStartOffset);
     }
 
     @Override
@@ -213,8 +160,6 @@ public class TieringLogSplit extends TieringSplit {
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
-                + ", logStartOffset="
-                + logStartOffset
                 + ", splitIndex="
                 + splitIndex
                 + ", tieringRoundTimestamp="
@@ -233,8 +178,7 @@ public class TieringLogSplit extends TieringSplit {
                 numberOfSplits,
                 skipCurrentRound,
                 splitIndex,
-                tieringRoundTimestamp,
-                logStartOffset);
+                tieringRoundTimestamp);
     }
 
     @Override
@@ -246,13 +190,11 @@ public class TieringLogSplit extends TieringSplit {
             return false;
         }
         TieringLogSplit that = (TieringLogSplit) object;
-        return startingOffset == that.startingOffset
-                && stoppingOffset == that.stoppingOffset
-                && logStartOffset == that.logStartOffset;
+        return startingOffset == that.startingOffset && stoppingOffset == that.stoppingOffset;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset, logStartOffset);
+        return Objects.hash(super.hashCode(), startingOffset, stoppingOffset);
     }
 }

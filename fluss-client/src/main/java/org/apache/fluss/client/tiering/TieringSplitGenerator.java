@@ -74,9 +74,8 @@ public class TieringSplitGenerator {
     public List<TieringSplit> generateTableSplits(
             TableInfo tableInfo, List<PartitionInfo> partitionInfos) throws Exception {
         TablePath tablePath = tableInfo.getTablePath();
-        // fetches real earliest offsets, see withLogStartOffsets
         final BucketOffsetsRetriever bucketOffsetsRetriever =
-                new BucketOffsetsRetrieverImpl(flussAdmin, tablePath, true);
+                new BucketOffsetsRetrieverImpl(flussAdmin, tablePath);
 
         // Get table lake snapshot info of the given table.
         LakeSnapshot lakeSnapshotInfo;
@@ -146,16 +145,13 @@ public class TieringSplitGenerator {
                                     .boxed()
                                     .collect(Collectors.toList()));
             splits.addAll(
-                    withLogStartOffsets(
-                            generateTableSplit(
-                                    tableInfo,
-                                    partitionId,
-                                    partitionName,
-                                    partitionBucketCount,
-                                    lakeSnapshotInfo,
-                                    latestBucketsOffset),
+                    generateTableSplit(
+                            tableInfo,
+                            partitionId,
                             partitionName,
-                            bucketOffsetsRetriever));
+                            partitionBucketCount,
+                            lakeSnapshotInfo,
+                            latestBucketsOffset));
         }
         return splits;
     }
@@ -171,65 +167,13 @@ public class TieringSplitGenerator {
                         IntStream.range(0, tableInfo.getNumBuckets())
                                 .boxed()
                                 .collect(Collectors.toList()));
-        return withLogStartOffsets(
-                generateTableSplit(
-                        tableInfo,
-                        null,
-                        null,
-                        tableInfo.getNumBuckets(),
-                        lakeSnapshotInfo,
-                        latestBucketsOffset),
+        return generateTableSplit(
+                tableInfo,
                 null,
-                bucketOffsetsRetriever);
-    }
-
-    /**
-     * Sets the bucket's log start offset on the splits that read from the earliest offset, as an
-     * old bucket's log no longer starts at 0. Best effort: only the backlog estimate depends on it.
-     */
-    private List<TieringSplit> withLogStartOffsets(
-            List<TieringSplit> splits,
-            @Nullable String partitionName,
-            BucketOffsetsRetriever bucketOffsetsRetriever) {
-        List<Integer> earliestBuckets = new ArrayList<>();
-        for (TieringSplit split : splits) {
-            if (readsFromEarliest(split)) {
-                earliestBuckets.add(split.getTableBucket().getBucket());
-            }
-        }
-        if (earliestBuckets.isEmpty()) {
-            return splits;
-        }
-
-        Map<Integer, Long> logStartOffsets;
-        try {
-            logStartOffsets =
-                    bucketOffsetsRetriever.earliestOffsets(partitionName, earliestBuckets);
-        } catch (RuntimeException e) {
-            LOG.warn(
-                    "Failed to get the log start offsets of buckets {} of partition {}, "
-                            + "their backlog is estimated from offset 0.",
-                    earliestBuckets,
-                    partitionName,
-                    e);
-            return splits;
-        }
-
-        List<TieringSplit> result = new ArrayList<>(splits.size());
-        for (TieringSplit split : splits) {
-            Long logStartOffset = logStartOffsets.get(split.getTableBucket().getBucket());
-            if (readsFromEarliest(split) && logStartOffset != null && logStartOffset >= 0) {
-                result.add(split.asTieringLogSplit().withLogStartOffset(logStartOffset));
-            } else {
-                result.add(split);
-            }
-        }
-        return result;
-    }
-
-    private static boolean readsFromEarliest(TieringSplit split) {
-        return split.isTieringLogSplit()
-                && split.asTieringLogSplit().getStartingOffset() == EARLIEST_OFFSET;
+                null,
+                tableInfo.getNumBuckets(),
+                lakeSnapshotInfo,
+                latestBucketsOffset);
     }
 
     private List<TieringSplit> generateTableSplit(

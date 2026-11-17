@@ -34,9 +34,7 @@ import org.apache.fluss.flink.sink.testutils.TestAdminAdapter;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringBacklogEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.TieringBacklog;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -82,7 +80,6 @@ import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
-import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.BACKLOG_READER;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -143,12 +140,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             offsets.put(bucket, CompletableFuture.completedFuture(0L));
         }
         ListOffsetsResult latestOffsets = new ListOffsetsResult(offsets);
-        Map<Integer, CompletableFuture<Long>> logStartOffsets = new HashMap<>();
-        for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
-            logStartOffsets.put(bucket, CompletableFuture.completedFuture(4L));
-        }
-        AtomicReference<ListOffsetsResult> earliestOffsets =
-                new AtomicReference<>(new ListOffsetsResult(logStartOffsets));
         AtomicReference<LakeSnapshot> lakeSnapshot = new AtomicReference<>();
         AtomicReference<KvSnapshots> kvSnapshots =
                 new AtomicReference<>(
@@ -171,9 +162,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     @Override
                     public ListOffsetsResult listOffsets(
                             TablePath path, Collection<Integer> buckets, OffsetSpec spec) {
-                        return spec instanceof OffsetSpec.EarliestSpec
-                                ? earliestOffsets.get()
-                                : latestOffsets;
+                        return latestOffsets;
                     }
 
                     @Override
@@ -182,9 +171,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             String partition,
                             Collection<Integer> buckets,
                             OffsetSpec spec) {
-                        return spec instanceof OffsetSpec.EarliestSpec
-                                ? earliestOffsets.get()
-                                : latestOffsets;
+                        return latestOffsets;
                     }
 
                     @Override
@@ -223,15 +210,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         committedOffsets.remove(bucket1);
         committedOffsets.remove(bucket2);
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
-        // splits read from the earliest offset carry the log start offset to estimate the backlog
         TieringLogSplit bucket1LogSplit =
                 new TieringLogSplit(
-                                DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0)
-                        .withLogStartOffset(4L);
+                        DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
         TieringLogSplit bucket2LogSplit =
                 new TieringLogSplit(
-                                DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0)
-                        .withLogStartOffset(4L);
+                        DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
         TieringSplit untieredBucketSplit =
                 historicalPartition
                         ? bucket2LogSplit
@@ -241,26 +225,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         assertThat(generator.generateTableSplits(tableInfo, partitions))
                 .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
         assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
-
-        // the log start offset only estimates the backlog, so failing to get it keeps the splits
-        earliestOffsets.set(
-                new ListOffsetsResult(
-                        Collections.singletonMap(
-                                1,
-                                FutureUtils.completedExceptionally(
-                                        new RuntimeException("Expected failure")))));
-        assertThat(generator.generateTableSplits(tableInfo, partitions))
-                .containsExactly(
-                        logSplit,
-                        bucket1LogSplit.withLogStartOffset(
-                                TieringLogSplit.UNKNOWN_LOG_START_OFFSET),
-                        historicalPartition
-                                ? bucket2LogSplit.withLogStartOffset(
-                                        TieringLogSplit.UNKNOWN_LOG_START_OFFSET)
-                                : untieredBucketSplit);
-        earliestOffsets.set(new ListOffsetsResult(logStartOffsets));
-        kvSnapshotRequests.set(historicalPartition ? 0 : 1);
-
         if (!historicalPartition) {
             kvSnapshots.set(
                     new KvSnapshots(
@@ -477,13 +441,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             for (int bucketId : bucketOffsetOfFirstWrite.keySet()) {
                 expectedAssignment.add(
                         new TieringLogSplit(
-                                        tablePath,
-                                        new TableBucket(tableId, bucketId),
-                                        null,
-                                        EARLIEST_OFFSET,
-                                        bucketOffsetOfFirstWrite.get(bucketId),
-                                        bucketOffsetOfFirstWrite.size())
-                                .withLogStartOffset(0L));
+                                tablePath,
+                                new TableBucket(tableId, bucketId),
+                                null,
+                                EARLIEST_OFFSET,
+                                bucketOffsetOfFirstWrite.get(bucketId),
+                                bucketOffsetOfFirstWrite.size()));
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
@@ -695,15 +658,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 for (int tableBucket : bucketOffsetOfFirstWrite.get(partitionId).keySet()) {
                     expectedAssignment.add(
                             new TieringLogSplit(
-                                            tablePath,
-                                            new TableBucket(tableId, partitionId, tableBucket),
-                                            partitionNameById.getKey(),
-                                            EARLIEST_OFFSET,
-                                            bucketOffsetOfFirstWrite
-                                                    .get(partitionId)
-                                                    .get(tableBucket),
-                                            bucketOffsetOfFirstWrite.size())
-                                    .withLogStartOffset(0L));
+                                    tablePath,
+                                    new TableBucket(tableId, partitionId, tableBucket),
+                                    partitionNameById.getKey(),
+                                    EARLIEST_OFFSET,
+                                    bucketOffsetOfFirstWrite.get(partitionId).get(tableBucket),
+                                    bucketOffsetOfFirstWrite.size()));
                 }
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
@@ -806,13 +766,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             for (int bucketId = 0; bucketId < DEFAULT_BUCKET_NUM; bucketId++) {
                 expectedAssignment.add(
                         new TieringLogSplit(
-                                        tablePath,
-                                        new TableBucket(tableId, bucketId),
-                                        null,
-                                        EARLIEST_OFFSET,
-                                        bucketOffsetOfWrite.get(bucketId),
-                                        expectNumberOfSplits)
-                                .withLogStartOffset(0L));
+                                tablePath,
+                                new TableBucket(tableId, bucketId),
+                                null,
+                                EARLIEST_OFFSET,
+                                bucketOffsetOfWrite.get(bucketId),
+                                expectNumberOfSplits));
             }
             List<FlinkTieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
@@ -970,89 +929,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         });
     }
 
-    @Test
-    void testReportsBacklogOfUnassignedSplitsToFirstReader() throws Throwable {
-        dropAllTables();
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-backlog-unassigned-splits");
-        createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
-        Map<Integer, Long> bucketOffsets =
-                appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 30);
-        assertThat(bucketOffsets).hasSizeGreaterThan(1);
-        long totalRecords = bucketOffsets.values().stream().mapToLong(Long::longValue).sum();
-
-        // a single reader gets one split at a time, the others wait in the enumerator
-        try (FlussMockSplitEnumeratorContext<FlinkTieringSplit> context =
-                        new FlussMockSplitEnumeratorContext<>(1);
-                TieringSourceEnumerator enumerator =
-                        createTieringSourceEnumerator(flussConf, context)) {
-            enumerator.start();
-            registerSingleReaderAndHandleSplitRequests(context, enumerator, 0, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, 1, 200L);
-
-            TieringSplit assignedSplit =
-                    context.getSplitsAssignmentSequence()
-                            .get(0)
-                            .assignment()
-                            .get(0)
-                            .get(0)
-                            .unwrap();
-            long expectedBacklog = totalRecords - TieringBacklog.estimate(assignedSplit);
-            assertThat(expectedBacklog).isGreaterThan(0L);
-            assertThat(lastBacklogEvent(context))
-                    .isEqualTo(new TieringBacklogEvent(expectedBacklog));
-            assertThat(context.getSentSourceEvent()).containsOnlyKeys(BACKLOG_READER);
-
-            // each further request assigns the next queued split, which leaves the backlog; one
-            // split stays queued for the failover below
-            for (int i = 1; i < bucketOffsets.size() - 1; i++) {
-                enumerator.handleSplitRequest(0, "localhost-0");
-                TieringSplit nextSplit =
-                        context.getSplitsAssignmentSequence()
-                                .get(i)
-                                .assignment()
-                                .get(0)
-                                .get(0)
-                                .unwrap();
-                expectedBacklog -= TieringBacklog.estimate(nextSplit);
-                assertThat(lastBacklogEvent(context))
-                        .isEqualTo(new TieringBacklogEvent(expectedBacklog));
-            }
-            assertThat(expectedBacklog).isGreaterThan(0L);
-
-            // a restarted reader fails the round over: the queued splits are dropped, and the
-            // new reader attempt gets the backlog again
-            context.registerSourceReader(0, 1, "localhost-0");
-            enumerator.addReader(0);
-            assertThat(lastBacklogEvent(context)).isEqualTo(new TieringBacklogEvent(0L));
-        }
-    }
-
-    /**
-     * Drops the tables of earlier tests, which would otherwise wait to be tiered again and could be
-     * claimed before the table under test. Safe because the cluster belongs to this test class and
-     * its tests run one after another.
-     */
-    private void dropAllTables() throws Exception {
-        for (String database : admin.listDatabases().get()) {
-            for (String table : admin.listTables(database).get()) {
-                dropTable(TablePath.of(database, table));
-            }
-        }
-    }
-
-    private static TieringBacklogEvent lastBacklogEvent(
-            FlussMockSplitEnumeratorContext<FlinkTieringSplit> context) throws Exception {
-        List<SourceEvent> events =
-                context.getSentSourceEvent().getOrDefault(BACKLOG_READER, Collections.emptyList());
-        List<TieringBacklogEvent> backlogEvents =
-                events.stream()
-                        .filter(e -> e instanceof TieringBacklogEvent)
-                        .map(e -> (TieringBacklogEvent) e)
-                        .collect(Collectors.toList());
-        assertThat(backlogEvents).isNotEmpty();
-        return backlogEvents.get(backlogEvents.size() - 1);
-    }
-
     private void registerReaderAndHandleSplitRequests(
             FlussMockSplitEnumeratorContext<FlinkTieringSplit> context,
             TieringSourceEnumerator enumerator,
@@ -1199,9 +1075,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         assertThat(eventsToReaders).hasSize(numSubtasks);
                         for (Map.Entry<Integer, List<SourceEvent>> entry :
                                 eventsToReaders.entrySet()) {
-                            // the first reader also gets the backlog
                             assertThat(entry.getValue())
-                                    .filteredOn(e -> !(e instanceof TieringBacklogEvent))
                                     .containsExactly(new TieringReachMaxDurationEvent(tableId));
                         }
                     });

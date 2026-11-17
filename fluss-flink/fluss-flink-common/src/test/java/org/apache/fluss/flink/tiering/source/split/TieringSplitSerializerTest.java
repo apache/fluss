@@ -28,7 +28,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 
-import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -100,22 +99,6 @@ class TieringSplitSerializerTest {
     }
 
     @Test
-    void testTieringLogSplitFromEarliestOffsetSerde() throws Exception {
-        TieringLogSplit tieringSplit =
-                new TieringLogSplit(tablePath, tableBucket, null, EARLIEST_OFFSET, 200, 40)
-                        .withLogStartOffset(150L);
-
-        byte[] serialized = serializer.serialize(new FlinkTieringSplit(tieringSplit));
-        TieringLogSplit deserializedSplit =
-                serializer
-                        .deserialize(serializer.getVersion(), serialized)
-                        .unwrap()
-                        .asTieringLogSplit();
-        assertThat(deserializedSplit).isEqualTo(tieringSplit);
-        assertThat(deserializedSplit.getLogStartOffset()).isEqualTo(150L);
-    }
-
-    @Test
     void testDeserializeUnknownSplitKindFailsFast() throws Exception {
         TieringLogSplit tieringSplit =
                 new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40);
@@ -142,8 +125,8 @@ class TieringSplitSerializerTest {
 
         String expectedSplitString =
                 isPartitionedTable
-                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, logStartOffset=-1, splitIndex=-1, tieringRoundTimestamp=-1}"
-                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, logStartOffset=-1, splitIndex=-1, tieringRoundTimestamp=-1}";
+                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, splitIndex=-1, tieringRoundTimestamp=-1}"
+                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', numberOfSplits=2, skipCurrentRound=false, startingOffset=100, stoppingOffset=200, splitIndex=-1, tieringRoundTimestamp=-1}";
         assertThat(new TieringLogSplit(path, bucket, partitionName, 100, 200, 2).toString())
                 .isEqualTo(expectedSplitString);
     }
