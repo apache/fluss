@@ -41,6 +41,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -231,6 +232,46 @@ class JsonKafkaRescueTest {
                                                     '}'
                                                 })))
                 .isInstanceOf(KafkaRecordEncodingException.class);
+    }
+
+    /**
+     * Jackson 2.15's byte-based UTF-8 parser accepts these sequences, so the decoder must keep the
+     * strict {@link java.nio.charset.CharsetDecoder} in front of the parser.
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testMalformedUtf8AcceptedByByteParserIsRejected(boolean nested) {
+        byte[][] malformed = {
+            {(byte) 0xc0, (byte) 0x80}, // overlong NUL
+            {(byte) 0xe0, (byte) 0x80, (byte) 0xaf}, // overlong '/'
+            {(byte) 0xed, (byte) 0xa0, (byte) 0x80}, // UTF-8 encoded high surrogate
+            {(byte) 0xf4, (byte) 0x90, (byte) 0x80, (byte) 0x80}, // above U+10FFFF
+            {(byte) 0xf5, (byte) 0x80, (byte) 0x80, (byte) 0x80} // invalid lead byte
+        };
+        // Rescued unknown value, projected nested string, and member name.
+        String[][] positions = {
+            {"{\"extra\":\"", "\",\"id\":1}"},
+            {"{\"details\":{\"label\":\"", "\"},\"id\":1}"},
+            {"{\"id\":1,\"", "\":2}"}
+        };
+        KafkaFieldDecoder decoder = decoder(nested, true);
+        for (byte[] sequence : malformed) {
+            for (String[] position : positions) {
+                byte[] prefix = position[0].getBytes(StandardCharsets.UTF_8);
+                byte[] suffix = position[1].getBytes(StandardCharsets.UTF_8);
+                ByteBuffer value =
+                        ByteBuffer.allocate(prefix.length + sequence.length + suffix.length)
+                                .put(prefix)
+                                .put(sequence)
+                                .put(suffix);
+                value.flip();
+                assertThatThrownBy(() -> decoder.decode(value))
+                        .as("%s at %s", Arrays.toString(sequence), position[0])
+                        .isInstanceOf(KafkaRecordEncodingException.class)
+                        .hasMessageContaining("not valid strict UTF-8 JSON")
+                        .hasRootCauseInstanceOf(CharacterCodingException.class);
+            }
+        }
     }
 
     @Test
