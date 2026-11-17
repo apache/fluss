@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
@@ -39,6 +40,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -73,6 +75,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private final Supplier<Integer> coordinatorEpochSupplier;
 
     private final SnapshotRunner snapshotRunner;
+    private final Executor ioExecutor;
 
     private volatile long logOffsetOfLatestSnapshot;
 
@@ -85,6 +88,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             ZooKeeperClient zooKeeperClient,
             RocksIncrementalSnapshot rocksIncrementalSnapshot,
             FsPath remoteKvTabletDir,
+            Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
@@ -101,6 +105,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                 rocksIncrementalSnapshot,
                 remoteKvTabletDir,
                 (int) ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE.defaultValue().getBytes(),
+                ioExecutor,
                 cancelStreamRegistry,
                 snapshotIdCounter,
                 tabletStateSupplier,
@@ -118,6 +123,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             RocksIncrementalSnapshot rocksIncrementalSnapshot,
             FsPath remoteKvTabletDir,
             int snapshotWriteBufferSize,
+            Executor ioExecutor,
             CloseableRegistry cancelStreamRegistry,
             SequenceIDCounter snapshotIdCounter,
             Supplier<TabletState> tabletStateSupplier,
@@ -128,6 +134,7 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             long snapshotSize)
             throws IOException {
         this.tableBucket = tableBucket;
+        this.ioExecutor = ioExecutor;
         this.completedKvSnapshotCommitter = completedKvSnapshotCommitter;
         this.zooKeeperClient = zooKeeperClient;
         this.rocksIncrementalSnapshot = rocksIncrementalSnapshot;
@@ -245,20 +252,39 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         } catch (Exception e) {
             Throwable cause = ExceptionUtils.stripExecutionException(e);
             try {
-                Optional<BucketSnapshot> selected =
-                        zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
-                if (selected.isPresent() && selected.get().getSnapshotId() == snapshotId) {
-                    updateStateOnCommitSuccess(
-                            snapshotId,
-                            tabletState.getFlushedLogOffset(),
-                            snapshotResult.getSnapshotSize());
-                    return;
+                Optional<BucketSnapshot> registered =
+                        zooKeeperClient.getTableBucketSnapshot(tableBucket, snapshotId);
+                if (!registered.isPresent()) {
+                    // Absence alone cannot exclude a pending or already-retired commit.
+                    if (cause instanceof OperationNotAttemptedException) {
+                        rocksIncrementalSnapshot.notifySnapshotAbort(snapshotId);
+                        completedSnapshot
+                                .discardAsync(ioExecutor)
+                                .whenComplete(
+                                        (ignored, cleanupFailure) -> {
+                                            if (cleanupFailure != null) {
+                                                LOG.warn(
+                                                        "Failed to clean rejected snapshot {} for {}.",
+                                                        snapshotId,
+                                                        tableBucket,
+                                                        cleanupFailure);
+                                            }
+                                        });
+                    }
+                } else {
+                    Optional<BucketSnapshot> selected =
+                            zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+                    if (selected.isPresent() && selected.get().getSnapshotId() == snapshotId) {
+                        updateStateOnCommitSuccess(
+                                snapshotId,
+                                tabletState.getFlushedLogOffset(),
+                                snapshotResult.getSnapshotSize());
+                        return;
+                    }
                 }
-            } catch (Exception queryFailure) {
-                cause.addSuppressed(queryFailure);
+            } catch (Exception handlingFailure) {
+                cause.addSuppressed(handlingFailure);
             }
-            // CS may already own these files, including SSTs reused by a later snapshot.
-            // Leave reclamation to CS retention and orphan cleanup.
             throw cause;
         }
     }

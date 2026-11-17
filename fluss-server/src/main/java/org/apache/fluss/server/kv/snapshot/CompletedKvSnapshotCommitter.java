@@ -25,6 +25,9 @@ public interface CompletedKvSnapshotCommitter {
     /**
      * Commit the completed kv snapshot for a bucket.
      *
+     * <p>Each snapshot ID must be submitted at most once. A response indicating that registration
+     * was not attempted permits the caller to reclaim the uploaded files.
+     *
      * @param snapshot CompletedSnapshot to be reported
      * @param coordinatorEpoch the coordinator epoch when the snapshot is triggered
      * @param bucketLeaderEpoch the bucket leader epoch when the snapshot is triggered

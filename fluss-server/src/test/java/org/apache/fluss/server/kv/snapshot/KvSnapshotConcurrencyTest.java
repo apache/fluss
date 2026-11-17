@@ -266,6 +266,7 @@ class KvSnapshotConcurrencyTest {
                             incremental,
                             remotePath,
                             4096,
+                            uploadExecutor,
                             cancelRegistry,
                             new TestingSequenceIDCounter(new AtomicLong(1)),
                             tablet::getTabletState,

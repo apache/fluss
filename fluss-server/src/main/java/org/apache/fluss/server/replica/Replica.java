@@ -1223,6 +1223,7 @@ public final class Replica {
                             rocksIncrementalSnapshot,
                             remoteKvTabletDir,
                             snapshotContext.getSnapshotFsWriteBufferSize(),
+                            snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
                             kvTablet::getTabletState,
