@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.delta;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -76,6 +77,16 @@ public class DeltaLakeCatalog implements LakeCatalog {
      */
     static final String FLUSS_PROPERTY_PREFIX = "fluss.";
 
+    /**
+     * Tiering can't compact a Delta table yet. Rejecting the option keeps users from assuming that
+     * small files are taken care of; other engines can compact the table instead.
+     */
+    private static final String AUTO_COMPACTION_UNSUPPORTED =
+            String.format(
+                    "Tiering to Delta Lake doesn't support '%s' yet. Compact the Delta table with "
+                            + "another engine instead.",
+                    ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key());
+
     private final Configuration options;
 
     public DeltaLakeCatalog(Configuration options) {
@@ -88,6 +99,10 @@ public class DeltaLakeCatalog implements LakeCatalog {
         if (tableDescriptor.hasPrimaryKey()) {
             throw new InvalidTableException(
                     "Currently, we don't support tiering a primary key table to Delta Lake.");
+        }
+        if (Configuration.fromMap(tableDescriptor.getProperties())
+                .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION)) {
+            throw new InvalidTableException(AUTO_COMPACTION_UNSUPPORTED);
         }
         RowType rowType = tableDescriptor.getSchema().getRowType();
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
@@ -185,6 +200,9 @@ public class DeltaLakeCatalog implements LakeCatalog {
                 throw new InvalidAlterTableException(
                         "The Delta table path can't be altered: " + change);
             }
+            if (enablesAutoCompaction(change)) {
+                throw new InvalidAlterTableException(AUTO_COMPACTION_UNSUPPORTED);
+            }
         }
 
         String path = DeltaConfig.tablePath(options, tablePath);
@@ -229,6 +247,17 @@ public class DeltaLakeCatalog implements LakeCatalog {
                 .withTablePropertiesRemoved(removed)
                 .build(engine)
                 .commit(engine, CloseableIterable.emptyIterable());
+    }
+
+    private static boolean enablesAutoCompaction(TableChange change) {
+        if (!(change instanceof TableChange.SetOption)) {
+            return false;
+        }
+        TableChange.SetOption option = (TableChange.SetOption) change;
+        return option.getKey().equals(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key())
+                && Configuration.fromMap(
+                                Collections.singletonMap(option.getKey(), option.getValue()))
+                        .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION);
     }
 
     /**

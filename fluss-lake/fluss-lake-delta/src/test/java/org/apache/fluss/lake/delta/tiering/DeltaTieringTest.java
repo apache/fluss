@@ -440,6 +440,21 @@ class DeltaTieringTest {
                                         new TestingLakeCatalogContext()))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("TIME");
+
+        TableDescriptor autoCompaction =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION, true)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                catalog.createTable(
+                                        TablePath.of("fluss", "auto_compaction"),
+                                        autoCompaction,
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key());
     }
 
     @Test
@@ -609,7 +624,9 @@ class DeltaTieringTest {
                                 "d", DataTypes.INT(), null, TableChange.ColumnPosition.last()),
                         TableChange.dropColumn("a"),
                         TableChange.set(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), "other"),
-                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()))) {
+                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key()),
+                        TableChange.set(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "TRUE"))) {
             assertThatThrownBy(
                             () ->
                                     catalog.alterTable(
@@ -626,6 +643,20 @@ class DeltaTieringTest {
                                                 TableChange.modifyBucketCount(BUCKET_NUM + 1)),
                                         new TestingLakeCatalogContext()))
                 .isInstanceOf(UnsupportedOperationException.class);
+
+        // disabling auto-compaction is accepted and mirrored like any other Fluss option
+        catalog.alterTable(
+                tablePath,
+                Collections.singletonList(
+                        TableChange.set(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "false")),
+                new TestingLakeCatalogContext());
+        assertThat(
+                        TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                                .build(engine)
+                                .getTableProperties())
+                .containsEntry(
+                        "fluss." + ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "false");
     }
 
     private long commit(
