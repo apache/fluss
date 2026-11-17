@@ -918,7 +918,6 @@ public class TieringSplitReader<WriteResult>
             return;
         } else {
             currentTableStoppingOffsets.put(tableBucket, stoppingOffset);
-            // reading from the earliest offset leaves the start unknown until the first records
             if (startingOffset >= 0) {
                 currentTableNextOffsets.put(tableBucket, startingOffset);
             }

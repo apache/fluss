@@ -588,7 +588,6 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 finishedSplits.addAll(tieringSplitReader.fetch().finishedSplits());
             }
 
-            // nothing reaches numRecordsIn until the task thread flushes
             assertThat(metricGroup.getIOMetricGroup().getNumRecordsInCounter().getCount())
                     .isEqualTo(0L);
             tieringMetrics.flushRecordsConsumed();
@@ -670,7 +669,6 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.handleSplitsChanges(
                     new SplitsAddition<>(Collections.singletonList(split)));
 
-            // read what was written
             while (numRecordsIn.getCount() < writtenRecords) {
                 assertThat(tieringSplitReader.fetch().finishedSplits()).isEmpty();
                 tieringMetrics.flushRecordsConsumed();

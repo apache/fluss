@@ -60,13 +60,11 @@ class TieringMetricsTest {
         TieringMetrics tieringMetrics = new TieringMetrics(metricGroup);
         Counter numRecordsIn = metricGroup.getIOMetricGroup().getNumRecordsInCounter();
 
-        // the split fetcher thread only accumulates
         tieringMetrics.recordsConsumed(40);
         tieringMetrics.recordsConsumed(2);
         tieringMetrics.recordsConsumed(0);
         assertThat(numRecordsIn.getCount()).isEqualTo(0L);
 
-        // the task thread moves them into numRecordsIn, once
         tieringMetrics.flushRecordsConsumed();
         assertThat(numRecordsIn.getCount()).isEqualTo(42L);
         tieringMetrics.flushRecordsConsumed();

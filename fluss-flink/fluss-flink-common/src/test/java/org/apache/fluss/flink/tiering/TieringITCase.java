@@ -190,9 +190,8 @@ abstract class TieringITCase extends FlinkTieringTestBase {
         try (TieringJobScope tiering = startTieringJob(env)) {
             waitUntilFullyTiered(tablePath, recordCount);
             JobID jobId = tiering.client().getJobID();
-            // the tables of the other tests are fully tiered when they end, so the job only
-            // consumes this table's records; later rounds find nothing new and must not add
-            // their write results to numRecordsIn
+            // other tests' tables are already tiered, so later rounds only emit empty write
+            // results, which must not count
             retry(
                     Duration.ofMinutes(1),
                     () ->
