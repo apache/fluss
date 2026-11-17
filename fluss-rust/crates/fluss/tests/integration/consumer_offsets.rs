@@ -192,6 +192,7 @@ async fn partition_commits_keep_partial_failures_and_missing_positions_distinct(
             .await
             .unwrap();
     }
+    super::utils::wait_for_partitions_ready(&admin, &path, &["a", "b"]).await;
     let table = connection.get_table(&path).await.unwrap();
     let buckets: Vec<_> = admin
         .list_partition_infos(&path)

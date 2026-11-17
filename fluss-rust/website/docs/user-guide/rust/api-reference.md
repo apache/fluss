@@ -253,7 +253,8 @@ on the group. Authorization failures are returned to the caller and never trigge
 Reading after processing without a successful commit can replay records after reconnecting;
 closing a scanner or connection does not commit automatically.
 
-Request rejection is `OffsetCommitError::Rejected`. Transport failures after dispatch, ACK timeouts
+Connection failures known to precede transmission trigger owner rediscovery and retry within the
+operation deadline. Request rejection is `OffsetCommitError::Rejected`. Transport failures after dispatch, ACK timeouts
 and unclassified write errors can have an unknown outcome; these block further commits on that
 scanner. A partial response retains successful buckets and distinguishes metadata rejection from
 unknown write results. Never retry the entire batch blindly. Reading the saved offset does not

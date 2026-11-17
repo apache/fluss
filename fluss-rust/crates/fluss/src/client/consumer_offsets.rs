@@ -20,7 +20,7 @@ use crate::cluster::{ServerNode, ServerType};
 use crate::error::{Error, Result};
 use crate::metadata::TableBucket;
 use crate::proto;
-use crate::rpc::{ApiError, RpcClient, message};
+use crate::rpc::{ApiError, RequestFailure, RpcClient, message};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -364,7 +364,7 @@ impl ConsumerGroup {
                 };
                 *uncertain = true;
                 match connection
-                    .request(message::CommitConsumerOffsetsRequest {
+                    .request_with_send_status(message::CommitConsumerOffsetsRequest {
                         inner_request: request.clone(),
                     })
                     .await
@@ -377,16 +377,26 @@ impl ConsumerGroup {
                             .any(|v| matches!(v, OffsetCommitOutcome::Unknown(_)));
                         return Ok(result);
                     }
-                    Err(error) if routing_error(&error) => {
+                    Err(RequestFailure::NotSent(error)) => {
+                        *uncertain = false;
+                        if !error.is_retriable() {
+                            return Err(OffsetCommitError::Rejected(error));
+                        }
+                        self.invalidate_owner();
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(RequestFailure::MaybeSent(error)) if routing_error(&error) => {
                         *uncertain = false;
                         self.invalidate_owner();
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
-                    Err(error) if definite_rejection(&error) => {
+                    Err(RequestFailure::MaybeSent(error)) if definite_rejection(&error) => {
                         *uncertain = false;
                         return Err(OffsetCommitError::Rejected(error));
                     }
-                    Err(error) => return Err(OffsetCommitError::Unknown(error)),
+                    Err(RequestFailure::MaybeSent(error)) => {
+                        return Err(OffsetCommitError::Unknown(error));
+                    }
                 }
             }
         })
@@ -584,86 +594,98 @@ mod tests {
             let recorded = recorded.clone();
             let observed_write = observed_write.clone();
             tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                while let Ok(len) = socket.read_i32().await {
-                    let mut request = vec![0; len as usize];
-                    socket.read_exact(&mut request).await.unwrap();
-                    let key = i16::from_be_bytes(request[..2].try_into().unwrap());
-                    let mut error = false;
-                    let body = match key {
-                        1000 => proto::ApiVersionsResponse {
-                            api_versions: [1000, 1068, 1069, 1070]
-                                .iter()
-                                .map(|key| proto::PbApiVersion {
-                                    api_key: *key,
-                                    min_version: 0,
-                                    max_version: 0,
-                                })
-                                .collect(),
-                            server_type: Some(ServerType::TabletServer.to_type_id()),
-                        }
-                        .encode_to_vec(),
-                        1068 => {
-                            discoveries.fetch_add(1, Ordering::SeqCst);
-                            let request =
-                                proto::FindConsumerGroupOwnerRequest::decode(&request[8..])
-                                    .unwrap();
-                            assert_eq!(request.group_id, "consumer-offsets");
-                            proto::FindConsumerGroupOwnerResponse {
-                                owner: proto::PbServerNode {
-                                    node_id: 0,
-                                    host: "127.0.0.1".into(),
-                                    port: port as i32,
-                                    ..Default::default()
-                                },
-                            }
-                            .encode_to_vec()
-                        }
-                        1069 => {
-                            let request =
-                                proto::CommitConsumerOffsetsRequest::decode(&request[8..]).unwrap();
-                            let value = &request.tables[0].buckets[0];
-                            assert_eq!(value.partition_id, None);
-                            let attempt = commits.fetch_add(1, Ordering::SeqCst);
-                            if attempt < 3 || matches!(value.offset, 21 | 22) {
-                                error = true;
-                                proto::ErrorResponse {
-                                    error_code: match value.offset {
-                                        21 => 81,
-                                        22 => 48,
-                                        _ => 76 + attempt as i32,
-                                    },
-                                    error_message: None,
+                let mut connections = tokio::task::JoinSet::new();
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let commits = commits.clone();
+                    let discoveries = discoveries.clone();
+                    let recorded = recorded.clone();
+                    let observed_write = observed_write.clone();
+                    connections.spawn(async move {
+                        while let Ok(len) = socket.read_i32().await {
+                            let mut request = vec![0; len as usize];
+                            socket.read_exact(&mut request).await.unwrap();
+                            let key = i16::from_be_bytes(request[..2].try_into().unwrap());
+                            let mut error = false;
+                            let body = match key {
+                                1000 => proto::ApiVersionsResponse {
+                                    api_versions: [1000, 1068, 1069, 1070]
+                                        .iter()
+                                        .map(|key| proto::PbApiVersion {
+                                            api_key: *key,
+                                            min_version: 0,
+                                            max_version: 0,
+                                        })
+                                        .collect(),
+                                    server_type: Some(ServerType::TabletServer.to_type_id()),
                                 }
-                                .encode_to_vec()
-                            } else if value.offset == 30 {
-                                // Keep the socket alive but withhold the ACK after observing the write.
-                                recorded.lock().push(value.offset);
-                                observed_write.notify_one();
-                                continue;
-                            } else {
-                                recorded.lock().push(value.offset);
-                                proto::CommitConsumerOffsetsResponse {
-                                    tables: vec![proto::PbCommitConsumerOffsetsResponseTable {
-                                        table_id: 1,
-                                        buckets: vec![
+                                .encode_to_vec(),
+                                1068 => {
+                                    discoveries.fetch_add(1, Ordering::SeqCst);
+                                    let request =
+                                        proto::FindConsumerGroupOwnerRequest::decode(&request[8..])
+                                            .unwrap();
+                                    assert_eq!(request.group_id, "consumer-offsets");
+                                    proto::FindConsumerGroupOwnerResponse {
+                                        owner: proto::PbServerNode {
+                                            node_id: 0,
+                                            host: "127.0.0.1".into(),
+                                            port: port as i32,
+                                            ..Default::default()
+                                        },
+                                    }
+                                    .encode_to_vec()
+                                }
+                                1069 => {
+                                    let request =
+                                        proto::CommitConsumerOffsetsRequest::decode(&request[8..])
+                                            .unwrap();
+                                    let value = &request.tables[0].buckets[0];
+                                    assert_eq!(value.partition_id, None);
+                                    let attempt = commits.fetch_add(1, Ordering::SeqCst);
+                                    if attempt < 3 || matches!(value.offset, 21 | 22) {
+                                        error = true;
+                                        proto::ErrorResponse {
+                                            error_code: match value.offset {
+                                                21 => 81,
+                                                22 => 48,
+                                                _ => 76 + attempt as i32,
+                                            },
+                                            error_message: None,
+                                        }
+                                        .encode_to_vec()
+                                    } else if value.offset == 30 {
+                                        // Keep the socket alive but withhold the ACK after observing the write.
+                                        recorded.lock().push(value.offset);
+                                        observed_write.notify_one();
+                                        continue;
+                                    } else {
+                                        recorded.lock().push(value.offset);
+                                        proto::CommitConsumerOffsetsResponse {
+                                            tables: vec![
+                                                proto::PbCommitConsumerOffsetsResponseTable {
+                                                    table_id: 1,
+                                                    buckets: vec![
                                             proto::PbCommitConsumerOffsetsResponseBucket {
                                                 bucket_id: 0,
                                                 ..Default::default()
                                             },
                                         ],
-                                    }],
+                                                },
+                                            ],
+                                        }
+                                        .encode_to_vec()
+                                    }
                                 }
-                                .encode_to_vec()
-                            }
+                                _ => panic!("unexpected API {key}"),
+                            };
+                            let mut response = vec![u8::from(error)];
+                            response.extend_from_slice(&request[4..8]);
+                            response.extend_from_slice(&body);
+                            socket.write_i32(response.len() as i32).await.unwrap();
+                            socket.write_all(&response).await.unwrap();
                         }
-                        _ => panic!("unexpected API {key}"),
-                    };
-                    let mut response = vec![u8::from(error)];
-                    response.extend_from_slice(&request[4..8]);
-                    response.extend_from_slice(&body);
-                    socket.write_i32(response.len() as i32).await.unwrap();
-                    socket.write_all(&response).await.unwrap();
+                    });
                 }
             })
         };
@@ -714,6 +736,21 @@ mod tests {
             ));
         }
         assert!(group.enqueue(offsets(25)).await.unwrap().is_ok());
+        let owner = group.owner().await.unwrap();
+        let connection = group.connections.get_connection(&owner).await.unwrap();
+        let recovered = tokio::time::timeout(
+            Duration::from_secs(5),
+            connection
+                .close_before_write_for_test(async { group.enqueue(offsets(26)).await.unwrap() }),
+        )
+        .await
+        .expect("commit did not recover from a connection closed before sending")
+        .expect("a request that was never sent must not block the scanner");
+        assert!(matches!(
+            recovered[&TableBucket::new(1, 0)],
+            OffsetCommitOutcome::Committed
+        ));
+        assert_eq!(discoveries.load(Ordering::SeqCst), 5);
         let pending = group.enqueue(offsets(30));
         if cancel {
             tokio::time::timeout(Duration::from_secs(2), observed_write.notified())
@@ -731,8 +768,8 @@ mod tests {
             group.enqueue(offsets(40)).await.unwrap(),
             Err(OffsetCommitError::NeedsRecovery)
         ));
-        assert_eq!(*recorded.lock(), vec![10, 15, 20, 25, 30]);
-        assert_eq!(commits.load(Ordering::SeqCst), 10);
+        assert_eq!(*recorded.lock(), vec![10, 15, 20, 25, 26, 30]);
+        assert_eq!(commits.load(Ordering::SeqCst), 11);
         peer.abort();
     }
 }
