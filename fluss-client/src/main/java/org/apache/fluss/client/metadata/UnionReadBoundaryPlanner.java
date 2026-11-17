@@ -24,6 +24,7 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.UnionReadDataUnavailableException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -216,30 +217,31 @@ public final class UnionReadBoundaryPlanner {
      * Selects lake partitions not owned by the captured bucket tasks, without querying metadata.
      *
      * <p>Execute this context alongside all {@link #forBucket} tasks to cover the original scope.
-     * The lake planner may divide this scope into multiple file tasks. No matching files is a valid
-     * empty result.
+     * It has no log ranges, so it must be planned as a lake-only read. The lake planner may divide
+     * this scope into multiple file tasks. No matching files is a valid empty result.
      *
      * @param context complete captured context, treated as immutable
-     * @param table metadata for the captured table and schema IDs
+     * @param schema the captured schema, from {@link Admin#getTableSchema(TablePath, int)} with the
+     *     context's schema ID
      * @return an independent lake-only context, or empty when no readable lake snapshot exists or
      *     the unpartitioned table is already owned by bucket tasks
-     * @throws IllegalArgumentException if the context is not complete or metadata IDs do not match
+     * @throws IllegalArgumentException if the context is not complete or the schema ID does not
+     *     match
      */
     public static Optional<PbUnionReadContext> forRemainingLakePartitions(
-            PbUnionReadContext context, TableInfo table) {
+            PbUnionReadContext context, SchemaInfo schema) {
         checkArgument(
                 context.hasCoverage() && context.getCoverage() == COVERAGE_COMPLETE_PARTITIONS,
                 "Remaining lake partitions require a complete captured context.");
         checkArgument(
-                context.getTableId() == table.getTableId()
-                        && context.getSchemaId() == table.getSchemaId(),
-                "Table and schema IDs must match the captured context.");
+                context.getSchemaId() == schema.getSchemaId(),
+                "Schema ID must match the captured context.");
         if (!context.hasLake()
                 || !context.getLake().hasSnapshotId()
                 || (context.getPartitionKeysCount() == 0 && context.getLogRangesCount() > 0)) {
             return Optional.empty();
         }
-        RowType rowType = table.getRowType();
+        RowType rowType = schema.getSchema().getRowType();
         PredicateBuilder builder = new PredicateBuilder(rowType);
         List<Predicate> scopes = new ArrayList<>();
         if (context.hasPartitionScope()) {

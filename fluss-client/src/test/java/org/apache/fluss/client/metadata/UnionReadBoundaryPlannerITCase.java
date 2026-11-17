@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -183,9 +184,25 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
                 assertThat(range.getStopOffset()).isEqualTo(5);
                 assertThat(PredicateMessageUtils.toPredicate(task.getPartitionScope(), schema))
                         .isEqualTo(builder.lessThan(1, 10.0));
+                admin.alterTable(
+                                path,
+                                Collections.singletonList(
+                                        TableChange.addColumn(
+                                                "note",
+                                                DataTypes.STRING(),
+                                                null,
+                                                TableChange.ColumnPosition.last())),
+                                false)
+                        .get();
+                assertThatThrownBy(
+                                () ->
+                                        UnionReadBoundaryPlanner.forRemainingLakePartitions(
+                                                scoped, admin.getTableSchema(path).get()))
+                        .isInstanceOf(IllegalArgumentException.class);
                 PbUnionReadContext remaining =
                         UnionReadBoundaryPlanner.forRemainingLakePartitions(
-                                        scoped, admin.getTableInfo(path).get())
+                                        scoped,
+                                        admin.getTableSchema(path, scoped.getSchemaId()).get())
                                 .get();
                 Predicate remainingScope =
                         PredicateMessageUtils.toPredicate(remaining.getPartitionScope(), schema);
