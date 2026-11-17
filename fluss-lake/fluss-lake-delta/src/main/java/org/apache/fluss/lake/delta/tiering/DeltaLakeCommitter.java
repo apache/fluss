@@ -34,6 +34,7 @@ import io.delta.kernel.Transaction;
 import io.delta.kernel.TransactionCommitResult;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.exceptions.KernelException;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.expressions.Literal;
 import io.delta.kernel.hook.PostCommitHook;
@@ -175,28 +176,55 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
             return null;
         }
 
-        // Other writers may commit after Fluss, so walk back to the version that set the domain
-        // metadata. The value holds the path of a new offsets file per commit, so it changes on
-        // every Fluss commit.
+        // The value holds the path of a new offsets file per commit, so it changes on every Fluss
+        // commit. If the version known to Fluss still has the latest value, no Fluss commit came
+        // after it, and the commits of other writers need not be walked.
         long version = latest.getVersion();
-        while (version > 0
-                && (latestLakeSnapshotIdOfFluss == null || version > latestLakeSnapshotIdOfFluss)) {
-            Optional<String> previous =
-                    TableManager.loadSnapshot(tablePath)
-                            .atVersion(version - 1)
-                            .build(engine)
-                            .getDomainMetadata(FLUSS_DOMAIN);
-            if (!properties.equals(previous)) {
+        long oldestCandidate = 0;
+        if (latestLakeSnapshotIdOfFluss != null) {
+            if (version <= latestLakeSnapshotIdOfFluss) {
+                return null;
+            }
+            Optional<Snapshot> known = loadRetainedSnapshot(latestLakeSnapshotIdOfFluss);
+            if (known.isPresent()
+                    && properties.equals(known.get().getDomainMetadata(FLUSS_DOMAIN))) {
+                return null;
+            }
+            oldestCandidate = latestLakeSnapshotIdOfFluss + 1;
+        }
+
+        // Other writers may commit after Fluss, so walk back to the version that set the value.
+        // Log cleanup may have removed that version. The walk then stops at the oldest version
+        // left, which holds the same offsets and can still be loaded. If the version known to
+        // Fluss is gone as well, that may report offsets Fluss already has. Recording them again
+        // is harmless, while missing a commit would tier its data twice.
+        while (version > oldestCandidate) {
+            Optional<Snapshot> previous = loadRetainedSnapshot(version - 1);
+            if (!previous.isPresent()
+                    || !properties.equals(previous.get().getDomainMetadata(FLUSS_DOMAIN))) {
                 break;
             }
             version--;
         }
-
-        if (latestLakeSnapshotIdOfFluss != null && version <= latestLakeSnapshotIdOfFluss) {
-            return null;
-        }
         return new CommittedLakeSnapshot(
                 version, OBJECT_MAPPER.readValue(properties.get(), PROPERTIES_TYPE));
+    }
+
+    /** Loads the snapshot at the given version, or empty if the log no longer holds it. */
+    private Optional<Snapshot> loadRetainedSnapshot(long version) {
+        try {
+            return Optional.of(
+                    TableManager.loadSnapshot(tablePath).atVersion(version).build(engine));
+        } catch (KernelException e) {
+            // Kernel fails this way when log cleanup or a manual deletion removed the files that
+            // rebuild the version. Engine I/O errors are KernelEngineException and still fail.
+            LOG.info(
+                    "Version {} of Delta table {} is no longer in the log: {}",
+                    version,
+                    tablePath,
+                    e.getMessage());
+            return Optional.empty();
+        }
     }
 
     @Override

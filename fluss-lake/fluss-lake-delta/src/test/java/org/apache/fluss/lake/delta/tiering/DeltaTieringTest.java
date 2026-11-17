@@ -65,12 +65,15 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -183,14 +186,8 @@ class DeltaTieringTest {
 
         assertThat(commit(tablePath, tableInfo, Collections.emptyList(), "offsets-1"))
                 .isEqualTo(1L);
-        // another engine appends to the table without touching the Fluss domain metadata
-        for (int i = 0; i < 2; i++) {
-            TableManager.loadSnapshot(deltaPath)
-                    .build(engine)
-                    .buildUpdateTableTransaction("other-engine", Operation.WRITE)
-                    .build(engine)
-                    .commit(engine, CloseableIterable.emptyIterable());
-        }
+        commitAsOtherWriter(deltaPath);
+        commitAsOtherWriter(deltaPath);
 
         try (LakeCommitter<DeltaWriteResult, DeltaCommittable> committer =
                 createLakeCommitter(tablePath, tableInfo)) {
@@ -198,6 +195,48 @@ class DeltaTieringTest {
             assertThat(missing).isNotNull();
             assertThat(missing.getLakeSnapshotId()).isEqualTo(1L);
             assertThat(committer.getMissingLakeSnapshot(1L)).isNull();
+        }
+    }
+
+    @Test
+    void testMissingLakeSnapshotOnTruncatedLog() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "truncated_log");
+        TableInfo tableInfo = createTable(tablePath, false);
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+
+        assertThat(commit(tablePath, tableInfo, Collections.emptyList(), "offsets-1"))
+                .isEqualTo(1L);
+        commitAsOtherWriter(deltaPath);
+        commitAsOtherWriter(deltaPath);
+        // log cleanup keeps the checkpoint of version 3 and drops the commits before it
+        TableManager.loadSnapshot(deltaPath).build(engine).writeCheckpoint(engine);
+        truncateLogBefore(deltaPath, 3L);
+        commitAsOtherWriter(deltaPath);
+
+        try (LakeCommitter<DeltaWriteResult, DeltaCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            // version 1 set the offsets but is gone, so the oldest version left stands in for it
+            CommittedLakeSnapshot missing = committer.getMissingLakeSnapshot(null);
+            assertThat(missing).isNotNull();
+            assertThat(missing.getLakeSnapshotId()).isEqualTo(3L);
+            assertThat(missing.getSnapshotProperties())
+                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets-1");
+            // the version known to Fluss is gone too, so the same offsets are reported again
+            assertThat(committer.getMissingLakeSnapshot(1L)).isEqualTo(missing);
+            assertThat(committer.getMissingLakeSnapshot(3L)).isNull();
+        }
+
+        assertThat(commit(tablePath, tableInfo, Collections.emptyList(), "offsets-2"))
+                .isEqualTo(5L);
+        commitAsOtherWriter(deltaPath);
+        try (LakeCommitter<DeltaWriteResult, DeltaCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            CommittedLakeSnapshot missing = committer.getMissingLakeSnapshot(3L);
+            assertThat(missing).isNotNull();
+            assertThat(missing.getLakeSnapshotId()).isEqualTo(5L);
+            assertThat(missing.getSnapshotProperties())
+                    .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets-2");
+            assertThat(committer.getMissingLakeSnapshot(5L)).isNull();
         }
     }
 
@@ -557,6 +596,29 @@ class DeltaTieringTest {
                                             FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, offsets),
                                     Collections.emptyMap()))
                     .getCommittedSnapshotId();
+        }
+    }
+
+    /** Commits to the table like another engine, without touching the Fluss domain metadata. */
+    private void commitAsOtherWriter(String deltaPath) {
+        TableManager.loadSnapshot(deltaPath)
+                .build(engine)
+                .buildUpdateTableTransaction("other-engine", Operation.WRITE)
+                .build(engine)
+                .commit(engine, CloseableIterable.emptyIterable());
+    }
+
+    /** Deletes the log files of the versions before the given one, as log cleanup does. */
+    private static void truncateLogBefore(String deltaPath, long version) throws IOException {
+        // matches commits, checksums, checkpoints and the hidden checksums of the local file system
+        Pattern logFile = Pattern.compile("\\.?(\\d{20})\\..*");
+        File[] files = new File(deltaPath, "_delta_log").listFiles();
+        assertThat(files).isNotNull();
+        for (File file : files) {
+            Matcher matcher = logFile.matcher(file.getName());
+            if (matcher.matches() && Long.parseLong(matcher.group(1)) < version) {
+                Files.delete(file.toPath());
+            }
         }
     }
 
