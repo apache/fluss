@@ -19,9 +19,9 @@ mod lookup;
 mod types;
 mod write_callback;
 use lookup::{
-    LookupCompletion, LookupCompletionPermit, PendingLookup, PendingPrefixLookup,
-    PrefixLookupCompletion, delete_lookup_completion, delete_lookup_completion_permit,
-    delete_pending_lookup, delete_pending_prefix_lookup, delete_prefix_lookup_completion,
+    LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
+    delete_lookup_completion, delete_pending_lookup, delete_pending_prefix_lookup,
+    delete_prefix_lookup_completion,
 };
 use write_callback::ensure_callback_executor;
 
@@ -441,7 +441,6 @@ mod ffi {
         type PendingPrefixLookup;
         type LookupCompletion;
         type PrefixLookupCompletion;
-        type LookupCompletionPermit;
 
         // Opaque types for optimized FFI
         type ScanResultInner;
@@ -735,12 +734,8 @@ mod ffi {
         fn lookup_wait(self: &mut PendingLookup, timeout_ms: i64) -> Box<LookupResultInner>;
         fn lookup_is_pending(self: &PendingLookup) -> bool;
         unsafe fn delete_lookup_completion(completion: *mut LookupCompletion);
-        unsafe fn delete_lookup_completion_permit(permit: *mut LookupCompletionPermit);
         fn lookup_completion_request_id(self: &LookupCompletion) -> u64;
         fn lookup_completion_take_result(self: &mut LookupCompletion) -> Box<LookupResultInner>;
-        fn lookup_completion_take_permit(
-            self: &mut LookupCompletion,
-        ) -> Box<LookupCompletionPermit>;
 
         // LookupResultInner accessors
         fn lv_has_error(self: &LookupResultInner) -> bool;
@@ -822,9 +817,6 @@ mod ffi {
         fn prefix_lookup_completion_take_result(
             self: &mut PrefixLookupCompletion,
         ) -> Box<PrefixLookupResultInner>;
-        fn prefix_lookup_completion_take_permit(
-            self: &mut PrefixLookupCompletion,
-        ) -> Box<LookupCompletionPermit>;
 
         // PrefixLookupResultInner accessors — like LookupResultInner but indexed
         // by record, since a prefix lookup returns zero-or-more rows.
@@ -1096,7 +1088,8 @@ pub struct Lookuper {
     completion_receiver: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<LookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
     completion_capacity: usize,
-    async_tasks: Arc<Mutex<tokio::task::JoinSet<()>>>,
+    completion_idle: tokio::sync::Notify,
+    async_tasks: Mutex<tokio::task::JoinSet<()>>,
 }
 
 pub struct PrefixLookuper {
@@ -1109,19 +1102,8 @@ pub struct PrefixLookuper {
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<PrefixLookupCompletion>>,
     completion_permits: Arc<tokio::sync::Semaphore>,
     completion_capacity: usize,
-    async_tasks: Arc<Mutex<tokio::task::JoinSet<()>>>,
-}
-
-impl Drop for Lookuper {
-    fn drop(&mut self) {
-        self.async_tasks.lock().unwrap().abort_all();
-    }
-}
-
-impl Drop for PrefixLookuper {
-    fn drop(&mut self) {
-        self.async_tasks.lock().unwrap().abort_all();
-    }
+    completion_idle: tokio::sync::Notify,
+    async_tasks: Mutex<tokio::task::JoinSet<()>>,
 }
 
 // C++ callers may share one lookuper across threads.
@@ -2256,7 +2238,8 @@ impl Table {
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
             completion_capacity,
-            async_tasks: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
+            completion_idle: tokio::sync::Notify::new(),
+            async_tasks: Mutex::new(tokio::task::JoinSet::new()),
         }));
         ok_ptr(ptr as usize)
     }
@@ -2300,7 +2283,8 @@ impl Table {
             completion_receiver: tokio::sync::Mutex::new(completion_receiver),
             completion_permits: Arc::new(tokio::sync::Semaphore::new(completion_capacity)),
             completion_capacity,
-            async_tasks: Arc::new(Mutex::new(tokio::task::JoinSet::new())),
+            completion_idle: tokio::sync::Notify::new(),
+            async_tasks: Mutex::new(tokio::task::JoinSet::new()),
         }));
         ok_ptr(ptr as usize)
     }

@@ -120,10 +120,9 @@ The number of outstanding asynchronous lookups is controlled by
 lookup batching queue `lookup_queue_size`. When async capacity is full,
 `LookupAsync` returns `ErrorCode::QUEUE_FULL`; callers should poll and retry that
 submission before submitting more work.
-Each completion retains its capacity permit until the caller consumes it.
+A finished lookup counts toward this limit until `Poll` returns it.
 `Poll` replaces its output vector and returns at most the caller-selected number
-of completions per call (1024 by default). `lookup_max_pending_operations`
-controls each lookuper's async capacity independently of `lookup_queue_size`.
+of completions per call (1024 by default).
 
 The SDK executes `WriteCallback` (`void(const WriteCompletion&)`) on one shared
 worker, serially in dispatch order and off the I/O threads. `WriteCompletion.result`
