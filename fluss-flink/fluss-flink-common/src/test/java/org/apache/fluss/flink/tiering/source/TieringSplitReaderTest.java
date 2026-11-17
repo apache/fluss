@@ -38,6 +38,7 @@ import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -577,6 +578,48 @@ class TieringSplitReaderTest extends FlinkTestBase {
                         });
     }
 
+    @Test
+    void testNonPaimonLakeFormatCanOptInToRecordBatchWrite() {
+        // The test cluster only creates Paimon tables, so the decision is checked on a TableInfo
+        // of an Iceberg table, with a factory that declares batch support for Iceberg only.
+        TableInfo icebergLogTable = tableInfo(DataLakeFormat.ICEBERG, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        TableInfo paimonLogTable = tableInfo(DataLakeFormat.PAIMON, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        TestingLakeTieringFactory icebergBatchFactory = new IcebergBatchLakeTieringFactory();
+
+        assertThat(
+                        TieringSplitReader.useRecordBatchPath(
+                                icebergLogTable, icebergBatchFactory, true))
+                .isTrue();
+        assertThat(TieringSplitReader.useRecordBatchPath(paimonLogTable, icebergBatchFactory, true))
+                .isFalse();
+        // The capability is still gated on Arrow being on the class path and on log tables.
+        assertThat(
+                        TieringSplitReader.useRecordBatchPath(
+                                icebergLogTable, icebergBatchFactory, false))
+                .isFalse();
+        assertThat(
+                        TieringSplitReader.useRecordBatchPath(
+                                tableInfo(DataLakeFormat.ICEBERG, DEFAULT_PK_TABLE_DESCRIPTOR),
+                                icebergBatchFactory,
+                                true))
+                .isFalse();
+    }
+
+    private static TableInfo tableInfo(DataLakeFormat format, TableDescriptor descriptor) {
+        Map<String, String> properties = new HashMap<>(descriptor.getProperties());
+        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), format.toString());
+        TableDescriptor withFormat = descriptor.withProperties(properties);
+        long now = System.currentTimeMillis();
+        return TableInfo.of(
+                TablePath.of("fluss", "tiering_" + format + "_table"),
+                1L,
+                1,
+                withFormat,
+                "/tmp/remote-data",
+                now,
+                now);
+    }
+
     private void tierLogTableAndVerifyRows(
             TablePath tablePath, TestingLakeTieringFactory lakeTieringFactory) throws Exception {
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
@@ -788,6 +831,19 @@ class TieringSplitReaderTest extends FlinkTestBase {
             RecordBatchCountingLakeWriter writer = new RecordBatchCountingLakeWriter();
             writers.add(writer);
             return writer;
+        }
+    }
+
+    /** A {@link TestingLakeTieringFactory} that declares record batch support for Iceberg only. */
+    private static class IcebergBatchLakeTieringFactory extends TestingLakeTieringFactory {
+
+        @Override
+        public boolean supportsRecordBatchWrite(TableInfo tableInfo) {
+            return tableInfo
+                    .getTableConfig()
+                    .getDataLakeFormat()
+                    .map(DataLakeFormat.ICEBERG::equals)
+                    .orElse(false);
         }
     }
 

@@ -438,11 +438,23 @@ public class TieringSplitReader<WriteResult>
         TableInfo tableInfo = checkNotNull(currentTable).getTableInfo();
 
         currentTableUseRecordBatchPath =
-                unshadedArrowAvailable
-                        && !tableInfo.hasPrimaryKey()
-                        && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
-                        && lakeTieringFactory.supportsRecordBatchWrite(tableInfo);
+                useRecordBatchPath(tableInfo, lakeTieringFactory, unshadedArrowAvailable);
         return currentTableUseRecordBatchPath;
+    }
+
+    /**
+     * Whether a table is tiered batch by batch: an ARROW log table whose lake tiering factory
+     * declares record batch write support for it, whatever the table's lake format.
+     */
+    @VisibleForTesting
+    static boolean useRecordBatchPath(
+            TableInfo tableInfo,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            boolean unshadedArrowAvailable) {
+        return unshadedArrowAvailable
+                && !tableInfo.hasPrimaryKey()
+                && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
+                && lakeTieringFactory.supportsRecordBatchWrite(tableInfo);
     }
 
     /**
