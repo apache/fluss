@@ -250,14 +250,6 @@ class KvReplicaRestoreITCase {
         assertThat(completedSnapshot.getRowCount()).isNotNull();
         assertThat(completedSnapshot.getRowCount()).isEqualTo(recordCount);
         ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
-        registerRecoverySnapshot(
-                zk,
-                tableBucket,
-                new BucketSnapshot(
-                        completedSnapshot.getSnapshotID(),
-                        completedSnapshot.getLogOffset(),
-                        completedSnapshot.getMetadataFilePath().toString()));
-
         // Trigger another write to generate changelogs not in snapshot
         List<KvRecord> moreRecords = new ArrayList<>();
         for (int i = recordCount; i < recordCount + 10; i++) {
@@ -267,6 +259,22 @@ class KvReplicaRestoreITCase {
         putRecordBatchAndAssertSuccess(tableBucket, leaderServer, toKvRecordBatch(moreRecords));
         CompletedSnapshot later = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
         assertThat(later.getSnapshotID()).isGreaterThan(completedSnapshot.getSnapshotID());
+        waitUntil(
+                () ->
+                        zk.getRecoveryBucketSnapshot(tableBucket)
+                                        .map(BucketSnapshot::getSnapshotId)
+                                        .orElse(-1L)
+                                == later.getSnapshotID(),
+                Duration.ofSeconds(30),
+                "Later snapshot did not become the recovery snapshot");
+        // Recover from the earlier snapshot and replay the remaining WAL records.
+        registerRecoverySnapshot(
+                zk,
+                tableBucket,
+                new BucketSnapshot(
+                        completedSnapshot.getSnapshotID(),
+                        completedSnapshot.getLogOffset(),
+                        completedSnapshot.getMetadataFilePath().toString()));
         assertThat(zk.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
                 .isEqualTo(completedSnapshot.getSnapshotID());
 
@@ -297,8 +305,14 @@ class KvReplicaRestoreITCase {
             }
             CompletedSnapshot next = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
             assertThat(next.getSnapshotID()).isGreaterThan(later.getSnapshotID());
-            assertThat(zk.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
-                    .isEqualTo(next.getSnapshotID());
+            waitUntil(
+                    () ->
+                            zk.getRecoveryBucketSnapshot(tableBucket)
+                                            .map(BucketSnapshot::getSnapshotId)
+                                            .orElse(-1L)
+                                    == next.getSnapshotID(),
+                    Duration.ofSeconds(30),
+                    "Snapshot after failover did not become the recovery snapshot");
         } finally {
             FLUSS_CLUSTER_EXTENSION.startTabletServer(currentLeader);
         }
