@@ -77,6 +77,7 @@ import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -420,7 +421,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 new TabletServerRegistration(
                         "rack3",
                         Endpoint.fromListenersString(DEFAULT_LISTENER_NAME + "://host3:1234"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled

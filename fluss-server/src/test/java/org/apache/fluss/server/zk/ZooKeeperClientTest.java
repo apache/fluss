@@ -49,6 +49,7 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -173,12 +174,16 @@ class ZooKeeperClientTest {
                 new TabletServerRegistration(
                         "rack1",
                         Endpoint.fromListenersString("CLIENT://host1:3456"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         TabletServerRegistration registration2 =
                 new TabletServerRegistration(
                         "rack2",
                         Endpoint.fromListenersString("CLIENT://host2:3454"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         zookeeperClient.registerTabletServer(2, registration2);
         zookeeperClient.registerTabletServer(1, registration1);
         // now get the tablet servers

@@ -348,9 +348,7 @@ pub(crate) fn pb_metadata_response(
             node_id: 1,
             host: "ts1".to_string(),
             port: 9123,
-            listeners: None,
-            rack: None,
-            server_tag: None,
+            ..Default::default()
         }],
         table_metadata,
         partition_metadata,

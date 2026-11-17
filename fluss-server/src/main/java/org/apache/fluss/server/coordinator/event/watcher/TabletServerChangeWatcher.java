@@ -17,12 +17,10 @@
 
 package org.apache.fluss.server.coordinator.event.watcher;
 
-import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
-import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
@@ -81,13 +79,7 @@ public class TabletServerChangeWatcher extends ServerBaseChangeWatcher {
                                     ServerIdZNode.decode(newData.getData());
                             LOG.info("Received CHILD_ADDED event for server {}.", serverId);
                             eventManager.put(
-                                    new NewTabletServerEvent(
-                                            new ServerInfo(
-                                                    serverId,
-                                                    registration.getRack(),
-                                                    registration.getEndpoints(),
-                                                    ServerType.TABLET_SERVER,
-                                                    registration.getResource())));
+                                    new NewTabletServerEvent(registration.toServerInfo(serverId)));
                         }
                         break;
                     }
