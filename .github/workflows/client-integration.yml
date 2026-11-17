@@ -27,14 +27,17 @@ on:
   push:
     branches:
       - main
+    # Covers every input of the server image key, so main saves a new image
+    # whenever the key changes.
     paths:
-      - 'fluss-rpc/src/main/proto/**'
+      - 'fluss-rpc/**'
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
       - 'LICENSE-bin'
       - 'NOTICE-bin'
       - 'docker/fluss/**'
+      - 'pom.xml'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
