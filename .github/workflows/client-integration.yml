@@ -59,6 +59,8 @@ on:
       - 'fluss-gateway/**'
       - '.github/workflows/client-integration.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '0 20 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -106,9 +108,9 @@ jobs:
           has '^fluss-gateway/' && gateway=true || true
           # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own sources changed
           gate() { if [ "$all" = true ] || [ "$core" = true ] || [ "$protocol" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
-          # PRs run on arm64, whose queue stays short at peak hours. Pushes to main
-          # run on x86, so a merge that breaks only x86 still shows up there.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then runner=ubuntu-24.04-arm; else runner=ubuntu-24.04; fi
+          # Runs on arm64, whose queue stays short at peak hours. Main uses the same
+          # arch, so PRs restore its caches. x86 runs nightly.
+          if [ "${{ github.event_name }}" = "schedule" ]; then runner=ubuntu-24.04; else runner=ubuntu-24.04-arm; fi
           {
             echo "runner=$runner"
             echo "rust=$(gate false)"
@@ -120,7 +122,7 @@ jobs:
 
   # Build the server image from THIS source tree once; cache it on server/proto
   # hashes so client-only PRs restore it instead of rebuilding. The key also
-  # holds the CPU architecture, because PRs and main run on different ones.
+  # holds the CPU architecture, because the nightly run uses x86.
   # The saved image is uploaded as an artifact and loaded by every client
   # integration job.
   build-server-image:
@@ -191,7 +193,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Integration tests
         run: cargo test --features integration_tests,kv-snapshot --test test_fluss -p fluss-rs
         env:
@@ -233,7 +235,7 @@ jobs:
           workspaces: |
             fluss-gateway
             fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build Fluss test cluster helper
         run: cargo build --locked --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
       - name: Integration Test
@@ -278,7 +280,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
       - name: Build Python bindings
@@ -330,7 +332,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build Python bindings
         working-directory: fluss-rust/bindings/python
         run: |
@@ -374,7 +376,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Build fluss-test-cluster binary
@@ -432,7 +434,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Cache Mix deps
         uses: actions/cache@v4
         with:
