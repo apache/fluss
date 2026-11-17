@@ -66,10 +66,16 @@ make_binary_release() {
   echo "Creating binary release"
   dir_name="fluss-$RELEASE_VERSION-bin"
 
+  local commit_timestamp
+  commit_timestamp="$(git show -s --format=%ct HEAD)"
+
   # enable release profile here (to check for the maven version)
-  $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests
+  $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests \
+    "-Dproject.build.outputTimestamp=${commit_timestamp}"
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
+  # Later assemblies update directory timestamps when adding files.
+  find "fluss-${RELEASE_VERSION}" -type d -exec touch -m -r "fluss-${RELEASE_VERSION}/LICENSE" {} +
   tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 
   cp fluss-*.tgz ${RELEASE_DIR}
