@@ -19,6 +19,7 @@ package org.apache.fluss.server.lakehouse;
 
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -109,7 +110,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public LakeSource<?> createLakeSource(TablePath tablePath) {
+        public LakeSource<?> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
             throw new UnsupportedOperationException("Not implemented");
         }
 

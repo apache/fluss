@@ -2326,6 +2326,14 @@ public class ConfigOptions {
                             "Specifies the table name of the datalake table. This option is currently supported only for Paimon and Iceberg. "
                                     + "If not set, the Fluss table name is used. The option may be configured before the lake table is created and cannot be changed after creation.");
 
+    public static final ConfigOption<String> TABLE_DATALAKE_BRANCH =
+            key("table.datalake.branch")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the target branch of the datalake table. Currently only supported for Paimon. "
+                                    + "If unset, the lake storage's default behavior is used.");
+
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
                     .durationType()

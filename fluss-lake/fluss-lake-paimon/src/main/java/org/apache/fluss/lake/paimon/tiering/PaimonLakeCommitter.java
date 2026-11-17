@@ -249,7 +249,8 @@ public class PaimonLakeCommitter
     @Nullable
     private TieringStats computeTableStats() {
         Identifier identifier =
-                new Identifier(lakeTablePath.getDatabaseName(), lakeTablePath.getTableName());
+                toPaimon(
+                        lakeTablePath, tableInfo.getTableConfig().getDataLakeBranch().orElse(null));
         try {
             Optional<TableSnapshot> snapshot = paimonCatalog.loadSnapshot(identifier);
             if (!snapshot.isPresent()) {
@@ -401,7 +402,15 @@ public class PaimonLakeCommitter
     private FileStoreTable getTable(TablePath tablePath, boolean isAutoSnapshotExpiration)
             throws IOException {
         try {
-            FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable table =
+                    (FileStoreTable)
+                            paimonCatalog.getTable(
+                                    toPaimon(
+                                            tablePath,
+                                            tableInfo
+                                                    .getTableConfig()
+                                                    .getDataLakeBranch()
+                                                    .orElse(null)));
 
             Map<String, String> dynamicOptions = new HashMap<>();
             dynamicOptions.put(

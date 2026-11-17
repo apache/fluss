@@ -31,6 +31,7 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
@@ -65,6 +66,7 @@ import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_PREFIX;
+import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_BRANCH_OPTION;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_DATABASE_NAME_OPTION;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_NAME_OPTION;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
@@ -92,7 +94,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
             ObjectIdentifier lakeIdentifier =
                     resolveToLakeIdentifier(
-                            tableIdentifier, context.getCatalogTable().getOptions());
+                            tableIdentifier,
+                            context.getCatalogTable().getOptions(),
+                            lakeFlinkCatalog.getLakeFormat());
             lakeTableFactory = mayInitLakeTableFactory();
             return lakeTableFactory.createDynamicTableSource(context, lakeIdentifier);
         }
@@ -278,14 +282,18 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
     }
 
     static ObjectIdentifier resolveToLakeIdentifier(
-            ObjectIdentifier flinkIdentifier, Map<String, String> lakeTableOptions) {
+            ObjectIdentifier flinkIdentifier,
+            Map<String, String> lakeTableOptions,
+            DataLakeFormat lakeFormat) {
         String lakeDatabaseName =
                 lakeTableOptions.getOrDefault(
                         LAKE_TABLE_DATABASE_NAME_OPTION, flinkIdentifier.getDatabaseName());
         String lakeObjectName =
                 resolveToLakeObjectName(
                         lakeTableOptions.get(LAKE_TABLE_NAME_OPTION),
-                        flinkIdentifier.getObjectName());
+                        flinkIdentifier.getObjectName(),
+                        lakeFormat,
+                        lakeTableOptions.get(LAKE_TABLE_BRANCH_OPTION));
         return ObjectIdentifier.of(
                 flinkIdentifier.getCatalogName(), lakeDatabaseName, lakeObjectName);
     }

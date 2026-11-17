@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -43,14 +44,15 @@ public interface LakeStorage {
     LakeCatalog createLakeCatalog();
 
     /**
-     * Creates a lake source instance for reading lakehouse data from the specified table path. The
-     * lake source provides capabilities for split planning and record reading, enabling efficient
-     * distributed processing of lakehouse data.
+     * Creates a lake source with the Fluss table's destination configuration. The lake source
+     * provides capabilities for split planning and record reading, enabling efficient distributed
+     * processing of lakehouse data.
      *
-     * @param tablePath the logical path identifying the table in the lakehouse storage
-     * @return a configured lake source instance for the specified table
+     * @param tablePath the resolved lake database and table name
+     * @param tableConfig the Fluss table configuration, including its target branch
+     * @return a configured lake source
      */
-    LakeSource<?> createLakeSource(TablePath tablePath);
+    LakeSource<?> createLakeSource(TablePath tablePath, TableConfig tableConfig);
 
     /**
      * Creates a TabletServer-scoped manager for lake table lookupers and their shared resources.

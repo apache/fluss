@@ -44,7 +44,6 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -85,14 +84,24 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
         FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
     }
 
-    @Test
-    void testWriteAndTierHistoricalKvToPaimon() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_write_tiering");
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWriteAndTierHistoricalKvToPaimon(boolean withBranch) throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_write_tiering_" + withBranch);
         Schema schema = partitionedPkSchema(true);
-        long tableId =
-                createTable(
-                        tablePath,
+        TableDescriptor.Builder descriptor =
+                TableDescriptor.builder(
                         partitionedDescriptor(schema, true, EXPIRED_PARTITION_RETENTION));
+        if (withBranch) {
+            descriptor.property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        }
+        long tableId = createTable(tablePath, descriptor.build());
+        TablePath lakeTablePath =
+                withBranch
+                        ? TablePath.of(
+                                tablePath.getDatabaseName(),
+                                tablePath.getTableName() + "$branch_rt")
+                        : tablePath;
 
         try {
             long historicalPartitionId = waitUntilHistoricalPartitionReady(tablePath, tableId);
@@ -108,7 +117,7 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
             TableBucket historicalBucket = new TableBucket(tableId, historicalPartitionId, 0);
             assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(1);
             tierAndVerifyPaimonRows(
-                    tablePath, historicalBucket, 1L, "1|" + EXPIRED_PARTITION_NAME + "|Alice");
+                    lakeTablePath, historicalBucket, 1L, "1|" + EXPIRED_PARTITION_NAME + "|Alice");
 
             // Leave an untiered update after the Paimon snapshot. Restart recovery must apply this
             // changelog over the tiered row.
@@ -127,23 +136,37 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
             assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(5);
             assertThat(getLeaderReplica(historicalBucket).getLakeLogEndOffset()).isEqualTo(1);
             tierAndVerifyPaimonRows(
-                    tablePath,
+                    lakeTablePath,
                     historicalBucket,
                     5L,
                     "1|" + EXPIRED_PARTITION_NAME + "|Alice-after-recovery");
+            if (withBranch) {
+                assertThat(readPaimonRows(tablePath)).isEmpty();
+            }
         } finally {
             dropTable(tablePath);
         }
     }
 
-    @Test
-    void testWriteAndTierHistoricalLogToPaimon() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "historical_log_write_tiering");
-        long tableId =
-                createTable(
-                        tablePath,
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testWriteAndTierHistoricalLogToPaimon(boolean withBranch) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "historical_log_write_tiering_" + withBranch);
+        TableDescriptor.Builder descriptor =
+                TableDescriptor.builder(
                         partitionedDescriptor(
                                 partitionedLogSchema(), true, EXPIRED_PARTITION_RETENTION));
+        if (withBranch) {
+            descriptor.property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        }
+        long tableId = createTable(tablePath, descriptor.build());
+        TablePath lakeTablePath =
+                withBranch
+                        ? TablePath.of(
+                                tablePath.getDatabaseName(),
+                                tablePath.getTableName() + "$branch_rt")
+                        : tablePath;
 
         try {
             long historicalPartitionId = waitUntilHistoricalPartitionReady(tablePath, tableId);
@@ -160,11 +183,14 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
             TableBucket historicalBucket = new TableBucket(tableId, historicalPartitionId, 0);
             assertThat(getLeaderReplica(historicalBucket).getLocalLogEndOffset()).isEqualTo(2);
             tierAndVerifyPaimonRows(
-                    tablePath,
+                    lakeTablePath,
                     historicalBucket,
                     2L,
                     "1|" + EXPIRED_PARTITION_NAME + "|Alice",
                     "2|" + EXPIRED_PARTITION_NAME + "|Bob");
+            if (withBranch) {
+                assertThat(readPaimonRows(tablePath)).isEmpty();
+            }
         } finally {
             dropTable(tablePath);
         }
@@ -471,7 +497,7 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
     }
 
     private void tierAndVerifyPaimonRows(
-            TablePath tablePath,
+            TablePath lakeTablePath,
             TableBucket historicalBucket,
             long expectedLogEndOffset,
             String... expectedRows)
@@ -480,8 +506,9 @@ class HistoricalPartitionITCase extends FlinkPaimonTieringTestBase {
         try {
             assertReplicaStatus(historicalBucket, expectedLogEndOffset);
             checkFlussOffsetsInSnapshot(
-                    tablePath, Collections.singletonMap(historicalBucket, expectedLogEndOffset));
-            assertThat(readPaimonRows(tablePath)).containsExactlyInAnyOrder(expectedRows);
+                    lakeTablePath,
+                    Collections.singletonMap(historicalBucket, expectedLogEndOffset));
+            assertThat(readPaimonRows(lakeTablePath)).containsExactlyInAnyOrder(expectedRows);
         } finally {
             jobClient.cancel().get();
         }

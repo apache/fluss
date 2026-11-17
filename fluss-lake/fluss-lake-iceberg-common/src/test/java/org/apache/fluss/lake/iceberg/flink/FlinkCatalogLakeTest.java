@@ -19,8 +19,11 @@
 package org.apache.fluss.lake.iceberg.flink;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.flink.catalog.FlinkCatalog;
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
@@ -33,6 +36,8 @@ import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -42,6 +47,7 @@ import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test class for {@link FlinkCatalog}. */
 class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
@@ -73,6 +79,40 @@ class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
         assertThat(schema.getColumns().size()).isEqualTo(3);
         assertThat(schema.getPrimaryKey().isPresent()).isTrue();
         assertThat(schema.getPrimaryKey().get().getColumnNames()).isEqualTo(List.of("first"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"table.datalake.database-name", "table.datalake.table-name"})
+    void testLakePathCannotChangeAfterReset(String optionKey) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DEFAULT_DB, "reset_bound_" + optionKey.replace('.', '_'));
+        catalog.createTable(
+                new ObjectPath(tablePath.getDatabaseName(), tablePath.getTableName()),
+                newCatalogTable(Collections.singletonMap(TABLE_DATALAKE_ENABLED.key(), "true")),
+                false);
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.reset(TABLE_DATALAKE_ENABLED.key())),
+                        false)
+                .get();
+        Map<String, String> properties =
+                admin.getTableInfo(tablePath).get().toTableDescriptor().getProperties();
+        assertThat(properties).doesNotContainKey(TABLE_DATALAKE_ENABLED.key());
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                optionKey, "another_target")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(optionKey);
+        assertThat(admin.getTableInfo(tablePath).get().toTableDescriptor().getProperties())
+                .isEqualTo(properties);
     }
 
     private CatalogTable newCatalogTable(Map<String, String> options) {

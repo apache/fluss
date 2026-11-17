@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
@@ -189,7 +190,7 @@ class LakeStorageTest {
         }
 
         @Override
-        public LakeSource<?> createLakeSource(TablePath tablePath) {
+        public LakeSource<?> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
             throw new UnsupportedOperationException("Not implemented");
         }
 

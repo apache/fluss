@@ -18,9 +18,11 @@
 
 package org.apache.fluss.lake.paimon.utils;
 
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.PartitionUtils;
 
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryRowWriter;
 import org.apache.paimon.data.BinaryString;
@@ -35,8 +37,22 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for partition value conversion in {@link PaimonConversions}. */
+/** Tests for metadata and partition value conversions in {@link PaimonConversions}. */
 class PaimonConversionsTest {
+
+    @Test
+    void testDefaultBranchIdentifier() {
+        TablePath tablePath = TablePath.of("lake_db", "events");
+        assertThat(PaimonConversions.toPaimon(tablePath, null))
+                .isEqualTo(
+                        Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName()));
+        assertThat(PaimonConversions.toPaimon(tablePath, "main"))
+                .isEqualTo(
+                        Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName()));
+        assertThat(PaimonConversions.toPaimon(tablePath, "main").getBranchNameOrDefault())
+                .isEqualTo(PaimonConversions.toPaimon(tablePath).getBranchNameOrDefault());
+        assertThat(PaimonConversions.toPaimon(tablePath, "rt").getBranchName()).isEqualTo("rt");
+    }
 
     /** Each type's lake-side string must equal the Fluss-side name ({@code convertValueOfType}). */
     @Test

@@ -121,10 +121,14 @@ class PaimonTieringTest {
 
     private static Stream<Arguments> tieringWriteArgs() {
         return Stream.of(
-                Arguments.of(true, true),
-                Arguments.of(true, false),
-                Arguments.of(false, true),
-                Arguments.of(false, false));
+                Arguments.of(true, true, "main"),
+                Arguments.of(true, false, "main"),
+                Arguments.of(false, true, "main"),
+                Arguments.of(false, false, "main"),
+                Arguments.of(true, true, "rt"),
+                Arguments.of(true, false, "rt"),
+                Arguments.of(false, true, "rt"),
+                Arguments.of(false, false, "rt"));
     }
 
     private static Stream<Arguments> snapshotExpireArgs() {
@@ -149,7 +153,8 @@ class PaimonTieringTest {
 
     @ParameterizedTest
     @MethodSource("tieringWriteArgs")
-    void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitioned) throws Exception {
+    void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitioned, String branch)
+            throws Exception {
         int bucketNum = 3;
         TablePath tablePath =
                 TablePath.of(
@@ -164,6 +169,16 @@ class PaimonTieringTest {
                 isPartitioned,
                 isPrimaryKeyTable ? bucketNum : null,
                 Collections.emptyMap());
+        TablePath readTablePath = tablePath;
+        if (!"main".equals(branch)) {
+            ((FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath)))
+                    .branchManager()
+                    .createBranch(branch);
+            readTablePath =
+                    TablePath.of(
+                            tablePath.getDatabaseName(),
+                            tablePath.getTableName() + "$branch_" + branch);
+        }
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -174,6 +189,7 @@ class PaimonTieringTest {
                                         .build())
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, branch)
                         .build();
         TableInfo tableInfo =
                 TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
@@ -205,7 +221,7 @@ class PaimonTieringTest {
                 Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                 List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
                 CloseableIterator<InternalRow> actualRecords =
-                        getPaimonRows(tablePath, partition, isPrimaryKeyTable, bucket);
+                        getPaimonRows(readTablePath, partition, isPrimaryKeyTable, bucket);
                 verifyTableRecords(actualRecords, expectRecords, bucket, partition);
             }
         }
@@ -227,6 +243,13 @@ class PaimonTieringTest {
             committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             // no any missing committed offset since the latest snapshot is 1L
             assertThat(committedLakeSnapshot).isNull();
+        }
+        if (!"main".equals(branch)) {
+            assertThat(
+                            ((FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath)))
+                                    .snapshotManager()
+                                    .latestSnapshotId())
+                    .isNull();
         }
     }
 

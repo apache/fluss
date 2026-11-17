@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -53,6 +54,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -348,6 +350,59 @@ class EnableFlussOnLakeTableProcedureITCase extends FlinkPaimonTieringTestBase {
             TableInfo tableInfo = assertEnableFlussProcedureSucceeds(tablePath, null);
             assertThat(tableInfo.getNumBuckets()).isEqualTo(2);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRejectBranchBindingBeforePromotion(boolean metadataExists) throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "procedure_non_main_" + metadataExists);
+        FileStoreTable main =
+                createPaimonTable(
+                        tablePath,
+                        Schema.newBuilder()
+                                .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                                .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                                .option(CoreOptions.BUCKET.key(), "-1")
+                                .build());
+        main.branchManager().createBranch("rt");
+        FileStoreTable branch =
+                (FileStoreTable)
+                        paimonCatalog.getTable(
+                                new Identifier(DATABASE, tablePath.getTableName(), "rt"));
+        long snapshotId = writeSingleRow(branch);
+        if (metadataExists) {
+            TableDescriptor descriptor =
+                    TableDescriptor.builder()
+                            .schema(
+                                    org.apache.fluss.metadata.Schema.newBuilder()
+                                            .column("id", org.apache.fluss.types.DataTypes.BIGINT())
+                                            .column(
+                                                    "payload",
+                                                    org.apache.fluss.types.DataTypes.STRING())
+                                            .build())
+                            .distributedBy(1)
+                            .property(TABLE_DATALAKE_ENABLED, false)
+                            .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                            .build();
+            admin.createTable(tablePath, descriptor, false).get();
+        }
+
+        // A retry without options must also reject existing metadata bound to rt.
+        String options = metadataExists ? null : "'table.datalake.branch=rt'";
+        assertThatThrownBy(() -> tableEnvironment.executeSql(procedureSql(tablePath, options)))
+                .hasStackTraceContaining(ConfigOptions.TABLE_DATALAKE_BRANCH.key());
+        if (metadataExists) {
+            TableInfo unchanged = admin.getTableInfo(tablePath).get();
+            assertThat(unchanged.getTableConfig().isDataLakeEnabled()).isFalse();
+            assertThat(unchanged.getTableConfig().getDataLakeBranch()).contains("rt");
+            assertThatThrownBy(() -> admin.getLatestLakeSnapshot(tablePath).get())
+                    .cause()
+                    .isInstanceOf(LakeTableSnapshotNotExistException.class);
+        } else {
+            assertThat(admin.tableExists(tablePath).get()).isFalse();
+        }
+        assertThat(main.snapshotManager().latestSnapshotId()).isNull();
+        assertThat(branch.snapshotManager().latestSnapshotId()).isEqualTo(snapshotId);
     }
 
     @Test

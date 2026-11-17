@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager;
@@ -61,8 +62,9 @@ public class PaimonLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<PaimonSplit> createLakeSource(TablePath tablePath) {
-        return new PaimonLakeSource(paimonConfig, tablePath);
+    public LakeSource<PaimonSplit> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
+        return new PaimonLakeSource(
+                paimonConfig, tablePath, tableConfig.getDataLakeBranch().orElse(null));
     }
 
     @Override

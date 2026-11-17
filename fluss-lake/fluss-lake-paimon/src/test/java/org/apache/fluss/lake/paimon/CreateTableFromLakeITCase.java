@@ -43,6 +43,7 @@ import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.sink.BatchTableCommit;
@@ -146,6 +147,57 @@ class CreateTableFromLakeITCase {
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class);
         assertThat(admin.getTableInfo(tablePath).get()).isEqualTo(created);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"main", "rt"})
+    void testRejectBranchOptionBeforeCreatingMetadata(String requestedBranch) throws Exception {
+        TablePath tablePath = TablePath.of("promote_branch_option_" + requestedBranch, "events");
+        createPaimonTable(
+                tablePath,
+                Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                        .column("payload", org.apache.paimon.types.DataTypes.STRING())
+                        .option(CoreOptions.BUCKET.key(), "-1")
+                        .build());
+        FileStoreTable main = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        main.branchManager().createBranch("rt");
+        Identifier branchIdentifier =
+                new Identifier(tablePath.getDatabaseName(), tablePath.getTableName(), "rt");
+        paimonCatalog.alterTable(
+                branchIdentifier,
+                Collections.singletonList(
+                        SchemaChange.addColumn(
+                                "branch_only", org.apache.paimon.types.DataTypes.INT())),
+                false);
+        FileStoreTable branch = (FileStoreTable) paimonCatalog.getTable(branchIdentifier);
+        BatchWriteBuilder writeBuilder = branch.newBatchWriteBuilder();
+        try (BatchTableWrite write = writeBuilder.newWrite();
+                BatchTableCommit commit = writeBuilder.newCommit()) {
+            write.write(GenericRow.of(1L, BinaryString.fromString("rt"), 42));
+            commit.commit(write.prepareCommit());
+        }
+        Long snapshotId = branch.snapshotManager().latestSnapshotId();
+        assertThat(snapshotId).isNotNull();
+        assertThat(main.snapshotManager().latestSnapshotId()).isNull();
+
+        // Unsupported branch options must not leave Fluss metadata or change either branch.
+        assertThatThrownBy(
+                        () ->
+                                admin.createTableFromLake(
+                                                tablePath,
+                                                Collections.singletonMap(
+                                                        ConfigOptions.TABLE_DATALAKE_BRANCH.key(),
+                                                        requestedBranch))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        ConfigOptions.TABLE_DATALAKE_BRANCH.key(),
+                        "managed by Fluss when creating a table from Paimon");
+        assertThat(admin.databaseExists(tablePath.getDatabaseName()).get()).isFalse();
+        assertThat(main.snapshotManager().latestSnapshotId()).isNull();
+        assertThat(branch.snapshotManager().latestSnapshotId()).isEqualTo(snapshotId);
     }
 
     @ParameterizedTest

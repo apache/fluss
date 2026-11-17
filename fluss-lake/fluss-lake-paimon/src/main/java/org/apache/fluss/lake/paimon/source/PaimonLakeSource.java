@@ -56,7 +56,13 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     private @Nullable org.apache.paimon.predicate.Predicate predicate;
 
     public PaimonLakeSource(Configuration paimonConfig, TablePath tablePath) {
-        this.tableLoader = new CatalogTableLoader(paimonConfig, tablePath);
+        this(paimonConfig, tablePath, null);
+    }
+
+    /** Creates a source for the specified Paimon branch. */
+    public PaimonLakeSource(
+            Configuration paimonConfig, TablePath tablePath, @Nullable String branch) {
+        this.tableLoader = new CatalogTableLoader(paimonConfig, tablePath, branch);
     }
 
     /**

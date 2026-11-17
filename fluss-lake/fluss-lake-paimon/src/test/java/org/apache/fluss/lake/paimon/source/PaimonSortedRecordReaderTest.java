@@ -71,7 +71,8 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
         List<InternalRow> writtenRows = new ArrayList<>();
         preparePkTable(tablePath, isPartitioned, DEFAULT_BUCKET_NUM, writtenRows);
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         Table table = getTable(tablePath);
 
         int[] pkIndex = table.rowType().getFieldIndices(table.primaryKeys());
@@ -116,7 +117,8 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
                         .option(CoreOptions.BUCKET_KEY.key(), "member_id,channel_key,seq_time")
                         .build());
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         RecordReader recordReader = lakeSource.createRecordReader(() -> null);
         assertThat(recordReader).isInstanceOf(PaimonSortedRecordReader.class);
 

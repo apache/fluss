@@ -119,6 +119,21 @@ ALTER TABLE fluss_table SET (
 
 Tables created before datalake was configured for the Fluss cluster do not support altering these options. Once the Paimon table has been created, including an automatically created Paimon table, the name mapping options cannot be modified.
 
+### Configure a Target Paimon Branch
+
+Use `table.datalake.branch` to select the Paimon branch used for lake storage. If unset, the default
+behavior is unchanged. Before the Paimon table is created, enable lake storage with the `rt` branch:
+
+```sql title="Flink SQL"
+ALTER TABLE fluss_table SET (
+    'table.datalake.enabled' = 'true',
+    'table.datalake.branch' = 'rt'
+);
+```
+
+Fluss automatically creates missing Paimon tables and empty branches. Once the target branch is
+created, `table.datalake.branch` cannot be changed or reset, even if lake storage is disabled.
+
 ### Configure Paimon Table Properties
 
 Since Fluss version 0.7, you can also specify Paimon table properties when creating a datalake-enabled Fluss table by using the `paimon.` prefix within the Fluss table properties clause.

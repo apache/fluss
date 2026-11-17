@@ -316,6 +316,29 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testLakeBranchValidation() {
+        TableDescriptor descriptor =
+                tableDescriptorWithLakeName(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        validate(descriptor, DataLakeFormat.PAIMON);
+        for (DataLakeFormat format :
+                new DataLakeFormat[] {
+                    DataLakeFormat.ICEBERG, DataLakeFormat.LANCE, DataLakeFormat.HUDI
+                }) {
+            assertThatThrownBy(() -> validate(descriptor, format))
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessageContaining("only supported for Paimon");
+        }
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        tableDescriptorWithLakeName(
+                                                ConfigOptions.TABLE_DATALAKE_BRANCH, " "),
+                                        DataLakeFormat.PAIMON))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("must not be empty");
+    }
+
+    @Test
     void testCustomLakePathRejectedForUnsupportedFormat() {
         assertThatThrownBy(
                         () ->

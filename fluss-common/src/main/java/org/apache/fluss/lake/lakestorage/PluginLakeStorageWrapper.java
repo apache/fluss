@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuperManager.LookupCacheOptions;
@@ -152,8 +153,8 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
-        public LakeSource<?> createLakeSource(TablePath tablePath) {
-            return inner.createLakeSource(tablePath);
+        public LakeSource<?> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
+            return inner.createLakeSource(tablePath, tableConfig);
         }
 
         @Override

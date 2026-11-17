@@ -169,6 +169,10 @@ public class PaimonTableValidation {
         Options existing = Options.fromMap(existingOptions);
         Options proposed = Options.fromMap(newOptions);
         for (String option : PAIMON_UNSETTABLE_OPTIONS) {
+            if (CoreOptions.BRANCH.key().equals(option)) {
+                // The target branch is resolved through the identifier, not the physical schema.
+                continue;
+            }
             if (PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY.equals(option)) {
                 // Existing Paimon tables keep their partition path encoding. Fluss addresses
                 // partitions through logical values and Paimon APIs rather than the directory name.

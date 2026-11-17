@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.read.lake
 
-import org.apache.fluss.config.{ConfigOptions, Configuration}
+import org.apache.fluss.config.{ConfigOptions, Configuration, TableConfig}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{LakeTableUtil, TablePath}
@@ -74,7 +74,9 @@ object FlussLakeUtils extends Logging {
     val lakeStoragePlugin =
       LakeStoragePluginSetUp.fromDataLakeFormat(datalakeFormat.toString, null)
     val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
-    lakeStorage.createLakeSource(tablePath).asInstanceOf[LakeSource[LakeSplit]]
+    lakeStorage
+      .createLakeSource(tablePath, new TableConfig(tableConfig))
+      .asInstanceOf[LakeSource[LakeSplit]]
   }
 
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {

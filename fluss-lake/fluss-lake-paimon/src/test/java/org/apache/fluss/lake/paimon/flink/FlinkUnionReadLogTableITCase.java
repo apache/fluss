@@ -17,13 +17,17 @@
 
 package org.apache.fluss.lake.paimon.flink;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.SavepointFormatType;
@@ -32,6 +36,8 @@ import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.table.FileStoreTable;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -59,6 +65,7 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.co
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The IT case for Flink union data in lake and fluss for log table. */
 class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
@@ -68,6 +75,65 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
+    }
+
+    @Test
+    void testTieringAndUnionReadOnBranch() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "branch_events");
+        TablePath lakePath = TablePath.of(DEFAULT_DB, "branch_lake_events");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("value", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_TABLE_NAME, lakePath.getTableName())
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofSeconds(1))
+                        .build();
+        Identifier mainIdentifier = Identifier.create(DEFAULT_DB, lakePath.getTableName());
+        long tableId = createTable(tablePath, descriptor);
+        JobClient tiering = buildTieringJob(execEnv);
+        try {
+            batchTEnv.executeSql("INSERT INTO branch_events VALUES (1, 'one')").await();
+            waitUntilBucketSynced(tablePath, tableId, 1, false);
+            assertThat(
+                            CollectionUtil.iteratorToList(
+                                    batchTEnv.executeSql("SELECT * FROM branch_events").collect()))
+                    .containsExactly(Row.of(1, "one"));
+            assertThat(
+                            CollectionUtil.iteratorToList(
+                                    batchTEnv
+                                            .executeSql("SELECT * FROM `branch_events$lake`")
+                                            .collect()))
+                    .containsExactly(Row.of(1, "one"));
+            assertThat(
+                            CollectionUtil.iteratorToList(
+                                    batchTEnv
+                                            .executeSql(
+                                                    "SELECT snapshot_id FROM `branch_events$lake$snapshots`")
+                                            .collect()))
+                    .isNotEmpty();
+            // Tiering to rt must not commit any snapshots to the main branch.
+            assertThat(
+                            ((FileStoreTable) paimonCatalog.getTable(mainIdentifier))
+                                    .snapshotManager()
+                                    .latestSnapshotId())
+                    .isNull();
+        } finally {
+            tiering.cancel().get();
+        }
+
+        // Resetting acceleration must not make the existing branch binding mutable.
+        batchTEnv.executeSql("ALTER TABLE branch_events RESET ('table.datalake.enabled')");
+        assertThatThrownBy(
+                        () ->
+                                batchTEnv.executeSql(
+                                        "ALTER TABLE branch_events SET ('table.datalake.branch' = 'main')"))
+                .hasStackTraceContaining("table.datalake.branch");
     }
 
     @ParameterizedTest

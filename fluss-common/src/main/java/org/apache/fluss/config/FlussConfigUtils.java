@@ -56,6 +56,7 @@ public class FlussConfigUtils {
                         ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE.key(),
                         ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                        ConfigOptions.TABLE_DATALAKE_BRANCH.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
                         ConfigOptions.TABLE_LOG_TTL.key(),

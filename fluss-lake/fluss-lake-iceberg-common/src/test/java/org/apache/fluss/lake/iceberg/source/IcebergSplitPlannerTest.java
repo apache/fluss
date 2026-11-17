@@ -83,7 +83,8 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
         table.refresh();
         Snapshot snapshot = table.currentSnapshot();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
         assertThat(icebergSplits.size()).isEqualTo(2);
         // Log table with bucket-aware
@@ -141,7 +142,8 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
         table.refresh();
         Snapshot snapshot = table.currentSnapshot();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
         assertThat(icebergSplits.size()).isEqualTo(2);
         // Log table is not bucket-aware
@@ -173,7 +175,8 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
 
         PredicateBuilder predicateBuilder =
                 new PredicateBuilder(RowType.of(new IntType(), new StringType(), new StringType()));
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         lakeSource.withFilters(Collections.singletonList(predicateBuilder.greaterOrEqual(0, 10)));
         List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
 

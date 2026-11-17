@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.hudi;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.hudi.source.HudiLakeSource;
 import org.apache.fluss.lake.hudi.source.HudiSplit;
 import org.apache.fluss.lake.hudi.tiering.HudiLakeTieringFactory;
@@ -47,7 +48,7 @@ public class HudiLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<HudiSplit> createLakeSource(TablePath tablePath) {
+    public LakeSource<HudiSplit> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
         return new HudiLakeSource(hudiConfig, tablePath);
     }
 }
