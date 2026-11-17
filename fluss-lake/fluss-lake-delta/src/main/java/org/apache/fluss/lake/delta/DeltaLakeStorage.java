@@ -18,11 +18,11 @@
 package org.apache.fluss.lake.delta;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.delta.source.DeltaLakeSource;
 import org.apache.fluss.lake.delta.tiering.DeltaCommittable;
 import org.apache.fluss.lake.delta.tiering.DeltaLakeTieringFactory;
 import org.apache.fluss.lake.delta.tiering.DeltaWriteResult;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
-import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
@@ -46,8 +46,7 @@ public class DeltaLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<?> createLakeSource(TablePath tablePath) {
-        // Union read is not supported yet, read the Delta table with a Delta reader directly.
-        throw new UnsupportedOperationException("Not implemented");
+    public DeltaLakeSource createLakeSource(TablePath tablePath) {
+        return new DeltaLakeSource(config, tablePath);
     }
 }

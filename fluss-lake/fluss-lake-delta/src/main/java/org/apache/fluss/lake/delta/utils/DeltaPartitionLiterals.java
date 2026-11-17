@@ -24,6 +24,18 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.PartitionUtils;
 
 import io.delta.kernel.expressions.Literal;
+import io.delta.kernel.types.BooleanType;
+import io.delta.kernel.types.ByteType;
+import io.delta.kernel.types.DataType;
+import io.delta.kernel.types.DateType;
+import io.delta.kernel.types.DoubleType;
+import io.delta.kernel.types.FloatType;
+import io.delta.kernel.types.IntegerType;
+import io.delta.kernel.types.LongType;
+import io.delta.kernel.types.ShortType;
+import io.delta.kernel.types.StringType;
+import io.delta.kernel.types.TimestampNTZType;
+import io.delta.kernel.types.TimestampType;
 
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -31,8 +43,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Converts the partition values of a Fluss partition name to the Delta Kernel literals of the
- * partition columns. Kernel checks that each literal has the type of its partition column, and
+ * Converts between the partition values of a Fluss partition name and the Delta Kernel literals of
+ * the partition columns. Kernel checks that each literal has the type of its partition column, and
  * serializes it into the data file path and the add action.
  */
 public class DeltaPartitionLiterals {
@@ -111,5 +123,51 @@ public class DeltaPartitionLiterals {
                 throw new UnsupportedOperationException(
                         "Delta Lake partition columns don't support the type " + type);
         }
+    }
+
+    /**
+     * Converts a partition literal of a Delta partition column to the value in a Fluss partition
+     * name, the inverse of {@link #toLiteral}. A Fluss CHAR partition key is a Delta STRING column
+     * and has the same value in its partition name.
+     */
+    public static String toFlussPartitionValue(Literal literal) {
+        Object value = literal.getValue();
+        DataType type = literal.getDataType();
+        if (value == null) {
+            throw new IllegalArgumentException(
+                    "A Fluss partition can't have a null value, but the Delta partition value of "
+                            + "type "
+                            + type
+                            + " is null.");
+        }
+        if (type instanceof StringType) {
+            return (String) value;
+        } else if (type instanceof BooleanType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.BOOLEAN);
+        } else if (type instanceof ByteType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.TINYINT);
+        } else if (type instanceof ShortType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.SMALLINT);
+        } else if (type instanceof IntegerType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.INTEGER);
+        } else if (type instanceof LongType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.BIGINT);
+        } else if (type instanceof FloatType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.FLOAT);
+        } else if (type instanceof DoubleType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.DOUBLE);
+        } else if (type instanceof DateType) {
+            return PartitionUtils.convertValueOfType(value, DataTypeRoot.DATE);
+        } else if (type instanceof TimestampNTZType) {
+            return PartitionUtils.convertValueOfType(
+                    TimestampNtz.fromMicros((Long) value),
+                    DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+        } else if (type instanceof TimestampType) {
+            return PartitionUtils.convertValueOfType(
+                    TimestampLtz.fromEpochMicros((Long) value),
+                    DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+        }
+        throw new UnsupportedOperationException(
+                "Fluss partitions don't support Delta partition columns of type " + type);
     }
 }
