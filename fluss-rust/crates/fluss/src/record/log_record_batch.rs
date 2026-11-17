@@ -522,7 +522,7 @@ impl LogRecordBatch {
     /// Rejects unsupported magic versions and batches shorter than their
     /// magic's fixed header, so the fixed-offset accessors cannot slice past
     /// the buffer. Mirrors the guard in Java's `DefaultLogRecordBatch`.
-    fn ensure_header_complete(&self) -> Result<usize> {
+    pub(crate) fn ensure_header_complete(&self) -> Result<usize> {
         if self.data.len() <= MAGIC_OFFSET {
             return Err(Error::UnexpectedError {
                 message: format!(
@@ -562,6 +562,16 @@ impl LogRecordBatch {
 
     pub fn next_log_offset(&self) -> i64 {
         self.last_log_offset() + 1
+    }
+
+    /// [`Self::next_log_offset`], or `None` when the batch is too short to
+    /// hold its header or a garbled header puts the offset after the batch
+    /// beyond `i64::MAX`.
+    pub(crate) fn checked_next_log_offset(&self) -> Option<i64> {
+        self.ensure_header_complete().ok()?;
+        self.base_log_offset()
+            .checked_add(i64::from(self.last_offset_delta()))?
+            .checked_add(1)
     }
 
     pub fn checksum(&self) -> u32 {
@@ -796,7 +806,7 @@ mod tests {
     use std::io::Write;
 
     use crate::test_utils::{
-        build_append_only_batch, build_table_info, splice_change_type_vector,
+        build_append_only_batch, build_table_info, splice_change_type_vector, splice_leader_epoch,
         splice_statistics_section, uncompressed_arrow_batch_config,
     };
     #[test]
@@ -1255,25 +1265,6 @@ mod tests {
         let mut data = append_only;
         data[MAGIC_OFFSET] = 3;
         assert!(!LogRecordBatch::new(Bytes::from(data)).is_valid());
-    }
-
-    /// Turns a V1 batch into a wire-valid V2 batch by inserting the leader
-    /// epoch before the CRC and fixing up the magic, length field and CRC.
-    fn splice_leader_epoch(v1_batch: &[u8], leader_epoch: i32) -> Vec<u8> {
-        let mut data = v1_batch.to_vec();
-        data[MAGIC_OFFSET] = LOG_MAGIC_VALUE_V2;
-        data.splice(
-            V2_LEADER_EPOCH_OFFSET..V2_LEADER_EPOCH_OFFSET,
-            leader_epoch.to_le_bytes(),
-        );
-
-        let new_length = (data.len() - LOG_OVERHEAD) as i32;
-        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
-            .copy_from_slice(&new_length.to_le_bytes());
-        let crc_offset = CRC_OFFSET + LEADER_EPOCH_LENGTH;
-        let crc = crc32c(&data[SCHEMA_ID_OFFSET + LEADER_EPOCH_LENGTH..]);
-        data[crc_offset..crc_offset + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
-        data
     }
 
     #[test]

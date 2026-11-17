@@ -383,6 +383,62 @@ impl PendingFetch for CompletedPendingFetch {
 /// Sentinel for a fetch whose response carried no `filtered_end_offset`.
 pub(crate) const NO_FILTERED_END_OFFSET: i64 = -1;
 
+/// A decode failure of a [`DefaultCompletedFetch`], kept until the fetch is
+/// discarded so every poll reports the same batch.
+struct DecodeFailure {
+    error: Arc<Error>,
+    /// `(base offset, next offset)` of the failed batch, or `None` when the
+    /// batch could not be read from the fetched data at all.
+    batch_offsets: Option<(i64, Option<i64>)>,
+}
+
+impl DecodeFailure {
+    fn unread(error: Error) -> Self {
+        Self {
+            error: Arc::new(error),
+            batch_offsets: None,
+        }
+    }
+
+    /// Checks a batch read from the fetched data. Its header must be complete
+    /// before its schema ID can be read to pick a decoder.
+    fn check_read(read: Result<LogRecordBatch>) -> std::result::Result<LogRecordBatch, Self> {
+        let batch = read.map_err(Self::unread)?;
+        batch
+            .ensure_header_complete()
+            .map_err(|error| Self::of_batch(&batch, error))?;
+        Ok(batch)
+    }
+
+    fn of_batch(batch: &LogRecordBatch, error: Error) -> Self {
+        let base_offset = batch.base_log_offset();
+        Self {
+            error: Arc::new(error),
+            batch_offsets: Some((base_offset, trusted_next_offset(batch, base_offset))),
+        }
+    }
+}
+
+/// The offset after a batch that failed to decode, if its header can be trusted.
+///
+/// Decoding does not check the CRC, so a garbled offset delta could make the
+/// caller skip valid records. The end is only trusted when the batch passes its
+/// CRC check, which covers the offset delta, and lies past its base offset.
+/// Projection by the server may invalidate the CRC of a batch, so the end of a
+/// projected batch is reported only if it still passes the check.
+///
+/// The CRC does not cover the base offset, so a negative base offset is
+/// rejected: resuming before offset 0 would resume from the earliest offset
+/// instead of skipping the batch.
+fn trusted_next_offset(batch: &LogRecordBatch, base_offset: i64) -> Option<i64> {
+    if base_offset < 0 || !batch.is_valid() {
+        return None;
+    }
+    batch
+        .checked_next_log_offset()
+        .filter(|next_offset| *next_offset > base_offset)
+}
+
 /// Default implementation of CompletedFetch for in-memory log records
 /// Used for local fetches from tablet server
 pub struct DefaultCompletedFetch {
@@ -415,7 +471,7 @@ pub struct DefaultCompletedFetch {
     pending_records: Vec<ScanRecord>,
     last_record: Option<ScanRecord>,
     // Keep decode failures until this fetch is discarded after a subscription change.
-    cached_record_error: Option<Arc<Error>>,
+    cached_record_error: Option<DecodeFailure>,
     corrupt_last_record: bool,
 }
 
@@ -535,7 +591,7 @@ impl DefaultCompletedFetch {
     }
 
     /// Get the next fetched record, handling batch iteration and record skipping
-    fn next_fetched_record(&mut self) -> Result<FetchStep<ScanRecord>> {
+    fn next_fetched_record(&mut self) -> std::result::Result<FetchStep<ScanRecord>, DecodeFailure> {
         loop {
             if let Some(record) = self
                 .current_record_iterator
@@ -555,7 +611,7 @@ impl DefaultCompletedFetch {
                         self.drain();
                         return Ok(FetchStep::End);
                     };
-                    self.pending_record_batch = Some(batch_result?);
+                    self.pending_record_batch = Some(DecodeFailure::check_read(batch_result)?);
                 }
 
                 let batch = self
@@ -570,7 +626,10 @@ impl DefaultCompletedFetch {
                     .pending_record_batch
                     .take()
                     .expect("pending batch must still be present after schema resolution");
-                self.current_record_iterator = Some(batch.records(&read_context)?);
+                let records = batch
+                    .records(&read_context)
+                    .map_err(|error| DecodeFailure::of_batch(&batch, error))?;
+                self.current_record_iterator = Some(records);
                 self.current_record_batch = Some(batch);
             }
         }
@@ -596,8 +655,8 @@ impl DefaultCompletedFetch {
                     self.corrupt_last_record = false;
                     return FetchStep::SchemaRequired(schema_id);
                 }
-                Err(e) => {
-                    self.cached_record_error = Some(Arc::new(e));
+                Err(failure) => {
+                    self.cached_record_error = Some(failure);
                 }
             }
         }
@@ -623,19 +682,43 @@ impl DefaultCompletedFetch {
         FetchResult::Data(records)
     }
 
-    fn fetch_error(&self) -> Error {
-        Error::UnexpectedError {
-            message: format!(
-                "Failed to read log data at offset {} for bucket {}",
-                self.next_fetch_offset, self.table_bucket
+    /// The error for the cached decode failure, if any. A failed fetch does not
+    /// advance, so repeated calls describe the same batch.
+    fn decode_error(&self) -> Option<Error> {
+        self.cached_record_error
+            .as_ref()
+            .map(|failure| self.to_decode_error(failure))
+    }
+
+    fn to_decode_error(&self, failure: &DecodeFailure) -> Error {
+        let (offset, next_offset) = failure
+            .batch_offsets
+            .unwrap_or((self.next_fetch_offset, None));
+        let message = match next_offset {
+            Some(next_offset) => format!(
+                "Failed to decode the log batch of bucket {} at offset {offset}. \
+                 Subscribe the bucket at offset {next_offset} to skip the batch",
+                self.table_bucket
             ),
-            source: self.cached_record_error.as_ref().map(|error| {
-                Box::new(Arc::clone(error)) as Box<dyn std::error::Error + Send + Sync>
-            }),
+            None => format!(
+                "Failed to decode the log batch of bucket {} at offset {offset}. \
+                 The offset after the failed batch is unknown",
+                self.table_bucket
+            ),
+        };
+        Error::LogDecodeError {
+            message,
+            table_bucket: self.table_bucket.clone(),
+            offset,
+            next_offset,
+            source: Arc::clone(&failure.error),
         }
     }
+
     /// Get the next batch with its base offset and commit timestamp.
-    fn next_fetched_batch(&mut self) -> Result<FetchStep<FetchedBatch>> {
+    fn next_fetched_batch(
+        &mut self,
+    ) -> std::result::Result<FetchStep<FetchedBatch>, DecodeFailure> {
         loop {
             if self.pending_record_batch.is_none() {
                 let Some(log_batch_result) = self.log_record_batch.next() else {
@@ -643,7 +726,7 @@ impl DefaultCompletedFetch {
                     self.drain();
                     return Ok(FetchStep::End);
                 };
-                self.pending_record_batch = Some(log_batch_result?);
+                self.pending_record_batch = Some(DecodeFailure::check_read(log_batch_result)?);
             }
 
             let log_batch = self
@@ -658,7 +741,9 @@ impl DefaultCompletedFetch {
                 .pending_record_batch
                 .take()
                 .expect("pending batch must still be present after schema resolution");
-            let mut record_batch = log_batch.record_batch(&read_context)?;
+            let mut record_batch = log_batch
+                .record_batch(&read_context)
+                .map_err(|error| DecodeFailure::of_batch(&log_batch, error))?;
 
             // Skip empty batches
             if record_batch.num_rows() == 0 {
@@ -752,8 +837,10 @@ impl CompletedFetch for DefaultCompletedFetch {
             });
         }
 
-        if self.corrupt_last_record {
-            return Err(self.fetch_error());
+        if self.corrupt_last_record
+            && let Some(error) = self.decode_error()
+        {
+            return Err(error);
         }
 
         if self.consumed {
@@ -797,8 +884,10 @@ impl CompletedFetch for DefaultCompletedFetch {
             }
         }
 
-        if self.cached_record_error.is_some() && scan_records.is_empty() {
-            return Err(self.fetch_error());
+        if scan_records.is_empty()
+            && let Some(error) = self.decode_error()
+        {
+            return Err(error);
         }
 
         Ok(self.finish_records(scan_records))
@@ -810,8 +899,8 @@ impl CompletedFetch for DefaultCompletedFetch {
             return Err(error);
         }
 
-        if self.cached_record_error.is_some() {
-            return Err(self.fetch_error());
+        if let Some(error) = self.decode_error() {
+            return Err(error);
         }
 
         if let Some(api_error) = self.api_error.as_ref() {
@@ -832,10 +921,11 @@ impl CompletedFetch for DefaultCompletedFetch {
         for _ in 0..max_batches {
             let step = match self.next_fetched_batch() {
                 Ok(step) => step,
-                Err(error) => {
-                    self.cached_record_error = Some(Arc::new(error));
+                Err(failure) => {
+                    let error = self.to_decode_error(&failure);
+                    self.cached_record_error = Some(failure);
                     if batches.is_empty() {
-                        return Err(self.fetch_error());
+                        return Err(error);
                     }
                     return Ok(FetchResult::Data(batches));
                 }
@@ -1092,12 +1182,16 @@ mod tests {
     };
     use crate::record::{
         APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, BASE_OFFSET_LENGTH, BASE_OFFSET_OFFSET,
-        COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET,
-        LOG_OVERHEAD, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, to_arrow_schema,
+        COMMIT_TIMESTAMP_LENGTH, COMMIT_TIMESTAMP_OFFSET, LAST_OFFSET_DELTA_LENGTH,
+        LAST_OFFSET_DELTA_OFFSET, LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V0,
+        LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2, LOG_OVERHEAD, MAGIC_OFFSET,
+        MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, ReadContext, record_batch_header_size,
+        to_arrow_schema,
     };
     use crate::row::{DataGetters, GenericRow};
     use crate::test_utils::{
-        build_table_info, build_table_info_with_columns, uncompressed_arrow_batch_config,
+        build_table_info, build_table_info_with_columns, header_field_shift,
+        uncompressed_arrow_batch_config, update_crc, with_magic,
     };
     use arrow::array::{Array, Int32Array, StringArray};
     use std::future::Future;
@@ -1116,27 +1210,7 @@ mod tests {
 
     #[test]
     fn batch_decode_error_follows_already_collected_data() -> Result<()> {
-        let table_path = TablePath::new("db", "tbl");
-        let table_info = Arc::new(build_table_info_with_columns(
-            table_path.clone(),
-            1,
-            1,
-            vec![DataField::new("id", DataTypes::int(), None)],
-        ));
-        let row_type = table_info.get_row_type();
-        let mut builder = MemoryLogRecordsArrowBuilder::new(
-            uncompressed_arrow_batch_config(1, row_type, usize::MAX),
-            false,
-        )?;
-        let mut row = GenericRow::new(1);
-        row.set_field(0, 42_i32);
-        builder.append(&WriteRecord::for_append(
-            table_info.clone(),
-            Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
-            1,
-            &row,
-        ))?;
-        let mut data = builder.build()?;
+        let mut data = one_row_batch()?;
         let commit_timestamp = 1234_i64;
         data[COMMIT_TIMESTAMP_OFFSET..COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH]
             .copy_from_slice(&commit_timestamp.to_le_bytes());
@@ -1176,7 +1250,7 @@ mod tests {
         assert!(std::error::Error::source(&error).is_some());
         assert!(!fetch.is_consumed());
         // Repeated reads retain the same cause and never continue the batch iterator.
-        let cause = fetch.cached_record_error.as_ref().unwrap().clone();
+        let cause = fetch.cached_record_error.as_ref().unwrap().error.clone();
         for _ in 0..3 {
             assert_eq!(
                 fetch
@@ -1188,10 +1262,173 @@ mod tests {
             );
             assert!(Arc::ptr_eq(
                 &cause,
-                fetch.cached_record_error.as_ref().unwrap()
+                &fetch.cached_record_error.as_ref().unwrap().error
             ));
             assert_eq!(fetch.next_fetch_offset(), 1);
             assert_eq!(fetch.records_read(), 1);
+        }
+        Ok(())
+    }
+
+    /// A valid log batch at offset 0 holding one row of `test_resolver`'s schema.
+    fn one_row_batch() -> Result<Vec<u8>> {
+        let table_path = TablePath::new("db", "tbl");
+        let table_info = Arc::new(build_table_info_with_columns(
+            table_path.clone(),
+            1,
+            1,
+            vec![DataField::new("id", DataTypes::int(), None)],
+        ));
+        let mut builder = MemoryLogRecordsArrowBuilder::new(
+            uncompressed_arrow_batch_config(1, table_info.get_row_type(), usize::MAX),
+            false,
+        )?;
+        let mut row = GenericRow::new(1);
+        row.set_field(0, 42_i32);
+        builder.append(&WriteRecord::for_append(
+            table_info,
+            Arc::new(PhysicalTablePath::of(Arc::new(table_path))),
+            1,
+            &row,
+        ))?;
+        builder.build()
+    }
+
+    fn batch_header(base_offset: i64, length: i32) -> Vec<u8> {
+        let mut header = vec![0_u8; LOG_OVERHEAD];
+        header[BASE_OFFSET_OFFSET..BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH]
+            .copy_from_slice(&base_offset.to_le_bytes());
+        header[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&length.to_le_bytes());
+        header
+    }
+
+    /// A one-row batch of `magic` at `base_offset` with garbage records and the
+    /// given offset delta.
+    fn undecodable_batch(
+        magic: u8,
+        base_offset: i64,
+        last_offset_delta: i32,
+        valid_crc: bool,
+    ) -> Vec<u8> {
+        let mut batch = with_magic(one_row_batch().expect("valid batch"), magic);
+        batch[..8].copy_from_slice(&base_offset.to_le_bytes());
+        let delta_offset = LAST_OFFSET_DELTA_OFFSET + header_field_shift(magic);
+        batch[delta_offset..delta_offset + LAST_OFFSET_DELTA_LENGTH]
+            .copy_from_slice(&last_offset_delta.to_le_bytes());
+        batch[record_batch_header_size(magic).expect("supported magic")..].fill(0);
+        if valid_crc {
+            update_crc(&mut batch);
+        }
+        batch
+    }
+
+    /// A batch of `magic` at offset 1, one byte short of its header.
+    fn incomplete_header(magic: u8) -> Vec<u8> {
+        let size = record_batch_header_size(magic).expect("supported magic") - 1;
+        let mut batch = batch_header(1, (size - LOG_OVERHEAD) as i32);
+        batch.resize(size, 0);
+        batch[MAGIC_OFFSET] = magic;
+        batch
+    }
+
+    fn poll_count(fetch: &mut DefaultCompletedFetch, batch_mode: bool) -> Result<usize> {
+        Ok(if batch_mode {
+            expect_data(fetch.fetch_batches(10)?).len()
+        } else {
+            expect_data(fetch.fetch_records(10)?).len()
+        })
+    }
+
+    #[test]
+    fn decode_error_reports_the_offset_after_a_trusted_batch_end() -> Result<()> {
+        let undecodable = "Invalid continuation marker";
+        let mut cases = vec![
+            (1, batch_header(1, 0), None, "does not reach the magic byte"),
+            // No batch is framed, so the offset the scan stopped at is reported.
+            (1, batch_header(7, -1), None, "Invalid negative batch size"),
+        ];
+        // V2 moves the CRC and the offset delta past its leader epoch, and V1
+        // and V2 have larger headers.
+        for magic in [LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2] {
+            cases.extend([
+                // Offsets 1..=3, so resuming at offset + 1 would land in the batch again.
+                (
+                    1,
+                    undecodable_batch(magic, 1, 2, true),
+                    Some(4),
+                    undecodable,
+                ),
+                (
+                    1,
+                    undecodable_batch(magic, 1, 100_000, false),
+                    None,
+                    undecodable,
+                ),
+                (1, undecodable_batch(magic, 1, -1, true), None, undecodable),
+                // The CRC does not cover the base offset, so the end may overflow.
+                (
+                    i64::MAX,
+                    undecodable_batch(magic, i64::MAX, 0, true),
+                    None,
+                    undecodable,
+                ),
+                // Nor can it catch a negative base offset, which is never a
+                // position to resume at.
+                (-3, undecodable_batch(magic, -3, 0, true), None, undecodable),
+                (
+                    i64::MIN,
+                    undecodable_batch(magic, i64::MIN, 2, true),
+                    None,
+                    undecodable,
+                ),
+                (
+                    i64::MIN,
+                    undecodable_batch(magic, i64::MIN, -2, true),
+                    None,
+                    undecodable,
+                ),
+                (1, incomplete_header(magic), None, "header size"),
+            ]);
+        }
+        for (expected_offset, corrupt, expected_next_offset, cause) in cases {
+            for batch_mode in [false, true] {
+                let data = [one_row_batch()?, corrupt.clone()].concat();
+                let mut fetch = DefaultCompletedFetch::new(
+                    TableBucket::new(1, 0),
+                    LogRecordsBatches::new(data.clone()),
+                    data.len(),
+                    test_resolver()?,
+                    false,
+                    0,
+                    0,
+                );
+                assert_eq!(poll_count(&mut fetch, batch_mode)?, 1);
+                let error =
+                    poll_count(&mut fetch, batch_mode).expect_err("expected a decode error");
+                let Error::LogDecodeError {
+                    table_bucket,
+                    offset,
+                    next_offset,
+                    ..
+                } = &error
+                else {
+                    panic!("expected LogDecodeError, got {error:?}");
+                };
+                assert_eq!(table_bucket, &TableBucket::new(1, 0));
+                assert_eq!(*offset, expected_offset);
+                assert_eq!(*next_offset, expected_next_offset);
+                let message = error.to_string();
+                let hint = match expected_next_offset {
+                    Some(next_offset) => {
+                        format!("Subscribe the bucket at offset {next_offset}")
+                    }
+                    None => "unknown".to_string(),
+                };
+                assert!(
+                    message.contains(&hint) && message.contains(cause),
+                    "{message}"
+                );
+            }
         }
         Ok(())
     }

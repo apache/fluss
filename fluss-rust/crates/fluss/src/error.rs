@@ -18,8 +18,10 @@
 pub use crate::rpc::RpcError;
 pub use crate::rpc::{ApiError, FlussError};
 
+use crate::metadata::TableBucket;
 use arrow_schema::ArrowError;
 use snafu::Snafu;
+use std::sync::Arc;
 use std::{io, result};
 use strum::ParseError;
 
@@ -134,6 +136,35 @@ pub enum Error {
     /// server address).
     #[snafu(visibility(pub(crate)), display("Invalid server type: {}.", message))]
     InvalidServerType { message: String },
+
+    /// A log scan could not decode a log batch of `table_bucket`.
+    ///
+    /// The scan does not move past the failed batch, so every poll returns this
+    /// error again until the bucket is subscribed at another offset or
+    /// unsubscribed. A scan decodes whole batches: if the failed batch holds
+    /// more than one record, subscribing at `offset + 1` lands in it again. To
+    /// skip the batch, subscribe the bucket at `next_offset`; the records of
+    /// the failed batch are then never returned.
+    #[snafu(
+        visibility(pub(crate)),
+        display("Fluss hitting log decode error {}: {:?}", message, source)
+    )]
+    LogDecodeError {
+        message: String,
+        table_bucket: TableBucket,
+        /// Base offset of the batch that could not be decoded. If the batch
+        /// could not be read from the fetched data at all, the offset the scan
+        /// stopped at instead.
+        offset: i64,
+        /// Offset after the failed batch, where to subscribe the bucket to skip
+        /// it. `None` when the end of the batch is unknown: the batch could not
+        /// be read, or its header cannot be trusted because it is incomplete,
+        /// fails its CRC check (which projection by the server may cause), has
+        /// a negative base offset, or puts the batch end at or before its start
+        /// or past `i64::MAX`.
+        next_offset: Option<i64>,
+        source: Arc<Error>,
+    },
 }
 
 /// Convenience constructors for API errors that may be raised client-side.

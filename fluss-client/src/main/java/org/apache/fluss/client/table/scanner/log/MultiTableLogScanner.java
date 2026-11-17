@@ -62,6 +62,10 @@ public interface MultiTableLogScanner extends AutoCloseable {
      * @return the result of poll, organized by {@link TablePath} and {@link
      *     org.apache.fluss.metadata.TableBucket}.
      * @throws IllegalStateException if the scanner is not subscribed to any buckets.
+     * @throws org.apache.fluss.exception.LogDecodeException if a log batch of a subscribed bucket
+     *     cannot be decoded. Every poll throws it again until the bucket is subscribed at another
+     *     offset, such as {@link org.apache.fluss.exception.LogDecodeException#getNextOffset()}, or
+     *     unsubscribed.
      */
     MultiTableRecords poll(Duration timeout);
 

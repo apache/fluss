@@ -18,12 +18,16 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.exception.LogDecodeException;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
@@ -42,6 +46,7 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.Projection;
+import org.apache.fluss.utils.crc.Crc32C;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,6 +56,9 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -59,10 +67,20 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
@@ -74,9 +92,18 @@ import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.DefaultCompletedFetch}. */
 public class DefaultCompletedFetchTest {
+    /**
+     * Every log batch format: V1 appends a statistics length to the header, and V2 inserts a leader
+     * epoch before the CRC, moving the CRC and the offset delta.
+     */
+    private static final byte[] MAGICS = {
+        LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2
+    };
+
     private LogScannerStatus logScannerStatus;
     private @TempDir File tempDir;
     private TableInfo tableInfo;
@@ -189,6 +216,127 @@ public class DefaultCompletedFetchTest {
                 makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
+    }
+
+    @ParameterizedTest
+    @MethodSource("decodeFailures")
+    void testDecodeFailureReportsTheOffsetToSkipTo(
+            byte magic,
+            Corruption corruption,
+            boolean checkCrcs,
+            @Nullable Projection projection,
+            boolean arrowBatches,
+            OptionalLong expectedNextOffset,
+            @Nullable Class<? extends Exception> expectedCause)
+            throws Exception {
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.records(
+                                tb, corruptBetweenHealthyBatches(corruption, magic), 30L, -1L, -1L),
+                        0L,
+                        projection,
+                        checkCrcs);
+        try {
+            assertThat(poll(fetch, arrowBatches)).isEqualTo(10);
+            for (int i = 0; i < 3; i++) {
+                assertThatThrownBy(() -> poll(fetch, arrowBatches))
+                        .isInstanceOfSatisfying(
+                                LogDecodeException.class,
+                                e -> {
+                                    assertThat(e.getTableBucket()).isEqualTo(tb);
+                                    assertThat(e.getOffset()).isEqualTo(10L);
+                                    assertThat(e.getNextOffset()).isEqualTo(expectedNextOffset);
+                                    if (expectedCause != null) {
+                                        assertThat(e).hasCauseInstanceOf(expectedCause);
+                                    }
+                                })
+                        .hasMessageContaining(
+                                expectedNextOffset.isPresent() ? "offset 20" : "unknown");
+            }
+        } finally {
+            fetch.drain();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("untrustedBatchEnds")
+    void testDecodeFailureDoesNotReportAnInvalidOffsetToSkipTo(
+            byte magic, long baseOffset, int lastOffsetDelta, boolean arrowBatches)
+            throws Exception {
+        // Garbage records with a valid CRC, so only the offsets make the batch end untrusted. The
+        // CRC covers the offset delta but not the base offset.
+        byte[] corrupt = arrowBatch(0L, magic);
+        Arrays.fill(corrupt, recordBatchHeaderSize(magic), corrupt.length, (byte) 0xff);
+        MemorySegment segment = MemorySegment.wrap(corrupt);
+        segment.putInt(lastOffsetDeltaOffset(magic), lastOffsetDelta);
+        updateCrc(corrupt, magic);
+        segment.putLong(BASE_OFFSET_OFFSET, baseOffset);
+
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.records(
+                                tb, MemoryLogRecords.pointToBytes(corrupt), 30L, -1L, -1L),
+                        0L,
+                        null,
+                        true);
+        try {
+            assertThatThrownBy(() -> poll(fetch, arrowBatches))
+                    .isInstanceOfSatisfying(
+                            LogDecodeException.class,
+                            e -> {
+                                assertThat(e.getOffset()).isEqualTo(baseOffset);
+                                assertThat(e.getNextOffset()).isEmpty();
+                            })
+                    .hasMessageContaining("unknown");
+        } finally {
+            fetch.drain();
+        }
+    }
+
+    @Test
+    void testDecodeFailureAfterPartOfTheBatchWasReturned() throws Exception {
+        byte magic = LOG_MAGIC_VALUE_V0;
+        // A changelog batch at offsets 0-9 whose second change type is invalid, with a valid CRC.
+        MemoryLogRecords records =
+                createRecordsWithoutBaseLogOffset(
+                        rowType,
+                        DEFAULT_SCHEMA_ID,
+                        0L,
+                        1000L,
+                        magic,
+                        DATA2,
+                        LogFormat.ARROW,
+                        false);
+        byte[] bytes = toBytes(records);
+        bytes[recordBatchHeaderSize(magic) + 1] = Byte.MAX_VALUE;
+        updateCrc(bytes, magic);
+
+        TableBucket tb = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.records(
+                                tb, MemoryLogRecords.pointToBytes(bytes), 10L, -1L, -1L),
+                        0L);
+        try {
+            List<ScanRecord> returned = fetch.fetchRecords(100);
+            assertThat(returned).hasSize(1);
+            assertThat(returned.get(0).logOffset()).isEqualTo(0L);
+            // The failure is attributed to the whole batch: skipping it gives up offsets 1-9.
+            assertThatThrownBy(() -> fetch.fetchRecords(100))
+                    .isInstanceOfSatisfying(
+                            LogDecodeException.class,
+                            e -> {
+                                assertThat(e.getOffset()).isEqualTo(0L);
+                                assertThat(e.getNextOffset()).hasValue(10L);
+                            });
+        } finally {
+            fetch.drain();
+        }
     }
 
     @Test
@@ -450,6 +598,15 @@ public class DefaultCompletedFetchTest {
             FetchLogResultForBucket resultForBucket,
             long offset,
             Projection projection) {
+        return makeCompletedFetch(tableBucket, resultForBucket, offset, projection, true);
+    }
+
+    private DefaultCompletedFetch makeCompletedFetch(
+            TableBucket tableBucket,
+            FetchLogResultForBucket resultForBucket,
+            long offset,
+            Projection projection,
+            boolean checkCrcs) {
         return new DefaultCompletedFetch(
                 tableBucket,
                 DATA2_TABLE_PATH,
@@ -462,9 +619,207 @@ public class DefaultCompletedFetchTest {
                         new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()),
                         new ChunkedAllocationManager.ChunkedFactory()),
                 logScannerStatus,
-                true,
+                checkCrcs,
                 offset,
                 null);
+    }
+
+    private static Collection<Arguments> decodeFailures() {
+        Projection allColumns = Projection.of(new int[] {0, 1, 2});
+        OptionalLong skipTo20 = OptionalLong.of(20L);
+        OptionalLong unknown = OptionalLong.empty();
+        Class<CorruptMessageException> corrupt = CorruptMessageException.class;
+        List<Arguments> params = new ArrayList<>();
+        for (byte magic : MAGICS) {
+            for (boolean arrowBatches : new boolean[] {false, true}) {
+                // The header is trusted unverified when the CRC check is disabled or the batch is
+                // projected, and only after the CRC check otherwise.
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.RECORDS,
+                                false,
+                                null,
+                                arrowBatches,
+                                skipTo20,
+                                null));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.RECORDS,
+                                true,
+                                allColumns,
+                                arrowBatches,
+                                skipTo20,
+                                null));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.RECORDS,
+                                true,
+                                null,
+                                arrowBatches,
+                                unknown,
+                                corrupt));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.RECORDS_WITH_VALID_CRC,
+                                true,
+                                null,
+                                arrowBatches,
+                                skipTo20,
+                                null));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.OFFSET_DELTA,
+                                false,
+                                null,
+                                arrowBatches,
+                                unknown,
+                                null));
+                params.add(
+                        Arguments.arguments(
+                                magic, Corruption.MAGIC, false, null, arrowBatches, unknown, null));
+                // An incomplete header is rejected however the CRC check is configured.
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.INCOMPLETE_HEADER,
+                                false,
+                                null,
+                                arrowBatches,
+                                unknown,
+                                corrupt));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.INCOMPLETE_HEADER,
+                                true,
+                                allColumns,
+                                arrowBatches,
+                                unknown,
+                                corrupt));
+                params.add(
+                        Arguments.arguments(
+                                magic,
+                                Corruption.INCOMPLETE_HEADER,
+                                true,
+                                null,
+                                arrowBatches,
+                                unknown,
+                                corrupt));
+            }
+        }
+        return params;
+    }
+
+    private static Collection<Arguments> untrustedBatchEnds() {
+        List<Arguments> params = new ArrayList<>();
+        for (byte magic : MAGICS) {
+            for (boolean arrowBatches : new boolean[] {false, true}) {
+                // A negative base offset: resuming at the end -2 would restart from the earliest
+                // offset instead of skipping the batch.
+                params.add(Arguments.arguments(magic, -3L, 0, arrowBatches));
+                params.add(Arguments.arguments(magic, Long.MIN_VALUE, 2, arrowBatches));
+                // The end underflows and wraps to Long.MAX_VALUE.
+                params.add(Arguments.arguments(magic, Long.MIN_VALUE, -2, arrowBatches));
+                // The end overflows and wraps to Long.MIN_VALUE.
+                params.add(Arguments.arguments(magic, Long.MAX_VALUE, 0, arrowBatches));
+            }
+        }
+        return params;
+    }
+
+    /** How {@link #corruptBetweenHealthyBatches} corrupts the batch at offset 10. */
+    private enum Corruption {
+        /** Garbage records behind an intact header, with a stale CRC. */
+        RECORDS,
+        /** Garbage records behind an intact header, with a matching CRC. */
+        RECORDS_WITH_VALID_CRC,
+        /** Garbage records behind an offset delta of -1, putting the batch end at its start. */
+        OFFSET_DELTA,
+        /** An unsupported magic. */
+        MAGIC,
+        /** One byte short of its header, whose last byte would be read from the next batch. */
+        INCOMPLETE_HEADER
+    }
+
+    /**
+     * Returns Arrow batches at offsets 0-9 and 20-29 with a corrupt batch at offset 10 between
+     * them.
+     */
+    private MemoryLogRecords corruptBetweenHealthyBatches(Corruption corruption, byte magic)
+            throws Exception {
+        byte[] corrupt;
+        if (corruption == Corruption.INCOMPLETE_HEADER) {
+            corrupt = new byte[recordBatchHeaderSize(magic) - 1];
+            MemorySegment segment = MemorySegment.wrap(corrupt);
+            segment.putLong(BASE_OFFSET_OFFSET, 10L);
+            segment.putInt(LENGTH_OFFSET, corrupt.length - LOG_OVERHEAD);
+            corrupt[MAGIC_OFFSET] = magic;
+        } else {
+            corrupt = arrowBatch(10L, magic);
+            if (corruption == Corruption.MAGIC) {
+                corrupt[MAGIC_OFFSET] = Byte.MAX_VALUE;
+            } else {
+                Arrays.fill(corrupt, recordBatchHeaderSize(magic), corrupt.length, (byte) 0xff);
+            }
+            if (corruption == Corruption.OFFSET_DELTA) {
+                // An all-ones int is -1 in either byte order.
+                int deltaStart = lastOffsetDeltaOffset(magic);
+                Arrays.fill(corrupt, deltaStart, deltaStart + Integer.BYTES, (byte) 0xff);
+            }
+            if (corruption == Corruption.RECORDS_WITH_VALID_CRC) {
+                updateCrc(corrupt, magic);
+            }
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        for (byte[] batch : new byte[][] {arrowBatch(0L, magic), corrupt, arrowBatch(20L, magic)}) {
+            out.write(batch, 0, batch.length);
+        }
+        return MemoryLogRecords.pointToBytes(out.toByteArray());
+    }
+
+    /** Returns an append-only Arrow batch, as the Arrow batch path only loads those. */
+    private byte[] arrowBatch(long baseOffset, byte magic) throws Exception {
+        return toBytes(
+                createRecordsWithoutBaseLogOffset(
+                        rowType,
+                        DEFAULT_SCHEMA_ID,
+                        baseOffset,
+                        1000L,
+                        magic,
+                        DATA2,
+                        LogFormat.ARROW,
+                        true));
+    }
+
+    /** Recomputes the CRC of a single batch so it passes its CRC check. */
+    private static void updateCrc(byte[] batch, byte magic) {
+        int crcStart = schemaIdOffset(magic);
+        long crc = Crc32C.compute(batch, crcStart, batch.length - crcStart);
+        MemorySegment.wrap(batch).putInt(crcOffset(magic), (int) crc);
+    }
+
+    private static byte[] toBytes(MemoryLogRecords records) {
+        byte[] bytes = new byte[records.sizeInBytes()];
+        records.getMemorySegment().get(records.getPosition(), bytes, 0, bytes.length);
+        return bytes;
+    }
+
+    /** Polls the fetch through the row or Arrow path and returns the number of rows read. */
+    private static int poll(DefaultCompletedFetch fetch, boolean arrowBatches) {
+        if (!arrowBatches) {
+            return fetch.fetchRecords(100).size();
+        }
+        int rows = 0;
+        for (ArrowBatchData batch : fetch.fetchArrowBatches(100)) {
+            rows += batch.getRecordCount();
+            batch.close();
+        }
+        return rows;
     }
 
     private static Collection<Arguments> typeAndMagic() {

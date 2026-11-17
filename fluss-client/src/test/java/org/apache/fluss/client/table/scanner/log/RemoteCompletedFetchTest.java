@@ -19,7 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptMessageException;
-import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.exception.LogDecodeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -175,7 +175,13 @@ class RemoteCompletedFetchTest {
             try {
                 if (checkCrc) {
                     assertThatThrownBy(() -> fetch.fetchRecords(10))
-                            .isInstanceOf(FetchException.class)
+                            .isInstanceOfSatisfying(
+                                    LogDecodeException.class,
+                                    e -> {
+                                        assertThat(e.getTableBucket()).isEqualTo(tableBucket);
+                                        assertThat(e.getOffset()).isZero();
+                                        assertThat(e.getNextOffset()).isEmpty();
+                                    })
                             .hasRootCauseInstanceOf(CorruptMessageException.class);
                 } else {
                     List<ScanRecord> records = fetch.fetchRecords(10);

@@ -274,6 +274,46 @@ while (true) {
 }
 ```
 
+#### Undecodable Log Batches
+
+If the scanner cannot decode a log batch of a bucket, `poll` throws a `LogDecodeException`. The
+scanner does not move past the batch, so every poll throws the same exception until the bucket is
+subscribed at another offset or unsubscribed. A scan decodes whole batches, so if the failed batch
+holds more than one record, subscribing at `getOffset() + 1` lands in it again. To skip the batch,
+subscribe at `getNextOffset()`.
+
+The exception may be thrown after earlier polls already returned some records of the failed batch,
+for example when a record in the middle of the batch cannot be decoded. Skipping the batch gives up
+its remaining records, which are never returned.
+
+`getNextOffset()` is empty when the end of the batch cannot be trusted: the batch could not be
+read, or its header is incomplete, failed the CRC check, has an unsupported magic, has a negative
+base offset, or puts the batch end at or before its start or past `Long.MAX_VALUE`. When the CRC
+check is skipped, because `client.scanner.log.check-crc` is disabled or the server projected the
+batch (Arrow tables scanned with a column projection), a complete header is trusted without
+verification, as it is for decoding. Batches read from remote storage are projected by the client
+and are still CRC-checked. Without the next offset, the client cannot tell where the batch ends, so
+where to resume is up to the application.
+
+```java
+try {
+    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+    // Process the records
+} catch (LogDecodeException e) {
+    if (!e.getNextOffset().isPresent()) {
+        throw e;
+    }
+    TableBucket bucket = e.getTableBucket();
+    long nextOffset = e.getNextOffset().getAsLong();
+    System.out.println("Skipping undecodable batch at offset " + e.getOffset() + " of " + bucket);
+    if (bucket.getPartitionId() != null) {
+        logScanner.subscribe(bucket.getPartitionId(), bucket.getBucket(), nextOffset);
+    } else {
+        logScanner.subscribe(bucket.getBucket(), nextOffset);
+    }
+}
+```
+
 #### Filter Pushdown
 
 Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against
