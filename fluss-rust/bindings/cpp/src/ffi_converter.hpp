@@ -248,6 +248,7 @@ inline ffi::FfiConfig to_ffi_config(const Configuration& config) {
     ffi_config.security_sasl_username = rust::String(config.security_sasl_username);
     ffi_config.security_sasl_password = rust::String(config.security_sasl_password);
     ffi_config.lookup_queue_size = config.lookup_queue_size;
+    ffi_config.lookup_max_pending_operations = config.lookup_max_pending_operations;
     ffi_config.lookup_max_batch_size = config.lookup_max_batch_size;
     ffi_config.lookup_batch_timeout_ms = config.lookup_batch_timeout_ms;
     ffi_config.lookup_max_inflight_requests = config.lookup_max_inflight_requests;
