@@ -859,7 +859,6 @@ class ZooKeeperClientTest {
         expectedSnapshots.put(bucketWithoutPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithoutSnapshotsPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithEmptySnapshotsPath.getBucket(), Optional.empty());
-        expectedSnapshots.put(unassignedBucketWithoutSnapshotsPath.getBucket(), Optional.empty());
 
         assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
                 .isEqualTo(expectedSnapshots);

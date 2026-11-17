@@ -83,7 +83,6 @@ import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -133,7 +132,6 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Offl
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
-import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -1331,20 +1329,13 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         responseCompletableFuture1.get();
         verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
 
-        // A preceding KV context may publish a higher-offset reference without replacing recovery.
+        // Successful ordinary commits notify their own flushed offset.
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         CompletedSnapshot selected = mockCompletedSnapshot(tempDir, tableBucket, 0);
         eventProcessor
                 .completedSnapshotStoreManager()
                 .getOrCreateCompletedSnapshotStore(t1, tableBucket)
                 .add(selected, null, bucketLeaderEpoch);
-        registerRecoverySnapshot(
-                zookeeperClient,
-                tableBucket,
-                new BucketSnapshot(
-                        selected.getSnapshotID(),
-                        selected.getLogOffset(),
-                        selected.getMetadataFilePath().toString()));
         CompletedSnapshot completedSnapshot =
                 new CompletedSnapshot(
                         tableBucket,
@@ -1375,7 +1366,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                 testCoordinatorChannelManager.getTabletServerGateway(server).get();
                 NotifyKvSnapshotOffsetRequest request =
                         (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
-                assertThat(request.getMinRetainOffset()).isZero();
+                assertThat(request.getMinRetainOffset())
+                        .isEqualTo(completedSnapshot.getLogOffset());
             }
         }
     }

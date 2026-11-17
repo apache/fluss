@@ -1555,19 +1555,8 @@ public class ZooKeeperClient implements AutoCloseable {
             long tableId, @Nullable Long partitionId, TableAssignment tableAssignment)
             throws Exception {
         Map<Integer, Optional<BucketSnapshot>> snapshots = new HashMap<>();
-        // first, put as empty for all buckets
-        for (Integer bucket : tableAssignment.getBuckets()) {
-            snapshots.put(bucket, Optional.empty());
-        }
-
-        // get the bucket ids
-        String bucketIdsPath =
-                partitionId == null
-                        ? BucketIdsZNode.pathOfTable(tableId)
-                        : BucketIdsZNode.pathOfPartition(partitionId);
         Map<String, TableBucket> snapshotPathToTableBucket = new HashMap<>();
-        for (String bucketIdStr : getChildren(bucketIdsPath)) {
-            int bucketId = Integer.parseInt(bucketIdStr);
+        for (Integer bucketId : tableAssignment.getBuckets()) {
             snapshots.put(bucketId, Optional.empty());
             TableBucket bucket = new TableBucket(tableId, partitionId, bucketId);
             snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(bucket), bucket);
