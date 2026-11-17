@@ -60,7 +60,6 @@ struct PendingLookup;
 struct PendingPrefixLookup;
 struct LookupCompletion;
 struct PrefixLookupCompletion;
-struct LookupCompletionPermit;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -574,7 +573,7 @@ struct Result {
 
     /// Returns true if retrying the request may succeed. Does not guarantee that a failed
     /// write had no effect or that application resubmission is duplicate-safe.
-    /// Client-side errors always return false.
+    /// Client-side errors return false, except QUEUE_FULL.
     bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
@@ -1707,9 +1706,8 @@ struct Configuration {
     // Capacity of the send queue; new lookups wait when it is full.
     // Each bucket also holds up to this many lookups while waiting for a leader.
     // Additional lookups for that bucket fail immediately with a buffer exhaustion error
-    // Maximum number of pending lookup operations, including async polling completions
     size_t lookup_queue_size{25600};
-    // Maximum number of pending async polling operations per lookuper
+    // Maximum number of async lookups per lookuper not yet returned by Poll
     size_t lookup_max_pending_operations{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
@@ -2199,10 +2197,6 @@ struct LookupCompletion {
     uint64_t request_id{0};
     Result result;
     LookupResult lookup;
-
-   private:
-    friend class Lookuper;
-    std::shared_ptr<ffi::LookupCompletionPermit> permit_;
 };
 
 struct PrefixLookupCompletion {
@@ -2216,10 +2210,6 @@ struct PrefixLookupCompletion {
     uint64_t request_id{0};
     Result result;
     PrefixLookupResult lookup;
-
-   private:
-    friend class PrefixLookuper;
-    std::shared_ptr<ffi::LookupCompletionPermit> permit_;
 };
 
 class Lookuper {

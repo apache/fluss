@@ -583,7 +583,10 @@ while (next < keys.size() || submitted != 0) {
             ++next;
         }
     }
-    if (submitted != 0 && !lookuper.Poll(1000, completed, 128).Ok()) {
+    if (submitted == 0) {
+        continue;
+    }
+    if (!lookuper.Poll(1000, completed, 128).Ok()) {
         // Handle a polling error.
     }
     submitted -= completed.size();
@@ -599,7 +602,7 @@ The number of outstanding asynchronous requests per lookuper is controlled by
 `Configuration::lookup_max_pending_operations`; the core lookup batching queue
 is configured independently by `lookup_queue_size`. If async capacity is reached,
 `LookupAsync` returns `QUEUE_FULL`; poll completed requests before retrying the
-submission. Each completion retains its capacity permit until it is consumed.
+submission. A finished lookup counts toward this limit until `Poll` returns it.
 `Poll` replaces `out`, accepts a caller-selected batch limit, and includes lock
 acquisition in its timeout.
 
@@ -608,10 +611,12 @@ already completed lookups. A timeout is not an error and does not cancel
 unfinished lookups. Each `LookupCompletion` contains the caller-supplied
 `request_id`, a per-lookup `result`, and the `lookup` result. The completion
 queue is owned by the lookuper and is safe to use from multiple threads.
-When `Poll(-1, out)` is called with no outstanding asynchronous lookup, it
-returns immediately with an empty result. Destroying a lookuper aborts its
-in-flight asynchronous tasks. Key conversion and validation happen at
-submission time, before capacity is reserved.
+`Poll(-1, out)` returns an empty result once no asynchronous lookup is
+outstanding, also when another thread polled the last one. Destroying a
+lookuper aborts its in-flight asynchronous tasks. A lookup that never
+completes, for example on a dropped table, holds its slot until the lookuper
+is destroyed. Key conversion and validation happen at submission time, before
+capacity is reserved.
 
 ## `PendingLookup`
 
@@ -632,7 +637,7 @@ Performs prefix (bucket-key) lookups, returning all rows whose primary key start
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 | `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
 | `PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const -> Result` | Start a prefix lookup with an application request ID |
-| `Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out) const -> Result` | Collect completed prefix lookups in completion order |
+| `Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed prefix lookups in completion order |
 
 `PrefixLookupAsync` and `PrefixLookuper::Poll` have the same timeout and
 completion-order semantics as the point-lookup polling API. Each
