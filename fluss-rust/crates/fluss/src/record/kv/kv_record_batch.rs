@@ -149,6 +149,14 @@ impl KvRecordBatch {
 
     /// Compute the checksum of this batch.
     pub fn compute_checksum(&self) -> io::Result<u32> {
+        let size = self.checked_size()?;
+        Ok(crc32c::crc32c(
+            &self.data[self.position + SCHEMA_ID_OFFSET..self.position + size],
+        ))
+    }
+
+    /// Returns the batch size, failing if it is shorter than the header or runs past the data.
+    fn checked_size(&self) -> io::Result<usize> {
         let size = self.size_in_bytes()?;
         if size < RECORD_BATCH_HEADER_SIZE {
             return Err(io::Error::new(
@@ -156,18 +164,13 @@ impl KvRecordBatch {
                 format!("Batch size {size} is less than header size {RECORD_BATCH_HEADER_SIZE}"),
             ));
         }
-
-        let start = self.position.saturating_add(SCHEMA_ID_OFFSET);
-        let end = self.position.saturating_add(size);
-
-        if end > self.data.len() || start >= end {
+        if self.position.saturating_add(size) > self.data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "Not enough bytes to compute checksum",
+                format!("Batch size {size} exceeds the available bytes"),
             ));
         }
-
-        Ok(crc32c::crc32c(&self.data[start..end]))
+        Ok(size)
     }
 
     /// Get the schema ID.
@@ -256,25 +259,12 @@ impl KvRecordBatch {
         ]))
     }
 
-    /// Create an iterable collection of records in this batch.
-    ///
-    /// This validates the batch checksum before returning the records.
-    /// For trusted data paths, use `records_unchecked()` to skip validation.
+    /// Create an iterable collection of records in this batch. Checks the batch size but not
+    /// the CRC, call [`Self::is_valid`] first.
     ///
     /// Mirrors: KvRecordBatch.records(ReadContext)
     pub fn records(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
-        if !self.is_valid() {
-            return Err(crate::error::Error::IoUnexpectedError {
-                message: "Invalid batch checksum".to_string(),
-                source: io::Error::new(io::ErrorKind::InvalidData, "Invalid batch checksum"),
-            });
-        }
-        self.records_unchecked(read_context)
-    }
-
-    /// Create an iterable collection of records in this batch without validating the checksum.
-    pub fn records_unchecked(&self, read_context: &dyn ReadContext) -> Result<KvRecords> {
-        let size = self.size_in_bytes()?;
+        let size = self.checked_size()?;
         let count = self.record_count()?;
         let schema_id = self.schema_id()?;
 
@@ -452,5 +442,48 @@ mod tests {
         assert!(record2.is_deletion());
 
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_records_does_not_check_crc() {
+        let mut builder = KvRecordBatchBuilder::new(42, 4096, KvFormat::COMPACTED);
+        builder.append_row(b"key", None).unwrap();
+        let mut bytes = builder.build().unwrap().to_vec();
+        bytes[CRC_OFFSET] ^= 1;
+
+        let batch = KvRecordBatch::new(Bytes::from(bytes), 0);
+        assert!(!batch.is_valid());
+        let read_context = TestReadContext::compacted(vec![DataTypes::bytes()]);
+        let mut records = batch.records(&read_context).unwrap().into_iter();
+        assert_eq!(records.next().unwrap().unwrap().key().as_ref(), b"key");
+    }
+
+    #[test]
+    fn test_records_checks_batch_size() {
+        let mut builder = KvRecordBatchBuilder::new(42, 4096, KvFormat::COMPACTED);
+        builder.append_row(b"key", None).unwrap();
+        let bytes = builder.build().unwrap().to_vec();
+        let read_context = TestReadContext::compacted(vec![DataTypes::bytes()]);
+        let with_length = |length: usize| {
+            let mut bytes = bytes.clone();
+            bytes[..LENGTH_LENGTH].copy_from_slice(&(length as i32).to_le_bytes());
+            KvRecordBatch::new(Bytes::from(bytes), 0)
+        };
+
+        for length in [
+            0,
+            RECORD_BATCH_HEADER_SIZE - KV_OVERHEAD - 1,
+            bytes.len() - KV_OVERHEAD + 1,
+        ] {
+            let err = with_length(length).records(&read_context).err();
+            assert!(err.unwrap().to_string().contains("Batch size"), "{length}");
+        }
+
+        // A batch followed by other bytes is fine.
+        let mut padded = bytes.clone();
+        padded.extend_from_slice(&[0; 8]);
+        let batch = KvRecordBatch::new(Bytes::from(padded), 0);
+        let mut records = batch.records(&read_context).unwrap().into_iter();
+        assert_eq!(records.next().unwrap().unwrap().key().as_ref(), b"key");
     }
 }

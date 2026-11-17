@@ -33,8 +33,8 @@ use crate::proto::{
 };
 use crate::record::{
     APPEND_ONLY_FLAG_MASK, ATTRIBUTES_OFFSET, ArrowBatchConfig, CRC_LENGTH, CRC_OFFSET, ChangeType,
-    LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V1, LOG_OVERHEAD, MAGIC_OFFSET,
-    MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, SCHEMA_ID_OFFSET,
+    LEADER_EPOCH_LENGTH, LENGTH_LENGTH, LENGTH_OFFSET, LOG_MAGIC_VALUE_V1, LOG_MAGIC_VALUE_V2,
+    LOG_OVERHEAD, MAGIC_OFFSET, MemoryLogRecordsArrowBuilder, RECORDS_OFFSET, SCHEMA_ID_OFFSET,
 };
 use crate::row::GenericRow;
 use crc32c::crc32c;
@@ -265,8 +265,7 @@ pub(crate) fn splice_statistics_section(v0_batch: &[u8], statistics: &[u8]) -> V
 
     let new_length = (data.len() - LOG_OVERHEAD) as i32;
     data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_length.to_le_bytes());
-    let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
-    data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+    update_crc(&mut data);
     data
 }
 
@@ -284,10 +283,20 @@ pub(crate) fn splice_change_type_vector(
 
     let new_length = (data.len() - LOG_OVERHEAD) as i32;
     data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&new_length.to_le_bytes());
-
-    let crc = crc32c(&data[SCHEMA_ID_OFFSET..]);
-    data[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+    update_crc(&mut data);
     data
+}
+
+/// Recomputes the CRC of a batch whose bytes a test changed.
+pub(crate) fn update_crc(batch: &mut [u8]) {
+    // V2 adds the leader epoch before the CRC.
+    let shift = if batch[MAGIC_OFFSET] >= LOG_MAGIC_VALUE_V2 {
+        LEADER_EPOCH_LENGTH
+    } else {
+        0
+    };
+    let crc = crc32c(&batch[SCHEMA_ID_OFFSET + shift..]);
+    batch[CRC_OFFSET + shift..CRC_OFFSET + shift + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
 }
 
 pub(crate) fn pb_table_metadata(

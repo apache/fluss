@@ -52,6 +52,8 @@ pub(crate) struct ReadContextResolver {
     /// older batches decode with their write-time schema and then align to
     /// this target by stable Fluss column ID.
     fixed_target: Option<FixedSchemaTarget>,
+    /// Whether fetched batches are checked against their CRC (`scanner_log_check_crc`).
+    check_crc: bool,
 }
 
 /// A pair of ReadContexts for local and remote reads.
@@ -88,7 +90,19 @@ impl ReadContextResolver {
             projected_fields,
             schema_getter: None,
             fixed_target: None,
+            check_crc: true,
         }
+    }
+
+    pub fn with_check_crc(mut self, check_crc: bool) -> Self {
+        self.check_crc = check_crc;
+        self
+    }
+
+    /// Whether a fetched batch is checked against its CRC. The server rewrites a local
+    /// batch fetched with a projection without updating its CRC, so that one is skipped.
+    pub fn checks_crc(&self, is_remote: bool) -> bool {
+        self.check_crc && (is_remote || self.projected_fields.is_none())
     }
 
     pub fn with_schema_getter(mut self, schema_getter: Arc<ClientSchemaGetter>) -> Self {
@@ -281,6 +295,47 @@ mod tests {
             &resolver.resolve(0, false).unwrap(),
             &resolver.resolve(1, false).unwrap()
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn crc_is_not_checked_for_server_projected_batches() -> Result<()> {
+        let schema = Schema::builder().column("id", DataTypes::int()).build()?;
+        let arrow_schema = to_arrow_schema(schema.row_type())?;
+        let row_type = Arc::new(schema.row_type().clone());
+        let resolver = |projected_fields: Option<Vec<usize>>| -> Result<ReadContextResolver> {
+            let context = |is_remote| match &projected_fields {
+                None => Ok(ReadContext::new(
+                    arrow_schema.clone(),
+                    Arc::clone(&row_type),
+                    is_remote,
+                )),
+                Some(fields) => ReadContext::with_projection_pushdown(
+                    arrow_schema.clone(),
+                    Arc::clone(&row_type),
+                    fields.clone(),
+                    is_remote,
+                ),
+            };
+            Ok(ReadContextResolver::new(
+                1,
+                Arc::new(context(false)?),
+                Arc::new(context(true)?),
+                projected_fields,
+            ))
+        };
+
+        let unprojected = resolver(None)?;
+        assert!(unprojected.checks_crc(false));
+        assert!(unprojected.checks_crc(true));
+
+        let projected = resolver(Some(vec![0]))?;
+        assert!(!projected.checks_crc(false));
+        assert!(projected.checks_crc(true));
+
+        let disabled = resolver(None)?.with_check_crc(false);
+        assert!(!disabled.checks_crc(false));
+        assert!(!disabled.checks_crc(true));
         Ok(())
     }
 }
