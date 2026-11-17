@@ -20,6 +20,7 @@ package org.apache.fluss.lake.delta.tiering;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.delta.DeltaConfig;
 import org.apache.fluss.lake.delta.utils.DeltaColumnarBatch;
+import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
 import org.apache.fluss.lake.delta.utils.FlussRowToDeltaValues;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -97,10 +98,7 @@ public class DeltaLakeWriter implements LakeWriter<DeltaWriteResult> {
                 partitionValues(
                         writerInitContext.tableInfo().getPartitionKeys(),
                         writerInitContext.partition());
-        this.partitionLiterals = new HashMap<>();
-        for (Map.Entry<String, String> entry : partitionValues.entrySet()) {
-            partitionLiterals.put(entry.getKey(), Literal.ofString(entry.getValue()));
-        }
+        this.partitionLiterals = DeltaPartitionLiterals.toLiterals(partitionValues, rowType);
         this.batchSize =
                 DeltaConfig.writeBatchSize(
                         options, writerInitContext.tableInfo().getCustomProperties().toMap());

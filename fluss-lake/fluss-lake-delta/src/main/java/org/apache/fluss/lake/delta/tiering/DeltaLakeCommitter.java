@@ -23,10 +23,12 @@ import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.delta.DeltaConfig;
+import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
 import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.type.TypeReference;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.types.RowType;
 
 import io.delta.kernel.DataWriteContext;
 import io.delta.kernel.Operation;
@@ -79,6 +81,7 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
 
     private final Engine engine;
     private final String tablePath;
+    private final RowType rowType;
     private final StructType expectedSchema;
     private final List<String> expectedPartitionColumns;
 
@@ -86,7 +89,8 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
         this.engine = DeltaConfig.createEngine(options);
         this.tablePath = DeltaConfig.tablePath(options, committerInitContext.tablePath());
         TableInfo tableInfo = committerInitContext.tableInfo();
-        this.expectedSchema = FlussDataTypeToDeltaDataType.toDeltaSchema(tableInfo.getRowType());
+        this.rowType = tableInfo.getRowType();
+        this.expectedSchema = FlussDataTypeToDeltaDataType.toDeltaSchema(rowType);
         this.expectedPartitionColumns = tableInfo.getPartitionKeys();
     }
 
@@ -123,10 +127,8 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
         List<Row> actions = new ArrayList<>();
         for (Map.Entry<Map<String, String>, List<DataFileStatus>> entry :
                 filesByPartition.entrySet()) {
-            Map<String, Literal> partitionLiterals = new HashMap<>();
-            for (Map.Entry<String, String> value : entry.getKey().entrySet()) {
-                partitionLiterals.put(value.getKey(), Literal.ofString(value.getValue()));
-            }
+            Map<String, Literal> partitionLiterals =
+                    DeltaPartitionLiterals.toLiterals(entry.getKey(), rowType);
             DataWriteContext writeContext =
                     Transaction.getWriteContext(engine, transactionState, partitionLiterals);
             try (CloseableIterator<Row> addActions =

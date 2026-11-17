@@ -47,11 +47,14 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.PartitionUtils;
 
 import io.delta.kernel.Operation;
 import io.delta.kernel.Snapshot;
@@ -62,7 +65,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
@@ -81,6 +86,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -295,6 +301,68 @@ class DeltaTieringTest {
                         "is partitioned by [c], but the Fluss table is partitioned by []");
     }
 
+    @ParameterizedTest
+    @MethodSource("partitionKeyTypes")
+    void testTieringTypedPartitionKey(DataType type, Object value, String expected)
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of("fluss", "partition_" + type.getTypeRoot().name().toLowerCase());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("p", type)
+                                        .build())
+                        .partitionedBy("p")
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = createTable(tablePath, descriptor);
+        // the writer gets the partition as a Fluss partition name
+        String partition = PartitionUtils.convertValueOfType(value, type.getTypeRoot());
+
+        List<DeltaWriteResult> writeResults = new ArrayList<>();
+        try (LakeWriter<DeltaWriteResult> writer =
+                createLakeWriter(tablePath, 0, partition, tableInfo)) {
+            for (int i = 0; i < 2; i++) {
+                writer.write(
+                        new GenericRecord(i, i, ChangeType.APPEND_ONLY, GenericRow.of(i, value)));
+            }
+            writeResults.add(writer.complete());
+        }
+        assertThat(commit(tablePath, tableInfo, writeResults, "offsets-1")).isEqualTo(1L);
+
+        // Kernel drops the partition column from the data files and reads it back from the
+        // partition value of the add action
+        assertThat(DeltaTestUtils.readRows(engine, DeltaConfig.tablePath(configuration, tablePath)))
+                .containsExactlyInAnyOrder("+I[0, " + expected + "]", "+I[1, " + expected + "]");
+    }
+
+    private static Stream<Arguments> partitionKeyTypes() {
+        return Stream.of(
+                Arguments.of(DataTypes.CHAR(3), BinaryString.fromString("abc"), "abc"),
+                Arguments.of(DataTypes.STRING(), BinaryString.fromString("a b/c"), "a b/c"),
+                Arguments.of(DataTypes.BOOLEAN(), true, "true"),
+                Arguments.of(DataTypes.TINYINT(), (byte) 7, "7"),
+                Arguments.of(DataTypes.SMALLINT(), (short) -3, "-3"),
+                Arguments.of(DataTypes.INT(), 42, "42"),
+                Arguments.of(DataTypes.BIGINT(), 1234567890123L, "1234567890123"),
+                Arguments.of(DataTypes.FLOAT(), 1.5f, "1.5"),
+                Arguments.of(DataTypes.DOUBLE(), -2.25d, "-2.25"),
+                // days since epoch, 2024-01-15
+                Arguments.of(DataTypes.DATE(), 19737, "19737"),
+                // microseconds since epoch
+                Arguments.of(
+                        DataTypes.TIMESTAMP(6),
+                        TimestampNtz.fromMicros(1700000000123456L),
+                        "1700000000123456"),
+                Arguments.of(
+                        DataTypes.TIMESTAMP_LTZ(6),
+                        TimestampLtz.fromEpochMicros(1700000000123456L),
+                        "1700000000123456"));
+    }
+
     @Test
     void testWriteBatchSizeSplitsFiles() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "small_batches");
@@ -408,12 +476,12 @@ class DeltaTieringTest {
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("primary key");
 
-        TableDescriptor intPartition =
+        TableDescriptor bytesPartition =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
                                         .column("a", DataTypes.INT())
-                                        .column("p", DataTypes.INT())
+                                        .column("p", DataTypes.BYTES())
                                         .build())
                         .partitionedBy("p")
                         .distributedBy(1)
@@ -421,11 +489,11 @@ class DeltaTieringTest {
         assertThatThrownBy(
                         () ->
                                 catalog.createTable(
-                                        TablePath.of("fluss", "int_partition"),
-                                        intPartition,
+                                        TablePath.of("fluss", "bytes_partition"),
+                                        bytesPartition,
                                         new TestingLakeCatalogContext()))
                 .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining("STRING partition keys");
+                .hasMessageContaining("doesn't support partition key 'p' of type BYTES");
 
         TableDescriptor timeColumn =
                 TableDescriptor.builder()
@@ -744,7 +812,11 @@ class DeltaTieringTest {
     }
 
     private TableInfo createTable(TablePath tablePath, boolean isPartitioned) throws Exception {
-        TableDescriptor descriptor = logTableDescriptor(isPartitioned);
+        return createTable(tablePath, logTableDescriptor(isPartitioned));
+    }
+
+    private TableInfo createTable(TablePath tablePath, TableDescriptor descriptor)
+            throws Exception {
         new DeltaLakeCatalog(configuration)
                 .createTable(tablePath, descriptor, new TestingLakeCatalogContext());
         return TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);

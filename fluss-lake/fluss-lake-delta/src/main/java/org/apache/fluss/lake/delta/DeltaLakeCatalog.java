@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
 import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.LakeTableUtil;
@@ -109,11 +110,10 @@ public class DeltaLakeCatalog implements LakeCatalog {
         for (String partitionKey : partitionKeys) {
             DataTypeRoot root =
                     rowType.getTypeAt(rowType.getFieldIndex(partitionKey)).getTypeRoot();
-            if (root != DataTypeRoot.STRING) {
+            if (!DeltaPartitionLiterals.isSupported(root)) {
                 throw new InvalidTableException(
                         String.format(
-                                "Currently, Delta Lake only supports STRING partition keys, "
-                                        + "but partition key '%s' is %s.",
+                                "Delta Lake doesn't support partition key '%s' of type %s.",
                                 partitionKey, root));
             }
         }
