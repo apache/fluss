@@ -24,7 +24,6 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
-import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.delta.DeltaConfig;
@@ -34,9 +33,7 @@ import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
-import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -859,60 +856,13 @@ class DeltaTieringTest {
     private LakeCommitter<DeltaWriteResult, DeltaCommittable> createLakeCommitter(
             TablePath tablePath, TableInfo tableInfo) throws IOException {
         return tieringFactory.createLakeCommitter(
-                new CommitterInitContext() {
-                    @Override
-                    public TablePath tablePath() {
-                        return tablePath;
-                    }
-
-                    @Override
-                    public TableInfo tableInfo() {
-                        return tableInfo;
-                    }
-
-                    @Override
-                    public Configuration lakeTieringConfig() {
-                        return new Configuration();
-                    }
-
-                    @Override
-                    public Configuration flussClientConfig() {
-                        return new Configuration();
-                    }
-                });
+                DeltaTestUtils.committerContext(tablePath, tableInfo));
     }
 
     private LakeWriter<DeltaWriteResult> createLakeWriter(
             TablePath tablePath, int bucket, @Nullable String partition, TableInfo tableInfo)
             throws IOException {
         return tieringFactory.createLakeWriter(
-                new WriterInitContext() {
-                    @Override
-                    public TablePath tablePath() {
-                        return tablePath;
-                    }
-
-                    @Override
-                    public TableBucket tableBucket() {
-                        // don't care about tableId & partitionId
-                        return new TableBucket(0, partition == null ? null : 0L, bucket);
-                    }
-
-                    @Nullable
-                    @Override
-                    public String partition() {
-                        return partition;
-                    }
-
-                    @Override
-                    public TableInfo tableInfo() {
-                        return tableInfo;
-                    }
-
-                    @Override
-                    public int bucketCount() {
-                        return tableInfo.getNumBuckets();
-                    }
-                });
+                DeltaTestUtils.writerContext(tablePath, bucket, partition, tableInfo));
     }
 }

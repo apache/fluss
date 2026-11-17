@@ -19,6 +19,7 @@ package org.apache.fluss.lake.delta.tiering;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.delta.DeltaConfig;
+import org.apache.fluss.lake.delta.utils.CloseableIterators;
 import org.apache.fluss.lake.delta.utils.DeltaColumnarBatch;
 import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
 import org.apache.fluss.lake.delta.utils.FlussRowToDeltaValues;

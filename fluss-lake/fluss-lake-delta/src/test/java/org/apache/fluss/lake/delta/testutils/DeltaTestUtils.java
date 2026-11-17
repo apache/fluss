@@ -17,6 +17,13 @@
 
 package org.apache.fluss.lake.delta.testutils;
 
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+
 import io.delta.kernel.Scan;
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.TableManager;
@@ -50,6 +57,8 @@ import io.delta.kernel.types.TimestampType;
 import io.delta.kernel.utils.CloseableIterator;
 import io.delta.kernel.utils.FileStatus;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -62,6 +71,64 @@ import java.util.StringJoiner;
 public class DeltaTestUtils {
 
     private DeltaTestUtils() {}
+
+    /** Creates the context of a lake writer for one bucket of the table. */
+    public static WriterInitContext writerContext(
+            TablePath tablePath, int bucket, @Nullable String partition, TableInfo tableInfo) {
+        return new WriterInitContext() {
+            @Override
+            public TablePath tablePath() {
+                return tablePath;
+            }
+
+            @Override
+            public TableBucket tableBucket() {
+                // don't care about tableId & partitionId
+                return new TableBucket(0, partition == null ? null : 0L, bucket);
+            }
+
+            @Nullable
+            @Override
+            public String partition() {
+                return partition;
+            }
+
+            @Override
+            public TableInfo tableInfo() {
+                return tableInfo;
+            }
+
+            @Override
+            public int bucketCount() {
+                return tableInfo.getNumBuckets();
+            }
+        };
+    }
+
+    /** Creates the context of a lake committer for the table. */
+    public static CommitterInitContext committerContext(TablePath tablePath, TableInfo tableInfo) {
+        return new CommitterInitContext() {
+            @Override
+            public TablePath tablePath() {
+                return tablePath;
+            }
+
+            @Override
+            public TableInfo tableInfo() {
+                return tableInfo;
+            }
+
+            @Override
+            public Configuration lakeTieringConfig() {
+                return new Configuration();
+            }
+
+            @Override
+            public Configuration flussClientConfig() {
+                return new Configuration();
+            }
+        };
+    }
 
     /**
      * Reads all rows of the latest snapshot. Each row is rendered as {@code +I[v1, v2, ...]}, with

@@ -15,18 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.delta.tiering;
+package org.apache.fluss.lake.delta.utils;
 
 import io.delta.kernel.utils.CloseableIterator;
 
 import java.util.Iterator;
 
 /** Wraps in-memory iterators as Delta Kernel {@link CloseableIterator}s. */
-final class CloseableIterators {
+public final class CloseableIterators {
 
     private CloseableIterators() {}
 
-    static <T> CloseableIterator<T> of(Iterator<T> iterator) {
+    /** Wraps the iterator, closing it does nothing. */
+    public static <T> CloseableIterator<T> of(Iterator<T> iterator) {
         return new CloseableIterator<T>() {
             @Override
             public boolean hasNext() {
