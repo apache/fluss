@@ -132,8 +132,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # The nightly x86 run saves no caches: only the next nightly would restore them.
       - name: Cache server image
         id: image-cache
+        if: github.event_name != 'schedule'
         uses: actions/cache@v4
         with:
           path: /tmp/fluss-dev.tar
@@ -145,7 +147,7 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: maven
+          cache: ${{ github.event_name != 'schedule' && 'maven' || '' }}
 
       - name: Build server image (fluss:dev) from source
         if: steps.image-cache.outputs.cache-hit != 'true'
@@ -276,6 +278,8 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          save-cache: ${{ github.event_name != 'schedule' }}
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -328,6 +332,8 @@ jobs:
           python-version: "3.12"
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          save-cache: ${{ github.event_name != 'schedule' }}
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
