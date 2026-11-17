@@ -19,10 +19,12 @@ package org.apache.fluss.lake.delta.tiering;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.delta.DeltaConfig;
-import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.type.TypeReference;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -38,6 +40,7 @@ import io.delta.kernel.exceptions.KernelException;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.expressions.Literal;
 import io.delta.kernel.hook.PostCommitHook;
+import io.delta.kernel.types.StructField;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterable;
 import io.delta.kernel.utils.CloseableIterator;
@@ -76,10 +79,15 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
 
     private final Engine engine;
     private final String tablePath;
+    private final StructType expectedSchema;
+    private final List<String> expectedPartitionColumns;
 
-    public DeltaLakeCommitter(Configuration options, TablePath tablePath) {
+    public DeltaLakeCommitter(Configuration options, CommitterInitContext committerInitContext) {
         this.engine = DeltaConfig.createEngine(options);
-        this.tablePath = DeltaConfig.tablePath(options, tablePath);
+        this.tablePath = DeltaConfig.tablePath(options, committerInitContext.tablePath());
+        TableInfo tableInfo = committerInitContext.tableInfo();
+        this.expectedSchema = FlussDataTypeToDeltaDataType.toDeltaSchema(tableInfo.getRowType());
+        this.expectedPartitionColumns = tableInfo.getPartitionKeys();
     }
 
     @Override
@@ -95,6 +103,9 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
     public LakeCommitResult commit(DeltaCommittable committable, CommitContext context)
             throws IOException {
         Snapshot snapshot = TableManager.loadSnapshot(tablePath).build(engine);
+        // A concurrent change of the table fails the Kernel commit below, but a change after the
+        // writers loaded the table would go unnoticed without this check.
+        checkTableMatchesFluss(snapshot);
         Transaction transaction =
                 snapshot.buildUpdateTableTransaction(DeltaConfig.ENGINE_INFO, Operation.WRITE)
                         .build(engine);
@@ -208,6 +219,64 @@ public class DeltaLakeCommitter implements LakeCommitter<DeltaWriteResult, Delta
         }
         return new CommittedLakeSnapshot(
                 version, OBJECT_MAPPER.readValue(properties.get(), PROPERTIES_TYPE));
+    }
+
+    /**
+     * Fails the round if another engine changed the schema or the partition columns of the Delta
+     * table. The data files of the round follow the Fluss table, so adding them would leave files
+     * that don't match the table.
+     */
+    private void checkTableMatchesFluss(Snapshot snapshot) {
+        StructType schema = snapshot.getSchema();
+        if (!schema.equals(expectedSchema)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "The schema of Delta table %s no longer matches the Fluss table: %s. "
+                                    + "Tiering to Delta Lake doesn't support schema changes yet.",
+                            tablePath, schemaDifference(schema, expectedSchema)));
+        }
+        List<String> partitionColumns = snapshot.getPartitionColumnNames();
+        if (!partitionColumns.equals(expectedPartitionColumns)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Delta table %s is partitioned by %s, but the Fluss table is "
+                                    + "partitioned by %s.",
+                            tablePath, partitionColumns, expectedPartitionColumns));
+        }
+    }
+
+    /** Describes how the schema of the Delta table differs from the one of the Fluss table. */
+    static String schemaDifference(StructType delta, StructType fluss) {
+        List<String> differences = new ArrayList<>();
+        for (StructField field : fluss.fields()) {
+            int index = delta.indexOf(field.getName());
+            if (index < 0) {
+                differences.add(String.format("column '%s' is missing", field.getName()));
+            } else if (!delta.at(index).equals(field)) {
+                differences.add(
+                        String.format(
+                                "column '%s' is %s, expected %s",
+                                field.getName(), describe(delta.at(index)), describe(field)));
+            }
+        }
+        for (StructField field : delta.fields()) {
+            if (fluss.indexOf(field.getName()) < 0) {
+                differences.add(String.format("column '%s' is unexpected", field.getName()));
+            }
+        }
+        if (differences.isEmpty()) {
+            differences.add(
+                    String.format(
+                            "columns are ordered %s, expected %s",
+                            delta.fieldNames(), fluss.fieldNames()));
+        }
+        return String.join("; ", differences);
+    }
+
+    private static String describe(StructField field) {
+        String metadata =
+                field.getMetadata().getEntries().isEmpty() ? "" : " " + field.getMetadata();
+        return field.getDataType() + (field.isNullable() ? "" : " NOT NULL") + metadata;
     }
 
     /** Loads the snapshot at the given version, or empty if the log no longer holds it. */

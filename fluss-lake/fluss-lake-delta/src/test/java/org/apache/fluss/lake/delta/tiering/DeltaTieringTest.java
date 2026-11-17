@@ -47,6 +47,10 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.fluss.types.DataTypes;
 
 import io.delta.kernel.Operation;
@@ -65,13 +69,16 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,6 +92,7 @@ class DeltaTieringTest {
 
     private static final int BUCKET_NUM = 3;
     private static final List<String> PARTITIONS = Arrays.asList("p1", "p2");
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private @TempDir File tempWarehouseDir;
     private Configuration configuration;
@@ -238,6 +246,53 @@ class DeltaTieringTest {
                     .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets-2");
             assertThat(committer.getMissingLakeSnapshot(5L)).isNull();
         }
+    }
+
+    @Test
+    void testCommitFailsWhenOtherEngineChangesSchema() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "schema_changed");
+        TableInfo tableInfo = createTable(tablePath, false);
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+        assertThat(commit(tablePath, tableInfo, Collections.emptyList(), "offsets-1"))
+                .isEqualTo(1L);
+
+        // like ALTER TABLE ... ADD COLUMNS (extra STRING) of Spark, and b becomes an integer
+        commitMetadataChange(
+                deltaPath,
+                metadata -> {
+                    ObjectNode schema =
+                            (ObjectNode) readTree(metadata.get("schemaString").asText());
+                    ArrayNode fields = (ArrayNode) schema.get("fields");
+                    ((ObjectNode) fields.get(1)).put("type", "integer");
+                    fields.addObject()
+                            .put("name", "extra")
+                            .put("type", "string")
+                            .put("nullable", true)
+                            .putObject("metadata");
+                    metadata.put("schemaString", schema.toString());
+                });
+
+        assertThatThrownBy(() -> commit(tablePath, tableInfo, Collections.emptyList(), "offsets-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no longer matches the Fluss table")
+                .hasMessageContaining("column 'b' is integer, expected string")
+                .hasMessageContaining("column 'extra' is unexpected");
+    }
+
+    @Test
+    void testCommitFailsWhenOtherEngineChangesPartitionColumns() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "partitioning_changed");
+        TableInfo tableInfo = createTable(tablePath, false);
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+        assertThat(commit(tablePath, tableInfo, Collections.emptyList(), "offsets-1"))
+                .isEqualTo(1L);
+
+        commitMetadataChange(deltaPath, metadata -> metadata.putArray("partitionColumns").add("c"));
+
+        assertThatThrownBy(() -> commit(tablePath, tableInfo, Collections.emptyList(), "offsets-2"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "is partitioned by [c], but the Fluss table is partitioned by []");
     }
 
     @Test
@@ -619,6 +674,41 @@ class DeltaTieringTest {
             if (matcher.matches() && Long.parseLong(matcher.group(1)) < version) {
                 Files.delete(file.toPath());
             }
+        }
+    }
+
+    /**
+     * Commits a new metaData action built from the latest one, the way Spark alters a table. Delta
+     * Kernel can't change the schema of a table without column mapping.
+     */
+    private void commitMetadataChange(String deltaPath, Consumer<ObjectNode> change)
+            throws IOException {
+        long version = TableManager.loadSnapshot(deltaPath).build(engine).getVersion();
+        Path logDir = Paths.get(deltaPath, "_delta_log");
+        ObjectNode metadata = null;
+        for (long v = version; v >= 0 && metadata == null; v--) {
+            for (String line : Files.readAllLines(logDir.resolve(String.format("%020d.json", v)))) {
+                JsonNode action = readTree(line);
+                if (action.has("metaData")) {
+                    metadata = (ObjectNode) action.get("metaData");
+                }
+            }
+        }
+        assertThat(metadata).isNotNull();
+        change.accept(metadata);
+        ObjectNode action = OBJECT_MAPPER.createObjectNode();
+        action.set("metaData", metadata);
+        Files.write(
+                logDir.resolve(String.format("%020d.json", version + 1)),
+                Collections.singletonList(action.toString()),
+                StandardOpenOption.CREATE_NEW);
+    }
+
+    private static JsonNode readTree(String json) {
+        try {
+            return OBJECT_MAPPER.readTree(json);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 

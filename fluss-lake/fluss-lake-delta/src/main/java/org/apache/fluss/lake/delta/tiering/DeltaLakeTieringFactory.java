@@ -51,7 +51,7 @@ public class DeltaLakeTieringFactory
     @Override
     public LakeCommitter<DeltaWriteResult, DeltaCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new DeltaLakeCommitter(config, committerInitContext.tablePath());
+        return new DeltaLakeCommitter(config, committerInitContext);
     }
 
     @Override
