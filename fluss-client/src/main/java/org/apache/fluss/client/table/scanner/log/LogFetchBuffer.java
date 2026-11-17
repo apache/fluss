@@ -76,6 +76,9 @@ public class LogFetchBuffer implements AutoCloseable {
     private @Nullable CompletedFetch nextInLineFetch;
 
     @GuardedBy("lock")
+    private boolean fetchRetryRequested;
+
+    @GuardedBy("lock")
     private @Nullable Throwable throwable;
 
     public LogFetchBuffer() {
@@ -100,39 +103,103 @@ public class LogFetchBuffer implements AutoCloseable {
                 });
     }
 
-    /**
-     * Tries to complete the pending fetches in order, convert them into completed fetches in the
-     * buffer.
-     */
-    void tryComplete(TableBucket tableBucket, Throwable t) {
+    /** Completes exactly the pending download whose callback fired. */
+    void tryComplete(RemotePendingFetch source, Throwable error) {
         inLock(
                 lock,
                 () -> {
-                    if (t != null) {
-                        this.throwable = t;
+                    TableBucket bucket = source.tableBucket();
+                    LinkedList<PendingFetch> queue = pendingFetches.get(bucket);
+                    // The pending fetch was already discarded, or belongs to an earlier queue that
+                    // has been replaced.
+                    if (queue == null || !queue.contains(source)) {
+                        return;
+                    }
+                    source.complete(error);
+                    // Keep the original global failure behavior for an active unbounded Remote
+                    // fetch.
+                    if (error != null && !source.isObsolete() && !source.isBounded()) {
+                        throwable = error;
                         notEmptyCondition.signalAll();
                         return;
                     }
+                    // For bounded fetches, a failed download is converted into a bucket-specific
+                    // CompletedFetch. Obsolete downloads are discarded without delivering failure.
+                    completePending(bucket, queue);
+                });
+    }
 
-                    boolean hasCompleted = false;
-                    LinkedList<PendingFetch> pendings = this.pendingFetches.get(tableBucket);
-                    while (pendings != null && !pendings.isEmpty()) {
-                        PendingFetch pendingFetch = pendings.peek();
-                        if (pendingFetch.isCompleted()) {
-                            CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
-                            completedFetches.add(completedFetch);
-                            pendings.poll();
-                            hasCompleted = true;
-                        } else {
-                            break;
+    private void completePending(TableBucket bucket, LinkedList<PendingFetch> queue) {
+        boolean hasCompleted = false;
+        while (!queue.isEmpty()) {
+            PendingFetch pending = queue.peek();
+            if (pending.isObsolete()) {
+                queue.poll().discard();
+                continue;
+            }
+            if (!pending.isCompleted()) {
+                break;
+            }
+            CompletedFetch completed = pending.toCompletedFetch();
+            queue.poll();
+            completedFetches.add(completed);
+            hasCompleted = true;
+        }
+        if (queue.isEmpty()) {
+            pendingFetches.remove(bucket);
+        }
+        if (hasCompleted) {
+            notEmptyCondition.signalAll();
+        }
+    }
+
+    void discardObsolete() {
+        inLock(
+                lock,
+                () -> {
+                    completedFetches.removeIf(
+                            fetch -> {
+                                if (!fetch.isObsolete()) {
+                                    return false;
+                                }
+
+                                fetch.drain();
+                                return true;
+                            });
+                    if (nextInLineFetch != null && nextInLineFetch.isObsolete()) {
+                        nextInLineFetch.drain();
+                        nextInLineFetch = null;
+                    }
+                    for (TableBucket bucket : new HashSet<>(pendingFetches.keySet())) {
+                        LinkedList<PendingFetch> queue = pendingFetches.get(bucket);
+                        if (queue != null) {
+                            completePending(bucket, queue);
                         }
                     }
-                    if (hasCompleted) {
-                        notEmptyCondition.signalAll();
-                        // clear the bucket entry if there is no pending fetches for the bucket.
-                        if (pendings.isEmpty()) {
-                            this.pendingFetches.remove(tableBucket);
-                        }
+                });
+    }
+
+    /** Discards buffered fetches for a replaced bucket subscription. */
+    void discardBucket(TableBucket bucket) {
+        inLock(
+                lock,
+                () -> {
+                    completedFetches.removeIf(
+                            fetch -> {
+                                if (!fetch.tableBucket.equals(bucket)) {
+                                    return false;
+                                }
+                                fetch.drain();
+                                return true;
+                            });
+
+                    if (nextInLineFetch != null && nextInLineFetch.tableBucket.equals(bucket)) {
+                        nextInLineFetch.drain();
+                        nextInLineFetch = null;
+                    }
+                    LinkedList<PendingFetch> pendings = pendingFetches.remove(bucket);
+                    if (pendings != null) {
+                        pendings.forEach(PendingFetch::discard);
                     }
                 });
     }
@@ -207,6 +274,10 @@ public class LogFetchBuffer implements AutoCloseable {
                         if (wokenup.compareAndSet(true, false)) {
                             throw new WakeupException("The await is wakeup.");
                         }
+                        if (fetchRetryRequested) {
+                            fetchRetryRequested = false;
+                            return true;
+                        }
                         long remainingNanos = deadlineNanos - System.nanoTime();
                         if (remainingNanos <= 0) {
                             // false for timeout
@@ -227,6 +298,15 @@ public class LogFetchBuffer implements AutoCloseable {
     public void wakeup() {
         wokenup.set(true);
         inLock(lock, notEmptyCondition::signalAll);
+    }
+
+    void requestFetchRetry() {
+        inLock(
+                lock,
+                () -> {
+                    fetchRetryRequested = true;
+                    notEmptyCondition.signalAll();
+                });
     }
 
     /**

@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -1823,11 +1824,43 @@ public class ReplicaManager implements ServerReconfigurable {
             Replica replica = null;
             FetchReqInfo fetchReqInfo = entry.getValue();
             long fetchOffset = fetchReqInfo.getFetchOffset();
+            Long stoppingOffset = fetchReqInfo.getStoppingOffset();
+            long logStartOffset = -1L;
             int adjustedMaxBytes = Math.min(limitBytes, fetchReqInfo.getMaxBytes());
             try {
                 replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalFetchLogRequests().inc();
+                if (stoppingOffset != null) {
+                    if (fetchParams.apiVersion() < 1
+                            || isFromFollower
+                            || stoppingOffset < 0
+                            || (fetchOffset < 0
+                                    && fetchOffset != FetchParams.FETCH_FROM_EARLIEST_OFFSET)) {
+                        throw new InvalidScanRequestException(
+                                "Stopping offsets require a v1 client fetch with nonnegative bounds.");
+                    }
+                    // Validate leadership before an empty range can bypass the physical read.
+                    replica.fetchOffsetSnapshot(fetchParams.fetchOnlyLeader());
+                }
+                if (fetchParams.apiVersion() >= 1 && stoppingOffset != null) {
+                    logStartOffset = replica.getLogStartOffset();
+                }
+                if (stoppingOffset != null) {
+                    long effectiveFetchOffset =
+                            fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                                    ? logStartOffset
+                                    : fetchOffset;
+                    if (effectiveFetchOffset >= stoppingOffset) {
+                        logReadResult.put(
+                                tb,
+                                new LogReadResult(
+                                        FetchLogResultForBucket.empty(
+                                                tb, replica.getLogHighWatermark(), stoppingOffset),
+                                        LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
+                        continue;
+                    }
+                }
                 LOG.trace(
                         "Fetching log record for replica {}, offset {}",
                         tb,
@@ -1841,6 +1874,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                     replica.getTablePath(), replica.getLogFormat()));
                 }
 
+                fetchParams.setStoppingOffset(stoppingOffset);
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
                         fetchOffset,
@@ -1916,6 +1950,19 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
                 logReadResult.put(
                         tb, new LogReadResult(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
+
+            } finally {
+                LogReadResult result = logReadResult.get(tb);
+                if (logStartOffset >= 0
+                        && result != null
+                        && result.getFetchLogResultForBucket().succeeded()) {
+                    logReadResult.put(
+                            tb,
+                            new LogReadResult(
+                                    result.getFetchLogResultForBucket()
+                                            .withLogStartOffset(logStartOffset),
+                                    result.getLogOffsetMetadata()));
+                }
             }
         }
         return logReadResult;
@@ -2140,17 +2187,20 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
-    private void maybeAddDelayedFetchLog(
+    @VisibleForTesting
+    void maybeAddDelayedFetchLog(
             FetchParams params,
             Map<TableBucket, FetchReqInfo> bucketFetchInfo,
             Map<TableBucket, LogReadResult> logReadResults,
             @Nullable UserContext userContext,
             Consumer<Map<TableBucket, FetchLogResultForBucket>> responseCallback) {
         long bytesReadable = 0;
+        long completedFetchBytes = 0;
         boolean errorReadingData = false;
         boolean hasFetchFromLocal = false;
         Map<TableBucket, FetchBucketStatus> fetchBucketStatusMap = new HashMap<>();
         Map<TableBucket, FetchLogResultForBucket> expectedErrorBuckets = new HashMap<>();
+        Map<TableBucket, FetchReqInfo> completedLocalBucketsToRefetch = new HashMap<>();
         for (Map.Entry<TableBucket, LogReadResult> logReadResultEntry : logReadResults.entrySet()) {
             TableBucket tb = logReadResultEntry.getKey();
             LogReadResult logReadResult = logReadResultEntry.getValue();
@@ -2173,9 +2223,34 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
             }
 
-            if (!fetchLogResultForBucket.fetchFromRemote()) {
+            boolean fetchFromLocal = !fetchLogResultForBucket.fetchFromRemote();
+            long fetchedBytes =
+                    fetchFromLocal ? fetchLogResultForBucket.recordsOrEmpty().sizeInBytes() : 0L;
+
+            // All successful local results contribute to the initial minBytes check,
+            // including bounded buckets that have already completed.
+            bytesReadable += fetchedBytes;
+
+            Long stoppingOffset = bucketFetchInfo.get(tb).getStoppingOffset();
+            if (stoppingOffset != null
+                    && fetchLogResultForBucket.hasFilteredEndOffset()
+                    && fetchLogResultForBucket.getFilteredEndOffset() >= stoppingOffset) {
+                // Completed bounded buckets do not participate in delayed fetch checks, but their
+                // bytes must still count toward minBytes.
+                completedFetchBytes += fetchedBytes;
+                if (fetchFromLocal && fetchedBytes > 0) {
+                    // Re-read file-backed records instead of retaining them across the wait.
+                    completedLocalBucketsToRefetch.put(tb, bucketFetchInfo.get(tb));
+                } else {
+                    expectedErrorBuckets.put(tb, fetchLogResultForBucket);
+                }
+                continue;
+            }
+
+            // Only unfinished local buckets can require waiting for additional data. A completed
+            // local bucket must not delay an otherwise remote-only fetch.
+            if (fetchFromLocal) {
                 hasFetchFromLocal = true;
-                bytesReadable += fetchLogResultForBucket.recordsOrEmpty().sizeInBytes();
             }
 
             fetchBucketStatusMap.put(
@@ -2186,9 +2261,12 @@ public class ReplicaManager implements ServerReconfigurable {
                             fetchLogResultForBucket));
         }
 
+        // A bounded fetch may complete all requested buckets without satisfying minBytes.
+        // Do not create a delayed fetch when no buckets remain to be watched.
         if (!hasFetchFromLocal
                 || params.maxWaitMs() <= 0
                 || bucketFetchInfo.isEmpty()
+                || fetchBucketStatusMap.isEmpty()
                 || bytesReadable >= params.minFetchBytes()
                 || errorReadingData) {
             responseCallback.accept(
@@ -2200,19 +2278,22 @@ public class ReplicaManager implements ServerReconfigurable {
                                                     entry.getValue()
                                                             .getFetchLogResultForBucket())));
         } else {
-            // need to put the fetch log request into delayed fetch log manager.
+            // Only unfinished buckets participate in delayed-fetch completion.
+            // Completed bounded results are preserved and merged into the response.
             DelayedFetchLog delayedFetchLog =
                     new DelayedFetchLog(
                             params,
                             this,
                             fetchBucketStatusMap,
+                            completedLocalBucketsToRefetch,
                             delayedResponse -> {
                                 // Merge expected error buckets with delayed response
                                 delayedResponse.putAll(expectedErrorBuckets);
                                 responseCallback.accept(delayedResponse);
                             },
                             serverMetricGroup,
-                            userContext);
+                            userContext,
+                            completedFetchBytes);
 
             // try to complete the request immediately, otherwise put it into the
             // delayedFetchLogManager; this is because while the delayed fetch log operation is

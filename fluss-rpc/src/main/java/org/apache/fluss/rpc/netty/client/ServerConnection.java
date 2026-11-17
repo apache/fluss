@@ -24,6 +24,7 @@ import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.RequiredApiVersionNotSupportedException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
@@ -32,6 +33,9 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -387,6 +391,21 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.FETCH_LOG && version < 1) {
+            for (PbFetchLogReqForTable table : ((FetchLogRequest) rawRequest).getTablesReqsList()) {
+                for (PbFetchLogReqForBucket bucket : table.getBucketsReqsList()) {
+                    if (bucket.hasStoppingOffset()) {
+                        throw new RequiredApiVersionNotSupportedException(
+                                "Bounded log scans require FETCH_LOG version 1 or newer, but server "
+                                        + node
+                                        + " negotiated version "
+                                        + version
+                                        + '.');
+                    }
+                }
+            }
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

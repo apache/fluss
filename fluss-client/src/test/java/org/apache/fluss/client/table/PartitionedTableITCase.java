@@ -19,6 +19,9 @@ package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.Lookuper;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -27,6 +30,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
@@ -38,9 +42,11 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
@@ -144,6 +150,136 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         // then, let's verify the logs
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testBoundedPartitionedLogScanCompletesOnce() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_static_partitioned_bounded_log_table");
+        // Reuse the existing partitioned Log Table fixture.
+        createPartitionedTable(tablePath, false);
+        // Create two physical partitions with the same bucket ID.
+        admin.createPartition(tablePath, newPartitionSpec("c", "c0"), false).get();
+        admin.createPartition(tablePath, newPartitionSpec("c", "c1"), false).get();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos).hasSize(2);
+
+        Table table = conn.getTable(tablePath);
+        long tableId = table.getTableInfo().getTableId();
+
+        long partitionId0 = partitionInfos.get(0).getPartitionId();
+        long partitionId1 = partitionInfos.get(1).getPartitionId();
+
+        TableBucket bucket0 = new TableBucket(tableId, partitionId0, 0);
+        TableBucket bucket1 = new TableBucket(tableId, partitionId1, 0);
+
+        try (LogScanner scanner = table.newScan().createLogScanner()) {
+            // A partitioned table must use the partition-aware overload.
+            assertThatThrownBy(() -> scanner.subscribeBounded(0, 0L, 0L))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("table partitioning");
+
+            // Both subscriptions are empty bounded ranges.
+            scanner.subscribeBounded(partitionId0, 0, 0L, 0L);
+            scanner.subscribeBounded(partitionId1, 0, 0L, 0L);
+
+            ScanRecords first = scanner.poll(Duration.ofSeconds(1));
+
+            assertThat(first.count()).isZero();
+            assertThat(first.records(bucket0)).isEmpty();
+            assertThat(first.records(bucket1)).isEmpty();
+            assertThat(first.finishedBuckets()).containsExactlyInAnyOrder(bucket0, bucket1);
+            assertThat(first.hasProgress()).isTrue();
+
+            // Completion events must be delivered only once.
+            ScanRecords second = scanner.poll(Duration.ZERO);
+
+            assertThat(second.count()).isZero();
+            assertThat(second.finishedBuckets()).isEmpty();
+            assertThat(second.hasProgress()).isFalse();
+        }
+    }
+
+    @Test
+    void testBoundedPartitionedLogScanReadsRecords() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_static_partitioned_bounded_log_scan");
+        Schema schema = createPartitionedTable(tablePath, false);
+
+        // Create two physical partitions sharing bucket ID 0.
+        admin.createPartition(tablePath, newPartitionSpec("c", "c0"), false).get();
+        admin.createPartition(tablePath, newPartitionSpec("c", "c1"), false).get();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos).hasSize(2);
+
+        Map<String, Long> partitionIds = new HashMap<>();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            partitionIds.put(partitionInfo.getPartitionName(), partitionInfo.getPartitionId());
+        }
+        assertThat(partitionIds).containsOnlyKeys("c0", "c1");
+
+        long partitionId0 = partitionIds.get("c0");
+        long partitionId1 = partitionIds.get("c1");
+        assertThat(partitionId0).isNotEqualTo(partitionId1);
+
+        Table table = conn.getTable(tablePath);
+        long tableId = table.getTableInfo().getTableId();
+
+        TableBucket bucket0 = new TableBucket(tableId, partitionId0, 0);
+        TableBucket bucket1 = new TableBucket(tableId, partitionId1, 0);
+
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        for (int i = 0; i < 6; i++) {
+            appendWriter.append(row(i, "a" + i, "c0"));
+            appendWriter.append(row(i, "a" + i, "c1"));
+        }
+        appendWriter.flush();
+
+        Map<TableBucket, List<Long>> actualOffsets = new HashMap<>();
+        Set<TableBucket> finishedBuckets = new HashSet<>();
+
+        try (LogScanner scanner = table.newScan().createLogScanner()) {
+            scanner.subscribeBounded(partitionId0, 0, 1L, 3L);
+            scanner.subscribeBounded(partitionId1, 0, 2L, 5L);
+            for (int i = 0; i < 10 && finishedBuckets.size() < 2; i++) {
+                ScanRecords result = scanner.poll(Duration.ofSeconds(2));
+                for (TableBucket bucket : result.buckets()) {
+                    assertThat(bucket).isIn(bucket0, bucket1);
+                    String partitionName = bucket.equals(bucket0) ? "c0" : "c1";
+                    for (ScanRecord record : result.records(bucket)) {
+                        long offset = record.logOffset();
+                        actualOffsets
+                                .computeIfAbsent(bucket, ignored -> new ArrayList<>())
+                                .add(offset);
+                        // Verify the record belongs to the expected physical partition, not just
+                        // that its offset is correct.
+                        assertThatRow(record.getRow())
+                                .withSchema(schema.getRowType())
+                                .isEqualTo(
+                                        row(Math.toIntExact(offset), "a" + offset, partitionName));
+                    }
+                }
+                for (TableBucket bucket : result.finishedBuckets()) {
+                    assertThat(bucket).isIn(bucket0, bucket1);
+                    assertThat(finishedBuckets.add(bucket))
+                            .as("Duplicate completion for bucket %s", bucket)
+                            .isTrue();
+                    assertThat(result.consumedUpToOffset(bucket))
+                            .isEqualTo(bucket.equals(bucket0) ? 3L : 5L);
+                }
+            }
+
+            assertThat(actualOffsets.get(bucket0)).containsExactly(1L, 2L);
+            assertThat(actualOffsets.get(bucket1)).containsExactly(2L, 3L, 4L);
+            assertThat(finishedBuckets).containsExactlyInAnyOrder(bucket0, bucket1);
+
+            // Completed buckets must not return additional records or repeated completion events.
+            ScanRecords afterCompletion = scanner.poll(Duration.ZERO);
+            assertThat(afterCompletion.count()).isZero();
+            assertThat(afterCompletion.finishedBuckets()).isEmpty();
+            assertThat(afterCompletion.hasProgress()).isFalse();
+        }
     }
 
     @Test

@@ -47,6 +47,11 @@ class CompletedPendingFetch implements PendingFetch {
     }
 
     @Override
+    public boolean isObsolete() {
+        return completedFetch.isObsolete();
+    }
+
+    @Override
     public void discard() {
         completedFetch.drain();
     }

@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.InvalidServerTypeException;
+import org.apache.fluss.exception.RequiredApiVersionNotSupportedException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Metric;
@@ -37,6 +38,8 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -297,6 +300,83 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testBoundedFetchNegotiationAndPendingRequest() throws Exception {
+        for (int maxVersion : new int[] {0, 1}) {
+            nettyServer.close();
+            FetchVersionGateway gateway = new FetchVersionGateway(maxVersion);
+            buildNettyServer(gateway);
+            ServerConnection connection =
+                    new ServerConnection(
+                            bootstrap,
+                            serverNode,
+                            TestingClientMetricGroup.newInstance(),
+                            clientAuthenticator,
+                            (con, ignore) -> {});
+            try {
+                FetchLogRequest request =
+                        new FetchLogRequest().setFollowerServerId(-1).setMaxBytes(1024);
+                request.addTablesReq()
+                        .setProjectionPushdownEnabled(false)
+                        .setTableId(1L)
+                        .addBucketsReq()
+                        .setBucketId(0)
+                        .setFetchOffset(0L)
+                        .setMaxFetchBytes(1024)
+                        .setStoppingOffset(0L);
+                CompletableFuture<ApiMessage> pending = connection.send(ApiKeys.FETCH_LOG, request);
+                gateway.versions.complete(null);
+                if (maxVersion == 0) {
+                    assertThatThrownBy(pending::get)
+                            .rootCause()
+                            .isInstanceOf(RequiredApiVersionNotSupportedException.class);
+                    assertThat(gateway.received).isZero();
+                    request.getTablesReqAt(0).getBucketsReqAt(0).clearStoppingOffset();
+                    assertThat(connection.send(ApiKeys.FETCH_LOG, request).get())
+                            .isInstanceOf(FetchLogResponse.class);
+                } else {
+                    assertThat(pending.get()).isInstanceOf(FetchLogResponse.class);
+                }
+                assertThat(gateway.received).isEqualTo(1);
+                assertThat(gateway.wireVersion).isEqualTo((short) maxVersion);
+            } finally {
+                connection.close().get();
+            }
+        }
+    }
+
+    @Test
+    void testBoundedFetchRequiresVersionOne() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            FetchLogRequest request = new FetchLogRequest();
+            request.addTablesReq()
+                    .setTableId(1L)
+                    .addBucketsReq()
+                    .setBucketId(0)
+                    .setFetchOffset(0L)
+                    .setMaxFetchBytes(1024);
+            connection.validateVersionCompatibility(ApiKeys.FETCH_LOG, (short) 0, request);
+            request.getTablesReqAt(0).getBucketsReqAt(0).setStoppingOffset(0L);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.FETCH_LOG, (short) 0, request))
+                    .isInstanceOf(RequiredApiVersionNotSupportedException.class)
+                    .hasMessageContaining("FETCH_LOG version 1");
+            connection.validateVersionCompatibility(ApiKeys.FETCH_LOG, (short) 1, request);
+            assertThat(ApiKeys.FETCH_LOG.highestSupportedVersion).isEqualTo((short) 1);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectBucketCountChangeForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(
@@ -412,6 +492,39 @@ public class ServerConnectionTest {
                             metricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
+        }
+    }
+
+    private static class FetchVersionGateway extends TestingTabletGatewayService {
+        private final int maxVersion;
+        private final CompletableFuture<Void> versions = new CompletableFuture<>();
+        private volatile int received;
+        private volatile short wireVersion;
+
+        private FetchVersionGateway(int maxVersion) {
+            this.maxVersion = maxVersion;
+        }
+
+        @Override
+        public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
+            return super.apiVersions(request)
+                    .thenCombine(
+                            versions,
+                            (response, ignored) -> {
+                                for (PbApiVersion version : response.getApiVersionsList()) {
+                                    if (version.getApiKey() == ApiKeys.FETCH_LOG.id) {
+                                        version.setMaxVersion(maxVersion);
+                                    }
+                                }
+                                return response;
+                            });
+        }
+
+        @Override
+        public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
+            received++;
+            wireVersion = currentSession().getApiVersion();
+            return CompletableFuture.completedFuture(new FetchLogResponse());
         }
     }
 

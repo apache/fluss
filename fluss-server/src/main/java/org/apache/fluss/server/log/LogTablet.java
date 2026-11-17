@@ -543,6 +543,26 @@ public final class LogTablet {
             @Nullable FileLogProjection projection,
             @Nullable FilterContext filterContext)
             throws IOException {
+        return read(
+                readOffset,
+                maxLength,
+                fetchIsolation,
+                minOneMessage,
+                projection,
+                filterContext,
+                null);
+    }
+
+    /** Reads log data with an optional exclusive stopping offset. */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            FetchIsolation fetchIsolation,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext,
+            @Nullable Long stoppingOffset)
+            throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
             maxOffsetMetadata = localLog.getLocalLogEndOffsetMetadata();
@@ -551,7 +571,13 @@ public final class LogTablet {
         }
 
         return localLog.read(
-                readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection, filterContext);
+                readOffset,
+                maxLength,
+                minOneMessage,
+                maxOffsetMetadata,
+                projection,
+                filterContext,
+                stoppingOffset);
     }
 
     /**

@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -47,6 +48,8 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
     private final Map<TableBucket, Long> consumedUpToOffsets;
 
+    private final Set<TableBucket> finishedBuckets;
+
     public ArrowScanRecords(Map<TableBucket, List<ArrowBatchData>> records) {
         this(records, Collections.emptyMap());
     }
@@ -54,8 +57,22 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
     public ArrowScanRecords(
             Map<TableBucket, List<ArrowBatchData>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
+        this(records, consumedUpToOffsets, Collections.emptySet());
+    }
+
+    /** Creates a poll result with consumed offsets and one-shot completion events. */
+    public ArrowScanRecords(
+            Map<TableBucket, List<ArrowBatchData>> records,
+            Map<TableBucket, Long> consumedUpToOffsets,
+            Set<TableBucket> finishedBuckets) {
+        this.finishedBuckets = Collections.unmodifiableSet(new LinkedHashSet<>(finishedBuckets));
         this.records = records;
         this.consumedUpToOffsets = consumedUpToOffsets;
+    }
+
+    /** Returns buckets that reached their exclusive stopping offset in this poll only. */
+    public Set<TableBucket> finishedBuckets() {
+        return finishedBuckets;
     }
 
     /** Get just the Arrow batches for the given bucket. */
@@ -97,6 +114,11 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
 
     public boolean isEmpty() {
         return records.isEmpty();
+    }
+
+    /** Returns whether this result has records, consumed offsets, or completion events. */
+    public boolean hasProgress() {
+        return !isEmpty() || !consumedUpToOffsets.isEmpty() || !finishedBuckets.isEmpty();
     }
 
     /** Closes all Arrow batches held by this container, releasing off-heap memory. */

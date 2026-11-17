@@ -233,10 +233,10 @@ public class CommonRpcMessageUtils {
                         FetchLogResultForBucket.remote(
                                 tb, rlFetchInfo, respForBucket.getHighWatermark());
             } else {
-                ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
                 LogRecords records =
                         respForBucket.hasRecords()
-                                ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
+                                ? MemoryLogRecords.pointToByteBuffer(
+                                        toByteBuffer(respForBucket.getRecordsSlice()))
                                 : MemoryLogRecords.EMPTY;
                 boolean hasFilteredEndOffset =
                         respForBucket.hasFilteredEndOffset()
@@ -253,6 +253,12 @@ public class CommonRpcMessageUtils {
             }
         }
 
+        if (fetchLogResultForBucket.succeeded()
+                && respForBucket.hasLogStartOffset()
+                && respForBucket.getLogStartOffset() >= 0) {
+            fetchLogResultForBucket =
+                    fetchLogResultForBucket.withLogStartOffset(respForBucket.getLogStartOffset());
+        }
         return fetchLogResultForBucket;
     }
 

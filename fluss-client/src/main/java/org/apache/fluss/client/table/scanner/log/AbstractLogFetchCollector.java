@@ -88,6 +88,14 @@ abstract class AbstractLogFetchCollector<T, R> {
                             logFetchBuffer.setNextInLineFetch(initialized);
                             if (initialized == null) {
                                 completedFetch.drain();
+                            } else if (initialized.isBounded()
+                                    && initialized.nextFetchOffset() != initialized.fetchOffset()) {
+                                // A bounded EARLIEST resolution may advance the logical position
+                                // without returning records.
+                                consumedUpToOffsets.merge(
+                                        initialized.tableBucket,
+                                        initialized.nextFetchOffset(),
+                                        Math::max);
                             }
                         } catch (Exception e) {
                             // Remove a completedFetch upon a parse with exception if
@@ -95,30 +103,61 @@ abstract class AbstractLogFetchCollector<T, R> {
                             // (2) there are no fetched records with actual content
                             // preceding this exception.
                             if (fetched.isEmpty() && completedFetch.sizeInBytes == 0) {
-                                logFetchBuffer.poll();
+                                try {
+                                    logFetchBuffer.poll();
+                                } finally {
+                                    completedFetch.drain();
+                                }
                             }
                             throw e;
                         }
                     } else {
                         logFetchBuffer.setNextInLineFetch(completedFetch);
                     }
-
-                    logFetchBuffer.poll();
+                    try {
+                        logFetchBuffer.poll();
+                    } catch (FetchException e) {
+                        // The fetch was initialized but could not be removed from the buffer
+                        // because an asynchronous remote failure was reported.
+                        // Do not keep it as the next fetch to consume.
+                        logFetchBuffer.setNextInLineFetch(null);
+                        try {
+                            completedFetch.drain();
+                        } catch (RuntimeException cleanupFailure) {
+                            e.addSuppressed(cleanupFailure);
+                        }
+                        throw e;
+                    }
                 } else {
-                    List<T> records = fetchRecords(nextInLineFetch, recordsRemaining);
                     TableBucket tableBucket = nextInLineFetch.tableBucket;
-                    // Always record the advanced next fetch offset for this bucket, even when
-                    // the materialized record list is empty.
-                    consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
+                    boolean bounded = nextInLineFetch.isBounded();
+                    Long previousOffset =
+                            bounded ? logScannerStatus.getBucketOffset(tableBucket) : null;
+
+                    List<T> records = fetchRecords(nextInLineFetch, recordsRemaining);
                     recordsRemaining -= fetchedRecordCount(nextInLineFetch, records);
+
+                    if (bounded) {
+                        Long currentOffset = logScannerStatus.getBucketOffset(tableBucket);
+                        if (previousOffset != null
+                                && currentOffset != null
+                                && currentOffset > previousOffset
+                                && nextInLineFetch.isCurrentSubscription()) {
+                            consumedUpToOffsets.merge(tableBucket, currentOffset, Math::max);
+                        }
+                    } else {
+                        // Preserve the existing unbounded consumed-offset reporting behavior.
+                        consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
+                    }
+
                     if (!records.isEmpty()) {
                         List<T> currentRecords = fetched.get(tableBucket);
                         if (currentRecords == null) {
                             fetched.put(tableBucket, records);
                         } else {
-                            // this case shouldn't usually happen because we only send one fetch
-                            // at a time per bucket, but it might conceivably happen in some rare
-                            // cases (such as bucket leader changes). we have to copy to a new list
+                            // this case shouldn't usually happen because we only send one fetch at
+                            // a time per bucket, but it might conceivably happen in some rare cases
+                            // (such as bucket leader changes). we have to copy to a new list
                             // because the old one may be immutable
                             List<T> mergedRecords =
                                     new ArrayList<>(records.size() + currentRecords.size());
@@ -126,8 +165,7 @@ abstract class AbstractLogFetchCollector<T, R> {
                             mergedRecords.addAll(records);
                             fetched.put(tableBucket, mergedRecords);
                         }
-
-                    } else {
+                    } else if (!bounded || consumedUpToOffsets.containsKey(tableBucket)) {
                         fetched.putIfAbsent(tableBucket, Collections.emptyList());
                     }
                 }
@@ -157,7 +195,13 @@ abstract class AbstractLogFetchCollector<T, R> {
         TableBucket tb = completedFetch.tableBucket;
         ApiError error = completedFetch.error;
 
+        if (!logScannerStatus.matchesRequestedRange(
+                tb, completedFetch.fetchOffset(), completedFetch.stoppingOffset())) {
+            return null;
+        }
+
         try {
+            completedFetch.checkFailure();
             if (error.isSuccess()) {
                 return handleInitializeSuccess(completedFetch);
             } else {
@@ -178,8 +222,12 @@ abstract class AbstractLogFetchCollector<T, R> {
         }
     }
 
-    private @Nullable CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
+    @Nullable
+    private CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
         TableBucket tb = completedFetch.tableBucket;
+        if (!completedFetch.resolveStartingOffset()) {
+            return null;
+        }
         long fetchOffset = completedFetch.nextFetchOffset();
 
         // we are interested in this fetch only if the beginning offset matches the
@@ -203,7 +251,8 @@ abstract class AbstractLogFetchCollector<T, R> {
         long highWatermark = completedFetch.highWatermark;
         if (highWatermark >= 0) {
             log.trace("Updating high watermark for bucket {} to {}.", tb, highWatermark);
-            logScannerStatus.updateHighWatermark(tb, highWatermark);
+            logScannerStatus.updateHighWatermarkIfCurrent(
+                    tb, fetchOffset, completedFetch.stoppingOffset(), highWatermark);
         }
 
         completedFetch.setInitialized();
@@ -264,7 +313,8 @@ abstract class AbstractLogFetchCollector<T, R> {
                     tb,
                     nextInLineFetch.fetchOffset());
         } else {
-            if (nextInLineFetch.nextFetchOffset() == offset) {
+            if (logScannerStatus.matchesRequestedRange(tb, offset, nextInLineFetch.stoppingOffset())
+                    && nextInLineFetch.nextFetchOffset() == offset) {
                 List<T> records = doFetchRecords(nextInLineFetch, maxRecords);
                 log.trace(
                         "Returning {} fetched records at offset {} for assigned bucket {}.",
@@ -279,7 +329,11 @@ abstract class AbstractLogFetchCollector<T, R> {
                             nextInLineFetch.nextFetchOffset(),
                             tb,
                             records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
+                    logScannerStatus.updateOffsetIfCurrent(
+                            tb,
+                            offset,
+                            nextInLineFetch.stoppingOffset(),
+                            nextInLineFetch.nextFetchOffset());
                 }
                 return records;
             } else {
