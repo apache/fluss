@@ -124,3 +124,5 @@ Fluss S3/OSS data requests use rustls and return the stored object bytes without
 Create a reader with `scan.new_reader()`. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
 
 The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
+
+Tasks with a persisted KV snapshot baseline are rejected before reading until the default executor integrates that baseline. An empty log tail does not make a KV task empty.

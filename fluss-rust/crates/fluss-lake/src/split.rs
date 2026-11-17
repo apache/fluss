@@ -294,6 +294,7 @@ impl FlussLakeReadSplit {
     pub(crate) fn is_empty(&self) -> bool {
         self.descriptor.start_offset == self.descriptor.stop_offset
             && self.descriptor.lake_splits.is_empty()
+            && self.descriptor.kv_snapshot_id.is_none()
     }
 
     pub(crate) fn is_append_lake(&self) -> bool {

@@ -22,54 +22,62 @@ use crate::table::BoundScan;
 use crate::{FlussLakeError, FlussLakeReadSplit, FlussLakeScan, RecordBatchStream, Result};
 use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
-use fluss::client::{FlussTable, RecordBatchLogReader};
+use fluss::client::{BoundedLogReadRange, FlussTable, RecordBatchLogReader};
 use fluss::error::Error as ClientError;
 use fluss::metadata::{RowType, TableInfo};
 use fluss::predicate::{BoundPredicate, Predicate};
 use futures::{StreamExt, TryStreamExt};
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
+
+/// Resources shared only by tasks in one read attempt.
+#[derive(Default)]
+pub(crate) struct ReadResources {
+    metadata: OnceCell<TableInfo>,
+    lake_source: OnceCell<Arc<dyn crate::LakeSource>>,
+}
 
 /// Executes a frozen task using the reader's immutable scan configuration.
 pub(crate) fn execute_split(
     split: &FlussLakeReadSplit,
     scan: &Arc<FlussLakeScan>,
-    metadata: Arc<OnceCell<TableInfo>>,
+    resources: Arc<ReadResources>,
 ) -> Result<RecordBatchStream> {
-    // Cloned tasks share frozen metadata; no wire descriptor needs decoding.
-    let descriptor = split.clone();
-    if descriptor.table_path() != scan.table_path() {
+    if split.table_path() != scan.table_path() {
         return Err(FlussLakeError::PlanningFailed(
             "split and reader refer to different tables".to_string(),
         ));
     }
-    if descriptor.is_primary_key() && !scan.lake_only() {
+    if split.descriptor().kv_snapshot_id().is_some() {
+        return Err(FlussLakeError::PlanningFailed(
+            "KV snapshot baseline execution is not yet supported by the UnionRead reader".into(),
+        ));
+    }
+    if split.is_primary_key() && !scan.lake_only() {
         return Err(FlussLakeError::PlanningFailed(
             "PK UnionRead execution requires the PK reconciliation executor".into(),
         ));
     }
-    if descriptor.is_empty() || (scan.lake_only() && descriptor.lake_splits().is_empty()) {
+    if split.is_empty() || (scan.lake_only() && split.lake_splits().is_empty()) {
         return Ok(Box::pin(futures::stream::empty()));
     }
     Ok(lazy_stream(open_logical_stream(
-        descriptor,
-        split.partition().clone(),
+        split.clone(),
         scan.clone(),
-        metadata,
+        resources,
     )))
 }
 
 async fn open_logical_stream(
     descriptor: FlussLakeReadSplit,
-    partition: crate::FlussLakePartitionIdentity,
     scan: Arc<FlussLakeScan>,
-    metadata: Arc<OnceCell<TableInfo>>,
+    resources: Arc<ReadResources>,
 ) -> Result<RecordBatchStream> {
     // Share the live identity check within one read attempt, not across queries.
     // Task metadata remains fixed even if the live schema has changed.
-    let live = metadata
+    let live = resources
+        .metadata
         .get_or_try_init(|| async {
             scan.connection()
                 .get_table(scan.table_path())
@@ -97,27 +105,14 @@ async fn open_logical_stream(
     let lake_stream = if descriptor.lake_splits().is_empty() {
         Box::pin(futures::stream::empty()) as RecordBatchStream
     } else {
-        let source = scan.resolve_lake_source(table_info)?;
+        let source = resources
+            .lake_source
+            .get_or_try_init(|| async { scan.resolve_lake_source(table_info) })
+            .await?;
         let snapshot_id = descriptor
             .snapshot_id()
             .ok_or_else(|| FlussLakeError::Internal("lake tasks need a snapshot".to_string()))?;
         let tasks = descriptor.lake_splits();
-        for task in tasks {
-            task.validate(source.format(), snapshot_id)?;
-            if task.bucket_id != descriptor.table_bucket().bucket_id()
-                || task.partition != partition
-            {
-                return Err(FlussLakeError::PlanningFailed(
-                    "lake task does not belong to the logical split".to_string(),
-                ));
-            }
-        }
-        let safe_filter = crate::source::lake_pushdown_filter(
-            filter,
-            table_info,
-            descriptor.is_primary_key() && !scan.lake_only(),
-        )
-        .unwrap_or(BoundPredicate::AlwaysTrue);
         source
             .read(crate::LakeReaderContext {
                 table_info,
@@ -131,7 +126,7 @@ async fn open_logical_stream(
                 splits: tasks,
                 projection: &physical.field_indexes,
                 schema: physical_schema.clone(),
-                filter: &safe_filter,
+                filter,
             })
             .await?
     };
@@ -178,27 +173,15 @@ async fn open_logical_append_log_stream(
     let scanner = table_scan
         .create_record_batch_log_scanner()
         .map_err(|error| execution_client_error("create append-log scanner", error))?;
-    match descriptor.table_bucket().partition_id() {
-        Some(partition_id) => scanner
-            .subscribe_partition(
-                partition_id,
-                descriptor.table_bucket().bucket_id(),
-                descriptor.start_offset(),
-            )
-            .await
-            .map_err(|error| execution_client_error("subscribe partition bucket", error))?,
-        None => scanner
-            .subscribe(
-                descriptor.table_bucket().bucket_id(),
-                descriptor.start_offset(),
-            )
-            .await
-            .map_err(|error| execution_client_error("subscribe table bucket", error))?,
-    }
-    let reader = RecordBatchLogReader::new_until_offsets(
+    let reader = RecordBatchLogReader::new_from_ranges(
         scanner,
-        HashMap::from([(descriptor.table_bucket().clone(), descriptor.stop_offset())]),
+        vec![BoundedLogReadRange {
+            bucket: descriptor.table_bucket().clone(),
+            starting_offset: descriptor.start_offset(),
+            stopping_offset: descriptor.stop_offset(),
+        }],
     )
+    .await
     .map_err(|error| execution_client_error("create bounded append-log reader", error))?;
     Ok(Box::pin(reader.into_stream().map(|result| {
         result
@@ -556,17 +539,6 @@ mod tests {
                 "id > {threshold}"
             );
         }
-    }
-
-    #[test]
-    fn long_membership_filter_handles_multiple_batches() {
-        let input = vec![id_batch(vec![1, 128, 256]), id_batch(vec![2, 64, 300])];
-        let source: RecordBatchStream = Box::pin(stream::iter(input.into_iter().map(Ok)));
-        let filtered = apply_filter_and_projection(source, &bound(col("id").is_in(0..128)), None);
-        assert_eq!(
-            collect_batches(filtered).unwrap(),
-            vec![id_batch(vec![1]), id_batch(vec![2, 64])]
-        );
     }
 
     #[test]

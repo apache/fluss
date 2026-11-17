@@ -17,12 +17,11 @@
 
 //! Scan-configured readers, sequential task consumption and stream cancellation.
 
-use crate::executor::execute_split;
+use crate::executor::{ReadResources, execute_split};
 use crate::{FlussLakeError, FlussLakeReadSplit, FlussLakeScan, RecordBatchStream, Result};
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 
 /// Reusable reader with immutable scan configuration.
 ///
@@ -42,18 +41,20 @@ impl FlussLakeReader {
     }
 
     /// Read a frozen local task, which may be cloned from a plan.
-    /// Construction validates scan configuration and the task table without I/O. Polling
-    /// the stream opens a fresh metadata session and starts reading. Initialization
+    /// Construction validates local task compatibility without I/O. Polling
+    /// refreshes table metadata and opens the frozen inputs. Initialization
     /// and read failures are terminal stream errors. Drop cancels the read.
     pub fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream> {
         self.scan.validate_configuration()?;
-        execute_split(split, &self.scan, Arc::new(OnceCell::new())).map(stop_after_first_error)
+        execute_split(split, &self.scan, Arc::new(ReadResources::default()))
+            .map(stop_after_first_error)
     }
 
     /// Read tasks sequentially in the supplied order. Duplicate tasks are rejected.
     /// Callers control concurrency by scheduling `read_split` streams themselves.
-    /// Nonempty tasks share one lazy table metadata load within this call; later
-    /// calls load it again. Routing refresh remains managed by the core client.
+    /// Nonempty tasks share lazy table metadata and source resolution within
+    /// this call; later calls refresh metadata again. Routing refresh remains
+    /// managed by the core client.
     /// The first error terminates the stream without starting remaining tasks;
     /// discard this attempt's output before replanning with fresh boundaries.
     pub fn read_splits(&self, splits: &[FlussLakeReadSplit]) -> Result<RecordBatchStream> {
@@ -66,10 +67,10 @@ impl FlussLakeReader {
                 ));
             }
         }
-        let metadata = Arc::new(OnceCell::new());
+        let resources = Arc::new(ReadResources::default());
         let streams = splits
             .iter()
-            .map(|split| execute_split(split, &self.scan, metadata.clone()))
+            .map(|split| execute_split(split, &self.scan, resources.clone()))
             .collect::<Result<Vec<_>>>()?;
         Ok(concatenate_split_streams(streams))
     }
