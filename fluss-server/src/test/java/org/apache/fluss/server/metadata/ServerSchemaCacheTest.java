@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
@@ -35,6 +36,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -81,6 +87,102 @@ public class ServerSchemaCacheTest {
         assertThat(subscriber1.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
         assertThat(subscriber2.getLatestSchemaInfo()).isNotNull();
         assertThat(subscriber2.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+    }
+
+    @Test
+    void testRefreshLatestSchema() {
+        TableInfo evolved =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA1_TABLE_ID,
+                        2,
+                        DATA2_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        0L,
+                        0L);
+        TestingMetadataManager metadata =
+                new TestingMetadataManager(Arrays.asList(DATA1_TABLE_INFO, evolved));
+        ServerSchemaCache cache = new ServerSchemaCache(metadata);
+        SchemaGetter getter =
+                cache.subscribeWithInitialSchema(DATA1_TABLE_ID, DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+
+        assertThat(getter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
+        assertThat(metadata.latestSchemaLookups).isZero();
+        assertThat(getter.refreshLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+        assertThat(getter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+        assertThat(metadata.latestSchemaLookups).isEqualTo(1);
+        // A direct refresh always consults metadata; a cached read does not.
+        assertThat(getter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+        assertThat(metadata.latestSchemaLookups).isEqualTo(1);
+        assertThat(getter.refreshLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA2_SCHEMA, 2));
+        assertThat(metadata.latestSchemaLookups).isEqualTo(2);
+        getter.release();
+    }
+
+    @Test
+    void testRefreshDoesNotOverwriteNewerNotification() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch proceed = new CountDownLatch(1);
+        MetadataManager metadata =
+                new MetadataManager(
+                        null,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+                    @Override
+                    public SchemaInfo getLatestSchema(TablePath path) {
+                        started.countDown();
+                        try {
+                            if (!proceed.await(10, TimeUnit.SECONDS)) {
+                                throw new IllegalStateException(
+                                        "Timed out waiting to finish refresh");
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(e);
+                        }
+                        return new SchemaInfo(DATA2_SCHEMA, 2);
+                    }
+                };
+        ServerSchemaCache cache = new ServerSchemaCache(metadata);
+        SchemaGetter getter =
+                cache.subscribeWithInitialSchema(DATA1_TABLE_ID, DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+        Schema newer =
+                Schema.newBuilder().fromSchema(DATA2_SCHEMA).column("d", DataTypes.INT()).build();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<SchemaInfo> result = executor.submit(() -> getter.refreshLatestSchemaInfo());
+            assertThat(started.await(10, TimeUnit.SECONDS)).isTrue();
+            cache.updateLatestSchema(DATA1_TABLE_ID, (short) 3, newer);
+            proceed.countDown();
+            assertThat(result.get(10, TimeUnit.SECONDS)).isEqualTo(new SchemaInfo(newer, 3));
+            assertThat(getter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(newer, 3));
+        } finally {
+            proceed.countDown();
+            executor.shutdownNow();
+            getter.release();
+        }
+    }
+
+    @Test
+    void testRefreshFailureDoesNotReplaceCachedSchema() {
+        MetadataManager metadata =
+                new MetadataManager(
+                        null,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+                    @Override
+                    public SchemaInfo getLatestSchema(TablePath tablePath) {
+                        throw new IllegalStateException("metadata unavailable");
+                    }
+                };
+        ServerSchemaCache cache = new ServerSchemaCache(metadata);
+        SchemaGetter getter =
+                cache.subscribeWithInitialSchema(DATA1_TABLE_ID, DATA1_TABLE_PATH, 1, DATA1_SCHEMA);
+        assertThatThrownBy(() -> getter.refreshLatestSchemaInfo())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("metadata unavailable");
+        assertThat(getter.getLatestSchemaInfo()).isEqualTo(new SchemaInfo(DATA1_SCHEMA, 1));
+        getter.release();
     }
 
     @Test
@@ -167,6 +269,7 @@ public class ServerSchemaCacheTest {
     private static final class TestingMetadataManager extends MetadataManager {
 
         private final Map<TablePath, Map<Short, Schema>> schemaInfoMap;
+        private int latestSchemaLookups;
 
         public TestingMetadataManager(List<TableInfo> tableInfos) {
             super(
@@ -180,6 +283,13 @@ public class ServerSchemaCacheTest {
                                 .computeIfAbsent(tableInfo.getTablePath(), k -> new HashMap<>())
                                 .put((short) tableInfo.getSchemaId(), tableInfo.getSchema());
                     });
+        }
+
+        @Override
+        public SchemaInfo getLatestSchema(TablePath tablePath) {
+            latestSchemaLookups++;
+            short latestId = Collections.max(schemaInfoMap.get(tablePath).keySet());
+            return getSchemaById(tablePath, latestId);
         }
 
         @Override

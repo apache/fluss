@@ -64,6 +64,9 @@ public interface SchemaGetter {
     /** Returns metadata describing the latest known schema. */
     SchemaInfo getLatestSchemaInfo();
 
+    /** Refreshes and returns the latest available schema metadata. */
+    SchemaInfo refreshLatestSchemaInfo();
+
     /**
      * Releases any resources held by this {@code SchemaGetter}.
      *

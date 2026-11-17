@@ -71,6 +71,11 @@ public class TestingSchemaGetter implements SchemaGetter {
     }
 
     @Override
+    public SchemaInfo refreshLatestSchemaInfo() {
+        return schemaInfo;
+    }
+
+    @Override
     public void release() {}
 
     public void updateLatestSchemaInfo(SchemaInfo schemaInfo) {

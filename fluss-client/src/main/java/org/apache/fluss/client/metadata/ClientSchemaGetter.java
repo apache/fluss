@@ -67,10 +67,7 @@ public class ClientSchemaGetter implements SchemaGetter {
             try {
                 SchemaInfo schemaInfo =
                         admin.getTableSchema(tablePath, schemaId).get(1, TimeUnit.MINUTES);
-                schemasById.put(schemaId, schemaInfo.getSchema());
-                if (schemaId > latestSchemaInfo.getSchemaId()) {
-                    latestSchemaInfo = schemaInfo;
-                }
+                cacheSchemaInfo(schemaInfo);
                 return schemaInfo.getSchema();
             } catch (Exception e) {
                 Throwable strippedException = stripExecutionException(e);
@@ -99,10 +96,7 @@ public class ClientSchemaGetter implements SchemaGetter {
             return admin.getTableSchema(tablePath, schemaId)
                     .thenApply(
                             (schemaInfo) -> {
-                                schemasById.put(schemaId, schemaInfo.getSchema());
-                                if (schemaId > latestSchemaInfo.getSchemaId()) {
-                                    latestSchemaInfo = schemaInfo;
-                                }
+                                cacheSchemaInfo(schemaInfo);
                                 return schemaInfo;
                             });
         }
@@ -110,6 +104,33 @@ public class ClientSchemaGetter implements SchemaGetter {
 
     @Override
     public SchemaInfo getLatestSchemaInfo() {
+        return latestSchemaInfo;
+    }
+
+    @Override
+    public SchemaInfo refreshLatestSchemaInfo() {
+        try {
+            SchemaInfo schemaInfo =
+                    admin.getTableInfo(tablePath).get(1, TimeUnit.MINUTES).getSchemaInfo();
+            return cacheSchemaInfo(schemaInfo);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(
+                    "Interrupted while refreshing schema for table: " + tablePath, e);
+        } catch (Exception e) {
+            Throwable cause = stripExecutionException(e);
+            if (cause instanceof TableNotExistException) {
+                throw (TableNotExistException) cause;
+            }
+            throw new RuntimeException("Failed to refresh schema for table: " + tablePath, cause);
+        }
+    }
+
+    private synchronized SchemaInfo cacheSchemaInfo(SchemaInfo schemaInfo) {
+        schemasById.put(schemaInfo.getSchemaId(), schemaInfo.getSchema());
+        if (schemaInfo.getSchemaId() > latestSchemaInfo.getSchemaId()) {
+            latestSchemaInfo = schemaInfo;
+        }
         return latestSchemaInfo;
     }
 
