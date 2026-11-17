@@ -304,25 +304,30 @@ class KvTabletSnapshotTargetTest {
         KvTabletSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore);
 
-        periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
+        // The failed snapshot directory can be created and deleted within one async task.
+        // Complete the task before checking its final state.
+        ManuallyTriggeredScheduledExecutorService asyncSnapshotExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+        periodicSnapshotManager =
+                new PeriodicSnapshotManager(
+                        tableBucket,
+                        kvTabletSnapshotTarget,
+                        periodicMaterializeDelay,
+                        asyncSnapshotExecutor,
+                        scheduledExecutorService);
         periodicSnapshotManager.start();
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
         rocksDB.put("key".getBytes(), "val".getBytes());
         periodicSnapshotManager.triggerSnapshot();
+        asyncSnapshotExecutor.trigger();
         long snapshotId1 = 1;
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
-
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isTrue());
 
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
         // the snapshot1 will fail
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId1));
+        assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId1);
         // the snapshot dir should be discarded
         assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isFalse();
         // minRetainOffset shouldn't be updated when the snapshot failed
@@ -337,11 +342,8 @@ class KvTabletSnapshotTargetTest {
         long snapshotId2 = 2;
         // trigger a snapshot again, it'll be success
         periodicSnapshotManager.triggerSnapshot();
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(rocksIncrementalSnapshot.completedSnapshots)
-                                .contains(snapshotId2));
+        asyncSnapshotExecutor.trigger();
+        assertThat(rocksIncrementalSnapshot.completedSnapshots).contains(snapshotId2);
 
         FsPath snapshotPath2 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId2);
         // the snapshot dir should exist again
