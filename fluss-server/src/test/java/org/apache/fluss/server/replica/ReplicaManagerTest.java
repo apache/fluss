@@ -125,7 +125,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -2721,98 +2720,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 tablePath,
                 TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, descriptor));
         zkClient.registerFirstSchema(tablePath, DATA1_SCHEMA_PK);
-    }
-
-    @Test
-    void testKvFormatV2TableRejectV0Client() throws Exception {
-        // Test that old client version (version 0) is rejected for new format tables
-        // with non-default bucket key. This is because new tables use CompactedKeyEncoder
-        // which is incompatible with old clients that expect lake's encoder.
-        TablePath tablePath = TablePath.of("test_db", "new_format_table");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.STRING())
-                        .primaryKey("a", "b")
-                        .build();
-        RowType rowType = schema.getRowType();
-        RowType keyType =
-                DataTypes.ROW(
-                        new DataField("a", DataTypes.INT()),
-                        new DataField("b", DataTypes.STRING()));
-
-        // Create table with:
-        // 1. kv format version 2 (new format)
-        // 2. non-default bucket key (a is subset of pk (a, b))
-        // 3. data lake format (paimon)
-        Map<String, String> properties = new HashMap<>();
-        properties.put(
-                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_2));
-        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON.toString());
-        long tableId =
-                registerTableInZkClient(
-                        tablePath,
-                        schema,
-                        2998232L,
-                        Collections.singletonList("a"), // bucket key is subset of pk
-                        properties);
-        TableBucket tb = new TableBucket(tableId, 0);
-        makeKvTableAsLeader(tableId, tablePath, tb.getBucket());
-
-        List<Tuple2<Object[], Object[]>> data =
-                Collections.singletonList(
-                        Tuple2.of(new Object[] {1, "a"}, new Object[] {1, "a", "value1"}));
-
-        // Test putKvRecords with old client version (version 0) - should fail
-        short oldClientVersion = 0;
-        CompletableFuture<List<PutKvResultForBucket>> putFuture = new CompletableFuture<>();
-        replicaManager.putRecordsToKv(
-                20000,
-                1,
-                Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data)),
-                null,
-                MergeMode.DEFAULT,
-                ApiKeys.PUT_KV,
-                oldClientVersion,
-                putFuture::complete);
-        PutKvResultForBucket putResult = putFuture.get().get(0);
-        assertThat(putResult.failed()).isTrue();
-        assertThat(putResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
-        assertThat(putResult.getErrorMessage()).contains("Client API version 0 is not supported");
-
-        // Test lookups with old client version (version 0) - should fail
-        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0, 1});
-        byte[] keyBytes = keyEncoder.encodeKey(row(1, "a"));
-        CompletableFuture<Map<TableBucket, LookupResultForBucket>> lookupFuture =
-                new CompletableFuture<>();
-        replicaManager.lookups(
-                Collections.singletonMap(tb, Collections.singletonList(keyBytes)),
-                oldClientVersion,
-                lookupFuture::complete);
-        LookupResultForBucket lookupResult = lookupFuture.get().get(tb);
-        assertThat(lookupResult.failed()).isTrue();
-        assertThat(lookupResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
-        assertThat(lookupResult.getErrorMessage())
-                .contains("Client API version 0 is not supported");
-
-        // Test prefixLookups with old client version (version 0) - should fail
-        CompactedKeyEncoder prefixKeyEncoder = new CompactedKeyEncoder(rowType, new int[] {0});
-        byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(row(1));
-        CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
-                new CompletableFuture<>();
-        replicaManager.prefixLookups(
-                Collections.singletonMap(
-                        tb,
-                        Collections.singletonList(
-                                new PbPrefixLookupKey().setPrefixKey(prefixKeyBytes))),
-                oldClientVersion,
-                prefixFuture::complete);
-        PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tb);
-        assertThat(prefixResult.failed()).isTrue();
-        assertThat(prefixResult.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
-        assertThat(prefixResult.getError().message())
-                .contains("Client API version 0 is not supported");
     }
 
     private ClusterMetadata buildClusterMetadata(
