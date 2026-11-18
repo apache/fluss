@@ -33,16 +33,21 @@ use crate::{FlussLakeError, FlussLakePartitionIdentity, RecordBatchStream, Resul
 use arrow::record_batch::RecordBatch;
 use fluss::metadata::{DataType, RowType, TableInfo, TablePath};
 use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal};
+use fluss::row::Datum;
 use futures::StreamExt;
+use opendal_core::ErrorKind as StorageErrorKind;
+use paimon::api::RestError;
 use paimon::catalog::{Catalog, Identifier};
 use paimon::spec::{
     BucketFunctionType, CoreOptions, Datum as PaimonDatum, Predicate as PaimonPredicate,
     PredicateBuilder,
 };
 use paimon::table::Table;
-use paimon::{CatalogFactory, DataSplit, Options};
-use std::collections::HashMap;
+use paimon::{CatalogFactory, CatalogOptions, DataSplit, Options};
+use std::collections::{HashMap, VecDeque};
+use std::error::Error;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell};
 
@@ -50,21 +55,77 @@ mod arrow_conversion;
 #[cfg(test)]
 mod reader_tests;
 
+/// Pinned snapshots a shared source keeps open; older ones are reopened on demand.
+const MAX_PINNED_TABLES: usize = 4;
+
+const PAIMON_PAYLOAD_VERSION: u32 = 1;
+
 /// Default Paimon LakeSource. Planning and reading share the same catalog mapping.
 /// Credentials stay in this runtime object, never in the split payload.
 #[derive(Clone)]
 pub struct PaimonLakeSource {
     catalog_options: PaimonCatalogOptions,
+    catalog_overrides: HashMap<String, String>,
     baseline_reader: Option<Arc<dyn PaimonBaselineReader>>,
     catalog: Arc<OnceCell<Arc<dyn Catalog>>>,
-    pinned_table: Arc<Mutex<Option<PinnedTable>>>,
+    pinned_tables: Arc<PinnedTables>,
 }
 
-struct PinnedTable {
+#[derive(PartialEq, Eq)]
+struct PinnedTableKey {
     table_id: i64,
     path: TablePath,
     snapshot_id: i64,
-    table: Arc<Table>,
+}
+
+type PinnedTableCell = Arc<OnceCell<Arc<Table>>>;
+
+/// The most recently pinned tables, each opened once however many tasks ask for it.
+#[derive(Default)]
+struct PinnedTables {
+    entries: Mutex<VecDeque<(PinnedTableKey, PinnedTableCell)>>,
+}
+
+impl PinnedTables {
+    async fn get_or_open<F, Fut>(&self, key: PinnedTableKey, open: F) -> Result<Arc<Table>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Table>>,
+    {
+        // Open outside the lock so a slow snapshot never delays the others.
+        self.cell(key)
+            .await
+            .get_or_try_init(|| async { open().await.map(Arc::new) })
+            .await
+            .cloned()
+    }
+
+    /// Returns the key's cell as the most recently used entry.
+    async fn cell(&self, key: PinnedTableKey) -> PinnedTableCell {
+        let mut entries = self.entries.lock().await;
+        let cached = entries
+            .iter()
+            .position(|(cached, _)| *cached == key)
+            .and_then(|index| entries.remove(index));
+        let cell = match cached {
+            Some((_, cell)) => cell,
+            None => {
+                // A cell held by a caller has an open in flight; evicting it would open twice.
+                while entries.len() >= MAX_PINNED_TABLES {
+                    let Some(idle) = entries
+                        .iter()
+                        .position(|(_, cell)| Arc::strong_count(cell) == 1)
+                    else {
+                        break;
+                    };
+                    entries.remove(idle);
+                }
+                PinnedTableCell::default()
+            }
+        };
+        entries.push_back((key, Arc::clone(&cell)));
+        cell
+    }
 }
 
 impl PaimonLakeSource {
@@ -74,9 +135,10 @@ impl PaimonLakeSource {
             catalog_options: PaimonCatalogOptions::from_table_info_with_overrides(
                 table_info, overrides,
             )?,
+            catalog_overrides: overrides.clone(),
             baseline_reader: None,
             catalog: Arc::new(OnceCell::new()),
-            pinned_table: Arc::new(Mutex::new(None)),
+            pinned_tables: Arc::default(),
         })
     }
 
@@ -94,36 +156,43 @@ impl PaimonLakeSource {
             .await
     }
 
+    /// Rejects a table whose properties resolve to another catalog than this source's.
+    fn ensure_same_catalog(&self, info: &TableInfo) -> Result<()> {
+        let resolved =
+            PaimonCatalogOptions::from_table_info_with_overrides(info, &self.catalog_overrides)?;
+        if resolved.identity() != self.catalog_options.identity() {
+            return Err(FlussLakeError::InvalidReadContext(format!(
+                "table {} uses a different Paimon catalog than this source; create a source per catalog",
+                info.table_path
+            )));
+        }
+        Ok(())
+    }
+
     async fn pinned_table(
         &self,
         info: &TableInfo,
         snapshot_id: i64,
         reconcile_primary_key: bool,
     ) -> Result<Arc<Table>> {
+        self.ensure_same_catalog(info)?;
         let path = crate::table::resolve_lake_table_path(info)?;
-        // Keep one snapshot per source; active streams retain their own table.
-        // Holding this lock through initialization also coalesces concurrent opens.
-        let mut cached = self.pinned_table.lock().await;
-        if !cached.as_ref().is_some_and(|entry| {
-            entry.table_id == info.table_id
-                && entry.path == path
-                && entry.snapshot_id == snapshot_id
-        }) {
-            let table =
-                open_pinned_table(self.catalog().await?.as_ref(), &path, snapshot_id).await?;
-            *cached = Some(PinnedTable {
-                table_id: info.table_id,
-                path: path.clone(),
-                snapshot_id,
-                table: Arc::new(table),
-            });
-        }
-        let table = cached.as_ref().unwrap().table.clone();
-        drop(cached);
+        let key = PinnedTableKey {
+            table_id: info.table_id,
+            path: path.clone(),
+            snapshot_id,
+        };
+        let table = self
+            .pinned_tables
+            .get_or_open(key, || async {
+                open_pinned_table(self.catalog().await?.as_ref(), &path, snapshot_id).await
+            })
+            .await?;
         // Callers can use the same snapshot with different capture metadata or
         // lake-only/UnionRead semantics. These checks are not cached with the table.
         if reconcile_primary_key {
             ensure_deduplicate_merge_engine(table.schema().options(), &path)?;
+            ensure_last_write_wins(table.schema().options(), info, &path)?;
         }
         validate_paimon_layout(
             &path,
@@ -201,8 +270,14 @@ impl crate::LakeSource for PaimonLakeSource {
 /// Property prefix carrying the Paimon catalog configuration of a table.
 const PAIMON_PROPERTY_PREFIX: &str = "table.datalake.paimon.";
 
-/// Paimon table option that pins a scan to one snapshot id.
-const PAIMON_SCAN_VERSION_OPTION: &str = "scan.version";
+/// Paimon table option that pins a scan to one snapshot id, never to a tag.
+const PAIMON_SCAN_SNAPSHOT_ID_OPTION: &str = "scan.snapshot-id";
+
+const FLUSS_DELETE_BEHAVIOR_OPTION: &str = "table.delete.behavior";
+
+const FLUSS_DELETE_BEHAVIORS_WITHOUT_DELETES: [&str; 2] = ["IGNORE", "DISABLE"];
+
+const DEFAULT_PAIMON_METASTORE: &str = "filesystem";
 
 /// Catalog configuration needed to reopen one Paimon table.
 ///
@@ -256,6 +331,23 @@ impl PaimonCatalogOptions {
         Ok(Self { options })
     }
 
+    /// The metastore, URI and warehouse that name a catalog, ignoring how a path is spelled.
+    fn identity(&self) -> (String, Option<&str>, Option<&str>) {
+        let metastore = self
+            .options
+            .get(CatalogOptions::METASTORE)
+            .map_or(DEFAULT_PAIMON_METASTORE, String::as_str)
+            .to_ascii_lowercase();
+        let location = |key| {
+            self.options
+                .get(key)
+                .map(|value: &String| value.trim_end_matches('/'))
+        };
+        let warehouse = location(CatalogOptions::WAREHOUSE)
+            .map(|path| path.strip_prefix("file://").unwrap_or(path));
+        (metastore, location(CatalogOptions::URI), warehouse)
+    }
+
     fn as_map(&self) -> &HashMap<String, String> {
         &self.options
     }
@@ -263,7 +355,7 @@ impl PaimonCatalogOptions {
 
 /// Opens a Paimon table at the captured snapshot and its historical schema.
 ///
-/// Pinning uses the Paimon `scan.version` option so that both planning and
+/// Pinning uses the Paimon `scan.snapshot-id` option so that both planning and
 /// execution observe exactly the snapshot frozen by the planner, regardless of
 /// later lake commits.
 async fn open_pinned_table(
@@ -286,15 +378,13 @@ async fn open_pinned_table(
 
     let mut pinned = HashMap::with_capacity(1);
     pinned.insert(
-        PAIMON_SCAN_VERSION_OPTION.to_string(),
+        PAIMON_SCAN_SNAPSHOT_ID_OPTION.to_string(),
         snapshot_id.to_string(),
     );
     let table = table
-        .copy_with_time_travel(pinned)
+        .copy_with_time_travel_strict(pinned)
         .await
         .map_err(|error| paimon_error("pin Paimon snapshot schema", error))?;
-    // Paimon's time-travel helper can fall back to the current table when
-    // resolution fails. UnionRead must not execute frozen tasks in that mode.
     if table.travel_snapshot().map(|snapshot| snapshot.id()) != Some(snapshot_id) {
         return Err(FlussLakeError::DataUnavailable(format!(
             "cannot resolve frozen Paimon snapshot {snapshot_id} for {table_path}"
@@ -577,12 +667,13 @@ async fn plan_snapshot_splits(
             bucket_id: lake_bucket_id(split),
             bucket_count: split.total_buckets(),
             estimated_rows: split
-                .merged_row_count()
-                .and_then(|v| usize::try_from(v).ok()),
+                .row_counts_known()
+                .then(|| split.row_count())
+                .and_then(|rows| usize::try_from(rows).ok()),
             estimated_size: split.data_files().iter().try_fold(0usize, |total, file| {
                 total.checked_add(usize::try_from(file.file_size).ok()?)
             }),
-            payload_version: 1,
+            payload_version: PAIMON_PAYLOAD_VERSION,
             payload: serde_json::to_vec(split).map_err(|error| {
                 FlussLakeError::PlanningFailed(format!("failed to encode Paimon split: {error}"))
             })?,
@@ -698,6 +789,37 @@ fn ensure_deduplicate_merge_engine(
     Ok(())
 }
 
+/// Requires Paimon to keep each key's last write, as the Fluss log tail does.
+fn ensure_last_write_wins(
+    table_options: &HashMap<String, String>,
+    info: &TableInfo,
+    table_path: &TablePath,
+) -> Result<()> {
+    let core_options = CoreOptions::new(table_options);
+    let sequence_fields = core_options.sequence_fields();
+    if !sequence_fields.is_empty() {
+        return Err(FlussLakeError::NotLakeReadable(format!(
+            "the Paimon table for {table_path} orders versions of a key by sequence.field '{}'; matching Fluss needs the VERSIONED merge engine on that column, which UnionRead does not support yet",
+            sequence_fields.join(",")
+        )));
+    }
+    // Dropped deletes match Fluss only when Fluss drops or rejects them too.
+    let fluss_applies_deletes = !info
+        .properties
+        .get(FLUSS_DELETE_BEHAVIOR_OPTION)
+        .is_some_and(|behavior| {
+            FLUSS_DELETE_BEHAVIORS_WITHOUT_DELETES
+                .iter()
+                .any(|without_deletes| behavior.eq_ignore_ascii_case(without_deletes))
+        });
+    if core_options.ignore_delete() && fluss_applies_deletes {
+        return Err(FlussLakeError::NotLakeReadable(format!(
+            "the Paimon table for {table_path} drops deletes ('ignore-delete=true') but the Fluss table applies them; set '{FLUSS_DELETE_BEHAVIOR_OPTION}' to IGNORE or DISABLE, or remove 'paimon.ignore-delete'"
+        )));
+    }
+    Ok(())
+}
+
 fn split_partition_identity(
     split: &DataSplit,
     partition_keys: &[String],
@@ -777,8 +899,7 @@ fn partition_literal(datum: PaimonDatum) -> Result<Literal> {
     })
 }
 
-fn to_paimon_scalar(datum: &fluss::row::Datum<'_>) -> Option<PaimonDatum> {
-    use fluss::row::Datum;
+fn to_paimon_scalar(datum: &Datum<'_>) -> Option<PaimonDatum> {
     Some(match datum {
         Datum::Bool(v) => PaimonDatum::Bool(*v),
         Datum::Int8(v) => PaimonDatum::TinyInt(*v),
@@ -800,6 +921,12 @@ fn to_paimon_scalar(datum: &fluss::row::Datum<'_>) -> Option<PaimonDatum> {
         // Floating equality has different NaN/zero semantics in Paimon.
         _ => return None,
     })
+}
+
+/// The authorization marker of a serialized split, which `DataSplit` keeps private.
+#[derive(serde::Deserialize)]
+struct SplitAuthorization {
+    query_auth_required: bool,
 }
 
 /// Reads several frozen Paimon splits as one finite Arrow batch stream.
@@ -827,10 +954,10 @@ async fn read_snapshot_splits(
         .iter()
         .map(|task| {
             task.validate("paimon", snapshot_id)?;
-            if task.payload_version != 1 {
-                return Err(FlussLakeError::IncompatibleSplitVersion(
-                    "Paimon requires V1 lake task payloads".to_string(),
-                ));
+            if task.payload_version != PAIMON_PAYLOAD_VERSION {
+                return Err(FlussLakeError::IncompatibleSplitVersion(format!(
+                    "Paimon requires V{PAIMON_PAYLOAD_VERSION} lake task payloads"
+                )));
             }
             if task.bucket_id != expected_bucket_id
                 || (info.has_primary_key() && task.bucket_id < 0)
@@ -848,10 +975,6 @@ async fn read_snapshot_splits(
                 // TableRead checks this transported marker itself. A replacement
                 // reader does not pass through TableRead, and rules can be empty
                 // even when a grant is required.
-                #[derive(serde::Deserialize)]
-                struct SplitAuthorization {
-                    query_auth_required: bool,
-                }
                 let auth: SplitAuthorization =
                     serde_json::from_slice(&task.payload).map_err(|error| {
                         FlussLakeError::PlanningFailed(format!(
@@ -1033,35 +1156,62 @@ impl PaimonProjection {
     }
 }
 
+type FailureKind = fn(String) -> FlussLakeError;
+
+/// Classifies a Paimon failure by its first typed cause; message text is not stable.
 fn paimon_error(action: &str, error: paimon::Error) -> FlussLakeError {
-    // Storage errors may be wrapped by Parquet before they reach Paimon. The
-    // outer Display may hide its cause, so include the available cause messages
-    // before checking storage and connection failures.
-    if matches!(&error, paimon::Error::ColumnNotExist { .. }) {
-        return FlussLakeError::SchemaIncompatible(error_message(action, &error));
+    let kind = std::iter::successors(Some(&error as &(dyn Error + 'static)), |&cause| {
+        next_cause(cause)
+    })
+    .find_map(paimon_failure_kind)
+    .unwrap_or(FlussLakeError::Internal);
+    kind(error_message(action, &error))
+}
+
+/// Follows `Error::source`, and also the causes that `UnexpectedError` and
+/// `io::Error` keep out of it.
+fn next_cause<'a>(cause: &'a (dyn Error + 'static)) -> Option<&'a (dyn Error + 'static)> {
+    if let Some(paimon::Error::UnexpectedError {
+        source: Some(source),
+        ..
+    }) = cause.downcast_ref::<paimon::Error>()
+    {
+        return Some(source.as_ref());
     }
-    let diagnostic = error_message(action, &error);
-    let message = diagnostic.to_ascii_lowercase();
-    let unavailable = message.contains("notfound")
-        || message.contains("not found")
-        || message.contains("does not exist")
-        || message.contains("no such file");
-    // Paimon's Parquet adapter stringifies I/O errors, losing their source type.
-    // Preserve the same storage-access category as an unwrapped IoUnexpected.
-    let connection_error = matches!(
-        &error,
-        paimon::Error::IoUnexpected { .. } | paimon::Error::RestApi { .. }
-    ) || message.contains("io operation failed on underlying storage:")
-        || message.contains("connection")
-        || message.contains("timed out")
-        || message.contains("timeout")
-        || message.contains("temporarily unavailable");
-    if unavailable {
-        FlussLakeError::DataUnavailable(diagnostic)
-    } else if connection_error {
-        FlussLakeError::ConnectionError(diagnostic)
-    } else {
-        FlussLakeError::Internal(diagnostic)
+    if let Some(inner) = cause
+        .downcast_ref::<std::io::Error>()
+        .and_then(std::io::Error::get_ref)
+    {
+        return Some(inner);
+    }
+    cause.source()
+}
+
+fn paimon_failure_kind(cause: &(dyn Error + 'static)) -> Option<FailureKind> {
+    if cause
+        .downcast_ref::<reqwest::Error>()
+        .is_some_and(|error| error.is_connect() || error.is_timeout() || error.is_request())
+    {
+        return Some(FlussLakeError::ConnectionError);
+    }
+    match cause.downcast_ref::<paimon::Error>()? {
+        paimon::Error::ColumnNotExist { .. } => Some(FlussLakeError::SchemaIncompatible),
+        paimon::Error::DatabaseNotExist { .. }
+        | paimon::Error::TableNotExist { .. }
+        | paimon::Error::SnapshotNotExist { .. }
+        | paimon::Error::RestApi {
+            source: RestError::NoSuchResource { .. },
+        } => Some(FlussLakeError::DataUnavailable),
+        paimon::Error::IoUnexpected { source, .. }
+            if source.kind() == StorageErrorKind::NotFound =>
+        {
+            Some(FlussLakeError::DataUnavailable)
+        }
+        paimon::Error::IoUnexpected { .. } | paimon::Error::RestApi { .. } => {
+            Some(FlussLakeError::ConnectionError)
+        }
+        paimon::Error::Unsupported { .. } => Some(FlussLakeError::NotLakeReadable),
+        _ => None,
     }
 }
 
@@ -1070,11 +1220,17 @@ mod tests {
     use super::*;
     use fluss::metadata::{DataField, DataTypes, Schema};
     use fluss::predicate::{Literal, Predicate, col};
+    use opendal_core::Error as StorageError;
+    use paimon::spec::{
+        BinaryRow, DataField as PaimonField, DataType as PaimonType, DecimalType, DoubleType,
+        IntType, TimestampType, VarCharType,
+    };
+    use std::mem::discriminant;
 
     // Model a backend wrapper that hides its cause in both Display and Debug.
     #[derive(thiserror::Error)]
     #[error("storage read failed")]
-    struct ReadFailure(#[source] std::io::Error);
+    struct ReadFailure(#[source] paimon::Error);
 
     impl Debug for ReadFailure {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1082,28 +1238,142 @@ mod tests {
         }
     }
 
-    #[test]
-    fn wrapped_backend_causes_preserve_diagnostics_and_failure_classification() {
-        for (detail, expected) in [
-            ("No such file: frozen.parquet", "unavailable"),
-            ("connection timed out reading frozen.parquet", "connection"),
-            ("invalid Parquet page", "internal"),
-        ] {
-            let source = paimon::Error::DataInvalid {
-                message: "wrapped read failure".into(),
-                source: Some(Box::new(ReadFailure(std::io::Error::other(detail)))),
-            };
-            assert!(!source.to_string().contains(detail));
-            let error = paimon_error("read frozen Paimon task", source);
-            let classification = match &error {
-                FlussLakeError::DataUnavailable(_) => "unavailable",
-                FlussLakeError::ConnectionError(_) => "connection",
-                FlussLakeError::Internal(_) => "internal",
-                other => panic!("unexpected error category: {other}"),
-            };
-            assert_eq!(classification, expected, "{detail}");
-            assert!(error.to_string().contains(detail));
+    fn storage_error(kind: StorageErrorKind, detail: &str) -> paimon::Error {
+        StorageError::new(kind, detail).into()
+    }
+
+    fn wrapped(cause: paimon::Error) -> paimon::Error {
+        paimon::Error::DataInvalid {
+            message: "wrapped read failure".into(),
+            source: Some(Box::new(ReadFailure(cause))),
         }
+    }
+
+    #[test]
+    fn paimon_failures_are_classified_by_typed_cause() {
+        let cases: Vec<(paimon::Error, FailureKind)> = vec![
+            (
+                paimon::Error::SnapshotNotExist { snapshot_id: 7 },
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                paimon::Error::TableNotExist {
+                    full_name: "fluss.orders".into(),
+                },
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                storage_error(StorageErrorKind::NotFound, "frozen.parquet"),
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                wrapped(storage_error(StorageErrorKind::NotFound, "frozen.parquet")),
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                storage_error(StorageErrorKind::Unexpected, "connection reset"),
+                FlussLakeError::ConnectionError,
+            ),
+            (
+                wrapped(storage_error(
+                    StorageErrorKind::PermissionDenied,
+                    "frozen.parquet",
+                )),
+                FlussLakeError::ConnectionError,
+            ),
+            (
+                paimon::Error::RestApi {
+                    source: RestError::NoSuchResource {
+                        resource_type: Some("TABLE".into()),
+                        resource_name: Some("orders".into()),
+                        message: "dropped".into(),
+                    },
+                },
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                paimon::Error::RestApi {
+                    source: RestError::ServiceUnavailable {
+                        message: "retry later".into(),
+                    },
+                },
+                FlussLakeError::ConnectionError,
+            ),
+            (
+                paimon::Error::ColumnNotExist {
+                    full_name: "fluss.orders".into(),
+                    column: "price".into(),
+                },
+                FlussLakeError::SchemaIncompatible,
+            ),
+            (
+                paimon::Error::Unsupported {
+                    message: "query-auth.enabled".into(),
+                },
+                FlussLakeError::NotLakeReadable,
+            ),
+            (
+                paimon::Error::UnexpectedError {
+                    message: "orc read failed".into(),
+                    source: Some(Box::new(storage_error(
+                        StorageErrorKind::NotFound,
+                        "frozen.orc",
+                    ))),
+                },
+                FlussLakeError::DataUnavailable,
+            ),
+            (
+                wrapped(paimon::Error::UnexpectedError {
+                    message: "orc read failed".into(),
+                    source: Some(Box::new(std::io::Error::other(storage_error(
+                        StorageErrorKind::Unexpected,
+                        "connection reset",
+                    )))),
+                }),
+                FlussLakeError::ConnectionError,
+            ),
+            (
+                paimon::Error::DataInvalid {
+                    message: "orc read failed".into(),
+                    source: Some(Box::new(std::io::Error::other(storage_error(
+                        StorageErrorKind::NotFound,
+                        "frozen.orc",
+                    )))),
+                },
+                FlussLakeError::DataUnavailable,
+            ),
+            // Wording that looks like a missing file is still an internal failure.
+            (
+                paimon::Error::UnexpectedError {
+                    message: "Partition key 'p' not found in schema fields".into(),
+                    source: None,
+                },
+                FlussLakeError::Internal,
+            ),
+            (
+                wrapped(paimon::Error::DataTypeInvalid {
+                    message: "connection timed out".into(),
+                }),
+                FlussLakeError::Internal,
+            ),
+        ];
+        for (error, expected) in cases {
+            let description = error.to_string();
+            let actual = paimon_error("read frozen Paimon task", error);
+            assert_eq!(
+                discriminant(&actual),
+                discriminant(&expected(String::new())),
+                "{description} was classified as {actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagnostics_keep_causes_hidden_by_wrappers() {
+        let source = wrapped(storage_error(StorageErrorKind::NotFound, "frozen.parquet"));
+        assert!(!source.to_string().contains("frozen.parquet"));
+        let error = paimon_error("read frozen Paimon task", source);
+        assert!(error.to_string().contains("frozen.parquet"));
     }
 
     #[test]
@@ -1156,10 +1426,6 @@ mod tests {
 
     #[test]
     fn translates_core_string_membership_and_null_semantics_to_paimon() {
-        use paimon::spec::{
-            DataField as PaimonField, DataType as PaimonType, IntType, VarCharType,
-        };
-
         let fields = vec![
             PaimonField::new(0, "id".to_string(), PaimonType::Int(IntType::new())),
             PaimonField::new(
@@ -1195,9 +1461,6 @@ mod tests {
 
     #[test]
     fn numeric_pushdown_uses_exact_bounds_and_keeps_floats_residual() {
-        use paimon::spec::{
-            DataField as PaimonField, DataType as PaimonType, DecimalType, DoubleType, IntType,
-        };
         let row_type = RowType::new(vec![
             DataField::new("i", DataTypes::int(), None),
             DataField::new("d", DataTypes::decimal(5, 2), None),
@@ -1396,19 +1659,16 @@ mod tests {
 
     #[test]
     fn typed_lake_partitions_match_fluss_identity_and_scope() {
-        use paimon::spec::{
-            BinaryRow, DataField as Field, DataType as Type, TimestampType, VarCharType,
-        };
         let fields = vec![
-            Field::new(
+            PaimonField::new(
                 0,
                 "region".into(),
-                Type::VarChar(VarCharType::string_type()),
+                PaimonType::VarChar(VarCharType::string_type()),
             ),
-            Field::new(
+            PaimonField::new(
                 1,
                 "ts".into(),
-                Type::Timestamp(TimestampType::new(9).unwrap()),
+                PaimonType::Timestamp(TimestampType::new(9).unwrap()),
             ),
         ];
         let row_type = RowType::new(vec![
