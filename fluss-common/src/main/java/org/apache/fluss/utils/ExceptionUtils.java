@@ -89,6 +89,19 @@ public final class ExceptionUtils {
     }
 
     /**
+     * Unwraps leading {@link CompletionException} and {@link ExecutionException} instances, even
+     * when the two types alternate. Returns {@code null} when the input is {@code null}.
+     */
+    @Nullable
+    public static Throwable stripFutureException(@Nullable Throwable throwable) {
+        while ((throwable instanceof CompletionException || throwable instanceof ExecutionException)
+                && throwable.getCause() != null) {
+            throwable = throwable.getCause();
+        }
+        return throwable;
+    }
+
+    /**
      * Checks whether the given exception indicates a situation that may leave the JVM in a
      * corrupted state, meaning a state where continued normal operation can only be guaranteed via
      * clean process restart.

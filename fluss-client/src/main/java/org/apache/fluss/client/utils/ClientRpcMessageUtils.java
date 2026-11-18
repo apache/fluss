@@ -45,6 +45,7 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -72,6 +73,7 @@ import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
@@ -1051,6 +1053,20 @@ public class ClientRpcMessageUtils {
         return new ClusterDescription(coordinator, coordinatorStandbys, tabletServers, loads);
     }
 
+    /** Decodes the tablet server owning a consumer group from its discovery response. */
+    public static ServerNode toConsumerGroupOwner(FindConsumerGroupOwnerResponse response) {
+        if (response == null || !response.hasOwner()) {
+            throw new ConsumerGroupOwnerNotAvailableException(
+                    "FindConsumerGroupOwner response does not contain an owner");
+        }
+        PbServerNode owner = response.getOwner();
+        if (!owner.hasHost() || !owner.hasPort()) {
+            throw new ConsumerGroupOwnerNotAvailableException(
+                    "FindConsumerGroupOwner response contains an incomplete owner");
+        }
+        return toServerNode(owner, ServerType.TABLET_SERVER);
+    }
+
     private static ServerNode toServerNode(PbServerNode node, ServerType type) {
         return new ServerNode(
                 node.getNodeId(),
@@ -1275,5 +1291,27 @@ public class ClientRpcMessageUtils {
             errors.put(group.getGroupId(), ApiError.fromErrorMessage(group));
         }
         return errors;
+    }
+
+    /**
+     * Checks a {@link CommitConsumerOffsetsResponse} for per-bucket errors, throwing the first
+     * error encountered.
+     *
+     * @param response the response from the tablet server
+     * @return always {@code null}; the method exists to be used as a {@code Function} in {@code
+     *     thenApply}
+     */
+    public static Void checkCommitConsumerOffsetsResponse(CommitConsumerOffsetsResponse response) {
+        for (PbCommitConsumerOffsetsResponseTable table : response.getTablesList()) {
+            for (PbCommitConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                Errors error =
+                        bucket.hasErrorCode() ? Errors.forCode(bucket.getErrorCode()) : Errors.NONE;
+                if (error != Errors.NONE) {
+                    throw error.exception(
+                            bucket.hasErrorMessage() ? bucket.getErrorMessage() : null);
+                }
+            }
+        }
+        return null;
     }
 }

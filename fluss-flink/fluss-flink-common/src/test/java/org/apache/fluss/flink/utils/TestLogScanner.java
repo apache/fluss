@@ -17,8 +17,10 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -136,6 +138,52 @@ public class TestLogScanner implements LogScanner {
 
     @Override
     public void subscribe(long partitionId, int bucket, long offset) {}
+
+    @Override
+    public void subscribeFromCommittedOffset(int bucket) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(long partitionId, int bucket) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitSync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitSync(Duration timeout) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitSync(Map<TableBucket, OffsetMetadata> offsets) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitSync(Map<TableBucket, OffsetMetadata> offsets, Duration timeout) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitAsync() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitAsync(OffsetCommitCallback callback) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void commitAsync(
+            Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback) {
+        throw new UnsupportedOperationException();
+    }
 
     @Override
     public void unsubscribe(long partitionId, int bucket) {}

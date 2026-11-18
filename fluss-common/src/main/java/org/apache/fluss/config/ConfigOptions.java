@@ -1954,6 +1954,34 @@ public class ConfigOptions {
                             "Local directory that is used by client for"
                                     + " storing the data files (like kv snapshot, log segment files) to read temporarily");
 
+    public static final ConfigOption<String> CLIENT_CONSUMER_GROUP_ID =
+            key("client.consumer.group.id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A unique identifier for the consumer group used to store offsets.");
+
+    public static final ConfigOption<Boolean> CLIENT_CONSUMER_AUTO_COMMIT_ENABLED =
+            key("client.consumer.auto-commit.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether consumed offsets are committed periodically in the background.");
+
+    public static final ConfigOption<Duration> CLIENT_CONSUMER_AUTO_COMMIT_INTERVAL =
+            key("client.consumer.auto-commit.interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(5))
+                    .withDescription("The interval between automatic consumer offset commits.");
+
+    public static final ConfigOption<ConsumerOffsetReset> CLIENT_CONSUMER_AUTO_OFFSET_RESET =
+            key("client.consumer.auto-offset-reset")
+                    .enumType(ConsumerOffsetReset.class)
+                    .defaultValue(ConsumerOffsetReset.EARLIEST)
+                    .withDescription(
+                            "Controls the starting position when no committed offset exists. "
+                                    + "Supported values are earliest, latest, and none.");
+
     public static final ConfigOption<Integer> REMOTE_FILE_DOWNLOAD_THREAD_NUM =
             key("client.remote-file.download-thread-num")
                     .intType()

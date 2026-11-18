@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.converter.RowToPojoConverter;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.TypedScanRecord;
@@ -76,6 +77,52 @@ public class TypedLogScannerImpl<T> implements TypedLogScanner<T> {
     @Override
     public void subscribeFromBeginning(long partitionId, int bucket) {
         delegate.subscribeFromBeginning(partitionId, bucket);
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(int bucket) {
+        delegate.subscribeFromCommittedOffset(bucket);
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(long partitionId, int bucket) {
+        delegate.subscribeFromCommittedOffset(partitionId, bucket);
+    }
+
+    @Override
+    public void commitSync() {
+        delegate.commitSync();
+    }
+
+    @Override
+    public void commitSync(Duration timeout) {
+        delegate.commitSync(timeout);
+    }
+
+    @Override
+    public void commitSync(Map<TableBucket, OffsetMetadata> offsets) {
+        delegate.commitSync(offsets);
+    }
+
+    @Override
+    public void commitSync(Map<TableBucket, OffsetMetadata> offsets, Duration timeout) {
+        delegate.commitSync(offsets, timeout);
+    }
+
+    @Override
+    public void commitAsync() {
+        delegate.commitAsync();
+    }
+
+    @Override
+    public void commitAsync(OffsetCommitCallback callback) {
+        delegate.commitAsync(callback);
+    }
+
+    @Override
+    public void commitAsync(
+            Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback) {
+        delegate.commitAsync(offsets, callback);
     }
 
     @Override

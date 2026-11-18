@@ -130,7 +130,8 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
                         scannerMetricGroup,
                         remoteFileDownloader,
                         LogRecordReadContext.SchemaResolution.DYNAMIC),
-                scannerMetricGroup);
+                scannerMetricGroup,
+                conf);
     }
 
     @VisibleForTesting
@@ -141,7 +142,25 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             LogScannerStatus logScannerStatus,
             LogFetcher logFetcher,
             ScannerMetricGroup scannerMetricGroup) {
-        super(scannerName, logScannerStatus, logFetcher, scannerMetricGroup);
+        this(
+                scannerName,
+                metadataUpdater,
+                admin,
+                logScannerStatus,
+                logFetcher,
+                scannerMetricGroup,
+                new Configuration());
+    }
+
+    private MultiTableLogScannerImpl(
+            String scannerName,
+            MetadataUpdater metadataUpdater,
+            Admin admin,
+            LogScannerStatus logScannerStatus,
+            LogFetcher logFetcher,
+            ScannerMetricGroup scannerMetricGroup,
+            Configuration conf) {
+        super(scannerName, logScannerStatus, logFetcher, scannerMetricGroup, conf, metadataUpdater);
         this.metadataUpdater = metadataUpdater;
         this.admin = admin;
     }
@@ -180,6 +199,25 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            trackSubscription(tablePath, tableBucket);
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(TablePath tablePath, int bucket) {
+        acquireAndEnsureOpen();
+        try {
+            TableInfo tableInfo = getTableInfo(tablePath);
+            if (tableInfo.isPartitioned()) {
+                throw new IllegalStateException(
+                        "Table " + tablePath + " is partitioned; provide a partition id.");
+            }
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            registerIfAbsent(tablePath, tableInfo);
+            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucket);
+            subscribeFromCommittedOffset(tableBucket);
             trackSubscription(tablePath, tableBucket);
         } finally {
             release();
@@ -229,6 +267,26 @@ public class MultiTableLogScannerImpl extends AbstractLogScanner<MultiTableRecor
             registerIfAbsent(tablePath, tableInfo);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucket);
             logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            trackSubscription(tablePath, tableBucket);
+        } finally {
+            release();
+        }
+    }
+
+    @Override
+    public void subscribeFromCommittedOffset(TablePath tablePath, long partitionId, int bucket) {
+        acquireAndEnsureOpen();
+        try {
+            TableInfo tableInfo = getTableInfo(tablePath);
+            if (!tableInfo.isPartitioned()) {
+                throw new IllegalStateException("Table " + tablePath + " is not partitioned.");
+            }
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            metadataUpdater.checkAndUpdatePartitionMetadata(
+                    tablePath, Collections.singleton(partitionId));
+            registerIfAbsent(tablePath, tableInfo);
+            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucket);
+            subscribeFromCommittedOffset(tableBucket);
             trackSubscription(tablePath, tableBucket);
         } finally {
             release();
