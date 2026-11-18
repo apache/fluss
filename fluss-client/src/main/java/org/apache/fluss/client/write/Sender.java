@@ -57,6 +57,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -77,6 +78,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class Sender implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(Sender.class);
+
+    /** Minimum time between two coordinator checks of the bucket layout of one table. */
+    private static final long BUCKET_LAYOUT_CHECK_INTERVAL_MS = 1000L;
 
     /** the record accumulator that batches records. */
     private final RecordAccumulator accumulator;
@@ -115,6 +119,9 @@ public class Sender implements Runnable {
 
     // TODO if we introduce client metadata cache, these parameters need to remove.
     private final MetadataUpdater metadataUpdater;
+
+    /** Table or partition -> time of its last bucket layout check. Sender thread only. */
+    private final Map<PhysicalTablePath, Long> lastBucketLayoutChecks = new HashMap<>();
 
     /** all the state related to writer, in particular the writer id and batch sequence numbers. */
     private final IdempotenceManager idempotenceManager;
@@ -279,6 +286,7 @@ public class Sender implements Runnable {
                     "Client update metadata due to unknown leader tables from the batched records: {}",
                     readyCheckResult.unknownLeaderTables);
         }
+        checkBucketLayouts(clusterSnapshot, readyCheckResult.bucketLayoutCheckTables);
 
         Set<Integer> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
@@ -860,6 +868,51 @@ public class Sender implements Runnable {
                     retryBackoffMs,
                     retries - batch.writeBatch().attempts(),
                     error.formatErrMsg());
+        }
+    }
+
+    /**
+     * Checks with the coordinator the bucket layout of the tables or partitions whose queued
+     * batches target buckets missing from the cached layout. Fails the batches routed with an
+     * outdated bucket count only if the coordinator confirms that the buckets do not exist, and
+     * keeps waiting for their leaders otherwise. Other tables keep being sent to.
+     */
+    private void checkBucketLayouts(Cluster cluster, Set<PhysicalTablePath> targetPaths) {
+        lastBucketLayoutChecks.keySet().retainAll(targetPaths);
+        long now = System.currentTimeMillis();
+        for (PhysicalTablePath targetPath : targetPaths) {
+            Long lastCheck = lastBucketLayoutChecks.get(targetPath);
+            if (lastCheck != null && now - lastCheck < BUCKET_LAYOUT_CHECK_INTERVAL_MS) {
+                continue;
+            }
+            lastBucketLayoutChecks.put(targetPath, now);
+            Long tableId = cluster.getTableId(targetPath.getTablePath()).orElse(null);
+            Long partitionId =
+                    targetPath.getPartitionName() == null
+                            ? null
+                            : cluster.getPartitionId(targetPath).orElse(null);
+            if (tableId == null || (targetPath.getPartitionName() != null && partitionId == null)) {
+                continue;
+            }
+            try {
+                OptionalInt bucketCount =
+                        metadataUpdater.getBucketCountFromCoordinator(
+                                targetPath, tableId, partitionId);
+                if (bucketCount.isPresent()
+                        && accumulator.abortBatchesBeyondBucketCount(
+                                targetPath, bucketCount.getAsInt())) {
+                    continue;
+                }
+                // The buckets exist, or the cached table or partition is outdated: refresh the
+                // cached layout so that the leaders can be found.
+                metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(targetPath));
+            } catch (Exception e) {
+                LOG.warn(
+                        "Failed to check the bucket layout of {} with the coordinator, "
+                                + "checking again later.",
+                        targetPath,
+                        e);
+            }
         }
     }
 

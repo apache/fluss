@@ -825,6 +825,90 @@ public class LookupSenderTest {
     }
 
     @Test
+    void testMissingPartitionOfRecreatedTableFailsWithTableNotExist() throws Exception {
+        ManualClock clock = new ManualClock(1_000);
+        restartLookupSenderWithoutThread(new ExponentialBackoff(100, 2, 10_000, 0), clock);
+        PartitionNotExistException partitionDropped =
+                new PartitionNotExistException("partition dropped");
+        metadataUpdater.failLeaderLookups(TABLE_BUCKET, Integer.MAX_VALUE, partitionDropped);
+        metadataUpdater.failLeaderLookups(OTHER_TABLE_BUCKET, Integer.MAX_VALUE, partitionDropped);
+        // Refreshing the table alone shows that the path now belongs to a re-created table.
+        metadataUpdater.remapTableOnRefresh(DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK + 100);
+        LookupQuery query1 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
+        LookupQuery query2 =
+                new LookupQuery(DATA1_TABLE_PATH_PK, OTHER_TABLE_BUCKET, bytes("key2"));
+        lookupSender.sendLookups(Arrays.asList(query1, query2));
+
+        assertThat(metadataUpdater.tableRefreshes()).isEqualTo(1);
+        for (LookupQuery query : Arrays.asList(query1, query2)) {
+            assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                    .isInstanceOf(ExecutionException.class)
+                    .hasRootCauseInstanceOf(TableNotExistException.class)
+                    .hasMessageContaining("re-created with table id " + (DATA1_TABLE_ID_PK + 100));
+        }
+    }
+
+    @Test
+    void testMissingPartitionOfDroppedTableFailsWithTableNotExist() throws Exception {
+        ManualClock clock = new ManualClock(1_000);
+        restartLookupSenderWithoutThread(new ExponentialBackoff(100, 2, 10_000, 0), clock);
+        metadataUpdater.failLeaderLookups(
+                TABLE_BUCKET,
+                Integer.MAX_VALUE,
+                new PartitionNotExistException("partition dropped"));
+        metadataUpdater.failTableRefreshes(
+                new FlussRuntimeException(
+                        "Failed to update metadata", new TableNotExistException("table dropped")));
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        lookupSender.sendLookups(Collections.singletonList(query));
+
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("does not exist");
+    }
+
+    @Test
+    void testDroppedTableCompletesLookupsWithoutBackoff() throws Exception {
+        ManualClock clock = new ManualClock(1_000);
+        restartLookupSenderWithoutThread(new ExponentialBackoff(100, 2, 10_000, 0), clock);
+        // The metadata refresh fails as the table no longer exists.
+        metadataUpdater.failLeaderLookups(
+                TABLE_BUCKET,
+                Integer.MAX_VALUE,
+                new FlussRuntimeException(
+                        "Failed to update metadata", new TableNotExistException("table dropped")));
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        lookupSender.sendLookups(Collections.singletonList(query));
+
+        assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(1);
+        assertThat(lookupSender.getNextLeaderLookupTimeMs(TABLE_BUCKET)).isNull();
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("does not exist");
+    }
+
+    @Test
+    void testRecreatedTableCompletesLookupsWithoutBackoff() throws Exception {
+        ManualClock clock = new ManualClock(1_000);
+        restartLookupSenderWithoutThread(new ExponentialBackoff(100, 2, 10_000, 0), clock);
+        // The lookup still carries the id of the dropped table, while the refreshed metadata maps
+        // the path to the re-created table.
+        TableBucket droppedTableBucket = new TableBucket(DATA1_TABLE_ID_PK + 100, 0);
+        metadataUpdater.failLeaderLookups(droppedTableBucket, Integer.MAX_VALUE, null);
+        LookupQuery query = new LookupQuery(DATA1_TABLE_PATH_PK, droppedTableBucket, bytes("key"));
+        lookupSender.sendLookups(Collections.singletonList(query));
+
+        assertThat(metadataUpdater.failedLeaderLookups()).isEqualTo(1);
+        assertThat(lookupSender.getNextLeaderLookupTimeMs(droppedTableBucket)).isNull();
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("re-created with table id " + DATA1_TABLE_ID_PK);
+    }
+
+    @Test
     void testDroppedPartitionDoesNotBlockSenderOnReroutedLookups() throws Exception {
         teardown();
         ManualClock clock = new ManualClock(1_000);
@@ -1542,6 +1626,12 @@ public class LookupSenderTest {
 
         private final AtomicInteger failedLeaderLookups = new AtomicInteger();
 
+        private final Map<TablePath, Long> remappedTables = new HashMap<>();
+
+        private final AtomicInteger tableRefreshes = new AtomicInteger();
+
+        @Nullable private RuntimeException tableRefreshFailure;
+
         TestingLeaderlessMetadataUpdater(
                 Map<TablePath, TableInfo> tableInfos, TestTabletServerGateway gateway) {
             super(
@@ -1587,6 +1677,43 @@ public class LookupSenderTest {
 
         int failedLeaderLookups() {
             return failedLeaderLookups.get();
+        }
+
+        /** Maps the path to {@code tableId} on the next table-only metadata refresh. */
+        synchronized void remapTableOnRefresh(TablePath tablePath, long tableId) {
+            remappedTables.put(tablePath, tableId);
+        }
+
+        /** Fails the table-only metadata refreshes with {@code failure}. */
+        synchronized void failTableRefreshes(RuntimeException failure) {
+            tableRefreshFailure = failure;
+        }
+
+        int tableRefreshes() {
+            return tableRefreshes.get();
+        }
+
+        @Override
+        public synchronized void updateTableOrPartitionMetadata(
+                TablePath tablePath, @Nullable Long partitionId) {
+            tableRefreshes.incrementAndGet();
+            if (tableRefreshFailure != null) {
+                throw tableRefreshFailure;
+            }
+            Long tableId = remappedTables.get(tablePath);
+            if (tableId != null) {
+                Map<TablePath, Long> tableIdByPath = new HashMap<>(cluster.getTableIdByPath());
+                tableIdByPath.put(tablePath, tableId);
+                updateCluster(
+                        new Cluster(
+                                new HashMap<>(cluster.getAliveTabletServers()),
+                                cluster.getCoordinatorServer(),
+                                cluster.getBucketLocationsByPath(),
+                                tableIdByPath,
+                                cluster.getPartitionIdByPath(),
+                                cluster.getBucketCountByTableOrPartition(),
+                                Collections.emptyMap()));
+            }
         }
 
         @Override
