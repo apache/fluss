@@ -264,8 +264,7 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
                                             0,
                                             0),
                                     3,
-                                    0L,
-                                    null)));
+                                    0L)));
             buckets.add(new BucketMetadata(bucket, TABLET_SERVER_ID, 0, replicas, replicas, 0));
         }
         TableInfo tableInfo =

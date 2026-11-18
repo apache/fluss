@@ -41,6 +41,48 @@ public final class NotifyLeaderAndIsrData {
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
             List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr) {
+        this(physicalTablePath, tableBucket, replicas, leaderAndIsr, null, null);
+    }
+
+    public NotifyLeaderAndIsrData(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr,
+            @Nullable Integer bucketCount,
+            @Nullable Long bucketCountEpoch) {
+        this(
+                physicalTablePath,
+                tableBucket,
+                replicas,
+                leaderAndIsr,
+                bucketCount,
+                bucketCountEpoch,
+                null);
+    }
+
+    /** Creates a recovery notification for a bucket whose role and layout are already installed. */
+    public static NotifyLeaderAndIsrData forBulkLoadRecovery(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr,
+            long recoverySnapshotId) {
+        return new NotifyLeaderAndIsrData(
+                physicalTablePath,
+                tableBucket,
+                replicas,
+                leaderAndIsr,
+                null,
+                null,
+                recoverySnapshotId);
+    }
+
+    private NotifyLeaderAndIsrData(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
             LeaderAndIsr leaderAndIsr,
             @Nullable Integer bucketCount,
             @Nullable Long bucketCountEpoch,

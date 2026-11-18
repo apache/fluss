@@ -196,14 +196,8 @@ public final class BulkLoadRecoveryManager {
                             if (assignment == null || assignment.isEmpty()) {
                                 return null;
                             }
-                            return new NotifyLeaderAndIsrData(
-                                    path,
-                                    bucket,
-                                    assignment,
-                                    role.get(),
-                                    null,
-                                    null,
-                                    selectedSnapshotId);
+                            return NotifyLeaderAndIsrData.forBulkLoadRecovery(
+                                    path, bucket, assignment, role.get(), selectedSnapshotId);
                         });
         events.put(context);
         return FutureUtils.orTimeout(

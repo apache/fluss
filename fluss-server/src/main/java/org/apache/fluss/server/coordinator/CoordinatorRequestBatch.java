@@ -236,8 +236,7 @@ public class CoordinatorRequestBatch {
                                                     bucketReplicas,
                                                     leaderAndIsr,
                                                     bucketCount,
-                                                    bucketCountEpoch,
-                                                    null));
+                                                    bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
 

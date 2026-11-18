@@ -883,26 +883,38 @@ public class ServerRpcMessageUtils {
                 standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
             }
 
-            PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
-            notifyLeaderAndIsrDataList.add(
-                    new NotifyLeaderAndIsrData(
-                            toPhysicalTablePath(reqForBucket.getPhysicalTablePath()),
-                            toTableBucket(pbTableBucket),
-                            replicas,
-                            new LeaderAndIsr(
-                                    reqForBucket.getLeader(),
-                                    reqForBucket.getLeaderEpoch(),
-                                    isr,
-                                    standbyReplicas,
-                                    request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch()),
-                            reqForBucket.hasBucketCount() ? reqForBucket.getBucketCount() : null,
-                            reqForBucket.hasBucketCountEpoch()
-                                    ? reqForBucket.getBucketCountEpoch()
-                                    : null,
-                            reqForBucket.hasRecoverySnapshotId()
-                                    ? reqForBucket.getRecoverySnapshotId()
-                                    : null));
+            PhysicalTablePath path = toPhysicalTablePath(reqForBucket.getPhysicalTablePath());
+            TableBucket bucket = toTableBucket(reqForBucket.getTableBucket());
+            LeaderAndIsr role =
+                    new LeaderAndIsr(
+                            reqForBucket.getLeader(),
+                            reqForBucket.getLeaderEpoch(),
+                            isr,
+                            standbyReplicas,
+                            request.getCoordinatorEpoch(),
+                            reqForBucket.getBucketEpoch());
+            if (reqForBucket.hasRecoverySnapshotId()) {
+                notifyLeaderAndIsrDataList.add(
+                        NotifyLeaderAndIsrData.forBulkLoadRecovery(
+                                path,
+                                bucket,
+                                replicas,
+                                role,
+                                reqForBucket.getRecoverySnapshotId()));
+            } else {
+                notifyLeaderAndIsrDataList.add(
+                        new NotifyLeaderAndIsrData(
+                                path,
+                                bucket,
+                                replicas,
+                                role,
+                                reqForBucket.hasBucketCount()
+                                        ? reqForBucket.getBucketCount()
+                                        : null,
+                                reqForBucket.hasBucketCountEpoch()
+                                        ? reqForBucket.getBucketCountEpoch()
+                                        : null));
+            }
         }
         return notifyLeaderAndIsrDataList;
     }
