@@ -351,6 +351,39 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testRejectOrderedPointAccessForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            PutKvRequest put = new PutKvRequest();
+            LookupRequest lookup = new LookupRequest();
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 3, put);
+            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 1, lookup);
+            put.setOrderedKeys(true);
+            lookup.setOrderedKeys(true);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PUT_KV, (short) 3, put))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.LOOKUP, (short) 1, lookup))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 4, put);
+            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 2, lookup);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectRangeBoundsForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(

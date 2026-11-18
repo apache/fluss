@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -140,9 +141,14 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
                                             .limit(-1)
                                             .createBatchScanner(bucket))
                     .isInstanceOf(IllegalArgumentException.class);
-            assertThatThrownBy(() -> table.newScan().direction(direction).createBatchScanner())
+            assertThatThrownBy(
+                            () ->
+                                    table.newScan()
+                                            .direction(direction)
+                                            .createBatchScanner(
+                                                    new TableBucket(bucket.getTableId() + 1, 0)))
                     .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("single index bucket");
+                    .hasMessageContaining("must belong to table");
             assertThatThrownBy(() -> table.newScan().direction(direction).createLogScanner())
                     .isInstanceOf(UnsupportedOperationException.class);
             assertThatThrownBy(
@@ -399,6 +405,52 @@ class TableRangeScanITCase extends ClientToServerITCaseBase {
             try (BatchScanner scanner =
                     scan.equalTo(Arrays.asList("p", "g"), row("missing", 1)).createBatchScanner()) {
                 assertThat(BatchScanUtils.collectRows(scanner)).isEmpty();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(ReadDirection.class)
+    void testOrderedMergeAcrossPartitions(ReadDirection direction) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("g", DataTypes.INT())
+                        .column("t", DataTypes.BIGINT())
+                        .column("id", DataTypes.INT())
+                        .column("v", DataTypes.STRING())
+                        .column("p", DataTypes.STRING())
+                        .primaryKey("g", "t", "id", "p")
+                        .build();
+        try (Table table =
+                create("merge_" + direction.name().toLowerCase(Locale.ROOT), schema, true)) {
+            for (String partition : Arrays.asList("p1", "p2")) {
+                admin.createPartition(
+                                table.getTableInfo().getTablePath(),
+                                new PartitionSpec(Collections.singletonMap("p", partition)),
+                                false)
+                        .get();
+            }
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(0, 1L, 0, "first", "p2"));
+            writer.upsert(row(0, 2L, 0, "tie-a", "p1"));
+            writer.upsert(row(0, 2L, 0, "tie-b", "p2"));
+            writer.upsert(row(0, 3L, 0, "last", "p1"));
+            writer.flush();
+
+            try (BatchScanner scanner =
+                    table.newScan()
+                            .project(Collections.singletonList("v"))
+                            .direction(direction)
+                            .limit(3)
+                            .createBatchScanner()) {
+                List<String> values =
+                        BatchScanUtils.collectRows(scanner).stream()
+                                .map(r -> r.getString(0).toString())
+                                .collect(Collectors.toList());
+                assertThat(values).hasSize(3);
+                assertThat(values.get(0))
+                        .isEqualTo(direction == ReadDirection.FORWARD ? "first" : "last");
+                assertThat(values.subList(1, 3)).containsExactlyInAnyOrder("tie-a", "tie-b");
             }
         }
     }

@@ -1283,7 +1283,8 @@ public class LookupSenderTest {
 
         // T1: create query with bucketCount=4 (the partition's actual count at lookup time)
         LookupQuery query =
-                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4, true);
         // The pinned value is visible on the query object
         assertThat(query.bucketCount()).isEqualTo(4);
 
@@ -1292,6 +1293,7 @@ public class LookupSenderTest {
         // T2: the request must carry the T1-pinned count as routing_bucket_count
         assertThat(receivedRequests).hasSize(1);
         LookupRequest request = receivedRequests.get(0);
+        assertThat(request.isOrderedKeys()).isTrue();
         assertThat(request.getBucketsReqAt(0).hasRoutingBucketCount()).isTrue();
         assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(4);
 
@@ -1304,6 +1306,7 @@ public class LookupSenderTest {
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(legacyQuery));
 
         assertThat(receivedRequests).hasSize(1);
+        assertThat(receivedRequests.get(0).hasOrderedKeys()).isFalse();
         assertThat(receivedRequests.get(0).getBucketsReqAt(0).hasRoutingBucketCount()).isFalse();
     }
 

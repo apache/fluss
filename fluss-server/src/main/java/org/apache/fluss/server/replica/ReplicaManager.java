@@ -2782,7 +2782,10 @@ public class ReplicaManager implements ServerReconfigurable {
     public static void validateClientVersionForPkTable(
             ApiKeys apiKey, int apiVersion, TableInfo tableInfo) {
         if (tableInfo.getTableConfig().isOrderedKeyEnabled()) {
-            int minimum = apiKey == ApiKeys.PUT_KV ? 4 : 2;
+            int minimum =
+                    apiKey == ApiKeys.PUT_KV
+                            ? ApiKeys.ORDERED_KEYS_PUT_KV_MIN_VERSION
+                            : ApiKeys.ORDERED_KEYS_LOOKUP_MIN_VERSION;
             if (apiVersion < minimum) {
                 throw new UnsupportedVersionException(
                         "Ordered keys require " + apiKey + " version " + minimum + " or newer.");

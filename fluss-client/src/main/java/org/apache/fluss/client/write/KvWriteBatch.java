@@ -52,6 +52,7 @@ public class KvWriteBatch extends WriteBatch {
     private final KvRecordBatchBuilder recordsBuilder;
     private final @Nullable int[] targetColumns;
     private final MergeMode mergeMode;
+    private final boolean orderedKeys;
 
     public KvWriteBatch(
             long tableId,
@@ -65,7 +66,8 @@ public class KvWriteBatch extends WriteBatch {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             boolean isHistoricalPartition,
-            long createdMs) {
+            long createdMs,
+            boolean orderedKeys) {
         super(
                 tableId,
                 bucketId,
@@ -80,6 +82,12 @@ public class KvWriteBatch extends WriteBatch {
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
         this.mergeMode = mergeMode;
+        this.orderedKeys = orderedKeys;
+    }
+
+    /** Whether the keys in this batch use the ordered primary-key encoding. */
+    public boolean usesOrderedKeys() {
+        return orderedKeys;
     }
 
     @Override

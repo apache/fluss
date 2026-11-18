@@ -48,9 +48,10 @@ public interface Scan {
      * the direction. Requires an ordered-key table; validation happens when the reader is created.
      * Ordered reads default to {@link ReadDirection#FORWARD}.
      *
-     * <p>Direction reverses the whole index key, including fields after the range column. The
-     * scanner must read at most one index bucket. The order covers all returned batches. Log and
-     * snapshot-ID scanners do not support explicit direction.
+     * <p>Direction applies to the whole physical index key, including fields after the range
+     * column. The order covers all batches and buckets in the scan. Equal physical keys across
+     * partitions have unspecified relative order. Log and snapshot-ID scanners do not support
+     * explicit direction.
      *
      * @param direction the index traversal direction
      */

@@ -449,9 +449,9 @@ traverse the same interval in descending index key order. The limit selects the
 first rows in the chosen direction. All index fields reverse together, including
 the primary-key suffix for equal range values.
 
-Explicit direction requires an ordered-key table and a single index bucket.
-A full ordered-key bucket scan also supports direction and limit without range
-conditions. Multi-bucket scans without explicit direction have no global order.
+Explicit direction requires an ordered-key table and orders all batches and
+buckets in the scan. A full ordered-key scan supports direction and limit without
+range conditions. Multi-bucket scans without explicit direction have no global order.
 See [Ordered Index Reads](ordered-reads.md) for the complete contract.
 
 `createBatchScanner(tableBucket)` further restricts the query to that bucket.

@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.admin.TabletServerDescription;
 import org.apache.fluss.client.lookup.LookupBatch;
+import org.apache.fluss.client.lookup.LookupQuery;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
@@ -190,6 +191,9 @@ public class ClientRpcMessageUtils {
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
         KvWriteBatch firstBatch = (KvWriteBatch) readyWriteBatches.get(0).writeBatch();
+        if (firstBatch.usesOrderedKeys()) {
+            request.setOrderedKeys(true);
+        }
         int[] targetColumns = firstBatch.getTargetColumns();
         MergeMode mergeMode = firstBatch.getMergeMode();
         for (int i = 1; i < readyWriteBatches.size(); i++) {
@@ -245,6 +249,11 @@ public class ClientRpcMessageUtils {
             short acks,
             int timeoutMs) {
         LookupRequest request = new LookupRequest().setTableId(tableId);
+        if (lookupBatches.stream()
+                .flatMap(batch -> batch.lookups().stream())
+                .anyMatch(LookupQuery::usesOrderedKeys)) {
+            request.setOrderedKeys(true);
+        }
         if (insertIfNotExists) {
             request.setInsertIfNotExists(true);
             request.setAcks(acks);

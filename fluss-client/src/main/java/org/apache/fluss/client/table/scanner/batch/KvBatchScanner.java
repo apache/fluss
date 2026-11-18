@@ -209,6 +209,9 @@ public final class KvBatchScanner implements BatchScanner {
                 return drained ? null : CloseableIterator.emptyIterator();
             }
             return CloseableIterator.wrap(parseRecords(response).iterator());
+        } catch (RuntimeException e) {
+            terminate();
+            throw e;
         } finally {
             // getRecords() copies the data, so returned rows no longer reference this buffer.
             releaseResponse(response);
@@ -357,22 +360,42 @@ public final class KvBatchScanner implements BatchScanner {
         }
         CompletableFuture<ScanKvResponse> pending = inFlight;
         inFlight = null;
-        if (pending != null) {
-            pending.whenComplete((response, throwable) -> releaseResponse(response));
+        if (pending == null) {
+            if (!drained) {
+                sendBestEffortClose(scannerId);
+            }
+        } else {
+            // A close must follow the in-flight call. In particular, the open response may
+            // be the only place where the server tells us which snapshot to close.
+            byte[] knownScannerId = scannerId;
+            pending.whenComplete(
+                    (response, throwable) -> {
+                        try {
+                            if (response != null
+                                    && response.hasHasMoreResults()
+                                    && !response.isHasMoreResults()) {
+                                return;
+                            }
+                            byte[] id =
+                                    response != null && response.hasScannerId()
+                                            ? response.getScannerId()
+                                            : knownScannerId;
+                            sendBestEffortClose(id);
+                        } finally {
+                            releaseResponse(response);
+                        }
+                    });
         }
-        sendBestEffortClose();
     }
 
-    private void sendBestEffortClose() {
-        // After natural EOF the server already closed the session; sending close_scanner is
-        // unnecessary and would be a stale request.
-        if (scannerId == null || gateway == null || drained) {
+    private void sendBestEffortClose(@Nullable byte[] id) {
+        if (id == null || gateway == null) {
             return;
         }
         try {
             gateway.scanKv(
                             new ScanKvRequest()
-                                    .setScannerId(scannerId)
+                                    .setScannerId(id)
                                     .setBatchSizeBytes(batchSizeBytes)
                                     .setCloseScanner(true))
                     .whenComplete(

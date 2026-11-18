@@ -388,6 +388,9 @@ pub struct PutKvRequest {
     /// 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
     #[prost(int32, optional, tag = "6")]
     pub agg_mode: ::core::option::Option<i32>,
+    /// The request keys use the ordered primary-key encoding.
+    #[prost(bool, optional, tag = "7")]
+    pub ordered_keys: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutKvResponse {
@@ -407,6 +410,9 @@ pub struct LookupRequest {
     pub acks: ::core::option::Option<i32>,
     #[prost(int32, optional, tag = "5")]
     pub timeout_ms: ::core::option::Option<i32>,
+    /// The request keys use the ordered primary-key encoding.
+    #[prost(bool, optional, tag = "6")]
+    pub ordered_keys: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LookupResponse {

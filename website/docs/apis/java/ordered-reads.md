@@ -43,8 +43,9 @@ row. Typed lookup uses the same configuration and result order.
 
 `Range` describes logical lower and upper endpoints independently of direction.
 The equality prefix and immediately following range column select a supported
-index access path. Both directions read the same matching set. Open, closed,
-single-sided and empty intervals have the same meaning in either direction.
+index access path. On the same read view without a limit, both directions match
+the same records. Open, closed, single-sided and empty intervals have the same
+meaning in either direction.
 Each finite endpoint is a one-field `InternalRow` with a non-null value in the
 range column's internal type. Reversed endpoints are invalid. Equal endpoints
 include all rows with that value only when both endpoints are closed. A missing
@@ -92,10 +93,12 @@ try (BatchScanner scanner = table.newScan()
 
 ## Scan contract
 
-A scanner holds its direction, iterator and fixed KV snapshot for its lifetime.
-The concatenation of all returned batches follows the selected index order.
-Projection and schema decoding preserve that order. Concurrent later writes are
-invisible. Loss of the scan session fails the read.
+Each bucket scanner retains the KV snapshot established when it opens. Writes
+after that point are invisible to that bucket's scanner. Explicit direction
+orders the entire result, including across buckets and batches. The client merges
+bucket streams by the complete physical index key before projecting rows. Each
+bucket opens its own snapshot, so the result has no shared point-in-time view.
+Loss of a bucket session fails the scan.
 
 The limit selects the first N matching rows in the chosen direction across all
 batches. Zero returns no rows and negative limits are rejected for ordered KV
@@ -110,16 +113,16 @@ try (BatchScanner scanner = scan.createBatchScanner(bucket)) {
 }
 ```
 
-Close this scanner after consumption, including when stopping before its limit.
-`createBatchScanner()` without range conditions is also supported when the table
-resolves to one bucket across all partitions. With range conditions,
-`createBatchScanner(bucket)` restricts the routed query to that bucket. A
-disjoint bucket returns no rows, and a bucket from another table is invalid.
+Close the scanner after consumption, including when stopping before its limit.
+Without range conditions, `createBatchScanner()` scans all selected buckets.
+Partition fields excluded from the physical primary key do not affect the
+comparison. Equal physical keys across partitions have unspecified relative
+order. The limit applies globally in traversal order after the merge.
 
-An explicit ordered request must resolve to at most one index bucket. A request
-requiring multiple index buckets fails before opening scanners. An ordinary
-multi-bucket scan has no global ordering guarantee. Log and snapshot-ID scanners
-reject explicit direction.
+With range conditions, `createBatchScanner(bucket)` restricts the routed query to
+that bucket. A disjoint bucket returns no rows. An explicit bucket must belong
+to the current table. Ordinary multi-bucket scans have no global ordering
+guarantee. Log and snapshot-ID scanners reject explicit direction.
 
 ## Lookup contract
 

@@ -28,6 +28,7 @@ import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.LimitBatchScanner;
+import org.apache.fluss.client.table.scanner.batch.OrderedBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
@@ -286,14 +287,7 @@ public class TableScan implements Scan {
     private BatchScanner createRangeScanner(@Nullable TableBucket scope) {
         validateReadConfiguration();
         if (scope != null) {
-            checkArgument(
-                    scope.getTableId() == tableInfo.getTableId(),
-                    "The bucket must belong to table %s.",
-                    tableInfo.getTablePath());
-            checkArgument(
-                    tableInfo.isPartitioned() == (scope.getPartitionId() != null),
-                    "The bucket partition does not match the table's partitioning.");
-            checkArgument(scope.getBucket() >= 0, "Bucket ID must be nonnegative.");
+            validateBucketScope(scope);
         }
         checkArgument(
                 rangeBounds != null && equalityColumns != null && equalityKey != null,
@@ -456,21 +450,11 @@ public class TableScan implements Scan {
                             tableInfo.getTablePath(), tableBucket));
         }
         if (effectiveDirection() != null) {
+            validateBucketScope(tableBucket);
             if (limit != null && limit == 0) {
                 return emptyScanner();
             }
-            return new KvBatchScanner(
-                    tableInfo,
-                    tableBucket,
-                    schemaGetter,
-                    conn.getMetadataUpdater(),
-                    kvBatchSizeBytes(),
-                    projectedColumns,
-                    null,
-                    null,
-                    limit,
-                    null,
-                    effectiveDirection());
+            return createOrderedBucketScanner(tableBucket, projectedColumns, limit);
         }
         if (tableInfo.hasPrimaryKey() && limit == null) {
             return new KvBatchScanner(
@@ -494,6 +478,33 @@ public class TableScan implements Scan {
                 conn.getMetadataUpdater(),
                 projectedColumns,
                 limit);
+    }
+
+    private void validateBucketScope(TableBucket bucket) {
+        checkArgument(
+                bucket.getTableId() == tableInfo.getTableId(),
+                "The bucket must belong to table %s.",
+                tableInfo.getTablePath());
+        checkArgument(
+                tableInfo.isPartitioned() == (bucket.getPartitionId() != null),
+                "The bucket partition does not match the table's partitioning.");
+        checkArgument(bucket.getBucket() >= 0, "Bucket ID must be nonnegative.");
+    }
+
+    private KvBatchScanner createOrderedBucketScanner(
+            TableBucket bucket, @Nullable int[] projection, @Nullable Integer rowLimit) {
+        return new KvBatchScanner(
+                tableInfo,
+                bucket,
+                schemaGetter,
+                conn.getMetadataUpdater(),
+                kvBatchSizeBytes(),
+                projection,
+                null,
+                null,
+                rowLimit,
+                null,
+                effectiveDirection());
     }
 
     private int kvBatchSizeBytes() {
@@ -588,9 +599,23 @@ public class TableScan implements Scan {
                             .collect(Collectors.toList());
         }
 
-        checkArgument(
-                direction == null || tableBuckets.size() <= 1,
-                "Ordered reads require a single index bucket.");
+        if (direction != null || (tableBuckets.size() == 1 && effectiveDirection() != null)) {
+            if (tableBuckets.isEmpty() || (limit != null && limit == 0)) {
+                return emptyScanner();
+            }
+            if (tableBuckets.size() == 1) {
+                return createOrderedBucketScanner(tableBuckets.get(0), projectedColumns, limit);
+            }
+            OrderedKeyEncoder encoder =
+                    OrderedKeyEncoder.createKeyEncoder(
+                            tableInfo.getRowType(), tableInfo.getPhysicalPrimaryKeys());
+            // Compare full rows and apply the requested projection only after choosing the head.
+            List<BatchScanner> inputs =
+                    tableBuckets.stream()
+                            .map(bucket -> createOrderedBucketScanner(bucket, null, null))
+                            .collect(Collectors.toList());
+            return new OrderedBatchScanner(inputs, encoder, direction, projectedColumns, limit);
+        }
 
         List<BatchScanner> scanners =
                 tableBuckets.stream().map(this::createBatchScanner).collect(Collectors.toList());

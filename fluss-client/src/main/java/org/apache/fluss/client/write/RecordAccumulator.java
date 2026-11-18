@@ -1130,7 +1130,8 @@ public final class RecordAccumulator {
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
                         isHistoricalPartition,
-                        clock.milliseconds());
+                        clock.milliseconds(),
+                        tableInfo.getTableConfig().isOrderedKeyEnabled());
 
             case ARROW_LOG:
                 ArrowWriter arrowWriter =

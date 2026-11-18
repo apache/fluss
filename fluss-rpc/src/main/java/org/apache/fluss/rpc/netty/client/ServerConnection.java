@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -396,6 +397,20 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV && version < ApiKeys.ORDERED_KEYS_PUT_KV_MIN_VERSION) {
+            PutKvRequest put = (PutKvRequest) rawRequest;
+            if (put.hasOrderedKeys() && put.isOrderedKeys()) {
+                throw new UnsupportedVersionException(
+                        "The server does not support ordered PUT_KV keys.");
+            }
+        }
+        if (apiKey == ApiKeys.LOOKUP && version < ApiKeys.ORDERED_KEYS_LOOKUP_MIN_VERSION) {
+            LookupRequest lookup = (LookupRequest) rawRequest;
+            if (lookup.hasOrderedKeys() && lookup.isOrderedKeys()) {
+                throw new UnsupportedVersionException(
+                        "The server does not support ordered LOOKUP keys.");
+            }
+        }
         if (apiKey == ApiKeys.SCAN_KV && version < 1) {
             ScanKvRequest scan = (ScanKvRequest) rawRequest;
             if (scan.hasBucketScanReq()

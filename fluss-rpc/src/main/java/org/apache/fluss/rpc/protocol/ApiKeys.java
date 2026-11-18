@@ -142,6 +142,12 @@ public enum ApiKeys {
                     .collect(Collectors.toMap(key -> (int) key.id, Function.identity()));
 
     /** the permanent and immutable id of an API - this can't change ever. */
+    /** First PUT_KV version that supports ordered primary keys. */
+    public static final short ORDERED_KEYS_PUT_KV_MIN_VERSION = 4;
+
+    /** First LOOKUP version that supports ordered primary keys. */
+    public static final short ORDERED_KEYS_LOOKUP_MIN_VERSION = 2;
+
     public final short id;
 
     public final short lowestSupportedVersion;

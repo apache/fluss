@@ -81,6 +81,7 @@ class ClientRpcMessageUtilsTest {
         // Verify mergeMode is set correctly in request
         assertThat(request.hasAggMode()).isTrue();
         assertThat(request.getAggMode()).isEqualTo(MergeMode.DEFAULT.getProtoValue());
+        assertThat(request.hasOrderedKeys()).isFalse();
     }
 
     @Test
@@ -128,7 +129,7 @@ class ClientRpcMessageUtilsTest {
     @Test
     void testMakePutKvRequestWithSingleBatch() throws Exception {
         // Single batch should always succeed
-        KvWriteBatch batch = createKvWriteBatch(0, MergeMode.OVERWRITE);
+        KvWriteBatch batch = createKvWriteBatch(0, MergeMode.OVERWRITE, true);
 
         List<ReadyWriteBatch> readyBatches =
                 Collections.singletonList(new ReadyWriteBatch(new TableBucket(TABLE_ID, 0), batch));
@@ -136,6 +137,7 @@ class ClientRpcMessageUtilsTest {
         PutKvRequest request =
                 ClientRpcMessageUtils.makePutKvRequest(TABLE_ID, ACKS, TIMEOUT_MS, readyBatches);
 
+        assertThat(request.isOrderedKeys()).isTrue();
         assertThat(request.getAggMode()).isEqualTo(MergeMode.OVERWRITE.getProtoValue());
     }
 
@@ -248,6 +250,11 @@ class ClientRpcMessageUtilsTest {
     }
 
     private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode) throws Exception {
+        return createKvWriteBatch(bucketId, mergeMode, false);
+    }
+
+    private KvWriteBatch createKvWriteBatch(int bucketId, MergeMode mergeMode, boolean orderedKeys)
+            throws Exception {
         MemorySegment segment = MemorySegment.allocateHeapMemory(1024);
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(Collections.singletonList(segment));
@@ -263,6 +270,7 @@ class ClientRpcMessageUtilsTest {
                 null,
                 mergeMode,
                 false,
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                orderedKeys);
     }
 }
