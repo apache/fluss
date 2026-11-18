@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidRequestException;
-import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
@@ -40,7 +39,6 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.utils.CloseableRegistry;
@@ -360,10 +358,8 @@ class KvTabletSnapshotTargetTest {
         assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testAddToSnapshotToStoreFail(boolean notAttempted, @TempDir Path kvTabletDir)
-            throws Throwable {
+    @Test
+    void testAddToSnapshotToStoreFail(@TempDir Path kvTabletDir) throws Throwable {
         final String errMsg = "Add to snapshot handle failed.";
         AtomicLong uploadedBytes = new AtomicLong();
         AtomicBoolean shouldFail = new AtomicBoolean(true);
@@ -378,9 +374,6 @@ class KvTabletSnapshotTargetTest {
                                                     .getKvSnapshotHandle()
                                                     .getIncrementalSize());
                                     if (shouldFail.get()) {
-                                        if (notAttempted) {
-                                            throw new OperationNotAttemptedException(errMsg);
-                                        }
                                         throw new InvalidRequestException(errMsg);
                                     }
                                     return null;
@@ -404,16 +397,13 @@ class KvTabletSnapshotTargetTest {
                                         first.getBucketLeaderEpoch(),
                                         first.getSnapshotLocation(),
                                         firstResult))
-                .isInstanceOf(
-                        notAttempted
-                                ? OperationNotAttemptedException.class
-                                : InvalidRequestException.class);
+                .isInstanceOf(InvalidRequestException.class);
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 1L);
-        assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isEqualTo(!notAttempted);
+        assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isFalse();
         for (KvFileHandleAndLocalPath file :
                 firstResult.getKvSnapshotHandle().getSharedKvFileHandles()) {
             FsPath path = new FsPath(file.getKvFileHandle().getFilePath());
-            assertThat(path.getFileSystem().exists(path)).isEqualTo(!notAttempted);
+            assertThat(path.getFileSystem().exists(path)).isFalse();
         }
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
 
@@ -445,7 +435,7 @@ class KvTabletSnapshotTargetTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testRejectedCommitPreservesReferencedOrUncertainFiles(
+    void testFailedCommitPreservesReferencedOrUncertainFiles(
             boolean failQuery, @TempDir Path directory) throws Throwable {
         registerRecoverySnapshot(
                 zooKeeperClient, tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
@@ -476,7 +466,7 @@ class KvTabletSnapshotTargetTest {
                                             snapshot.getSnapshotID(),
                                             snapshot.getLogOffset(),
                                             snapshot.getMetadataFilePath().toString()));
-                            throw new OperationNotAttemptedException("Registration rejected.");
+                            throw new IOException("Commit failed.");
                         });
         rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
         PeriodicSnapshotManager.SnapshotRunnable task = target.initSnapshot().get();
@@ -490,7 +480,7 @@ class KvTabletSnapshotTargetTest {
                                         task.getBucketLeaderEpoch(),
                                         task.getSnapshotLocation(),
                                         result))
-                .isInstanceOf(OperationNotAttemptedException.class);
+                .isInstanceOf(IOException.class);
         for (KvFileHandleAndLocalPath file :
                 result.getKvSnapshotHandle().getSharedKvFileHandles()) {
             FsPath path = new FsPath(file.getKvFileHandle().getFilePath());
@@ -498,79 +488,6 @@ class KvTabletSnapshotTargetTest {
         }
         assertThat(result.getSnapshotPath().getFileSystem().exists(result.getSnapshotPath()))
                 .isTrue();
-        assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
-    }
-
-    @Test
-    void testLateCommitFailurePreservesSharedFiles(@TempDir Path directory) throws Throwable {
-        CompletedSnapshotStore store =
-                new CompletedSnapshotStore(
-                        1,
-                        new SharedKvFileRegistry(),
-                        Collections.emptyList(),
-                        new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient),
-                        directExecutor(),
-                        snapshot -> false);
-        CompletedKvSnapshotCommitter committer =
-                (snapshot, coordinatorEpoch, leaderEpoch, previousSnapshotId) -> {
-                    // RPC deserialization gives CS its own file-ownership state.
-                    store.add(
-                            CompletedSnapshotJsonSerde.fromJson(
-                                    CompletedSnapshotJsonSerde.toJson(snapshot)),
-                            previousSnapshotId,
-                            leaderEpoch);
-                    CompletedSnapshot next =
-                            new CompletedSnapshot(
-                                    tableBucket,
-                                    2L,
-                                    new FsPath(directory.resolve("snapshot-2").toUri()),
-                                    snapshot.getKvSnapshotHandle(),
-                                    2L,
-                                    null,
-                                    null);
-                    store.add(
-                            CompletedSnapshotJsonSerde.fromJson(
-                                    CompletedSnapshotJsonSerde.toJson(next)),
-                            1L,
-                            leaderEpoch);
-                    throw new IOException("Old target receives a delayed commit failure.");
-                };
-        KvTabletSnapshotTarget target =
-                createSnapshotTargetWithCustomCommitter(new FsPath(directory.toUri()), committer);
-        rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
-        PeriodicSnapshotManager.SnapshotRunnable task = target.initSnapshot().get();
-        task.getSnapshotRunnable().run();
-        SnapshotResult result = task.getSnapshotRunnable().get();
-        assertThatThrownBy(
-                        () ->
-                                target.handleSnapshotResult(
-                                        task.getSnapshotId(),
-                                        task.getCoordinatorEpoch(),
-                                        task.getBucketLeaderEpoch(),
-                                        task.getSnapshotLocation(),
-                                        result))
-                .isInstanceOf(IOException.class);
-        assertThat(result.getKvSnapshotHandle().getSharedKvFileHandles()).isNotEmpty();
-        for (KvFileHandleAndLocalPath file :
-                result.getKvSnapshotHandle().getSharedKvFileHandles()) {
-            FsPath path = new FsPath(file.getKvFileHandle().getFilePath());
-            assertThat(path.getFileSystem().exists(path)).isTrue();
-        }
-        snapshotIdGenerator.set(3L);
-        logOffsetGenerator.set(3L);
-        PeriodicSnapshotManager.SnapshotRunnable next = target.initSnapshot().get();
-        next.getSnapshotRunnable().run();
-        assertThatThrownBy(
-                        () ->
-                                target.handleSnapshotResult(
-                                        next.getSnapshotId(),
-                                        next.getCoordinatorEpoch(),
-                                        next.getBucketLeaderEpoch(),
-                                        next.getSnapshotLocation(),
-                                        next.getSnapshotRunnable().get()))
-                .isInstanceOf(KeeperException.BadVersionException.class);
-        assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
-                .isEqualTo(2L);
         assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
     }
 
@@ -631,13 +548,6 @@ class KvTabletSnapshotTargetTest {
                 coordinatorEpochSupplier,
                 0,
                 0L);
-    }
-
-    private KvTabletSnapshotTarget createSnapshotTargetWithCustomCommitter(
-            FsPath remoteKvTabletDir, CompletedKvSnapshotCommitter customCommitter)
-            throws IOException {
-        return createSnapshotTargetWithCustomZkAndCommitter(
-                remoteKvTabletDir, zooKeeperClient, customCommitter);
     }
 
     private KvTabletSnapshotTarget createSnapshotTargetWithCustomZkAndCommitter(

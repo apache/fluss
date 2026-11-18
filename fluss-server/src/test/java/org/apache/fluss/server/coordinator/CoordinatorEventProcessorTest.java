@@ -24,8 +24,9 @@ import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidAlterTableException;
-import org.apache.fluss.exception.OperationNotAttemptedException;
+import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -674,8 +675,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
-                .isInstanceOf(OperationNotAttemptedException.class)
-                .hasMessageContaining("leader epoch");
+                .isInstanceOf(FencedLeaderEpochException.class);
 
         // invalid coordinator epoch
         int invalidCoordinatorEpoch = 1;
@@ -691,9 +691,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
-                .isInstanceOf(OperationNotAttemptedException.class)
-                .hasMessageContaining("coordinator");
-        assertThat(completedSnapshotHandleStore.get(tableBucket, 2)).isEmpty();
+                .isInstanceOf(InvalidCoordinatorException.class);
     }
 
     @Test

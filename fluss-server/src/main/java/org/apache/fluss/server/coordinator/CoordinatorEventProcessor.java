@@ -33,7 +33,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.OperationNotAttemptedException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -2499,10 +2498,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         try {
             validateFencedEvent(event);
         } catch (Exception e) {
-            // No registration task was scheduled, so TS may reclaim this snapshot's files.
-            callback.completeExceptionally(
-                    new OperationNotAttemptedException(
-                            "Snapshot registration was not attempted: " + e.getMessage()));
+            callback.completeExceptionally(e);
             return;
         }
         // commit the kv snapshot asynchronously
