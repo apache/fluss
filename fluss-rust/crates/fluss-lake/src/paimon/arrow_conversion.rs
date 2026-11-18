@@ -24,7 +24,7 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::{CastOptions, cast_with_options};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use std::sync::Arc;
@@ -145,14 +145,15 @@ fn normalize_array(array: &ArrayRef, expected: &DataType) -> arrow::error::Resul
             // safe cast would instead silently replace invalid values with null.
             cast_with_options(array, expected, &strict_cast_options())
         }
-        (DataType::Timestamp(_, actual_zone), DataType::Timestamp(_, expected_zone))
+        (DataType::Timestamp(from, actual_zone), DataType::Timestamp(to, expected_zone))
             if actual_zone == expected_zone =>
         {
-            cast_temporal_losslessly(array, expected)
+            cast_temporal_losslessly(array, expected, *from, *to)
         }
-        (DataType::Time32(_) | DataType::Time64(_), DataType::Time32(_) | DataType::Time64(_)) => {
-            cast_temporal_losslessly(array, expected)
-        }
+        (
+            DataType::Time32(from) | DataType::Time64(from),
+            DataType::Time32(to) | DataType::Time64(to),
+        ) => cast_temporal_losslessly(array, expected, *from, *to),
         _ => Err(ArrowError::CastError(format!(
             "unsupported Paimon representation change from {} to {expected}",
             array.data_type()
@@ -207,12 +208,16 @@ fn strict_cast_options() -> CastOptions<'static> {
 fn cast_temporal_losslessly(
     array: &ArrayRef,
     expected: &DataType,
+    from: TimeUnit,
+    to: TimeUnit,
 ) -> arrow::error::Result<ArrayRef> {
     let options = strict_cast_options();
     let converted = cast_with_options(array, expected, &options)?;
-    // Strict casts catch overflow, but downscaling timestamps can still
-    // truncate. A round trip also rejects precision loss for negative values,
-    // while Arrow equality ignores the unspecified contents of null slots.
+    // Upscaling cannot truncate, and strict casts reject timestamp overflow.
+    if to >= from {
+        return Ok(converted);
+    }
+    // Downscaling can truncate, so the value must survive a round trip.
     let restored = cast_with_options(&converted, array.data_type(), &options)?;
     if restored.to_data() != array.to_data() {
         return Err(ArrowError::CastError(
@@ -229,8 +234,10 @@ mod tests {
         BinaryArray, BinaryBuilder, ListBuilder, MapBuilder, MapFieldNames, Time32MillisecondArray,
         TimestampMillisecondArray, TimestampNanosecondArray,
     };
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::{Field, Schema, Time64MicrosecondType, Time64NanosecondType};
     use fluss::metadata::{DataField, DataTypes};
+
+    const LAST_MILLI_OF_DAY: i32 = 86_399_999;
 
     fn schema(data_type: fluss::metadata::DataType) -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new(
@@ -359,6 +366,33 @@ mod tests {
         ]));
         let result = convert(array.clone(), DataTypes::timestamp_with_precision(9)).unwrap();
         assert!(Arc::ptr_eq(result.column(0), &array));
+    }
+
+    #[test]
+    fn time_upscaling_keeps_every_value() {
+        let source: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![
+            Some(-1),
+            None,
+            Some(LAST_MILLI_OF_DAY),
+        ]));
+        let micros = convert(source.clone(), DataTypes::time_with_precision(6)).unwrap();
+        assert_eq!(
+            micros
+                .column(0)
+                .as_primitive::<Time64MicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(-1_000), None, Some(86_399_999_000)],
+        );
+        let nanos = convert(source, DataTypes::time_with_precision(9)).unwrap();
+        assert_eq!(
+            nanos
+                .column(0)
+                .as_primitive::<Time64NanosecondType>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(-1_000_000), None, Some(86_399_999_000_000)],
+        );
     }
 
     #[test]

@@ -31,10 +31,14 @@ categories = { workspace = true }
 
 [features]
 integration_tests = ["fluss/integration_tests"]
-paimon = ["dep:paimon"]
+paimon = ["dep:opendal-core", "dep:paimon", "dep:reqwest"]
 
 [dependencies]
+# Paimon reports storage failures as opendal-core errors.
+opendal-core = { version = "0.59.5", default-features = false, optional = true }
 paimon = { version = "0.5.0", default-features = false, features = ["storage-memory", "storage-fs", "storage-oss", "storage-s3"], optional = true }
+# Paimon's REST client reports transport failures as reqwest errors.
+reqwest = { version = "0.12", default-features = false, optional = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 arrow = { workspace = true }
