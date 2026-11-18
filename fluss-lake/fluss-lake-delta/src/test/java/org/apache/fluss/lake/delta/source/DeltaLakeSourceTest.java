@@ -66,6 +66,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.PartitionUtils;
 
+import io.delta.kernel.TableManager;
+import io.delta.kernel.engine.Engine;
 import io.delta.kernel.internal.deletionvectors.Base85Codec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -80,6 +82,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -177,6 +180,48 @@ class DeltaLakeSourceTest {
         allRows.addAll(secondRound);
         assertThat(read(source, 2L, ROW_TYPE))
                 .containsExactlyInAnyOrderElementsOf(render(allRows, ROW_TYPE));
+    }
+
+    @Test
+    void testReadLatestVersionWithSameFlussData() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "compacted");
+        TableInfo tableInfo = createTable(tablePath, tableDescriptor(true));
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+        List<GenericRow> rows = new ArrayList<>();
+        assertThat(tier(tablePath, tableInfo, PARTITIONS, 1, rows)).isEqualTo(1L);
+
+        // an OPTIMIZE of another engine replaces the files of version 1, then VACUUM deletes them
+        List<String> compactedFiles = compactAsOtherEngine(deltaPath, 1L);
+
+        // Fluss still has version 1 registered, but version 2 holds the same Fluss data
+        LakeSource<DeltaSplit> source = createLakeSource(tablePath);
+        assertThat(plan(source, 1L))
+                .extracting(split -> OBJECT_MAPPER.readTree(split.scanFile()).toString())
+                .allSatisfy(
+                        scanFile ->
+                                assertThat(compactedFiles)
+                                        .anySatisfy(file -> assertThat(scanFile).contains(file)));
+        assertThat(read(source, 1L, ROW_TYPE))
+                .containsExactlyInAnyOrderElementsOf(render(rows, ROW_TYPE));
+    }
+
+    @Test
+    void testRegisteredVersionRemovedByLogCleanup() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "log_cleanup");
+        TableInfo tableInfo = createTable(tablePath, tableDescriptor(false));
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+        List<String> partitions = Collections.singletonList(null);
+        tier(tablePath, tableInfo, partitions, 1, new ArrayList<>());
+        tier(tablePath, tableInfo, partitions, 2, new ArrayList<>());
+        Engine engine = DeltaConfig.createEngine(configuration);
+        TableManager.loadSnapshot(deltaPath).build(engine).writeCheckpoint(engine);
+        DeltaTestUtils.truncateLogBefore(deltaPath, 2L);
+
+        // version 2 has other Fluss data, and version 1 is gone, so it can't be compared
+        assertThatThrownBy(() -> plan(createLakeSource(tablePath), 1L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Cannot load version 1 of Delta table")
+                .hasMessageContaining("delta.logRetentionDuration");
     }
 
     @Test
@@ -494,6 +539,63 @@ class DeltaLakeSourceTest {
                 logDir.resolve("00000000000000000002.json"),
                 actions,
                 StandardOpenOption.CREATE_NEW);
+    }
+
+    /**
+     * Rewrites every data file added by the given version into a new file and commits the swap with
+     * {@code dataChange = false}, as an {@code OPTIMIZE} of another engine does, then deletes the
+     * old files as {@code VACUUM} does. Returns the paths of the new files.
+     */
+    private static List<String> compactAsOtherEngine(String deltaPath, long version)
+            throws IOException {
+        Path logDir = Paths.get(deltaPath, "_delta_log");
+        List<String> actions = new ArrayList<>();
+        List<String> compactedFiles = new ArrayList<>();
+        List<Path> replacedFiles = new ArrayList<>();
+        for (String line :
+                Files.readAllLines(logDir.resolve(String.format("%020d.json", version)))) {
+            JsonNode action = OBJECT_MAPPER.readTree(line);
+            if (!action.has("add")) {
+                continue;
+            }
+            ObjectNode add = (ObjectNode) action.get("add");
+            String path = add.get("path").asText();
+            String compacted =
+                    path.substring(0, path.lastIndexOf('/') + 1)
+                            + "compacted-"
+                            + path.substring(path.lastIndexOf('/') + 1);
+            Path file = dataFile(deltaPath, path);
+            Files.copy(file, dataFile(deltaPath, compacted));
+            replacedFiles.add(file);
+            compactedFiles.add(compacted);
+
+            ObjectNode remove = OBJECT_MAPPER.createObjectNode();
+            remove.put("path", path);
+            remove.put("deletionTimestamp", System.currentTimeMillis());
+            remove.put("dataChange", false);
+            remove.put("extendedFileMetadata", true);
+            remove.set("partitionValues", add.get("partitionValues"));
+            remove.put("size", add.get("size").asLong());
+            ObjectNode compactedAdd = add.deepCopy();
+            compactedAdd.put("path", compacted);
+            compactedAdd.put("dataChange", false);
+            actions.add(OBJECT_MAPPER.createObjectNode().set("remove", remove).toString());
+            actions.add(OBJECT_MAPPER.createObjectNode().set("add", compactedAdd).toString());
+        }
+        assertThat(compactedFiles).isNotEmpty();
+        Files.write(
+                logDir.resolve(String.format("%020d.json", version + 1)),
+                actions,
+                StandardOpenOption.CREATE_NEW);
+        for (Path file : replacedFiles) {
+            Files.delete(file);
+        }
+        return compactedFiles;
+    }
+
+    private static Path dataFile(String deltaPath, String path) {
+        URI uri = URI.create(path);
+        return uri.isAbsolute() ? Paths.get(uri) : Paths.get(deltaPath, path);
     }
 
     /**

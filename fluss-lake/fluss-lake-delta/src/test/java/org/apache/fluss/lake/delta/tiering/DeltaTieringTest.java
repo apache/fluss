@@ -81,8 +81,6 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
@@ -221,7 +219,7 @@ class DeltaTieringTest {
         commitAsOtherWriter(deltaPath);
         // log cleanup keeps the checkpoint of version 3 and drops the commits before it
         TableManager.loadSnapshot(deltaPath).build(engine).writeCheckpoint(engine);
-        truncateLogBefore(deltaPath, 3L);
+        DeltaTestUtils.truncateLogBefore(deltaPath, 3L);
         commitAsOtherWriter(deltaPath);
 
         try (LakeCommitter<DeltaWriteResult, DeltaCommittable> committer =
@@ -757,20 +755,6 @@ class DeltaTieringTest {
                 .buildUpdateTableTransaction("other-engine", Operation.WRITE)
                 .build(engine)
                 .commit(engine, CloseableIterable.emptyIterable());
-    }
-
-    /** Deletes the log files of the versions before the given one, as log cleanup does. */
-    private static void truncateLogBefore(String deltaPath, long version) throws IOException {
-        // matches commits, checksums, checkpoints and the hidden checksums of the local file system
-        Pattern logFile = Pattern.compile("\\.?(\\d{20})\\..*");
-        File[] files = new File(deltaPath, "_delta_log").listFiles();
-        assertThat(files).isNotNull();
-        for (File file : files) {
-            Matcher matcher = logFile.matcher(file.getName());
-            if (matcher.matches() && Long.parseLong(matcher.group(1)) < version) {
-                Files.delete(file.toPath());
-            }
-        }
     }
 
     /**

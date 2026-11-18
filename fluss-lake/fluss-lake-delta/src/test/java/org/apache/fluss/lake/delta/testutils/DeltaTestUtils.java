@@ -59,13 +59,17 @@ import io.delta.kernel.utils.FileStatus;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.StringJoiner;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Reads Delta tables back with Delta Kernel to verify what the tiering wrote. */
 public class DeltaTestUtils {
@@ -128,6 +132,22 @@ public class DeltaTestUtils {
                 return new Configuration();
             }
         };
+    }
+
+    /** Deletes the log files of the versions before the given one, as log cleanup does. */
+    public static void truncateLogBefore(String deltaPath, long version) throws IOException {
+        // matches commits, checksums, checkpoints and the hidden checksums of the local file system
+        Pattern logFile = Pattern.compile("\\.?(\\d{20})\\..*");
+        File[] files = new File(deltaPath, "_delta_log").listFiles();
+        if (files == null) {
+            throw new IOException("No _delta_log directory in " + deltaPath);
+        }
+        for (File file : files) {
+            Matcher matcher = logFile.matcher(file.getName());
+            if (matcher.matches() && Long.parseLong(matcher.group(1)) < version) {
+                Files.delete(file.toPath());
+            }
+        }
     }
 
     /**

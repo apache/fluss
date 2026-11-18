@@ -29,6 +29,7 @@ import io.delta.kernel.TableManager;
 import io.delta.kernel.data.FilteredColumnarBatch;
 import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
+import io.delta.kernel.exceptions.KernelException;
 import io.delta.kernel.internal.InternalScanFileUtils;
 import io.delta.kernel.internal.util.PartitionUtils;
 import io.delta.kernel.types.StructField;
@@ -41,10 +42,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+
+import static org.apache.fluss.lake.delta.tiering.DeltaLakeCommitter.FLUSS_DOMAIN;
 
 /**
- * Plans one {@link DeltaSplit} per data file of the Delta table version that Fluss recorded as its
- * lake snapshot.
+ * Plans one {@link DeltaSplit} per data file of the Delta table version that Fluss registered as
+ * its lake snapshot, or of the latest version when that one holds the same Fluss data.
  */
 public class DeltaSplitPlanner implements Planner<DeltaSplit> {
 
@@ -67,10 +71,7 @@ public class DeltaSplitPlanner implements Planner<DeltaSplit> {
     @Override
     public List<DeltaSplit> plan() throws IOException {
         Engine engine = DeltaConfig.createEngine(options);
-        Snapshot snapshot =
-                TableManager.loadSnapshot(DeltaConfig.tablePath(options, tablePath))
-                        .atVersion(snapshotId)
-                        .build(engine);
+        Snapshot snapshot = snapshotToRead(engine, DeltaConfig.tablePath(options, tablePath));
         StructType schema = snapshot.getSchema();
         Scan scan = snapshot.getScanBuilder().withReadSchema(readSchema(schema)).build();
         Row scanState = scan.getScanState(engine);
@@ -96,6 +97,46 @@ public class DeltaSplitPlanner implements Planner<DeltaSplit> {
             }
         }
         return splits;
+    }
+
+    /**
+     * Returns the latest version when it holds the same Fluss data as the registered lake snapshot,
+     * otherwise the registered lake snapshot.
+     *
+     * <p>Other engines may commit after Fluss, for example {@code OPTIMIZE}, and {@code VACUUM}
+     * later deletes the files those commits replaced. If no Fluss commit happens in between, for
+     * example because the Fluss table gets no new data, reading the registered version would fail
+     * on the deleted files. Fluss changes its domain metadata on every commit, and other engines
+     * must not change the data of the table, so a later version with the same domain metadata,
+     * schema and partition columns holds the same rows as the registered one.
+     */
+    private Snapshot snapshotToRead(Engine engine, String path) {
+        Snapshot latest = TableManager.loadSnapshot(path).build(engine);
+        if (latest.getVersion() == snapshotId) {
+            return latest;
+        }
+        Snapshot registered;
+        try {
+            registered = TableManager.loadSnapshot(path).atVersion(snapshotId).build(engine);
+        } catch (KernelException e) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot load version %s of Delta table %s, which Fluss registered as "
+                                    + "its lake snapshot. If log cleanup has removed it, keep "
+                                    + "'delta.logRetentionDuration' longer than the time between "
+                                    + "two Fluss commits.",
+                            snapshotId, path),
+                    e);
+        }
+        Optional<String> flussData = registered.getDomainMetadata(FLUSS_DOMAIN);
+        boolean sameFlussData =
+                flussData.isPresent()
+                        && flussData.equals(latest.getDomainMetadata(FLUSS_DOMAIN))
+                        && registered.getSchema().equals(latest.getSchema())
+                        && registered
+                                .getPartitionColumnNames()
+                                .equals(latest.getPartitionColumnNames());
+        return sameFlussData ? latest : registered;
     }
 
     /** The columns to read, in the order of the projection. */
