@@ -124,15 +124,16 @@ async fn open_logical_stream(
         filter,
         ..
     } = bound.as_ref();
-    let reconcile_pk = split.is_primary_key() && !scan.lake_only();
-    if reconcile_pk {
+    let pk_union = split.is_primary_key() && !scan.lake_only();
+    if pk_union {
         crate::table::validate_pk_union_merge_engine(table_info)?;
     }
+    let has_log_tail = descriptor.start_offset() != descriptor.stop_offset();
     let physical = PhysicalProjection::resolve(
         table_info.row_type(),
         output_projection.as_deref(),
         filter,
-        if reconcile_pk {
+        if pk_union && has_log_tail {
             split.primary_key_indexes()
         } else {
             &[]
@@ -159,7 +160,7 @@ async fn open_logical_stream(
                 } else {
                     crate::LakeReadSemantics::Append
                 },
-                reconcile_primary_key: reconcile_pk,
+                reconcile_primary_key: pk_union,
                 splits: tasks,
                 projection: &physical.field_indexes,
                 schema: physical_schema.clone(),
@@ -170,9 +171,9 @@ async fn open_logical_stream(
     let lake_stream = normalize_stream_schema(lake_stream, physical_schema.clone());
     let output_column_count = output_projection.as_deref().map(|indexes| indexes.len());
     let batch_size = scan.max_batch_size();
-    let stream = if scan.lake_only() {
+    let stream = if !has_log_tail {
         lake_stream
-    } else if reconcile_pk {
+    } else if pk_union {
         let mut current_view = match memory_budget {
             Some(budget) => DeduplicateCurrentView::try_new_with_memory_budget(
                 physical_schema,
@@ -209,9 +210,6 @@ async fn open_logical_append_log_stream(
     physical: &PhysicalProjection,
     filter: Option<&Predicate>,
 ) -> Result<RecordBatchStream> {
-    if descriptor.start_offset() == descriptor.stop_offset() {
-        return Ok(Box::pin(futures::stream::empty()));
-    }
     let mut table_scan = table
         .new_scan()
         .project(&physical.field_indexes)
@@ -247,9 +245,6 @@ async fn fold_logical_changelog_tail(
     physical: &PhysicalProjection,
     current_view: &mut DeduplicateCurrentView,
 ) -> Result<()> {
-    if descriptor.start_offset() == descriptor.stop_offset() {
-        return Ok(());
-    }
     let scanner = table
         .new_scan()
         .project(&physical.field_indexes)
