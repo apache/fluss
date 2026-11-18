@@ -160,7 +160,6 @@ const MAX_PENDING_COMMITS: usize = 64;
 
 pub(crate) struct ConsumerGroup {
     slots: Arc<tokio::sync::Semaphore>,
-    table_id: i64,
     client: ConsumerGroupClient,
     // Held through the response, not just dispatch: the server may reorder concurrent commits.
     late_writes: tokio::sync::Mutex<HashMap<TableBucket, OffsetAndMetadata>>,
@@ -170,19 +169,21 @@ pub(crate) struct ConsumerGroup {
 
 impl ConsumerGroup {
     pub(crate) fn new(
-        table_id: i64,
         options: ConsumerGroupOptions,
         connections: Arc<RpcClient>,
         metadata: Arc<Metadata>,
     ) -> Self {
         Self {
             slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_COMMITS)),
-            table_id,
             client: ConsumerGroupClient::new(options, connections, metadata),
             late_writes: tokio::sync::Mutex::new(HashMap::new()),
             tail: Mutex::new(None),
             delivered: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(crate) fn client_for(&self, group_id: &str) -> Option<&ConsumerGroupClient> {
+        (self.client.options.group_id == group_id).then_some(&self.client)
     }
 
     pub(crate) fn enqueue(
@@ -212,31 +213,13 @@ impl ConsumerGroup {
         &self,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,
     ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
-        let mut requested = Vec::with_capacity(offsets.len());
-        for (bucket, value) in &offsets {
-            if value.offset < 0 {
-                return Err(OffsetCommitError::Rejected(invalid(
-                    "Committed offset must be nonnegative",
-                )));
-            }
-            requested.push(proto::PbCommitConsumerOffsetsRequestBucket {
-                partition_id: bucket.partition_id(),
-                bucket_id: bucket.bucket_id(),
-                offset: value.offset,
-                metadata: value.metadata.clone(),
-            });
+        if offsets.is_empty() {
+            return Ok(HashMap::new());
         }
-        let request = proto::CommitConsumerOffsetsRequest {
-            group_id: self.client.options.group_id.clone(),
-            tables: if requested.is_empty() {
-                Vec::new()
-            } else {
-                vec![proto::PbCommitConsumerOffsetsRequestTable {
-                    table_id: self.table_id,
-                    buckets: requested,
-                }]
-            },
-        };
+        let request = self
+            .client
+            .commit_request(&offsets)
+            .map_err(OffsetCommitError::Rejected)?;
         let mut late = self.late_writes.lock().await;
         if offsets.iter().any(|(bucket, next)| {
             late.get(bucket).is_some_and(|old| {
@@ -406,6 +389,23 @@ impl ConsumerGroupClient {
         &self,
         buckets: &[TableBucket],
     ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
+        if buckets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        self.fetch_offsets(buckets, false).await
+    }
+
+    pub(crate) async fn fetch_all(
+        &self,
+    ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
+        self.fetch_offsets(&[], true).await
+    }
+
+    async fn fetch_offsets(
+        &self,
+        buckets: &[TableBucket],
+        all: bool,
+    ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
         let mut requested: HashMap<i64, Vec<proto::PbGetConsumerOffsetsRequestBucket>> =
             HashMap::new();
         let expected: HashSet<_> = buckets.iter().cloned().collect();
@@ -423,7 +423,7 @@ impl ConsumerGroupClient {
         }
         let request = proto::GetConsumerOffsetsRequest {
             group_id: self.options.group_id.clone(),
-            all_offsets: Some(false),
+            all_offsets: Some(all),
             tables: requested
                 .into_iter()
                 .map(
@@ -447,7 +447,9 @@ impl ConsumerGroupClient {
                         .await
                 }
                 .await;
-                match response.and_then(|response| decode_fetch(response, &expected)) {
+                match response.and_then(|response| {
+                    decode_fetch(response, if all { None } else { Some(&expected) })
+                }) {
                     Err(error) if error.is_retriable() || routing_error(&error) => {
                         self.invalidate_owner();
                         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -458,6 +460,58 @@ impl ConsumerGroupClient {
         })
         .await
         .map_err(|_| timeout_error())?
+    }
+
+    fn commit_request(
+        &self,
+        offsets: &HashMap<TableBucket, OffsetAndMetadata>,
+    ) -> Result<proto::CommitConsumerOffsetsRequest> {
+        let mut requested: HashMap<i64, Vec<proto::PbCommitConsumerOffsetsRequestBucket>> =
+            HashMap::new();
+        for (bucket, value) in offsets {
+            validate_bucket(bucket)?;
+            if value.offset < 0 {
+                return Err(invalid("Committed offset must be nonnegative"));
+            }
+            requested.entry(bucket.table_id()).or_default().push(
+                proto::PbCommitConsumerOffsetsRequestBucket {
+                    partition_id: bucket.partition_id(),
+                    bucket_id: bucket.bucket_id(),
+                    offset: value.offset,
+                    metadata: value.metadata.clone(),
+                },
+            );
+        }
+        Ok(proto::CommitConsumerOffsetsRequest {
+            group_id: self.options.group_id.clone(),
+            tables: requested
+                .into_iter()
+                .map(
+                    |(table_id, buckets)| proto::PbCommitConsumerOffsetsRequestTable {
+                        table_id,
+                        buckets,
+                    },
+                )
+                .collect(),
+        })
+    }
+
+    pub(crate) async fn alter_offsets(
+        &self,
+        offsets: HashMap<TableBucket, OffsetAndMetadata>,
+    ) -> std::result::Result<OffsetCommitResult, OffsetCommitError> {
+        if offsets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let request = self
+            .commit_request(&offsets)
+            .map_err(OffsetCommitError::Rejected)?;
+        let response = self
+            .mutate(&mut false, || message::CommitConsumerOffsetsRequest {
+                inner_request: request.clone(),
+            })
+            .await?;
+        decode_commit(response, &offsets).map_err(OffsetCommitError::Unknown)
     }
 }
 
@@ -501,7 +555,7 @@ fn validate_bucket(bucket: &TableBucket) -> Result<()> {
 
 fn decode_fetch(
     response: proto::GetConsumerOffsetsResponse,
-    expected: &HashSet<TableBucket>,
+    expected: Option<&HashSet<TableBucket>>,
 ) -> Result<HashMap<TableBucket, Option<OffsetAndMetadata>>> {
     let mut result = HashMap::new();
     for table in response.tables {
@@ -511,7 +565,7 @@ fn decode_fetch(
                 bucket.partition_id,
                 bucket.bucket_id,
             );
-            if !expected.contains(&key) || result.contains_key(&key) {
+            if expected.is_some_and(|keys| !keys.contains(&key)) || result.contains_key(&key) {
                 return Err(invalid(
                     "Unexpected or duplicate consumer offset response bucket",
                 ));
@@ -533,7 +587,7 @@ fn decode_fetch(
             );
         }
     }
-    if result.len() != expected.len() {
+    if expected.is_some_and(|keys| result.len() != keys.len()) {
         return Err(invalid("Missing consumer offset response bucket"));
     }
     Ok(result)
@@ -576,6 +630,175 @@ fn decode_commit(
         return Err(invalid("Missing consumer commit response bucket"));
     }
     Ok(result)
+}
+
+/// Per-bucket deletion results. An unknown result must not be retried while writers
+/// are active: a second deletion could remove a newer commit.
+pub type OffsetDeleteResult = HashMap<TableBucket, std::result::Result<(), OffsetCommitError>>;
+/// Per-group deletion results, including failures from independent owners.
+pub type GroupDeleteResult = HashMap<String, std::result::Result<(), OffsetCommitError>>;
+
+impl ConsumerGroupClient {
+    // A mutation can be repeated only with proof that the previous attempt did not write.
+    async fn mutate<R>(
+        &self,
+        sent: &mut bool,
+        make_request: impl Fn() -> R,
+    ) -> std::result::Result<R::ResponseBody, OffsetCommitError>
+    where
+        R: message::RequestBody + Send + message::WriteType<Vec<u8>>,
+        R::ResponseBody: message::ReadType<std::io::Cursor<Vec<u8>>>,
+    {
+        let operation = tokio::time::timeout(self.options.timeout, async {
+            loop {
+                let owner = self.owner().await.map_err(OffsetCommitError::Rejected)?;
+                let connection = match self.connections.get_connection(&owner).await {
+                    Ok(connection) => connection,
+                    Err(error) if error.is_retriable() => {
+                        self.invalidate_owner();
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    Err(error) => return Err(OffsetCommitError::Rejected(error)),
+                };
+                match connection
+                    .request_with_send_status(make_request(), sent)
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(RequestFailure::NotSent(error)) => {
+                        *sent = false;
+                        if !error.is_retriable() {
+                            return Err(OffsetCommitError::Rejected(error));
+                        }
+                    }
+                    Err(RequestFailure::MaybeSent(error)) if routing_error(&error) => {
+                        *sent = false;
+                    }
+                    Err(RequestFailure::MaybeSent(error)) if definite_rejection(&error) => {
+                        return Err(OffsetCommitError::Rejected(error));
+                    }
+                    Err(RequestFailure::MaybeSent(error)) => {
+                        return Err(OffsetCommitError::Unknown(error));
+                    }
+                }
+                self.invalidate_owner();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        operation.unwrap_or_else(|_| {
+            Err(if *sent {
+                OffsetCommitError::Unknown(timeout_error())
+            } else {
+                OffsetCommitError::Rejected(timeout_error())
+            })
+        })
+    }
+
+    pub(crate) async fn delete_offsets(
+        &self,
+        buckets: &[TableBucket],
+    ) -> std::result::Result<OffsetDeleteResult, OffsetCommitError> {
+        if buckets.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut tables: HashMap<i64, Vec<proto::PbDeleteConsumerOffsetsRequestBucket>> =
+            HashMap::new();
+        let expected: HashSet<_> = buckets.iter().cloned().collect();
+        if expected.len() != buckets.len() {
+            return Err(OffsetCommitError::Rejected(invalid(
+                "Duplicate consumer offset bucket",
+            )));
+        }
+        for bucket in buckets {
+            validate_bucket(bucket).map_err(OffsetCommitError::Rejected)?;
+            tables.entry(bucket.table_id()).or_default().push(
+                proto::PbDeleteConsumerOffsetsRequestBucket {
+                    partition_id: bucket.partition_id(),
+                    bucket_id: bucket.bucket_id(),
+                },
+            );
+        }
+        let request = proto::DeleteConsumerOffsetsRequest {
+            group_id: self.options.group_id.clone(),
+            tables: tables
+                .into_iter()
+                .map(
+                    |(table_id, buckets)| proto::PbDeleteConsumerOffsetsRequestTable {
+                        table_id,
+                        buckets,
+                    },
+                )
+                .collect(),
+        };
+        let response = self
+            .mutate(&mut false, || message::DeleteConsumerOffsetsRequest {
+                inner_request: request.clone(),
+            })
+            .await?;
+        let mut result = HashMap::new();
+        for table in response.tables {
+            for bucket in table.buckets {
+                let key = TableBucket::new_with_partition(
+                    table.table_id,
+                    bucket.partition_id,
+                    bucket.bucket_id,
+                );
+                if !expected.contains(&key) || result.contains_key(&key) {
+                    return Err(OffsetCommitError::Unknown(invalid(
+                        "Unexpected or duplicate delete response bucket",
+                    )));
+                }
+                result.insert(
+                    key,
+                    deletion_result(bucket.error_code, bucket.error_message),
+                );
+            }
+        }
+        if result.len() != expected.len() {
+            return Err(OffsetCommitError::Unknown(invalid(
+                "Missing delete response bucket",
+            )));
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn delete_group(&self) -> std::result::Result<(), OffsetCommitError> {
+        let response = self
+            .mutate(&mut false, || message::DeleteConsumerGroupsRequest {
+                inner_request: proto::DeleteConsumerGroupsRequest {
+                    groups: vec![self.options.group_id.clone()],
+                },
+            })
+            .await?;
+        if response.groups.len() != 1 || response.groups[0].group_id != self.options.group_id {
+            return Err(OffsetCommitError::Unknown(invalid(
+                "Invalid delete group response",
+            )));
+        }
+        let group = response.groups.into_iter().next().unwrap();
+        deletion_result(group.error_code, group.error_message)
+    }
+}
+
+fn deletion_result(
+    code: Option<i32>,
+    message: Option<String>,
+) -> std::result::Result<(), OffsetCommitError> {
+    match code.filter(|code| *code != 0) {
+        None => Ok(()),
+        Some(code) => {
+            let error = Error::FlussAPIError {
+                api_error: api_error(code, message),
+            };
+            Err(if definite_rejection(&error) || routing_error(&error) {
+                OffsetCommitError::Rejected(error)
+            } else {
+                OffsetCommitError::Unknown(error)
+            })
+        }
+    }
 }
 
 #[cfg(test)]

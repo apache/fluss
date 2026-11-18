@@ -282,6 +282,55 @@ no group retain their behavior. Offset persistence requires a server implementin
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
 consumer offsets. A committed offset that has expired from log retention is not silently reset.
 
+### Periodic commits and multiple tables
+
+Automatic commits are opt-in with `scan.with_auto_commit(Duration::from_secs(5))?` and
+require a consumer group. They run at the start of a poll once the interval has elapsed,
+using only positions from previous completed polls. Process the whole previous result before
+polling again. There is no timer writing offsets while the application is processing a batch.
+A commit failure fails the poll before delivering more records; its error source retains
+`AutoCommitError`, including per-bucket failures. After an unknown outcome, the same per-bucket rewind rules apply as for explicit commits.
+
+For shutdown, finish processing the last result, await `commit_sync`, inspect every bucket,
+and drop the scanner. Drop and connection close do not perform a final commit. Applications
+that dispatch work to another thread should use explicit commits after that work completes.
+
+```rust,ignore
+let scanner = connection
+    .new_multi_table_scan(&[orders_path, payments_path], ConsumerGroupOptions::new("billing"))
+    .await?
+    .with_auto_commit(Duration::from_secs(5))?
+    .create_log_scanner()?;
+scanner.subscribe_with_initializer(&buckets, &OffsetsInitializer::committed("billing")).await?;
+let records = scanner.poll(Duration::from_secs(1)).await?;
+// Process records using their TableBucket to identify the source table.
+// After the last processed batch:
+let outcomes = scanner.commit_sync().await?;
+```
+
+`create_record_batch_log_scanner` provides the Arrow equivalent. Each batch retains its source
+bucket and schema. Both scanner types support `subscribe_with_initializer`, `unsubscribe`,
+`commit_sync`, `commit_offsets_sync` and their asynchronous variants. Assignment resolves all
+requested tables before changing subscriptions. Poll rotates across tables; successful commits
+across tables share one ordering queue, but are not an atomic cross-table transaction. Projection
+and filtering remain available through individual table scanners.
+
+### Managing saved offsets
+
+| Admin method | Contract |
+| --- | --- |
+| `list_consumer_groups()` | Fans out to all current TabletServers, deduplicates visible groups, and fails if a server cannot be queried. This is not a transactional snapshot during owner movement. |
+| `list_consumer_offsets(group)` | Returns all saved offsets visible to the caller; unauthorized source tables are omitted. Requires group DESCRIBE. |
+| `alter_consumer_offsets(group, offsets)` | Sets or rewinds explicit next offsets across tables, with metadata and per-bucket results. Requires group READ and source table READ. |
+| `delete_consumer_offsets(group, buckets)` | Deletes selected entries, including entries for dropped tables; missing entries succeed. Requires group WRITE. Returns per-bucket results. |
+| `delete_consumer_groups(groups)` | Validates all IDs first, then deletes each distinct group and its offsets once. Missing groups succeed. Requires group DROP; returns a result for every group. |
+
+Stop consumers before resetting or deleting their offsets: these operations do not fence concurrent
+writers, and later commits can recreate deleted groups. Mutation failures distinguish rejection
+from unknown outcomes using `OffsetCommitError`; a timeout after dispatch must not be blindly
+retried, since a later deletion could erase a newer commit. List/delete APIs require server support
+for consumer group management. Cancellation of a multi-group deletion may leave some groups deleted.
+
 ## `RecordBatchLogReader`
 
 Bounded log reader that consumes data up to specified stopping offsets, then terminates.

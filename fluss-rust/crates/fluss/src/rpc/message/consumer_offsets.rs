@@ -54,3 +54,36 @@ impl RequestBody for GetConsumerOffsetsRequest {
 }
 impl_write_type!(GetConsumerOffsetsRequest);
 impl_read_type!(proto::GetConsumerOffsetsResponse);
+
+#[derive(Debug)]
+pub(crate) struct DeleteConsumerOffsetsRequest {
+    pub(crate) inner_request: proto::DeleteConsumerOffsetsRequest,
+}
+impl RequestBody for DeleteConsumerOffsetsRequest {
+    type ResponseBody = proto::DeleteConsumerOffsetsResponse;
+    const API_KEY: ApiKey = ApiKey::DeleteConsumerOffsets;
+}
+impl_write_type!(DeleteConsumerOffsetsRequest);
+impl_read_type!(proto::DeleteConsumerOffsetsResponse);
+
+#[derive(Debug)]
+pub(crate) struct ListConsumerGroupsRequest {
+    pub(crate) inner_request: proto::ListConsumerGroupsRequest,
+}
+impl RequestBody for ListConsumerGroupsRequest {
+    type ResponseBody = proto::ListConsumerGroupsResponse;
+    const API_KEY: ApiKey = ApiKey::ListConsumerGroups;
+}
+impl_write_type!(ListConsumerGroupsRequest);
+impl_read_type!(proto::ListConsumerGroupsResponse);
+
+#[derive(Debug)]
+pub(crate) struct DeleteConsumerGroupsRequest {
+    pub(crate) inner_request: proto::DeleteConsumerGroupsRequest,
+}
+impl RequestBody for DeleteConsumerGroupsRequest {
+    type ResponseBody = proto::DeleteConsumerGroupsResponse;
+    const API_KEY: ApiKey = ApiKey::DeleteConsumerGroups;
+}
+impl_write_type!(DeleteConsumerGroupsRequest);
+impl_read_type!(proto::DeleteConsumerGroupsResponse);

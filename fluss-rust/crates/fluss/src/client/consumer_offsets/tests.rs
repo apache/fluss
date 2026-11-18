@@ -40,20 +40,20 @@ fn response_validation_keeps_missing_offsets_and_partial_failures_distinct() {
         }],
     };
     assert_eq!(
-        decode_fetch(response.clone(), &expected).unwrap()[&bucket],
+        decode_fetch(response.clone(), Some(&expected)).unwrap()[&bucket],
         None
     );
     response.tables[0].buckets[0].offset = Some(0);
     response.tables[0].buckets[0].metadata = Some(String::new());
     assert_eq!(
-        decode_fetch(response.clone(), &expected).unwrap()[&bucket],
+        decode_fetch(response.clone(), Some(&expected)).unwrap()[&bucket],
         Some(OffsetAndMetadata {
             offset: 0,
             metadata: Some(String::new())
         })
     );
     response.tables[0].buckets.clear();
-    assert!(decode_fetch(response, &expected).is_err());
+    assert!(decode_fetch(response, Some(&expected)).is_err());
 
     let values = HashMap::from([
         (bucket.clone(), OffsetAndMetadata::new(2)),
@@ -190,7 +190,6 @@ impl CommitPeer {
         });
         let cluster = crate::test_utils::build_cluster_with_tables(&[], port.into());
         let group = Arc::new(ConsumerGroup::new(
-            1,
             ConsumerGroupOptions {
                 group_id: "test".into(),
                 timeout: Duration::from_secs(2),
@@ -340,4 +339,44 @@ async fn aborting_waiter_preserves_queue_order_and_capacity() {
         (0..MAX_PENDING_COMMITS as i64).collect::<Vec<_>>()
     );
     peer.commit(100).await.unwrap();
+}
+
+#[tokio::test]
+async fn admin_reset_does_not_retry_a_lost_ack() {
+    let peer = CommitPeer::start([Reply::Disconnect]).await;
+    let offsets = HashMap::from([(TableBucket::new(1, 0), OffsetAndMetadata::new(10))]);
+    assert!(matches!(
+        peer.group.client.alter_offsets(offsets).await,
+        Err(OffsetCommitError::Unknown(_))
+    ));
+    assert_eq!(*peer.received.lock(), [10]);
+}
+
+#[tokio::test]
+async fn empty_admin_selections_complete_without_a_server() {
+    let admin = crate::client::FlussAdmin::new(
+        Arc::new(RpcClient::new()),
+        Arc::new(Metadata::new_for_test(Default::default())),
+    );
+    assert!(
+        admin
+            .get_consumer_offsets("group", &[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        admin
+            .alter_consumer_offsets("group", HashMap::new())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        admin
+            .delete_consumer_offsets("group", &[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

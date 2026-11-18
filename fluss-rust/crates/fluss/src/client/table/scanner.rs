@@ -67,13 +67,16 @@ use crate::client::consumer_offsets::ConsumerGroup;
 use crate::client::{ConsumerGroupOptions, OffsetAndMetadata};
 
 mod consumer_group;
-pub use consumer_group::OffsetsInitializer;
+pub use consumer_group::{AutoCommitError, OffsetsInitializer};
+mod multi_table;
+pub use multi_table::{MultiTableLogScanner, MultiTableRecordBatchLogScanner, MultiTableScan};
 
 pub(super) const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     consumer_group: Option<ConsumerGroupOptions>,
+    auto_commit_interval: Option<Duration>,
     table_info: TableInfo,
     metadata: Arc<Metadata>,
     /// Column indices to project. None means all columns, Some(vec) means only the specified columns (non-empty).
@@ -92,6 +95,7 @@ impl<'a> TableScan<'a> {
         Self {
             conn,
             consumer_group: None,
+            auto_commit_interval: None,
             table_info,
             metadata,
             projected_fields: None,
@@ -101,12 +105,32 @@ impl<'a> TableScan<'a> {
         }
     }
 
+    fn validate_auto_commit(&self) -> Result<()> {
+        if self.auto_commit_interval.is_some() && self.consumer_group.is_none() {
+            return Err(crate::client::consumer_offsets::invalid(
+                "Auto-commit requires a consumer group",
+            ));
+        }
+        Ok(())
+    }
+
     /// Enables persisted offsets for a manually assigned consumer group.
     /// Existing subscriptions still use their explicit starting offsets; use
-    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. No background commits are made.
+    /// `subscribe_with_initializer` with `OffsetsInitializer::committed` to restore them. Automatic commits are disabled by default.
     pub fn with_consumer_group(mut self, options: ConsumerGroupOptions) -> Result<Self> {
         options.validate()?;
         self.consumer_group = Some(options);
+        Ok(self)
+    }
+
+    /// Enables periodic commits at the start of poll, before delivering more data.
+    /// Process the previous poll completely before polling again. The interval is checked
+    /// only on poll; idle applications do not commit in the background. Failures stop that
+    /// poll and are returned to the caller. Drop does not commit: after processing the final
+    /// batch, await `commit_sync` and inspect its results before dropping the scanner.
+    pub fn with_auto_commit(mut self, interval: Duration) -> Result<Self> {
+        consumer_group::AutoCommit::new(interval)?;
+        self.auto_commit_interval = Some(interval);
         Ok(self)
     }
 
@@ -192,7 +216,7 @@ impl<'a> TableScan<'a> {
         self,
         table_bucket: TableBucket,
     ) -> Result<LimitBatchScanner> {
-        if self.consumer_group.is_some() {
+        if self.consumer_group.is_some() || self.auto_commit_interval.is_some() {
             return Err(Error::UnsupportedOperation {
                 message: "Consumer offsets require a log scanner".into(),
             });
@@ -429,6 +453,7 @@ impl<'a> TableScan<'a> {
     /// (update-before), `+U` (update-after) or `-D` (delete). A log table yields
     /// `+A` (append-only) for every record. Requires the ARROW log format.
     pub fn create_log_scanner(self) -> Result<LogScanner> {
+        self.validate_auto_commit()?;
         self.reject_limit("LogScanner")?;
         validate_scan_support_inner(&self.table_info.table_path, &self.table_info, true)?;
         let admin = self.conn.get_admin()?;
@@ -442,9 +467,12 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.auto_commit = self
+            .auto_commit_interval
+            .map(consumer_group::AutoCommit::new)
+            .transpose()?;
         inner.consumer_group = self.consumer_group.map(|options| {
             Arc::new(ConsumerGroup::new(
-                self.table_info.table_id,
                 options,
                 self.conn.get_connections(),
                 self.metadata.clone(),
@@ -473,6 +501,7 @@ impl<'a> TableScan<'a> {
     }
 
     fn batch_log_scanner(self, allow_primary_key: bool) -> Result<RecordBatchLogScanner> {
+        self.validate_auto_commit()?;
         self.reject_limit("RecordBatchLogScanner")?;
         validate_scan_support_inner(
             &self.table_info.table_path,
@@ -490,9 +519,12 @@ impl<'a> TableScan<'a> {
             self.filter,
             admin,
         )?;
+        inner.auto_commit = self
+            .auto_commit_interval
+            .map(consumer_group::AutoCommit::new)
+            .transpose()?;
         inner.consumer_group = self.consumer_group.map(|options| {
             Arc::new(ConsumerGroup::new(
-                self.table_info.table_id,
                 options,
                 self.conn.get_connections(),
                 self.metadata.clone(),
@@ -539,6 +571,7 @@ impl PolledBatches {
 /// Private shared implementation for both scanner types
 struct LogScannerInner {
     consumer_group: Option<Arc<ConsumerGroup>>,
+    auto_commit: Option<consumer_group::AutoCommit>,
     table_path: TablePath,
     table_id: TableId,
     table_info: TableInfo,
@@ -738,6 +771,7 @@ impl LogScannerInner {
         );
         Ok(Self {
             consumer_group: None,
+            auto_commit: None,
             table_path: table_info.table_path.clone(),
             table_id: table_info.table_id,
             table_info: table_info.clone(),
@@ -785,6 +819,7 @@ impl LogScannerInner {
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
         let _poll_guard = PollGuard::new(self);
+        self.maybe_auto_commit().await?;
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -1057,18 +1092,10 @@ impl LogScannerInner {
             .await
     }
 
-    async fn do_subscribe_buckets(
+    async fn prepare_bucket_metadata(
         &self,
-        bucket_offsets: HashMap<TableBucket, i64>,
-        reader_is_active: bool,
+        bucket_offsets: &HashMap<TableBucket, i64>,
     ) -> Result<()> {
-        if bucket_offsets.is_empty() {
-            return Err(Error::UnexpectedError {
-                message: "Bucket offsets are empty.".to_string(),
-                source: None,
-            });
-        }
-
         if self.is_partitioned_table {
             let partition_ids: Vec<PartitionId> = bucket_offsets
                 .keys()
@@ -1083,6 +1110,23 @@ impl LogScannerInner {
                 .await?;
         }
 
+        Ok(())
+    }
+
+    async fn do_subscribe_buckets(
+        &self,
+        bucket_offsets: HashMap<TableBucket, i64>,
+        reader_is_active: bool,
+    ) -> Result<()> {
+        if bucket_offsets.is_empty() {
+            return Err(Error::UnexpectedError {
+                message: "Bucket offsets are empty.".to_string(),
+                source: None,
+            });
+        }
+
+        self.prepare_bucket_metadata(&bucket_offsets).await?;
+
         let _subscription_guard = self.subscription_lock.lock();
         if reader_is_active {
             debug_assert!(
@@ -1093,6 +1137,11 @@ impl LogScannerInner {
         } else {
             self.check_no_active_reader()?;
         }
+        self.assign_buckets(bucket_offsets);
+        Ok(())
+    }
+
+    fn assign_buckets(&self, bucket_offsets: HashMap<TableBucket, i64>) {
         if let Some(group) = &self.consumer_group {
             let mut delivered = group.delivered.lock();
             for bucket in bucket_offsets.keys() {
@@ -1100,7 +1149,6 @@ impl LogScannerInner {
             }
         }
         self.log_scanner_status.assign_scan_buckets(bucket_offsets);
-        Ok(())
     }
 
     fn unassign_bucket(&self, bucket: &TableBucket) {
@@ -1166,6 +1214,7 @@ impl LogScannerInner {
 
     async fn poll_batches(&self, timeout: Duration) -> Result<PolledBatches> {
         let _poll_guard = PollGuard::new(self);
+        self.maybe_auto_commit().await?;
         let start = Instant::now();
         let deadline = start + timeout;
 
@@ -4714,7 +4763,6 @@ mod tests {
             // Without bootstrap servers an unnecessary metadata fetch fails deterministically.
             let (mut inner, _, _) = scanner_fixture(false)?;
             let group = Arc::new(ConsumerGroup::new(
-                1,
                 ConsumerGroupOptions::new("filtered"),
                 inner.log_fetcher.conns.clone(),
                 inner.metadata.clone(),

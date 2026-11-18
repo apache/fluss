@@ -71,14 +71,81 @@ impl OffsetsInitializer {
     }
 }
 
+/// Failure from a poll-triggered automatic commit. Poll returns no new records when this
+/// occurs. The source of `Error::UnexpectedError` retains these per-bucket outcomes.
+#[derive(Debug, thiserror::Error)]
+pub enum AutoCommitError {
+    /// Request failure. A possibly late write restricts rewinds on its buckets.
+    #[error("Automatic commit failed: {0}")]
+    Request(#[from] OffsetCommitError),
+    /// At least one bucket was rejected or has an unknown outcome.
+    #[error("Automatic commit contains unsuccessful buckets: {0:?}")]
+    Buckets(OffsetCommitResult),
+}
+
+pub(super) struct AutoCommit {
+    interval: std::time::Duration,
+    next: parking_lot::Mutex<tokio::time::Instant>,
+}
+
+impl AutoCommit {
+    pub(super) fn new(interval: std::time::Duration) -> Result<Self> {
+        if interval.is_zero() {
+            return Err(invalid("Auto-commit interval must be positive"));
+        }
+        Ok(Self {
+            interval,
+            next: parking_lot::Mutex::new(tokio::time::Instant::now() + interval),
+        })
+    }
+
+    pub(super) async fn before_poll(&self, group: &Arc<ConsumerGroup>) -> Result<()> {
+        if tokio::time::Instant::now() < *self.next.lock() {
+            return Ok(());
+        }
+        let offsets = group.delivered.lock().clone();
+        let result = async {
+            if !offsets.is_empty() {
+                let result = group
+                    .enqueue(offsets)
+                    .map_err(OffsetCommitError::Rejected)?
+                    .await
+                    .map_err(OffsetCommitError::from)??;
+                if result.values().any(|outcome| {
+                    !matches!(outcome, crate::client::OffsetCommitOutcome::Committed)
+                }) {
+                    return Err(AutoCommitError::Buckets(result));
+                }
+            }
+            Ok(())
+        }
+        .await;
+        result.map_err(
+            |error: AutoCommitError| crate::error::Error::UnexpectedError {
+                message: error.to_string(),
+                source: Some(Box::new(error)),
+            },
+        )?;
+        *self.next.lock() = tokio::time::Instant::now() + self.interval;
+        Ok(())
+    }
+}
+
 impl LogScannerInner {
+    pub(super) async fn maybe_auto_commit(&self) -> Result<()> {
+        if let Some(auto) = &self.auto_commit {
+            auto.before_poll(self.group()?).await?;
+        }
+        Ok(())
+    }
+
     fn group(&self) -> Result<&Arc<ConsumerGroup>> {
         self.consumer_group
             .as_ref()
             .ok_or_else(|| invalid("Configure a consumer group before creating the scanner"))
     }
 
-    fn validate_group_buckets<'a>(
+    pub(super) fn validate_group_buckets<'a>(
         &self,
         buckets: impl IntoIterator<Item = &'a TableBucket>,
     ) -> Result<()> {
@@ -96,7 +163,7 @@ impl LogScannerInner {
         Ok(())
     }
 
-    fn delivered_offsets(&self) -> Result<HashMap<TableBucket, OffsetAndMetadata>> {
+    pub(super) fn delivered_offsets(&self) -> Result<HashMap<TableBucket, OffsetAndMetadata>> {
         self.check_no_active_reader()?;
         Ok(self.group()?.delivered.lock().clone())
     }
@@ -106,6 +173,15 @@ impl LogScannerInner {
         buckets: &[TableBucket],
         initializer: &OffsetsInitializer,
     ) -> Result<()> {
+        let offsets = self.resolve_initializer(buckets, initializer).await?;
+        self.do_subscribe_buckets(offsets, false).await
+    }
+
+    pub(super) async fn resolve_initializer(
+        &self,
+        buckets: &[TableBucket],
+        initializer: &OffsetsInitializer,
+    ) -> Result<HashMap<TableBucket, i64>> {
         self.check_no_active_reader()?;
         self.validate_group_buckets(buckets)?;
         let mut pending = buckets.to_vec();
@@ -116,7 +192,14 @@ impl LogScannerInner {
         while !pending.is_empty() {
             match &strategy.0 {
                 Initializer::Committed(group_id, fallback) => {
-                    let saved = admin.get_consumer_offsets(group_id, &pending).await?;
+                    let saved = match self
+                        .consumer_group
+                        .as_ref()
+                        .and_then(|g| g.client_for(group_id))
+                    {
+                        Some(client) => client.fetch(&pending).await?,
+                        None => admin.get_consumer_offsets(group_id, &pending).await?,
+                    };
                     pending.retain(|bucket| {
                         if let Some(value) = &saved[bucket] {
                             offsets.insert(bucket.clone(), value.offset);
@@ -188,7 +271,7 @@ impl LogScannerInner {
             }
         }
         // Resolve every bucket before changing subscriptions, including fallback failures.
-        self.do_subscribe_buckets(offsets, false).await
+        Ok(offsets)
     }
 }
 
