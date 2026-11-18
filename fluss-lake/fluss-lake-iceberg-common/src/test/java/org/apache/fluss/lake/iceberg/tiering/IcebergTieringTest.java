@@ -373,6 +373,31 @@ class IcebergTieringTest {
         assertThat(rows).containsExactly("1:v3");
     }
 
+    @Test
+    void testInsertWithWalChangelogWritesNoDeleteFile() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_insert_wal_changelog");
+        createTable(tablePath, true, false);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false, ChangelogImage.WAL);
+
+        // INSERT is emitted only for a key absent from the KV state, so no stale row to delete
+        tierOneRound(
+                tablePath,
+                tableInfo,
+                toRecord(0L, pkRow(1, "v1"), INSERT),
+                toRecord(1L, pkRow(2, "v2"), INSERT));
+
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        assertThat(table.currentSnapshot().addedDeleteFiles(table.io())).isEmpty();
+        List<String> rows = new ArrayList<>();
+        try (CloseableIterator<Record> records = IcebergGenerics.read(table).build().iterator()) {
+            while (records.hasNext()) {
+                Record record = records.next();
+                rows.add(record.getField("c1") + ":" + record.getField("c2"));
+            }
+        }
+        assertThat(rows).containsExactlyInAnyOrder("1:v1", "2:v2");
+    }
+
     private static GenericRow pkRow(int key, String value) {
         GenericRow row = new GenericRow(3);
         row.setField(0, key);

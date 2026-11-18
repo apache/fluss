@@ -52,6 +52,8 @@ public class DeltaTaskWriter extends RecordWriter {
         flussRecordAsIcebergRecord.setFlussRecord(record);
         switch (record.getChangeType()) {
             case INSERT:
+                deltaWriter.write(flussRecordAsIcebergRecord);
+                break;
             case UPDATE_AFTER:
                 if (upsert) {
                     deltaWriter.delete(flussRecordAsIcebergRecord);
