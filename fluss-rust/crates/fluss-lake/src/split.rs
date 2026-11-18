@@ -241,6 +241,10 @@ impl FlussLakeReadSplit {
         self.table_info.schema_id
     }
 
+    pub(crate) fn primary_key_indexes(&self) -> &[usize] {
+        &self.primary_key_indexes
+    }
+
     pub(crate) fn is_primary_key(&self) -> bool {
         !self.primary_key_indexes.is_empty()
     }

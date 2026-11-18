@@ -522,3 +522,82 @@ async fn dropped_partition_fails_a_frozen_log_read() {
     );
     admin.drop_table(&path, false).await.unwrap();
 }
+
+#[tokio::test]
+async fn complete_log_pk_read_applies_changes_only_up_to_the_frozen_stop() {
+    use fluss::row::GenericRow;
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "union_read_pk_complete_log");
+    let schema = Schema::builder()
+        .column("id", DataTypes::int())
+        .column("name", DataTypes::string())
+        .primary_key(vec!["id"])
+        .unwrap()
+        .build()
+        .unwrap();
+    let descriptor = TableDescriptor::builder()
+        .schema(schema)
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_upsert().unwrap().create_writer().unwrap();
+    let row = |id: i32, name: &'static str| {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, name);
+        row
+    };
+    for value in [row(1, "old"), row(2, "remove"), row(1, "kept")] {
+        writer.upsert(&value).unwrap().await.unwrap();
+    }
+    writer.delete(&row(2, "remove")).unwrap().await.unwrap();
+    let scan = FlussLakeTable::new(connection.clone(), &path)
+        .new_scan()
+        .with_projection(vec![1]);
+    // The cluster periodically creates KV snapshots. Pin the complete-log path
+    // explicitly so this read does not depend on snapshot timing.
+    let info = table.get_table_info();
+    let stop = admin
+        .list_offsets(&path, &[0], fluss::rpc::message::OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    let context = FlussLakeReadContext::from_boundary(
+        info,
+        None,
+        vec![fluss_lake::FlussLakeLogRange::new(
+            fluss::metadata::TableBucket::new(info.table_id, 0),
+            fluss_lake::FlussLakeLogPartition::Ordinary(
+                fluss_lake::FlussLakePartitionIdentity::Unpartitioned,
+            ),
+            1,
+            None,
+            stop,
+            0,
+        )],
+    )
+    .unwrap();
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    writer.upsert(&row(1, "too late")).unwrap().await.unwrap();
+    let batches = scan
+        .new_reader()
+        .read_splits(plan.splits())
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let names: Vec<_> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+        })
+        .collect();
+    assert_eq!(names, [Some("kept")]);
+    admin.drop_table(&path, false).await.unwrap();
+}

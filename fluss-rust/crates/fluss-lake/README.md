@@ -18,7 +18,7 @@ limitations under the License.
 
 # Bounded UnionRead
 
-`fluss-lake` plans and executes bounded Append or lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
+`fluss-lake` plans and executes bounded Append, deduplicate PK and lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -81,7 +81,7 @@ The protocol starts at version 1. Optional additive fields are compatible only w
 | `None`, Append table | Start at the captured earliest retained offset. |
 | `None`, PK table | Complete log history from offset zero. Truncated history fails with `DataUnavailable`, even if the retained range is empty. |
 
-Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; opening the snapshot and reconciling rows belong to the subsequent PK executor. Boundary capture preserves merge-engine metadata; the subsequent default executor targets deduplicate semantics, while other merge engines require explicit executor support.
+Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; the reader rejects these tasks until KV snapshot execution is available. Boundary capture preserves merge-engine metadata; the default PK executor supports deduplicate tables.
 
 Call `validate_available()` for required ranges after safe pruning. It detects a baseline seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
 
@@ -119,10 +119,10 @@ Partition scope is passed to Paimon before planning. Paimon 0.5 does not expose 
 
 Fluss S3/OSS data requests use rustls and return the stored object bytes without HTTP decompression, independently of reqwest features enabled by Paimon. Paimon 0.5 still enables native TLS, so the combined build retains OpenSSL on Linux. OpenDAL's credential providers use a separate internal HTTP client; their TLS selection also requires an upstream fix.
 
-## Append execution
+## Bounded execution
 
 Create one reader per execution attempt with `scan.new_reader()`. The reader and its clones share the initial table identity lookup and lake source across splits. Create a fresh reader on retry. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
 
-The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a deduplicate PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
 
 Tasks with a persisted KV snapshot baseline are rejected before reading until the default executor integrates that baseline. An empty log tail does not make a KV task empty.
