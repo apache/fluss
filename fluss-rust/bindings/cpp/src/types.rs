@@ -800,15 +800,21 @@ pub fn core_lake_snapshot_to_ffi(snapshot: &fcore::metadata::LakeSnapshot) -> ff
 pub fn core_scan_batches_to_ffi(
     batches: &[fcore::record::ScanBatch],
 ) -> Result<ffi::FfiArrowRecordBatches, String> {
-    let mut ffi_batches = Vec::new();
-    for batch in batches {
+    // Schema export can fail. Complete it before transferring any array ownership to C++.
+    let schemas = batches
+        .iter()
+        .map(|batch| {
+            FFI_ArrowSchema::try_from(batch.batch().schema().as_ref())
+                .map(Box::new)
+                .map_err(|e| e.to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut ffi_batches = Vec::with_capacity(batches.len());
+    for (batch, ffi_schema) in batches.iter().zip(schemas) {
         let record_batch = batch.batch();
         // Convert RecordBatch to StructArray first, then get the data
         let struct_array = arrow::array::StructArray::from(record_batch.clone());
         let ffi_array = Box::new(FFI_ArrowArray::new(&struct_array.into_data()));
-        let ffi_schema = Box::new(
-            FFI_ArrowSchema::try_from(record_batch.schema().as_ref()).map_err(|e| e.to_string())?,
-        );
         // Export as raw pointers
         ffi_batches.push(ffi::FfiArrowRecordBatch {
             array_ptr: Box::into_raw(ffi_array) as usize,

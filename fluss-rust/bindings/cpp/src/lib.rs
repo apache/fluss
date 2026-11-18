@@ -53,6 +53,10 @@ mod ffi {
     unsafe extern "C++" {
         include!("write_callback.hpp");
 
+        include!("commit_promise.hpp");
+        type CommitPromise;
+        fn resolve(self: Pin<&mut CommitPromise>, result: &mut FfiConsumerOffsetsResult);
+
         type WriteCallback;
 
         #[cxx_name = "Complete"]
@@ -472,8 +476,6 @@ mod ffi {
         type AppendWriter;
         type WriteResult;
         type LogScanner;
-        type OffsetCommitTask;
-        fn wait(self: &mut OffsetCommitTask) -> FfiConsumerOffsetsResult;
         type RecordBatchLogReader;
         type BatchScanner;
         type UpsertWriter;
@@ -945,11 +947,13 @@ mod ffi {
             group_id: &str,
             buckets: Vec<FfiConsumerOffset>,
         ) -> FfiConsumerOffsetsResult;
+        fn delivered(self: &LogScanner);
         fn begin_commit(
             self: &LogScanner,
             current: bool,
             offsets: Vec<FfiConsumerOffset>,
-        ) -> Box<OffsetCommitTask>;
+            promise: UniquePtr<CommitPromise>,
+        );
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
         fn subscribe_buckets(
@@ -1144,6 +1148,7 @@ enum ScannerKind {
 }
 
 pub struct LogScanner {
+    delivery_pending: Option<std::sync::atomic::AtomicBool>,
     scanner: ScannerKind,
     /// Fluss columns matching the projected Arrow fields (1:1 by index).
     /// For non-projected scanners this is the full table schema columns.
@@ -2197,6 +2202,7 @@ impl Table {
             };
 
             let ptr = Box::into_raw(Box::new(LogScanner {
+                delivery_pending: group.enabled.then(Default::default),
                 scanner,
                 projected_columns,
                 table_columns: HashMap::new(),
@@ -2674,6 +2680,12 @@ impl LogScanner {
     }
 
     fn poll(&self, timeout_ms: i64) -> Box<ScanResultInner> {
+        if let Err(error) = self.check_delivery() {
+            return Box::new(ScanResultInner::from_error(
+                CLIENT_ERROR_CODE,
+                error.to_string(),
+            ));
+        }
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let result = RUNTIME.block_on(async {
             match &self.scanner {
@@ -2687,6 +2699,7 @@ impl LogScanner {
 
         match result {
             Ok(records) => {
+                self.await_delivery();
                 let columns = records
                     .records_by_buckets()
                     .keys()
@@ -2728,6 +2741,9 @@ impl LogScanner {
     }
 
     fn poll_record_batch(&self, timeout_ms: i64) -> ffi::FfiArrowRecordBatchesResult {
+        if let Err(error) = self.check_delivery() {
+            return empty_arrow_batches_result(err_from_core_error(&error));
+        }
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
         let result = RUNTIME.block_on(async {
             match &self.scanner {
@@ -2740,7 +2756,10 @@ impl LogScanner {
         });
 
         match result {
-            Ok(batches) => arrow_batches_result(types::core_scan_batches_to_ffi(&batches)),
+            Ok(batches) => {
+                self.await_delivery();
+                arrow_batches_result(types::core_scan_batches_to_ffi(&batches))
+            }
             Err(e) => empty_arrow_batches_result(err_from_core_error(&e)),
         }
     }
@@ -4735,4 +4754,3 @@ fn structurally_compatible(a: &fcore::metadata::DataType, b: &fcore::metadata::D
 }
 
 mod consumer_offsets;
-use consumer_offsets::OffsetCommitTask;

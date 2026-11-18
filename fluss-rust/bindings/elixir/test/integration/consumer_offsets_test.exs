@@ -47,6 +47,16 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
         {info.table_id, nil, 0}
       end
 
+    # If the polling process exits without processing its mailbox, another process must
+    # restore, not commit the dead consumer's native cursor.
+    orphan_group = group <> "-orphan"
+    {:ok, orphan} = Fluss.LogScanner.new_multi(conn, tables, group_id: orphan_group)
+    :ok = Fluss.LogScanner.subscribe_with_initializer(orphan, buckets, {:committed, orphan_group})
+    assert :ok = Task.async(fn -> Fluss.LogScanner.poll(orphan, 1000) end) |> Task.await()
+    assert {:ok, %{request: %{status: :rejected}}} = Fluss.LogScanner.commit_sync(orphan)
+    assert {:ok, orphan_offsets} = Fluss.Admin.get_consumer_offsets(admin, orphan_group, buckets)
+    assert Enum.all?(orphan_offsets, fn {_bucket, saved} -> is_nil(saved) end)
+
     [a, b] = buckets
     {:ok, scanner} = Fluss.LogScanner.new_multi(conn, tables, group_id: group)
     :ok = Fluss.LogScanner.subscribe_with_initializer(scanner, buckets, {:committed, group})
@@ -58,6 +68,10 @@ defmodule Fluss.Integration.ConsumerOffsetsTest do
              "1",
              "2"
            ]
+
+    # A different process cannot acknowledge a delivery made to this mailbox.
+    assert {:ok, %{request: %{status: :rejected}}} =
+             Task.async(fn -> Fluss.LogScanner.commit_sync(scanner) end) |> Task.await()
 
     {:ok, partial} =
       Fluss.LogScanner.commit_sync(scanner, [{a, {1, nil}}, {b, {1, String.duplicate("x", 5000)}}])

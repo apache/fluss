@@ -162,6 +162,8 @@ defmodule Fluss.LogScanner do
 
   @doc """
   Starts a non-blocking poll. Returns `:ok` immediately.
+  For consumer groups, receive and process each reply before polling or committing
+  again in the same process. Recreate the scanner after a failed delivery.
   Results arrive as `{:fluss_records, [record]}` or
   `{:fluss_poll_error, %Fluss.Error{}}`.
   """

@@ -447,7 +447,7 @@ assert all(value.status == "success" for value in result.buckets.values())
 
 `OffsetsInitializer.committed(group, fallback=None)` uses earliest for missing commits by default. Alternatives are `latest()`, `timestamp(epoch_ms)`, `offset(next_offset)`, or `fail()`. Authorization and transport failures are propagated, never treated as missing commits.
 
-`table.new_scan().with_consumer_group(group).with_auto_commit(interval_ms)` enables automatic commits **before a subsequent poll** when due. Process the previous poll completely before polling again. No background timer commits during processing, and dropping a scanner does not commit the final batch. Bounded readers do not support auto-commit.
+`table.new_scan().with_consumer_group(group).with_auto_commit(interval_ms)` enables automatic commits **before a subsequent poll** when due. Process the previous poll completely before polling again. No background timer commits during processing, and dropping a scanner does not commit the final batch. Use a scanner without a consumer group for bounded reads. Await each poll and finish processing its result before the next poll or commit. If conversion fails or the await is cancelled, recreate the scanner from committed offsets.
 
 For multiple tables use `await connection.create_multi_table_scanner(paths, group, auto_commit_interval_ms=None, arrow=False)`. Assign table-qualified buckets with `subscribe_with_initializer`, then use `poll(timeout_ms)` or, with `arrow=True`, `poll_record_batch(timeout_ms)`. Each table retains its own schema. Polls, assignment changes and commits must be driven by one consumer task. Subscription is manual; there is no automatic membership or rebalance.
 

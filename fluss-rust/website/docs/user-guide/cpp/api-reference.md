@@ -1368,7 +1368,7 @@ Check `OffsetCommitResult::Ok()` and inspect request/per-bucket `result` and `ou
 
 `OffsetsInitializer::Committed(group)` restores saved positions and defaults missing commits to earliest. Its fallback overload accepts `Earliest()`, `Latest()`, `Timestamp(epoch_ms)`, `Offset(next_offset)` or `Fail()`. Authorization and RPC failures never select a fallback.
 
-`ConsumerGroupOptions::auto_commit_interval_ms` defaults to zero (disabled). A positive value commits previously delivered positions before a later poll when due. Process every record before polling again and call `CommitSync()` after the last processed batch. Dropping a scanner performs no final commit; bounded readers do not support auto-commit.
+`ConsumerGroupOptions::auto_commit_interval_ms` defaults to zero (disabled). A positive value commits previously delivered positions before a later poll when due. Process every record before polling again and call `CommitSync()` after the last processed batch. Dropping a scanner performs no final commit; use a scanner without a consumer group for bounded reads. If importing a poll result fails, recreate the scanner from committed offsets before continuing.
 
 `Connection::CreateMultiTableLogScanner(paths, options, out)` and `CreateMultiTableRecordBatchLogScanner` share the same group queue across tables. Table-qualified `Subscribe` and `Unsubscribe` select buckets; every result retains its source schema. Drive polling, assignment and commits from one consumer thread. Assignment is manual, without membership or rebalance.
 

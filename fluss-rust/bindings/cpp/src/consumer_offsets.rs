@@ -21,10 +21,6 @@ use fcore::client::{
 };
 use fcore::metadata::TableBucket;
 
-pub struct OffsetCommitTask {
-    pending: Option<Result<OffsetCommitHandle, fcore::error::Error>>,
-}
-
 fn bucket(value: &ffi::FfiConsumerOffset) -> TableBucket {
     TableBucket::new_with_partition(
         value.table_id,
@@ -101,6 +97,31 @@ impl Admin {
 }
 
 impl LogScanner {
+    pub(super) fn check_delivery(&self) -> fcore::error::Result<()> {
+        if self
+            .delivery_pending
+            .as_ref()
+            .is_some_and(|v| v.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(fcore::error::Error::IllegalArgument {
+                message:
+                    "Poll result was not delivered; recreate the scanner from committed offsets"
+                        .into(),
+            });
+        }
+        Ok(())
+    }
+    pub(super) fn await_delivery(&self) {
+        if let Some(flag) = &self.delivery_pending {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+    pub(super) fn delivered(&self) {
+        if let Some(flag) = &self.delivery_pending {
+            flag.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
     pub(super) fn subscribe_with_initializer(
         &self,
         buckets: Vec<ffi::FfiConsumerOffset>,
@@ -145,17 +166,34 @@ impl LogScanner {
         &self,
         current: bool,
         offsets: Vec<ffi::FfiConsumerOffset>,
-    ) -> Box<OffsetCommitTask> {
+        mut promise: cxx::UniquePtr<ffi::CommitPromise>,
+    ) {
         let _enter = RUNTIME.enter();
-        let values = match commit_offsets(offsets) {
-            Ok(values) => values,
-            Err(error) => {
-                return Box::new(OffsetCommitTask {
-                    pending: Some(Err(error)),
+        match self.enqueue_commit(current, offsets) {
+            Ok(handle) => {
+                RUNTIME.spawn(async move {
+                    let result = handle.await.unwrap_or_else(|error| Err(error.into()));
+                    promise.pin_mut().resolve(&mut commit_response(result));
                 });
             }
-        };
-        let pending = match &self.scanner {
+            Err(error) => {
+                promise
+                    .pin_mut()
+                    .resolve(&mut commit_response(Err(OffsetCommitError::Rejected(
+                        error,
+                    ))))
+            }
+        }
+    }
+
+    fn enqueue_commit(
+        &self,
+        current: bool,
+        offsets: Vec<ffi::FfiConsumerOffset>,
+    ) -> fcore::error::Result<OffsetCommitHandle> {
+        self.check_delivery()?;
+        let values = commit_offsets(offsets)?;
+        match &self.scanner {
             ScannerKind::Record(scanner) => {
                 if current {
                     scanner.commit_async()
@@ -184,29 +222,12 @@ impl LogScanner {
                     scanner.commit_offsets_async(values)
                 }
             }
-        };
-        Box::new(OffsetCommitTask {
-            pending: Some(pending),
-        })
+        }
     }
 }
 
-impl OffsetCommitTask {
-    pub fn wait(&mut self) -> ffi::FfiConsumerOffsetsResult {
-        let result = match self.pending.take() {
-            Some(Ok(handle)) => RUNTIME
-                .block_on(handle)
-                .unwrap_or_else(|error| Err(error.into())),
-            Some(Err(error)) => Err(OffsetCommitError::Rejected(error)),
-            None => Err(OffsetCommitError::Rejected(
-                fcore::error::Error::IllegalArgument {
-                    message: "Commit result already consumed".into(),
-                },
-            )),
-        };
-        commit_response(result)
-    }
-}
+// SAFETY: one completion task owns the promise; resolving it never invokes user code.
+unsafe impl Send for ffi::CommitPromise {}
 
 impl Connection {
     pub(super) fn create_multi_table_scanner(
@@ -240,6 +261,7 @@ impl Connection {
                 ScannerKind::MultiRecord(scan.create_log_scanner()?)
             };
             Ok(LogScanner {
+                delivery_pending: Some(Default::default()),
                 scanner,
                 projected_columns: Vec::new(),
                 table_columns,

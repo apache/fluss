@@ -663,6 +663,7 @@ impl TableScan {
             )?
             .with_fixed_schema(fixed_schema);
 
+            let delivery = crate::consumer_offsets::PollDelivery::new(group.is_some())?;
             if let Some(group) = group {
                 table_scan = table_scan
                     .with_consumer_group(group)
@@ -697,6 +698,7 @@ impl TableScan {
             };
 
             let py_scanner = LogScanner::new(
+                delivery,
                 scanner_kind,
                 admin,
                 table_info,
@@ -2513,6 +2515,7 @@ macro_rules! with_scanner {
 /// - Batch-based scanning via `poll_arrow()` / `poll_record_batch()` - returns Arrow batches
 #[pyclass]
 pub struct LogScanner {
+    delivery: crate::consumer_offsets::PollDelivery,
     kind: Arc<ScannerKind>,
     admin: Arc<fcore::client::FlussAdmin>,
     table_info: fcore::metadata::TableInfo,
@@ -2547,6 +2550,7 @@ impl LogScanner {
         py: Python<'py>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        self.delivery.check(py)?;
         let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
         future_into_py(py, async move {
             Ok(crate::consumer_offsets::commit_result(
@@ -2561,6 +2565,7 @@ impl LogScanner {
         py: Python<'_>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<OffsetCommitResult> {
+        self.delivery.check(py)?;
         let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
         Ok(py.detach(|| {
             crate::consumer_offsets::commit_result(
@@ -2694,31 +2699,34 @@ impl LogScanner {
         let scanner = Arc::clone(&self.kind);
         let projected_row_type = self.projected_row_type.clone();
 
-        future_into_py(py, async move {
-            let scan_records = scanner
-                .as_record()?
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
+        self.delivery.poll(py, || {
+            future_into_py(py, async move {
+                let scan_records = scanner
+                    .as_record()?
+                    .poll(timeout)
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
 
-            Python::attach(|py| {
-                let mut records_by_bucket = IndexMap::new();
-                let mut total_count = 0usize;
+                Python::attach(|py| {
+                    let mut records_by_bucket = IndexMap::new();
+                    let mut total_count = 0usize;
 
-                for (bucket, records) in scan_records.into_records_by_buckets() {
-                    let py_bucket = TableBucket::from_core(bucket);
-                    let mut py_records = Vec::with_capacity(records.len());
-                    for record in &records {
-                        let scan_record = ScanRecord::from_core(py, record, &projected_row_type)?;
-                        py_records.push(Py::new(py, scan_record)?);
-                        total_count += 1;
+                    for (bucket, records) in scan_records.into_records_by_buckets() {
+                        let py_bucket = TableBucket::from_core(bucket);
+                        let mut py_records = Vec::with_capacity(records.len());
+                        for record in &records {
+                            let scan_record =
+                                ScanRecord::from_core(py, record, &projected_row_type)?;
+                            py_records.push(Py::new(py, scan_record)?);
+                            total_count += 1;
+                        }
+                        records_by_bucket.insert(py_bucket, py_records);
                     }
-                    records_by_bucket.insert(py_bucket, py_records);
-                }
 
-                Ok(ScanRecords {
-                    records_by_bucket,
-                    total_count,
+                    Ok(ScanRecords {
+                        records_by_bucket,
+                        total_count,
+                    })
                 })
             })
         })
@@ -2751,18 +2759,20 @@ impl LogScanner {
         let timeout = Duration::from_millis(timeout_ms as u64);
         let scanner = Arc::clone(&self.kind);
 
-        future_into_py(py, async move {
-            let scan_batches = scanner
-                .as_batch()?
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
+        self.delivery.poll(py, || {
+            future_into_py(py, async move {
+                let scan_batches = scanner
+                    .as_batch()?
+                    .poll(timeout)
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
 
-            Python::attach(|py| {
-                scan_batches
-                    .into_iter()
-                    .map(|sb| Py::new(py, RecordBatch::from_scan_batch(sb)))
-                    .collect::<PyResult<Vec<_>>>()
+                Python::attach(|py| {
+                    scan_batches
+                        .into_iter()
+                        .map(|sb| Py::new(py, RecordBatch::from_scan_batch(sb)))
+                        .collect::<PyResult<Vec<_>>>()
+                })
             })
         })
     }
@@ -2790,19 +2800,23 @@ impl LogScanner {
         let scanner = Arc::clone(&self.kind);
         let projected_schema = self.projected_schema.clone();
 
-        future_into_py(py, async move {
-            let scan_batches = scanner
-                .as_batch()?
-                .poll(timeout)
-                .await
-                .map_err(|e| FlussError::from_core_error(&e))?;
+        self.delivery.poll(py, || {
+            future_into_py(py, async move {
+                let scan_batches = scanner
+                    .as_batch()?
+                    .poll(timeout)
+                    .await
+                    .map_err(|e| FlussError::from_core_error(&e))?;
 
-            let arrow_batches = scan_batches
-                .into_iter()
-                .map(|sb| Arc::new(sb.into_batch()))
-                .collect();
+                let arrow_batches = scan_batches
+                    .into_iter()
+                    .map(|sb| Arc::new(sb.into_batch()))
+                    .collect();
 
-            Python::attach(|py| Self::batches_to_arrow_table(py, arrow_batches, &projected_schema))
+                Python::attach(|py| {
+                    Self::batches_to_arrow_table(py, arrow_batches, &projected_schema)
+                })
+            })
         })
     }
 
@@ -2953,6 +2967,7 @@ async def _async_scan_generic(scanner, method_name, timeout_ms):
 
 impl LogScanner {
     fn new(
+        delivery: crate::consumer_offsets::PollDelivery,
         scanner: ScannerKind,
         admin: Arc<fcore::client::FlussAdmin>,
         table_info: fcore::metadata::TableInfo,
@@ -2960,6 +2975,7 @@ impl LogScanner {
         projected_row_type: Arc<fcore::metadata::RowType>,
     ) -> Self {
         Self {
+            delivery,
             kind: Arc::new(scanner),
             admin,
             table_info,

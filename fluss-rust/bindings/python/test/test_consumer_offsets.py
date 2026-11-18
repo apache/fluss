@@ -17,6 +17,7 @@
 
 """Consumer offsets through Python objects, real RPC, and both scan formats."""
 
+import asyncio
 import uuid
 
 import pyarrow as pa
@@ -130,3 +131,50 @@ async def test_multi_table_restore_and_management(connection, admin):
     assert not await admin.list_consumer_offsets(group)
     for path in paths:
         await admin.drop_table(path)
+
+
+@pytest.mark.asyncio
+async def test_undelivered_poll_cannot_advance_committed_offset(connection, admin):
+    group = "delivery-" + uuid.uuid4().hex
+    path = fluss.TablePath("fluss", "delivery_" + uuid.uuid4().hex)
+    schema = pa.schema([("d", pa.date32())])
+    await admin.create_table(
+        path, fluss.TableDescriptor(fluss.Schema(schema), bucket_count=1)
+    )
+    table = await connection.get_table(path)
+    bucket = fluss.TableBucket((await admin.get_table_info(path)).table_id, 0)
+    writer = table.new_append().create_writer()
+    # Arrow supports year zero; conversion to datetime.date fails after the native poll.
+    dates = pa.array([-719528], type=pa.int32()).cast(pa.date32())
+    writer.write_arrow_batch(pa.record_batch([dates], schema=schema))
+    await writer.flush()
+
+    async def restore(**options):
+        scanner = await connection.create_multi_table_scanner([path], group, **options)
+        await scanner.subscribe_with_initializer(
+            [bucket], fluss.OffsetsInitializer.committed(group)
+        )
+        return scanner
+
+    scanner = await restore(auto_commit_interval_ms=1)
+    with pytest.raises(ValueError, match="year 0"):
+        await scanner.poll(5000)
+    with pytest.raises(fluss.FlussError, match="recreate"):
+        await scanner.commit_async()
+    with pytest.raises(fluss.FlussError, match="recreate"):
+        await scanner.poll(100)
+    assert (await admin.get_consumer_offsets(group, [bucket]))[bucket] is None
+
+    # Cancel after starting the native poll, before its result reaches the task.
+    abandoned = await restore(arrow=True)
+    task = asyncio.create_task(abandoned.poll_record_batch(5000))
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(fluss.FlussError, match="recreate"):
+        abandoned.commit_sync()
+
+    scanner = await restore(arrow=True)
+    assert [b.base_offset for b in await scanner.poll_record_batch(5000)] == [0]
+    successful(await scanner.commit_async())
+    await admin.drop_table(path)

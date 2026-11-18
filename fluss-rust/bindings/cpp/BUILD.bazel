@@ -281,6 +281,7 @@ cc_library(
         "src/ffi_converter.hpp",
         "src/type_lowering.hpp",
         "src/write_callback.hpp",
+        "src/commit_promise.hpp",
         ":rust_bridge_h_unified",
         ":lib_rs_h_unified",
         ":cxx_h_unified",

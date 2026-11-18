@@ -2451,8 +2451,8 @@ class LogScanner {
     /// Commits explicit next offsets, allowing partially processed poll results.
     OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
     /// Enqueues a snapshot now. Calls on one scanner execute in invocation order.
-    /// The operation owns its resources and survives scanner destruction. Destroying
-    /// the returned future may wait for completion. No cross-scanner fencing exists.
+    /// The operation owns its resources and survives scanner destruction. Dropping
+    /// the returned future does not cancel the write. No cross-scanner fencing exists.
     /// Unknown outcomes block further commits; reads do not fence a late write.
     /// Drive polls, subscriptions and commit initiation from one consumer thread.
     std::future<OffsetCommitResult> CommitAsync();

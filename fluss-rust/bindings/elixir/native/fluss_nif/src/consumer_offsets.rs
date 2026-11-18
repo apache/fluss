@@ -161,7 +161,30 @@ fn initializer(steps: Vec<Initializer>) -> OffsetsInitializer {
     }
     value
 }
+#[derive(Default)]
+struct Delivery {
+    owner: Option<rustler::LocalPid>,
+    pending: bool,
+}
+
+impl Delivery {
+    fn check(&self, pid: rustler::LocalPid) -> fluss::error::Result<()> {
+        if self.owner.is_some_and(|owner| owner != pid) {
+            return Err(invalid(
+                "Continue from the process that polled this scanner, or create a new scanner",
+            ));
+        }
+        if self.pending {
+            return Err(invalid(
+                "Await the poll reply before continuing; recreate the scanner if delivery failed",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub struct ConsumerScannerResource {
+    delivery: std::sync::Mutex<Delivery>,
     inner: MultiTableLogScanner,
     columns: HashMap<i64, Vec<Column>>,
 }
@@ -189,6 +212,7 @@ async fn create(
         columns.insert(info.table_id, info.schema.columns().to_vec());
     }
     Ok(ResourceArc::new(ConsumerScannerResource {
+        delivery: Default::default(),
         inner: scan.create_log_scanner()?,
         columns,
     }))
@@ -270,17 +294,25 @@ fn consumer_scanner_commit(
 ) -> Term<'_> {
     // Enqueue before returning to BEAM; async wait scheduling cannot reorder invocations.
     let _guard = RUNTIME.enter();
-    let handle = match offsets {
+    let state = scanner.delivery.lock().unwrap();
+    let handle = state.check(env.pid()).and_then(|()| match offsets {
         None => scanner.inner.commit_async(),
         Some(offsets) => {
             values(offsets).and_then(|values| scanner.inner.commit_offsets_async(values))
         }
+    });
+    drop(state);
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(error) => {
+            let reference = *env.make_ref();
+            let result = commit_result(Err(OffsetCommitError::Rejected(error)));
+            let _ = env.send(&env.pid(), (reference, (atoms::ok(), result)));
+            return reference;
+        }
     };
     async_nif::spawn_task_with_result(env, async move {
-        let result = match handle {
-            Ok(handle) => handle.await.unwrap_or_else(|error| Err(error.into())),
-            Err(error) => Err(OffsetCommitError::Rejected(error)),
-        };
+        let result = handle.await.unwrap_or_else(|error| Err(error.into()));
         Ok(commit_result(result))
     })
 }
@@ -291,27 +323,53 @@ fn consumer_scanner_poll(
     timeout_ms: u64,
 ) -> rustler::Atom {
     let pid = env.pid();
+    {
+        let mut state = scanner.delivery.lock().unwrap();
+        if let Err(error) = state.check(pid) {
+            let _ = env.send(
+                &pid,
+                (
+                    atoms::fluss_poll_error(),
+                    atoms::NifFlussError::from_core(&error),
+                ),
+            );
+            return atoms::ok();
+        }
+        state.owner = Some(pid);
+        state.pending = true;
+    }
     RUNTIME.spawn(async move {
         let result = scanner.inner.poll(Duration::from_millis(timeout_ms)).await;
         let mut owned = rustler::env::OwnedEnv::new();
-        let _ = owned.send_and_clear(&pid, |env| match result {
-            Err(error) => (
-                atoms::fluss_poll_error(),
-                atoms::NifFlussError::from_core(&error),
-            )
-                .encode(env),
-            Ok(records) => {
-                let result = encode_records(env, records, &scanner.columns);
-                match result {
-                    Ok(records) => (atoms::fluss_records(), records).encode(env),
-                    Err(message) => (
+        let (message, can_continue) = owned.run(|env| {
+            let (term, can_continue) = match result {
+                Err(error) => (
+                    (
                         atoms::fluss_poll_error(),
-                        atoms::NifFlussError::client(message),
+                        atoms::NifFlussError::from_core(&error),
                     )
                         .encode(env),
-                }
-            }
+                    false,
+                ),
+                Ok(records) => match encode_records(env, records, &scanner.columns) {
+                    Ok(records) => ((atoms::fluss_records(), records).encode(env), true),
+                    Err(message) => (
+                        (
+                            atoms::fluss_poll_error(),
+                            atoms::NifFlussError::client(message),
+                        )
+                            .encode(env),
+                        false,
+                    ),
+                },
+            };
+            (owned.save(term), can_continue)
         });
+        // Publish the reply and release the next poll/commit together.
+        let mut state = scanner.delivery.lock().unwrap();
+        if owned.send_and_clear(&pid, |env| message.load(env)).is_ok() && can_continue {
+            state.pending = false;
+        }
     });
     atoms::ok()
 }

@@ -89,6 +89,7 @@ impl FlussConnection {
                 )
             };
             Ok(MultiTableLogScanner {
+                delivery: crate::consumer_offsets::PollDelivery::new(true)?,
                 inner: Arc::new(inner),
                 schemas: Arc::new(schemas),
             })

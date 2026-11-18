@@ -246,12 +246,50 @@ pub(crate) fn enqueue(
     result.map_err(|error| FlussError::from_core_error(&error))
 }
 
+pub(crate) struct PollDelivery(Option<Py<PyAny>>);
+
+impl PollDelivery {
+    pub(crate) fn new(enabled: bool) -> PyResult<Self> {
+        Python::attach(|py| {
+            Ok(Self(if enabled {
+                Some(
+                    py.import("fluss._delivery")?
+                        .getattr("PollDelivery")?
+                        .call0()?
+                        .unbind(),
+                )
+            } else {
+                None
+            }))
+        })
+    }
+
+    pub(crate) fn check(&self, py: Python<'_>) -> PyResult<()> {
+        if let Some(state) = &self.0 {
+            state.bind(py).call_method0("check")?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn poll<'py>(
+        &self,
+        py: Python<'py>,
+        start: impl FnOnce() -> PyResult<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let Some(state) = &self.0 else { return start() };
+        let state = state.bind(py);
+        state.call_method0("begin")?;
+        state.call_method1("deliver", (start()?,))
+    }
+}
+
 pub(crate) enum MultiKind {
     Record(fcore::client::MultiTableLogScanner),
     Batch(fcore::client::MultiTableRecordBatchLogScanner),
 }
 #[pyclass]
 pub struct MultiTableLogScanner {
+    pub(crate) delivery: PollDelivery,
     pub(crate) inner: Arc<MultiKind>,
     pub(crate) schemas: Arc<HashMap<i64, fcore::metadata::RowType>>,
 }
@@ -298,35 +336,37 @@ impl MultiTableLogScanner {
     fn poll<'py>(&self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyAny>> {
         let scanner = self.inner.clone();
         let schemas = self.schemas.clone();
-        future_into_py(py, async move {
-            let MultiKind::Record(scanner) = scanner.as_ref() else {
-                return Err(FlussError::new_err(
-                    "Use poll_record_batch for an Arrow scanner",
-                ));
-            };
-            let records = scanner
-                .poll(Duration::from_millis(timeout_ms))
-                .await
-                .map_err(|error| FlussError::from_core_error(&error))?;
-            Python::attach(|py| {
-                let mut records_by_bucket = indexmap::IndexMap::new();
-                let total_count = records.count();
-                for (bucket, records) in records.into_records_by_buckets() {
-                    let schema = schemas
-                        .get(&bucket.table_id())
-                        .ok_or_else(|| FlussError::new_err("Unknown source table"))?;
-                    let values = records
-                        .iter()
-                        .map(|record| {
-                            ScanRecord::from_core(py, record, schema)
-                                .and_then(|record| Py::new(py, record))
-                        })
-                        .collect::<PyResult<Vec<_>>>()?;
-                    records_by_bucket.insert(TableBucket::from_core(bucket), values);
-                }
-                Ok(ScanRecords {
-                    records_by_bucket,
-                    total_count,
+        self.delivery.poll(py, || {
+            future_into_py(py, async move {
+                let MultiKind::Record(scanner) = scanner.as_ref() else {
+                    return Err(FlussError::new_err(
+                        "Use poll_record_batch for an Arrow scanner",
+                    ));
+                };
+                let records = scanner
+                    .poll(Duration::from_millis(timeout_ms))
+                    .await
+                    .map_err(|error| FlussError::from_core_error(&error))?;
+                Python::attach(|py| {
+                    let mut records_by_bucket = indexmap::IndexMap::new();
+                    let total_count = records.count();
+                    for (bucket, records) in records.into_records_by_buckets() {
+                        let schema = schemas
+                            .get(&bucket.table_id())
+                            .ok_or_else(|| FlussError::new_err("Unknown source table"))?;
+                        let values = records
+                            .iter()
+                            .map(|record| {
+                                ScanRecord::from_core(py, record, schema)
+                                    .and_then(|record| Py::new(py, record))
+                            })
+                            .collect::<PyResult<Vec<_>>>()?;
+                        records_by_bucket.insert(TableBucket::from_core(bucket), values);
+                    }
+                    Ok(ScanRecords {
+                        records_by_bucket,
+                        total_count,
+                    })
                 })
             })
         })
@@ -338,19 +378,21 @@ impl MultiTableLogScanner {
         timeout_ms: u64,
     ) -> PyResult<Bound<'py, PyAny>> {
         let scanner = self.inner.clone();
-        future_into_py(py, async move {
-            let MultiKind::Batch(scanner) = scanner.as_ref() else {
-                return Err(FlussError::new_err("Use poll for a record scanner"));
-            };
-            let batches = scanner
-                .poll(Duration::from_millis(timeout_ms))
-                .await
-                .map_err(|error| FlussError::from_core_error(&error))?;
-            Python::attach(|py| {
-                batches
-                    .into_iter()
-                    .map(|batch| Py::new(py, RecordBatch::from_scan_batch(batch)))
-                    .collect::<PyResult<Vec<_>>>()
+        self.delivery.poll(py, || {
+            future_into_py(py, async move {
+                let MultiKind::Batch(scanner) = scanner.as_ref() else {
+                    return Err(FlussError::new_err("Use poll for a record scanner"));
+                };
+                let batches = scanner
+                    .poll(Duration::from_millis(timeout_ms))
+                    .await
+                    .map_err(|error| FlussError::from_core_error(&error))?;
+                Python::attach(|py| {
+                    batches
+                        .into_iter()
+                        .map(|batch| Py::new(py, RecordBatch::from_scan_batch(batch)))
+                        .collect::<PyResult<Vec<_>>>()
+                })
             })
         })
     }
@@ -361,6 +403,7 @@ impl MultiTableLogScanner {
         py: Python<'py>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        self.delivery.check(py)?;
         let handle = self.enqueue(offsets)?;
         future_into_py(py, async move {
             Ok(commit_result(
@@ -375,6 +418,7 @@ impl MultiTableLogScanner {
         py: Python<'_>,
         offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
     ) -> PyResult<OffsetCommitResult> {
+        self.delivery.check(py)?;
         let handle = self.enqueue(offsets)?;
         Ok(py.detach(|| {
             commit_result(

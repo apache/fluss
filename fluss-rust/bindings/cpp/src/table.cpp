@@ -2395,9 +2395,11 @@ std::future<OffsetCommitResult> start_commit(ffi::LogScanner* scanner, bool curr
         result.set_value({utils::make_client_error("LogScanner not available"), false, {}});
         return result.get_future();
     }
-    auto task = scanner->begin_commit(current, commit_values(offsets));
-    return std::async(std::launch::async,
-                      [task = std::move(task)]() mutable { return commit_result(task->wait()); });
+    auto promise = std::make_unique<ffi::CommitPromise>(
+        [](ffi::FfiConsumerOffsetsResult& value) { return commit_result(std::move(value)); });
+    auto future = promise->future();
+    scanner->begin_commit(current, commit_values(offsets), std::move(promise));
+    return future;
 }
 }  // namespace
 
@@ -2498,14 +2500,10 @@ std::future<OffsetCommitResult> LogScanner::CommitAsync(
     return start_commit(scanner_, false, offsets);
 }
 OffsetCommitResult LogScanner::CommitSync() {
-    if (!Available()) return {utils::make_client_error("LogScanner not available"), false, {}};
-    auto task = scanner_->begin_commit(true, {});
-    return commit_result(task->wait());
+    return CommitAsync().get();
 }
 OffsetCommitResult LogScanner::CommitSync(const std::vector<ConsumerOffset>& offsets) {
-    if (!Available()) return {utils::make_client_error("LogScanner not available"), false, {}};
-    auto task = scanner_->begin_commit(false, commit_values(offsets));
-    return commit_result(task->wait());
+    return CommitAsync(offsets).get();
 }
 
 Result RecordBatchLogScanner::Subscribe(const std::vector<TableBucket>& buckets,
@@ -2608,8 +2606,8 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
                                  std::string(result_box->sv_error_message()));
     }
 
-    // Wrap raw pointer in ScanData immediately so it's never leaked on exception.
-    auto data = std::make_shared<detail::ScanData>(result_box.into_raw(), detail::ColumnMap{});
+    auto data = std::make_shared<detail::ScanData>(nullptr, detail::ColumnMap{});
+    data->raw = result_box.into_raw();
     // Build column map eagerly — shared by all RowViews/BucketRecords.
     auto col_count = data->raw->sv_column_count();
     for (size_t i = 0; i < col_count; ++i) {
@@ -2618,6 +2616,7 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
             i, static_cast<TypeId>(data->raw->sv_column_type(i))};
     }
     out.data_ = std::move(data);
+    scanner_->delivered();
     return utils::make_ok();
 }
 
@@ -2686,14 +2685,21 @@ struct ArrowBatchImporter {
     }
 
     static Result ImportAppend(ffi::FfiArrowRecordBatches& src, ArrowRecordBatches& out) {
+        // Arrow consumes the contents, but Rust still owns each pair of container structs.
+        // Keep all pairs owned until exit, including the suffix after a failed import.
+        struct Release {
+            ffi::FfiArrowRecordBatches& source;
+            ~Release() {
+                for (const auto& batch : source.batches) {
+                    ffi::free_arrow_ffi_structures(batch.array_ptr, batch.schema_ptr);
+                }
+            }
+        } release{src};
         for (const auto& ffi_batch : src.batches) {
             auto* c_array = reinterpret_cast<struct ArrowArray*>(ffi_batch.array_ptr);
             auto* c_schema = reinterpret_cast<struct ArrowSchema*>(ffi_batch.schema_ptr);
 
             auto import_result = arrow::ImportRecordBatch(c_array, c_schema);
-            // Free the Rust-allocated container structures whether or not the
-            // import succeeded, to avoid leaks.
-            ffi::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
             if (!import_result.ok()) {
                 return utils::make_client_error("Failed to import Arrow record batch: " +
                                                 import_result.status().ToString());
@@ -2732,7 +2738,9 @@ Result LogScanner::PollRecordBatch(int64_t timeout_ms, ArrowRecordBatches& out) 
     if (!result.Ok()) {
         return result;
     }
-    return detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+    auto imported = detail::ArrowBatchImporter::Import(ffi_result.arrow_batches, out);
+    if (imported.Ok()) scanner_->delivered();
+    return imported;
 }
 
 // ============================================================================
