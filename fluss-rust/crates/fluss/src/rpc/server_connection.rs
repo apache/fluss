@@ -858,16 +858,23 @@ where
     pub(crate) async fn request_with_send_status<R>(
         &self,
         msg: R,
+        write_started: &mut bool,
     ) -> Result<R::ResponseBody, RequestFailure>
     where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
-        self.dispatch_with_send_status(msg)
+        self.dispatch_with_send_status(msg, write_started)
             .await?
             .receive()
             .await
             .map_err(RequestFailure::MaybeSent)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_write_lock_for_test<F: Future>(&self, request: F) -> F::Output {
+        let _guard = self.stream_write.lock().await;
+        request.await
     }
 
     #[cfg(test)]
@@ -901,7 +908,7 @@ where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
-        self.dispatch_with_send_status(msg)
+        self.dispatch_with_send_status(msg, &mut false)
             .await
             .map_err(RequestFailure::into_error)
     }
@@ -909,6 +916,7 @@ where
     async fn dispatch_with_send_status<R>(
         &self,
         msg: R,
+        write_started: &mut bool,
     ) -> Result<PendingResponse<R::ResponseBody>, RequestFailure>
     where
         R: RequestBody + Send + WriteType<Vec<u8>>,
@@ -957,7 +965,7 @@ where
         let request_body_bytes = buf.len().saturating_sub(REQUEST_HEADER_LENGTH) as u64;
         let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, request_body_bytes);
 
-        self.send_message(buf)
+        self.send_message(buf, write_started)
             .await
             .inspect_err(|_| request_metrics.complete(0))?;
         Ok(PendingResponse {
@@ -970,12 +978,18 @@ where
         })
     }
 
-    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RequestFailure> {
+    async fn send_message(
+        &self,
+        msg: Vec<u8>,
+        write_started: &mut bool,
+    ) -> Result<(), RequestFailure> {
         let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
         let state = Arc::clone(&self.state);
         let last_activity = Arc::clone(&self.last_activity);
         let closed = Arc::clone(&self.closed);
 
+        // Once the cancellation-safe writer starts, dropping the request cannot stop the frame.
+        *write_started = true;
         // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
         let fut = CancellationSafeFuture::new(async move {
             // Created before the state check, so that a close after the check wakes it.
@@ -1404,17 +1418,22 @@ mod tests {
         let (conn, _server) = duplex_conn(4096);
         conn.close_if_idle(Instant::now(), Duration::ZERO).unwrap();
         assert!(matches!(
-            conn.request_with_send_status(TestProduceRequest).await,
+            conn.request_with_send_status(TestProduceRequest, &mut false)
+                .await,
             Err(RequestFailure::NotSent(_))
         ));
 
         // Once any part of the frame reached the peer, a disconnect cannot prove rejection.
         let (conn, mut server) = duplex_conn(8);
         let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(conn.request_with_send_status(TestProduceRequest), async {
-                server.read_u8().await.unwrap();
-                drop(server);
-            })
+            let mut started = false;
+            tokio::join!(
+                conn.request_with_send_status(TestProduceRequest, &mut started),
+                async {
+                    server.read_u8().await.unwrap();
+                    drop(server);
+                }
+            )
         })
         .await
         .expect("partial write did not fail after disconnect");

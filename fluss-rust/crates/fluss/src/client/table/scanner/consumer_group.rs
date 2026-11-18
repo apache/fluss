@@ -221,6 +221,8 @@ macro_rules! group_methods {
             /// Enqueues explicit next offsets. Commits on this scanner execute in call order.
             /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
+            /// At most 64 commits may be pending per scanner. A full queue returns
+            /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes.
             /// Unknown outcomes block subsequent commits on this scanner; fetching the
             /// current offset does not fence a late write from the previous operation.
             pub fn commit_offsets_async(
@@ -229,7 +231,7 @@ macro_rules! group_methods {
             ) -> Result<OffsetCommitHandle> {
                 self.inner.check_no_active_reader()?;
                 self.inner.validate_group_buckets(offsets.keys())?;
-                Ok(self.inner.group()?.enqueue(offsets))
+                self.inner.group()?.enqueue(offsets)
             }
 
             /// Awaits persistence of the positions delivered by completed polls.

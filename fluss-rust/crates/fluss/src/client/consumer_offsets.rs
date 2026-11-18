@@ -156,14 +156,17 @@ fn definite_rejection(error: &Error) -> bool {
         )
 }
 
+const MAX_PENDING_COMMITS: usize = 64;
+
 pub(crate) struct ConsumerGroup {
+    slots: Arc<tokio::sync::Semaphore>,
     table_id: i64,
     options: ConsumerGroupOptions,
     connections: Arc<RpcClient>,
     metadata: Arc<Metadata>,
     owner: Mutex<Option<ServerNode>>,
     // Held through the response, not just dispatch: the server may reorder concurrent commits.
-    // Setting true before dispatch also preserves uncertainty if the caller drops the future.
+    // Marking the start of the socket write also preserves uncertainty if the caller drops the future.
     uncertain: tokio::sync::Mutex<bool>,
     tail: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
     pub(crate) delivered: Mutex<HashMap<TableBucket, OffsetAndMetadata>>,
@@ -177,6 +180,7 @@ impl ConsumerGroup {
         metadata: Arc<Metadata>,
     ) -> Self {
         Self {
+            slots: Arc::new(tokio::sync::Semaphore::new(MAX_PENDING_COMMITS)),
             table_id,
             options,
             connections,
@@ -191,7 +195,10 @@ impl ConsumerGroup {
     pub(crate) fn enqueue(
         self: &Arc<Self>,
         offsets: HashMap<TableBucket, OffsetAndMetadata>,
-    ) -> OffsetCommitHandle {
+    ) -> Result<OffsetCommitHandle> {
+        let slot = self.slots.clone().try_acquire_owned().map_err(|_| Error::BufferExhausted {
+            message: format!("All {MAX_PENDING_COMMITS} consumer commit slots are occupied; wait for a pending commit before retrying"),
+        })?;
         let (done, next) = tokio::sync::oneshot::channel();
         let previous = self.tail.lock().replace(next);
         let group = self.clone();
@@ -200,11 +207,12 @@ impl ConsumerGroup {
                 let _ = previous.await;
             }
             let result = group.commit(offsets).await;
+            drop(slot);
             let _ = done.send(());
             result
         });
         // Keep the queue link alive when a caller cancels its waiting handle.
-        tokio::spawn(async move { operation.await? })
+        Ok(tokio::spawn(async move { operation.await? }))
     }
 
     async fn owner(&self) -> Result<ServerNode> {
@@ -362,11 +370,13 @@ impl ConsumerGroup {
                     }
                     Err(error) => return Err(OffsetCommitError::Rejected(error)),
                 };
-                *uncertain = true;
                 match connection
-                    .request_with_send_status(message::CommitConsumerOffsetsRequest {
-                        inner_request: request.clone(),
-                    })
+                    .request_with_send_status(
+                        message::CommitConsumerOffsetsRequest {
+                            inner_request: request.clone(),
+                        },
+                        &mut uncertain,
+                    )
                     .await
                 {
                     Ok(response) => {
@@ -715,11 +725,11 @@ mod tests {
         ));
         let offsets =
             |offset| HashMap::from([(TableBucket::new(1, 0), OffsetAndMetadata::new(offset))]);
-        let first = group.enqueue(offsets(10));
-        let cancelled = group.enqueue(offsets(15));
+        let first = group.enqueue(offsets(10)).unwrap();
+        let cancelled = group.enqueue(offsets(15)).unwrap();
         cancelled.abort();
         assert!(cancelled.await.unwrap_err().is_cancelled());
-        let second = group.enqueue(offsets(20));
+        let second = group.enqueue(offsets(20)).unwrap();
         // Dropping a waiting handle must not cancel or reorder the first write.
         drop(first);
         assert!(matches!(
@@ -730,18 +740,44 @@ mod tests {
         assert_eq!(discoveries.load(Ordering::SeqCst), 4);
         for (offset, code) in [(21, 81), (22, 48)] {
             assert!(matches!(
-                group.enqueue(offsets(offset)).await.unwrap(),
+                group.enqueue(offsets(offset)).unwrap().await.unwrap(),
                 Err(OffsetCommitError::Rejected(Error::FlussAPIError { api_error }))
                     if api_error.code == code
             ));
         }
-        assert!(group.enqueue(offsets(25)).await.unwrap().is_ok());
+        assert!(group.enqueue(offsets(25)).unwrap().await.unwrap().is_ok());
         let owner = group.owner().await.unwrap();
         let connection = group.connections.get_connection(&owner).await.unwrap();
+        if !cancel {
+            let before = commits.load(Ordering::SeqCst);
+            connection
+                .with_write_lock_for_test(async {
+                    // The running request owns its slot even if its waiting handle is aborted.
+                    let mut handles = Vec::new();
+                    for _ in 0..MAX_PENDING_COMMITS {
+                        handles.push(group.enqueue(offsets(25)).unwrap());
+                    }
+                    handles.pop().unwrap().abort();
+                    assert!(matches!(
+                        group.enqueue(offsets(25)),
+                        Err(Error::BufferExhausted { .. })
+                    ));
+                    assert!(matches!(
+                        handles.remove(0).await.unwrap(),
+                        Err(OffsetCommitError::Rejected(_))
+                    ));
+                    assert_eq!(commits.load(Ordering::SeqCst), before);
+                })
+                .await;
+            // Drain all admitted writes before testing the next connection failure.
+            group.enqueue(offsets(25)).unwrap().await.unwrap().unwrap();
+            assert_eq!(commits.load(Ordering::SeqCst) - before, MAX_PENDING_COMMITS);
+        }
         let recovered = tokio::time::timeout(
             Duration::from_secs(5),
-            connection
-                .close_before_write_for_test(async { group.enqueue(offsets(26)).await.unwrap() }),
+            connection.close_before_write_for_test(async {
+                group.enqueue(offsets(26)).unwrap().await.unwrap()
+            }),
         )
         .await
         .expect("commit did not recover from a connection closed before sending")
@@ -751,7 +787,7 @@ mod tests {
             OffsetCommitOutcome::Committed
         ));
         assert_eq!(discoveries.load(Ordering::SeqCst), 5);
-        let pending = group.enqueue(offsets(30));
+        let pending = group.enqueue(offsets(30)).unwrap();
         if cancel {
             tokio::time::timeout(Duration::from_secs(2), observed_write.notified())
                 .await
@@ -765,11 +801,14 @@ mod tests {
             ));
         }
         assert!(matches!(
-            group.enqueue(offsets(40)).await.unwrap(),
+            group.enqueue(offsets(40)).unwrap().await.unwrap(),
             Err(OffsetCommitError::NeedsRecovery)
         ));
-        assert_eq!(*recorded.lock(), vec![10, 15, 20, 25, 26, 30]);
-        assert_eq!(commits.load(Ordering::SeqCst), 11);
+        assert!(recorded.lock().ends_with(&[25, 26, 30]));
+        assert_eq!(
+            commits.load(Ordering::SeqCst),
+            11 + if cancel { 0 } else { MAX_PENDING_COMMITS }
+        );
         peer.abort();
     }
 }

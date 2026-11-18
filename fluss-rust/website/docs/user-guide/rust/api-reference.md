@@ -266,7 +266,9 @@ not atomic with writes to an external sink. No cross-process fencing token is se
 consumer requires stopping the previous writer before the replacement starts committing.
 
 `ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
-after preceding queued commits finish. Background auto-commit is disabled. Existing scanners with
+after preceding queued commits finish. A scanner admits up to 64 pending commits. If admission returns
+`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A timeout while
+waiting to start a socket write rejects only that commit. Background auto-commit is disabled. Existing scanners with
 no group retain their behavior. Offset persistence requires a server implementing discovery,
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
 consumer offsets. A committed offset that has expired from log retention is not silently reset.

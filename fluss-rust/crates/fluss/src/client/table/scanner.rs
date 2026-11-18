@@ -1392,6 +1392,12 @@ impl RecordBatchLogScanner {
     /// iterate per scanner at a time. This mirrors Java's
     /// `LogScannerImpl.acquire()` single-consumer guard.
     pub(crate) fn try_set_reader_active(&self) -> Result<()> {
+        // A bounded reader can trim a polled batch; its scanner position is not a delivery receipt.
+        if self.inner.consumer_group.is_some() {
+            return Err(crate::client::consumer_offsets::invalid(
+                "Use a separate scanner without a consumer group for bounded reads",
+            ));
+        }
         use std::sync::atomic::Ordering;
         let _subscription_guard = self.inner.subscription_lock.lock();
         self.inner

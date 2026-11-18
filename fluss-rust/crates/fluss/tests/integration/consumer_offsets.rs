@@ -313,6 +313,13 @@ async fn arrow_commits_track_delivered_batches_and_forget_progress_after_seek() 
         .subscribe_with_initializer(buckets, &OffsetsInitializer::committed(&group))
         .await
         .unwrap();
+    assert!(matches!(
+        fluss::client::RecordBatchLogReader::new_until_offsets(
+            scanner.new_shared_handle(),
+            HashMap::from([(bucket.clone(), 1)])
+        ),
+        Err(fluss::error::Error::IllegalArgument { .. })
+    ));
     let batches = scanner.poll(Duration::from_secs(10)).await.unwrap();
     assert_eq!(
         batches
