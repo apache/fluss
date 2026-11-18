@@ -81,7 +81,7 @@ impl FlussLakeTable {
             table_path: self.table_path.clone(),
             projection: None,
             filter: None,
-            batch_size: None,
+            max_batch_size: None,
             lake_only: false,
             lake_source: None,
             catalog_property_overrides: self.catalog_property_overrides.clone(),
@@ -132,7 +132,7 @@ impl FlussLakeTable {
         let mut live = admin
             .get_table_info(&self.table_path)
             .await
-            .map_err(|e| planning_client_error("resolve boundary table", e))?;
+            .map_err(|e| crate::error::execution_client_error("resolve boundary table", e))?;
         validate_wire_identity(boundary, &live)?;
         let schema_id = required(boundary.schema_id, "schema_id")?;
         let schema = if schema_id == live.schema_id {
@@ -141,7 +141,7 @@ impl FlussLakeTable {
             admin
                 .get_table_schema(&self.table_path, Some(schema_id))
                 .await
-                .map_err(|e| planning_client_error("resolve captured schema", e))?
+                .map_err(|e| crate::error::execution_client_error("resolve captured schema", e))?
         };
         let context = FlussLakeReadContext::from_protobuf(boundary, &live, &schema)?;
         if schema_id != live.schema_id {
@@ -149,7 +149,7 @@ impl FlussLakeTable {
             let current = admin
                 .get_table_info(&self.table_path)
                 .await
-                .map_err(|e| planning_client_error("recheck boundary table", e))?;
+                .map_err(|e| crate::error::execution_client_error("recheck boundary table", e))?;
             context.validate_table(&current)?;
             live = current;
         }
@@ -193,7 +193,7 @@ pub struct FlussLakeScan {
     table_path: TablePath,
     projection: Option<FlussLakeProjection>,
     filter: Option<Predicate>,
-    batch_size: Option<usize>,
+    max_batch_size: Option<usize>,
     lake_only: bool,
     lake_source: Option<Arc<dyn crate::LakeSource>>,
     catalog_property_overrides: HashMap<String, String>,
@@ -224,9 +224,9 @@ impl FlussLakeScan {
         self
     }
 
-    /// Sets the target output batch size.
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.batch_size = Some(batch_size);
+    /// Limits rows per output batch. Smaller batches are not coalesced.
+    pub fn with_max_batch_size(mut self, max_batch_size: usize) -> Self {
+        self.max_batch_size = Some(max_batch_size);
         self
     }
 
@@ -255,7 +255,7 @@ impl FlussLakeScan {
     /// the tasks, with a compatible lake backend. Task metadata does not encode
     /// these settings; mismatches can produce incomplete results or the wrong
     /// output schema. A task can outlive its plan without changing its bounds.
-    /// This constructor performs no I/O; initialization is lazy when reading.
+    /// Create one reader per execution attempt; all its splits share lazy initialization.
     pub fn new_reader(&self) -> FlussLakeReader {
         FlussLakeReader::from_scan(self.clone())
     }
@@ -449,8 +449,8 @@ impl FlussLakeScan {
         self.filter.as_ref()
     }
 
-    pub(crate) fn batch_size(&self) -> Option<usize> {
-        self.batch_size
+    pub(crate) fn max_batch_size(&self) -> Option<usize> {
+        self.max_batch_size
     }
 
     pub(crate) fn lake_only(&self) -> bool {
@@ -463,7 +463,7 @@ impl FlussLakeScan {
                 "database and table names must not be empty".to_string(),
             ));
         }
-        if self.batch_size == Some(0) {
+        if self.max_batch_size == Some(0) {
             return Err(FlussLakeError::PlanningFailed(
                 "batch size must be greater than zero".to_string(),
             ));
@@ -479,7 +479,7 @@ impl Debug for FlussLakeScan {
             .field("table_path", &self.table_path)
             .field("projection", &self.projection)
             .field("filter", &self.filter)
-            .field("batch_size", &self.batch_size)
+            .field("max_batch_size", &self.max_batch_size)
             .field("lake_only", &self.lake_only)
             .field(
                 "catalog_property_override_count",

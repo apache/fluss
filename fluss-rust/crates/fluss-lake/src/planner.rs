@@ -63,16 +63,7 @@ pub(crate) async fn plan_with_context(
     let table_info = admin
         .get_table_info(scan.table_path())
         .await
-        .map_err(|error| {
-            if error.api_error() == Some(fluss::error::FlussError::TableNotExist) {
-                FlussLakeError::DataUnavailable(format!(
-                    "table {} from the frozen context no longer exists",
-                    context.table_path()
-                ))
-            } else {
-                planning_client_error("get table metadata", error)
-            }
-        })?;
+        .map_err(|error| crate::error::execution_client_error("get frozen source table", error))?;
     let table_info = context.table_info(&table_info)?;
     let bound = scan.bind(table_info.row_type())?;
     plan_prepared(scan, context, &table_info, bound).await

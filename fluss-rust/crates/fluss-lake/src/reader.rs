@@ -23,38 +23,46 @@ use futures::StreamExt;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Reusable reader with immutable scan configuration.
+/// Reader for one execution attempt. Clones share lazy table metadata and lake source.
+/// Create a new reader for each query or retry to recheck the live table identity.
 ///
 /// Execute local tasks with the scan settings that produced them, including a
 /// compatible lake backend. Tasks can outlive their plan and be scheduled by
 /// an in-process engine; no plan identity or task transport is required.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct FlussLakeReader {
     scan: Arc<FlussLakeScan>,
+    resources: Arc<ReadResources>,
+}
+
+impl std::fmt::Debug for FlussLakeReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlussLakeReader")
+            .field("scan", &self.scan)
+            .finish_non_exhaustive()
+    }
 }
 
 impl FlussLakeReader {
     pub(crate) fn from_scan(scan: FlussLakeScan) -> Self {
         Self {
             scan: Arc::new(scan),
+            resources: Arc::default(),
         }
     }
 
     /// Read a frozen local task, which may be cloned from a plan.
     /// Construction validates local task compatibility without I/O. Polling
-    /// refreshes table metadata and opens the frozen inputs. Initialization
+    /// initializes shared metadata on first use and opens the frozen inputs. Initialization
     /// and read failures are terminal stream errors. Drop cancels the read.
     pub fn read_split(&self, split: &FlussLakeReadSplit) -> Result<RecordBatchStream> {
         self.scan.validate_configuration()?;
-        execute_split(split, &self.scan, Arc::new(ReadResources::default()))
-            .map(stop_after_first_error)
+        execute_split(split, &self.scan, self.resources.clone()).map(stop_after_first_error)
     }
 
     /// Read tasks sequentially in the supplied order. Duplicate tasks are rejected.
     /// Callers control concurrency by scheduling `read_split` streams themselves.
-    /// Nonempty tasks share lazy table metadata and source resolution within
-    /// this call; later calls refresh metadata again. Routing refresh remains
-    /// managed by the core client.
+    /// Routing refresh remains managed by the core client.
     /// The first error terminates the stream without starting remaining tasks;
     /// discard this attempt's output before replanning with fresh boundaries.
     pub fn read_splits(&self, splits: &[FlussLakeReadSplit]) -> Result<RecordBatchStream> {
@@ -67,10 +75,9 @@ impl FlussLakeReader {
                 ));
             }
         }
-        let resources = Arc::new(ReadResources::default());
         let streams = splits
             .iter()
-            .map(|split| execute_split(split, &self.scan, resources.clone()))
+            .map(|split| execute_split(split, &self.scan, self.resources.clone()))
             .collect::<Result<Vec<_>>>()?;
         Ok(concatenate_split_streams(streams))
     }

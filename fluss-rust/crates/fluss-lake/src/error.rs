@@ -84,7 +84,6 @@ pub(crate) fn planning_client_error(action: &str, error: ClientError) -> FlussLa
 
 /// Missing frozen inputs invalidate the attempt; other failures retain their category.
 pub(crate) fn execution_client_error(action: &str, error: ClientError) -> FlussLakeError {
-    let message = error_message(action, &error);
     if matches!(
         error.api_error(),
         Some(
@@ -96,17 +95,17 @@ pub(crate) fn execution_client_error(action: &str, error: ClientError) -> FlussL
                 | fluss::error::FlussError::LogOffsetOutOfRangeException
         )
     ) {
-        return FlussLakeError::DataUnavailable(message);
+        return FlussLakeError::DataUnavailable(error_message(action, &error));
     }
     match error {
         ClientError::UnexpectedError {
-            source: Some(source),
+            source: Some(ref source),
             ..
         } if source.downcast_ref::<ClientError>().is_some_and(|cause| {
             cause.api_error() == Some(fluss::error::FlussError::LogOffsetOutOfRangeException)
         }) =>
         {
-            FlussLakeError::DataUnavailable(message)
+            FlussLakeError::DataUnavailable(error_message(action, &error))
         }
         error => planning_client_error(action, error),
     }

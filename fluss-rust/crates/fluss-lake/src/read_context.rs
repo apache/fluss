@@ -279,6 +279,54 @@ impl LakeDescriptor {
     }
 }
 
+pub(crate) fn validate_frozen_table(frozen: &TableInfo, live: &TableInfo) -> Result<()> {
+    validate_source(
+        &frozen.table_path,
+        frozen.table_id,
+        &frozen.partition_keys,
+        &frozen.bucket_keys,
+        LakeDescriptor::capture(frozen, None)?.as_ref(),
+        live,
+    )
+}
+
+fn validate_source(
+    path: &TablePath,
+    id: i64,
+    partition_keys: &[String],
+    bucket_keys: &[String],
+    lake: Option<&LakeDescriptor>,
+    live: &TableInfo,
+) -> Result<()> {
+    validate_source_identity(path, id, live)?;
+    crate::table::validate_supported_table(live)?;
+    // Enabling tiering later does not change a frozen Fluss-only read.
+    let lake_changed = match lake {
+        Some(lake) => LakeDescriptor::capture(live, None)?.is_none_or(|current| {
+            current.table_path != lake.table_path || current.format != lake.format
+        }),
+        None => false,
+    };
+    if lake_changed
+        || partition_keys != live.partition_keys.as_ref()
+        || bucket_keys != live.bucket_keys
+    {
+        return Err(FlussLakeError::SchemaIncompatible(format!(
+            "source layout changed for {path} (table id {id})"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_source_identity(path: &TablePath, id: i64, live: &TableInfo) -> Result<()> {
+    if path != &live.table_path || id != live.table_id {
+        return Err(FlussLakeError::DataUnavailable(format!(
+            "frozen source {path} (table id {id}) is no longer available"
+        )));
+    }
+    Ok(())
+}
+
 impl FlussLakeReadContext {
     /// Imports boundaries already captured by a trusted query coordinator.
     ///
@@ -493,29 +541,14 @@ impl FlussLakeReadContext {
     /// verify that data is still retained. An engine-native adapter must also
     /// validate its lake layout and enforce bounded log availability.
     pub fn validate_table(&self, table: &TableInfo) -> Result<()> {
-        crate::table::validate_supported_table(table)?;
-        let lake_changed = if let Some(lake) = &self.lake {
-            let live = LakeDescriptor::capture(table, None)?;
-            live.as_ref()
-                .is_none_or(|live| live.table_path != lake.table_path || live.format != lake.format)
-        } else {
-            // Enabling tiering later does not change a frozen Fluss-only read.
-            false
-        };
-        if self.table_path() != &table.table_path
-            || self.table_id() != table.table_id
-            || lake_changed
-            || self.partition_keys.as_slice() != table.partition_keys.as_ref()
-            || self.bucket_keys != table.bucket_keys
-        {
-            return Err(FlussLakeError::SchemaIncompatible(format!(
-                "table metadata no longer matches the frozen read context for {} (table id {}, schema id {})",
-                self.table_path(),
-                self.table_id(),
-                self.schema_id()
-            )));
-        }
-        Ok(())
+        validate_source(
+            self.table_path(),
+            self.table_id(),
+            &self.partition_keys,
+            &self.bucket_keys,
+            self.lake.as_ref(),
+            table,
+        )
     }
 }
 
@@ -1008,7 +1041,7 @@ mod tests {
         for table in [recreated, moved] {
             assert!(matches!(
                 context.validate_table(&table),
-                Err(FlussLakeError::SchemaIncompatible(_))
+                Err(FlussLakeError::DataUnavailable(_))
             ));
         }
         evolved.schema = Schema::builder()

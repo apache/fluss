@@ -118,33 +118,7 @@ impl FlussLakeReadSplit {
         &self.table_info
     }
     pub(crate) fn validate_live_table(&self, live: &TableInfo) -> Result<()> {
-        crate::table::validate_supported_table(live)?;
-        let frozen = &self.table_info;
-        let lake_changed = frozen
-            .table_config
-            .is_datalake_enabled()
-            .map_err(|e| invalid_descriptor(e.to_string()))?
-            && (!live
-                .table_config
-                .is_datalake_enabled()
-                .map_err(|e| invalid_descriptor(e.to_string()))?
-                || crate::table::resolve_lake_table_path(frozen)?
-                    != crate::table::resolve_lake_table_path(live)?
-                || frozen
-                    .table_config
-                    .get_datalake_format()
-                    .map_err(|e| invalid_descriptor(e.to_string()))?
-                    != live
-                        .table_config
-                        .get_datalake_format()
-                        .map_err(|e| invalid_descriptor(e.to_string()))?);
-        if live.table_id != frozen.table_id || live.table_path != frozen.table_path || lake_changed
-        {
-            return Err(FlussLakeError::SchemaIncompatible(
-                "source identity or lake mapping changed after planning".into(),
-            ));
-        }
-        Ok(())
+        crate::read_context::validate_frozen_table(&self.table_info, live)
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -283,10 +257,6 @@ impl FlussLakeReadSplit {
         &self.descriptor.lake_splits
     }
 
-    pub(crate) fn primary_key_indexes(&self) -> &[usize] {
-        &self.primary_key_indexes
-    }
-
     pub(crate) fn is_primary_key(&self) -> bool {
         !self.primary_key_indexes.is_empty()
     }
@@ -416,7 +386,7 @@ mod tests {
         info.table_id += 1;
         assert!(matches!(
             task.validate_live_table(&info),
-            Err(FlussLakeError::SchemaIncompatible(_))
+            Err(FlussLakeError::DataUnavailable(_))
         ));
         info.table_id -= 1;
         info.properties

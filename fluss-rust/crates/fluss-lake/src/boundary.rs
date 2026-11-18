@@ -265,7 +265,9 @@ async fn validate_source_identity(
     let live_table = admin
         .get_table_info(&table_info.table_path)
         .await
-        .map_err(|error| planning_client_error("recheck source table identity", error))?;
+        .map_err(|error| {
+            crate::error::execution_client_error("recheck source table identity", error)
+        })?;
     context.validate_table(&live_table)
 }
 

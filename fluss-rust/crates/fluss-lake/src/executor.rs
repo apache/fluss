@@ -59,7 +59,12 @@ pub(crate) fn execute_split(
             "PK UnionRead execution requires the PK reconciliation executor".into(),
         ));
     }
-    if split.is_empty() || (scan.lake_only() && split.lake_splits().is_empty()) {
+    if scan.lake_only() && split.start_offset() != split.stop_offset() {
+        return Err(FlussLakeError::PlanningFailed(
+            "lake-only reader cannot execute a log range".into(),
+        ));
+    }
+    if split.is_empty() {
         return Ok(Box::pin(futures::stream::empty()));
     }
     Ok(lazy_stream(open_logical_stream(
@@ -95,12 +100,8 @@ async fn open_logical_stream(
         filter,
     } = scan.bind(table_info.row_type())?;
     let filter = &filter;
-    let physical = PhysicalProjection::resolve(
-        table_info.row_type(),
-        output_projection.as_deref(),
-        filter,
-        descriptor.primary_key_indexes(),
-    )?;
+    let physical =
+        PhysicalProjection::resolve(table_info.row_type(), output_projection.as_deref(), filter)?;
     let physical_schema = physical.arrow_schema(table_info.row_type())?;
     let lake_stream = if descriptor.lake_splits().is_empty() {
         Box::pin(futures::stream::empty()) as RecordBatchStream
@@ -122,7 +123,7 @@ async fn open_logical_stream(
                 } else {
                     crate::LakeReadSemantics::Append
                 },
-                reconcile_primary_key: descriptor.is_primary_key() && !scan.lake_only(),
+                reconcile_primary_key: false,
                 splits: tasks,
                 projection: &physical.field_indexes,
                 schema: physical_schema.clone(),
@@ -132,7 +133,7 @@ async fn open_logical_stream(
     };
     let lake_stream = normalize_stream_schema(lake_stream, physical_schema.clone());
     let output_column_count = output_projection.as_deref().map(|indexes| indexes.len());
-    let batch_size = scan.batch_size();
+    let batch_size = scan.max_batch_size();
     let stream = if scan.lake_only() {
         lake_stream
     } else {
@@ -190,9 +191,7 @@ async fn open_logical_append_log_stream(
     })))
 }
 
-/// Physical columns are ordered as engine output, predicate-only columns,
-/// then primary-key-only columns. The reader filters first and strips the
-/// hidden suffix only after exact filtering.
+/// Output columns come first so predicate-only columns can be stripped after filtering.
 struct PhysicalProjection {
     field_indexes: Vec<usize>,
 }
@@ -202,7 +201,6 @@ impl PhysicalProjection {
         row_type: &RowType,
         output_projection: Option<&[usize]>,
         filter: &BoundPredicate,
-        primary_key_indexes: &[usize],
     ) -> Result<Self> {
         let field_count = row_type.fields().len();
         let mut field_indexes = match output_projection {
@@ -214,18 +212,8 @@ impl PhysicalProjection {
                 field_indexes.push(field_index);
             }
         }
-        for primary_key_index in primary_key_indexes {
-            if *primary_key_index >= field_count {
-                return Err(FlussLakeError::Internal(format!(
-                    "primary-key field index {primary_key_index} exceeds the resolved table width {field_count}"
-                )));
-            }
-            if !field_indexes.contains(primary_key_index) {
-                field_indexes.push(*primary_key_index);
-            }
-        }
         // Some readers cannot preserve row counts for a zero-column physical
-        // read. Read one hidden field and project it away after reconciliation.
+        // read. Read one hidden field and project it away after filtering.
         if field_indexes.is_empty() && field_count > 0 {
             field_indexes.push(0);
         }
@@ -445,16 +433,12 @@ mod tests {
     #[test]
     fn empty_output_projection_preserves_filtered_row_counts() {
         let filter = bound(col("amount").gt(10_i64));
-        let physical =
-            PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &filter, &[0]).unwrap();
-        assert_eq!(physical.field_indexes, vec![2, 0]);
+        let physical = PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &filter).unwrap();
+        assert_eq!(physical.field_indexes, vec![2]);
         let schema = physical.arrow_schema(&pk_row_type()).unwrap();
         let batch = RecordBatch::try_new(
             schema,
-            vec![
-                Arc::new(arrow::array::Int64Array::from(vec![5, 15, 25])),
-                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
-            ],
+            vec![Arc::new(arrow::array::Int64Array::from(vec![5, 15, 25]))],
         )
         .unwrap();
         let stream = apply_output_processing(
@@ -471,13 +455,9 @@ mod tests {
                 .all(|b| b.num_rows() == 1 && b.num_columns() == 0)
         );
 
-        let physical = PhysicalProjection::resolve(
-            &pk_row_type(),
-            Some(&[]),
-            &BoundPredicate::AlwaysTrue,
-            &[],
-        )
-        .unwrap();
+        let physical =
+            PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &BoundPredicate::AlwaysTrue)
+                .unwrap();
         assert_eq!(physical.field_indexes, vec![0]);
     }
 
@@ -511,15 +491,11 @@ mod tests {
 
     #[test]
     fn physical_projection_keeps_predicate_columns_hidden_from_output() {
-        let physical = PhysicalProjection::resolve(
-            &pk_row_type(),
-            Some(&[2]),
-            &bound(col("id").eq(1_i32)),
-            &[0, 1],
-        )
-        .unwrap();
+        let physical =
+            PhysicalProjection::resolve(&pk_row_type(), Some(&[2]), &bound(col("id").eq(1_i32)))
+                .unwrap();
 
-        assert_eq!(physical.field_indexes, vec![2, 0, 1]);
+        assert_eq!(physical.field_indexes, vec![2, 0]);
     }
 
     #[test]

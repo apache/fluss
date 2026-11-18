@@ -1060,7 +1060,7 @@ impl LogScannerInner {
         }
 
         // send any new fetches (won't resend pending fetches).
-        self.log_fetcher.send_fetches().await?;
+        self.log_fetcher.send_fetches(None).await?;
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches().await
@@ -1105,7 +1105,11 @@ impl LogScannerInner {
             return Ok(result);
         }
 
-        self.log_fetcher.send_fetches().await?;
+        let bounded_table = self
+            .reader_active
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then_some(self.table_id);
+        self.log_fetcher.send_fetches(bounded_table).await?;
         self.log_fetcher.collect_batches().await
     }
 }
@@ -1622,7 +1626,11 @@ impl LogFetcher {
         }
     }
 
-    async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
+    async fn check_and_update_metadata(
+        &self,
+        table_buckets: &[TableBucket],
+        bounded_table: Option<TableId>,
+    ) -> Result<()> {
         let mut partition_ids = Vec::new();
         let mut need_update = false;
 
@@ -1639,7 +1647,10 @@ impl LogFetcher {
             }
         }
 
-        let update_result = if self.is_partitioned && !partition_ids.is_empty() {
+        if !need_update && partition_ids.is_empty() {
+            return Ok(());
+        }
+        let update_result = if self.is_partitioned {
             self.metadata
                 .update_tables_metadata(
                     &HashSet::from([&self.table_path]),
@@ -1647,14 +1658,25 @@ impl LogFetcher {
                     partition_ids,
                 )
                 .await
-        } else if need_update {
-            self.metadata.update_table_metadata(&self.table_path).await
         } else {
-            Ok(())
+            self.metadata.update_table_metadata(&self.table_path).await
         };
+        if update_result.is_ok()
+            && let Some(expected) = bounded_table
+            && self
+                .metadata
+                .get_cluster()
+                .get_table_id(&self.table_path)
+                .is_some_and(|live| live != expected)
+        {
+            return Err(Error::table_not_exist(format!(
+                "frozen table {} (id {expected}) no longer exists",
+                self.table_path
+            )));
+        }
 
         update_result.or_else(|error| {
-            if matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
+            if bounded_table.is_none() && matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
                 warn!(
                     "Received PartitionNotExists while updating scanner metadata; ignoring it: {error}"
                 );
@@ -1709,8 +1731,8 @@ impl LogFetcher {
     }
 
     /// Send fetch requests asynchronously without waiting for responses
-    async fn send_fetches(&self) -> Result<()> {
-        self.check_and_update_metadata(self.fetchable_buckets().as_slice())
+    async fn send_fetches(&self, bounded_table: Option<TableId>) -> Result<()> {
+        self.check_and_update_metadata(self.fetchable_buckets().as_slice(), bounded_table)
             .await?;
         self.send_fetches_without_metadata_refresh();
         Ok(())
@@ -2193,7 +2215,7 @@ impl LogFetcher {
                         message: format!(
                             "The fetching offset {fetch_offset} is out of range: {error_message}"
                         ),
-                        source: None,
+                        source: Some(Box::new(Error::from(api_error.clone()))),
                     });
                 }
                 FetchErrorAction::Authorization => {

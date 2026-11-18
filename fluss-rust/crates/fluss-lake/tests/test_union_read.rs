@@ -31,6 +31,32 @@ use futures::TryStreamExt;
 use std::sync::Arc;
 use std::time::Duration;
 
+fn append_schema() -> Schema {
+    Schema::builder()
+        .column("id", DataTypes::int())
+        .column("name", DataTypes::string())
+        .build()
+        .unwrap()
+}
+
+fn sorted_ids(batches: &[RecordBatch]) -> Vec<i32> {
+    let mut ids: Vec<_> = batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
 fn append_batch(ids: Vec<i32>, names: Vec<&str>) -> RecordBatch {
     RecordBatch::try_from_iter(vec![
         ("id", Arc::new(Int32Array::from(ids)) as ArrayRef),
@@ -122,11 +148,19 @@ async fn append_log_plan_uses_frozen_stop_offset_after_planning() {
     assert!(
         lake_table
             .new_scan()
-            .with_batch_size(0)
+            .with_max_batch_size(0)
             .new_reader()
             .read_splits(&[])
             .is_err()
     );
+    assert!(matches!(
+        lake_table
+            .new_scan()
+            .with_lake_only(true)
+            .new_reader()
+            .read_split(&retained_split),
+        Err(FlussLakeError::PlanningFailed(_))
+    ));
     let mut ids: Vec<i32> = Vec::new();
     for split in &ids_splits {
         let batches = tokio::time::timeout(
@@ -399,33 +433,27 @@ async fn shared_read_metadata_does_not_outlive_the_read_attempt() {
     let admin = connection.get_admin().unwrap();
     let path = TablePath::new("fluss", "test_union_read_metadata_session");
     let descriptor = TableDescriptor::builder()
-        .schema(
-            Schema::builder()
-                .column("id", DataTypes::int())
-                .column("name", DataTypes::string())
-                .build()
-                .unwrap(),
-        )
+        .schema(append_schema())
         .distributed_by(Some(2), vec!["id".into()])
         .build()
         .unwrap();
     support::create_table(&admin, &path, &descriptor).await;
     let lake_table = FlussLakeTable::new(connection.clone(), &path);
     let scan = lake_table.new_scan();
-    let reader = scan.new_reader();
     let mut previous_splits = None;
 
     for generation in 0..2 {
+        let reader = scan.new_reader();
         if generation > 0 {
             admin.drop_table(&path, false).await.unwrap();
             support::create_table(&admin, &path, &descriptor).await;
-            // Reusing the reader must still reject tasks for the dropped table.
+            // A fresh attempt must reject tasks for the dropped table.
             let result = reader
                 .read_splits(previous_splits.as_deref().unwrap())
                 .unwrap()
                 .try_collect::<Vec<_>>()
                 .await;
-            assert!(matches!(result, Err(FlussLakeError::SchemaIncompatible(_))));
+            assert!(matches!(result, Err(FlussLakeError::DataUnavailable(_))));
         }
         let table = connection.get_table(&path).await.unwrap();
         let writer = table.new_append().unwrap().create_writer().unwrap();
@@ -447,22 +475,170 @@ async fn shared_read_metadata_does_not_outlive_the_read_attempt() {
         .await
         .unwrap()
         .unwrap();
-        let mut ids: Vec<i32> = batches
-            .iter()
-            .flat_map(|batch| {
-                batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .values()
-                    .iter()
-                    .copied()
-            })
-            .collect();
-        ids.sort_unstable();
-        assert_eq!(ids, expected);
+        assert_eq!(sorted_ids(&batches), expected);
         previous_splits = Some(plan.splits().to_vec());
     }
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn append_reads_lake_baseline_and_only_the_log_tail() {
+    use fluss::metadata::TableBucket;
+    use fluss_lake::{
+        FlussLakeLogPartition, FlussLakeLogRange, FlussLakePartitionIdentity, LakePlannerContext,
+        LakeReaderContext, LakeSource, LakeSplit, RecordBatchStream,
+    };
+    use futures::future::BoxFuture;
+
+    struct Baseline;
+    impl LakeSource for Baseline {
+        fn format(&self) -> &str {
+            "paimon"
+        }
+        fn plan<'a>(
+            &'a self,
+            ctx: LakePlannerContext<'a>,
+        ) -> BoxFuture<'a, fluss_lake::Result<Vec<LakeSplit>>> {
+            Box::pin(async move {
+                Ok(vec![LakeSplit {
+                    format: self.format().into(),
+                    snapshot_id: ctx.snapshot_id,
+                    partition: FlussLakePartitionIdentity::Unpartitioned,
+                    bucket_id: 0,
+                    bucket_count: 1,
+                    estimated_rows: None,
+                    estimated_size: None,
+                    payload_version: 1,
+                    payload: vec![1],
+                }])
+            })
+        }
+        fn read<'a>(
+            &'a self,
+            ctx: LakeReaderContext<'a>,
+        ) -> BoxFuture<'a, fluss_lake::Result<RecordBatchStream>> {
+            Box::pin(async move {
+                let batch =
+                    RecordBatch::try_new(ctx.schema, vec![Arc::new(Int32Array::from(vec![1]))])
+                        .unwrap();
+                Ok(Box::pin(futures::stream::iter([Ok(batch)])) as RecordBatchStream)
+            })
+        }
+    }
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "test_union_read_stub_lake_and_tail");
+    let descriptor = TableDescriptor::builder()
+        .schema(append_schema())
+        .property("table.datalake.enabled", "true")
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    writer
+        .append_arrow_batch(append_batch(vec![1, 2], vec!["baseline", "tail"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    let info = table.get_table_info();
+    // Supply an engine-captured boundary: offset 0 is already in the lake.
+    let context = FlussLakeReadContext::from_boundary(
+        info,
+        Some(1),
+        vec![FlussLakeLogRange::new(
+            TableBucket::new(info.table_id, 0),
+            FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+            1,
+            Some(1),
+            2,
+            0,
+        )],
+    )
+    .unwrap();
+    let scan = FlussLakeTable::new(connection.clone(), &path)
+        .new_scan()
+        .with_lake_source(Arc::new(Baseline))
+        .with_projection(vec![0]);
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    let batches = scan
+        .new_reader()
+        .read_splits(plan.splits())
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert_eq!(sorted_ids(&batches), [1, 2]);
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_partition_fails_a_frozen_log_read() {
+    use fluss::metadata::PartitionSpec;
+    use std::collections::HashMap;
+
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "test_union_read_expired_partition");
+    let descriptor = TableDescriptor::builder()
+        .schema(append_schema())
+        .partitioned_by(vec!["name"])
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let partition = PartitionSpec::new(HashMap::from([("name", "expired")]));
+    admin
+        .create_partition(&path, &partition, false)
+        .await
+        .unwrap();
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    writer
+        .append_arrow_batch(append_batch(vec![1], vec!["expired"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    let scan = FlussLakeTable::new(connection.clone(), &path).new_scan();
+    let plan = scan.plan().await.unwrap();
+    // Keep a core reader subscribed across deletion; checking only when a split
+    // opens would miss a partition disappearing after its first batch.
+    let scanner = table.new_scan().create_record_batch_log_scanner().unwrap();
+    let mut active = fluss::client::RecordBatchLogReader::new_from_ranges(
+        scanner,
+        vec![fluss::client::BoundedLogReadRange {
+            bucket: plan.read_context().log_ranges()[0].table_bucket().clone(),
+            starting_offset: 0,
+            stopping_offset: 2,
+        }],
+    )
+    .await
+    .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(15), active.next_batch())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_some()
+    );
+    admin
+        .drop_partition(&path, &partition, false)
+        .await
+        .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(15), active.next_batch())
+        .await
+        .expect("bounded reader must observe deletion")
+        .unwrap_err();
+    assert_eq!(
+        error.api_error(),
+        Some(fluss::error::FlussError::PartitionNotExists)
+    );
+    let stream = scan.new_reader().read_splits(plan.splits()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(15), stream.try_collect::<Vec<_>>())
+        .await
+        .expect("bounded read must terminate");
+    assert!(
+        matches!(result, Err(FlussLakeError::DataUnavailable(_))),
+        "{result:?}"
+    );
     admin.drop_table(&path, false).await.unwrap();
 }
