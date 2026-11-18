@@ -20,6 +20,8 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -29,7 +31,9 @@ import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.IndexTableUtils;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -136,6 +140,41 @@ class TableMinInSyncReplicasITCase {
                     .isEqualTo(originalDescriptor.getProperties());
             assertWriteResult(replica, primaryKey, expectedWriteResult);
         }
+    }
+
+    @Test
+    void testSyncIndexUsesTheTableMinInSyncReplicasOverride() throws Exception {
+        String indexName = "idx_b";
+        TablePath path = TablePath.of("min_isr", "indexed_override");
+        Schema schema =
+                Schema.newBuilder()
+                        .fromSchema(DATA1_SCHEMA_PK)
+                        .index(indexName, IndexType.SECONDARY, Collections.singletonList("b"))
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
+                        .property(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS, 1)
+                        .build();
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, path, descriptor);
+        TablePath indexPath =
+                TablePath.of(
+                        path.getDatabaseName(),
+                        IndexTableUtils.indexTableName(path.getTableName(), indexName));
+        long indexTableId =
+                FLUSS_CLUSTER_EXTENSION
+                        .newCoordinatorClient()
+                        .getTableInfo(newGetTableInfoRequest(indexPath))
+                        .get()
+                        .getTableId();
+        Replica index =
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(indexTableId, 0));
+        Replica main = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(new TableBucket(tableId, 0));
+
+        assertWriteResult(main, true, Errors.NONE);
+        assertThat(index.getLogTablet().getHighWatermark()).isPositive();
     }
 
     private static void assertWriteResult(Replica replica, boolean primaryKey, Errors expected)

@@ -1201,24 +1201,20 @@ public final class Replica {
         Long indexPushedOffset = snapshot.getIndexPushedOffset();
         if (indexPushedOffset == null || indexPushedOffset < 0) {
             throw new KvStorageException(
-                    "KV Snapshot "
-                            + snapshot.getSnapshotID()
-                            + " for main table bucket "
-                            + tableBucket
-                            + " with secondary indexes must contain a non-negative "
-                            + "indexPushedOffset, but was "
-                            + indexPushedOffset);
+                    String.format(
+                            "KV Snapshot %s for main table bucket %s with secondary indexes "
+                                    + "must contain a non-negative indexPushedOffset, but was %s",
+                            snapshot.getSnapshotID(), tableBucket, indexPushedOffset));
         }
         if (hasSyncIndexes
-                && (snapshot.getSyncIndexPushedOffset() == null
-                        || snapshot.getSyncIndexPushedOffset() < indexPushedOffset)) {
+                && snapshot.getSyncIndexPushedOffset() != null
+                && snapshot.getSyncIndexPushedOffset() < indexPushedOffset) {
             throw new KvStorageException(
-                    "KV snapshot "
-                            + snapshot.getSnapshotID()
-                            + " for "
-                            + tableBucket
-                            + " has invalid SYNC index progress: "
-                            + snapshot.getSyncIndexPushedOffset());
+                    String.format(
+                            "KV snapshot %s for %s has invalid SYNC index progress: %s",
+                            snapshot.getSnapshotID(),
+                            tableBucket,
+                            snapshot.getSyncIndexPushedOffset()));
         }
     }
 
@@ -1228,7 +1224,10 @@ public final class Replica {
             return;
         }
         if (hasSyncIndexes) {
-            syncIndexPushedOffset = checkNotNull(snapshot.getSyncIndexPushedOffset());
+            // The confirmed all-index prefix also bounds SYNC visibility in older snapshots.
+            syncIndexPushedOffset =
+                    Optional.ofNullable(snapshot.getSyncIndexPushedOffset())
+                            .orElse(indexPushedOffset);
         }
         if (hasSecondaryIndexes) {
             allIndexPushedOffset = indexPushedOffset;
@@ -1429,7 +1428,8 @@ public final class Replica {
                 lastCompletedSnapshotLogOffset = completedSnapshot.getLogOffset();
                 lastCompletedSnapshotIndexPushedOffset = completedSnapshot.getIndexPushedOffset();
                 lastCompletedSnapshotSyncIndexPushedOffset =
-                        completedSnapshot.getSyncIndexPushedOffset();
+                        Optional.ofNullable(completedSnapshot.getSyncIndexPushedOffset())
+                                .orElse(lastCompletedSnapshotIndexPushedOffset);
                 snapshotSize = completedSnapshot.getSnapshotSize();
                 uploadedSstFiles.put(
                         completedSnapshot.getSnapshotID(),

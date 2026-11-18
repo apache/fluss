@@ -19,6 +19,7 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -95,8 +96,18 @@ public final class IndexTableDescriptorFactory {
             physicalPrimaryKey.add(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
         }
         physicalPrimaryKey.add(IndexTableUtils.ROW_KEY_SYSTEM_COLUMN);
-        Schema derivedSchema =
-                Schema.newBuilder().fromColumns(columns).primaryKey(physicalPrimaryKey).build();
+        Schema derivedSchema;
+        try {
+            derivedSchema =
+                    Schema.newBuilder().fromColumns(columns).primaryKey(physicalPrimaryKey).build();
+        } catch (IllegalStateException e) {
+            throw new InvalidTableException(
+                    "Cannot derive the schema for secondary index '"
+                            + index.getIndexName()
+                            + "': "
+                            + e.getMessage(),
+                    e);
+        }
 
         Integer bucketCount =
                 index.getBucketCount()
@@ -119,6 +130,11 @@ public final class IndexTableDescriptorFactory {
                         .property(
                                 ConfigOptions.TABLE_KV_FORMAT_VERSION,
                                 ConfigOptions.KV_FORMAT_VERSION_2);
+        String minIsrKey = ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key();
+        String minIsr = mainDescriptor.getProperties().get(minIsrKey);
+        if (minIsr != null) {
+            b.property(minIsrKey, minIsr);
+        }
         if (partitioned) {
             b.property(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION, KvValueLayout.TAGGED.version());
         }

@@ -56,6 +56,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -155,15 +156,21 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
         assertThat(replica.getLogStartOffset()).isEqualTo(TRUNCATED_LOG_START_OFFSET);
     }
 
-    @Test
-    void testRestoresDistinctSyncAndAllIndexProgressBeforeReplay() throws Exception {
+    private static Stream<Arguments> snapshotSyncProgress() {
+        return Stream.of(Arguments.of(null, 80L), Arguments.of(90L, 90L));
+    }
+
+    @ParameterizedTest
+    @MethodSource("snapshotSyncProgress")
+    void testRestoresSyncAndAllIndexProgressBeforeReplay(
+            Long syncProgress, long expectedSyncProgress) throws Exception {
         Schema schema =
                 Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
         // Only the source metadata is registered. Without index-table metadata the supervisor
         // cannot start WAL replay, so progress here must come from the persisted snapshot.
         registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
         TableBucket tableBucket = new TableBucket(INDEXED_TABLE_ID, 0);
-        injectLatestSnapshot(tableBucket, 80L, 90L, TRUNCATED_LOG_START_OFFSET);
+        injectLatestSnapshot(tableBucket, 80L, syncProgress, TRUNCATED_LOG_START_OFFSET);
         makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, tableBucket);
 
         NotifyLeaderAndIsrResultForBucket result =
@@ -172,12 +179,13 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
         assertThat(result.succeeded()).isTrue();
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         assertThat(replica.getAllIndexPushedOffset()).isEqualTo(80L);
-        assertThat(replica.getSyncIndexPushedOffset()).isEqualTo(90L);
-        assertThat(replica.getClientLogHighWatermark()).isEqualTo(90L);
+        assertThat(replica.getSyncIndexPushedOffset()).isEqualTo(expectedSyncProgress);
+        assertThat(replica.getClientLogHighWatermark()).isEqualTo(expectedSyncProgress);
         // Metadata is still absent: visibility and recovery backlog must remain observable
         // even though no replicator has started.
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS)).isEqualTo(20L);
-        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS)).isEqualTo(10L);
+        assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS))
+                .isEqualTo(TRUNCATED_LOG_START_OFFSET - expectedSyncProgress);
         manualClock.advanceTime(500, TimeUnit.MILLISECONDS);
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS))
                 .isEqualTo(500L);
@@ -200,6 +208,23 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
                                 FOLLOWER_LEADER_EPOCH + 2)));
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_LAG_OFFSETS)).isEqualTo(0L);
         assertThat(indexGauge(MetricNames.INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS)).isEqualTo(0L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {-1L, 79L})
+    void testInvalidSyncSnapshotProgressBlocksLeadership(long syncProgress) throws Exception {
+        Schema schema =
+                Schema.newBuilder().fromSchema(indexedSchema()).index("idx_sync", "b").build();
+        registerMainTable(INDEXED_TABLE_PATH, INDEXED_TABLE_ID, schema);
+        TableBucket bucket = new TableBucket(INDEXED_TABLE_ID, 0);
+        injectLatestSnapshot(bucket, 80L, syncProgress, TRUNCATED_LOG_START_OFFSET);
+        makeLogStartUnreachableFromZero(INDEXED_TABLE_PATH, bucket);
+
+        NotifyLeaderAndIsrResultForBucket result =
+                tryBecomeLeader(bucket, INDEXED_TABLE_PATH, FOLLOWER_LEADER_EPOCH + 1);
+
+        assertThat(result.failed()).isTrue();
+        assertNotLeaderAndNoIndexProgress(bucket);
     }
 
     @Test

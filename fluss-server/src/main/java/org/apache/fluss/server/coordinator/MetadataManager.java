@@ -90,8 +90,8 @@ import java.util.function.BiConsumer;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateIndexSafeSchemaEvolution;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for metadata. */
 public class MetadataManager {

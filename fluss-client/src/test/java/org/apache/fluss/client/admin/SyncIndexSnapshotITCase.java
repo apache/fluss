@@ -22,6 +22,9 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -30,6 +33,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -41,6 +46,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -128,9 +134,15 @@ class SyncIndexSnapshotITCase {
     }
 
     @ParameterizedTest
-    @CsvSource({"120,3", "100,2", "90,1", "70,0"})
-    void testDiscoveryUsesCommittedSyncProgress(long syncProgress, int expected) throws Exception {
-        TablePath path = TablePath.of("snapshot_visibility", "stored_progress_" + syncProgress);
+    @CsvSource({
+        "120,3,false", "100,2,false", "90,1,false", "70,0,false",
+        "120,3,true", "100,2,true", "90,1,true", "70,0,true"
+    })
+    void testDiscoveryUsesCommittedSyncProgress(long syncProgress, int expected, boolean legacy)
+            throws Exception {
+        TablePath path =
+                TablePath.of(
+                        "snapshot_visibility", "stored_progress_" + syncProgress + "_" + legacy);
         try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
                 Admin admin = connection.getAdmin()) {
             admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
@@ -151,8 +163,12 @@ class SyncIndexSnapshotITCase {
             long tableId = admin.getTableInfo(path).get().getTableId();
             TableBucket bucket = new TableBucket(tableId, 0);
             // Discovery must use committed evidence even though the live source is still empty.
-            // These metadata-only fixtures also ensure no snapshot file is opened for selection.
+            // Explicit SYNC evidence in ZooKeeper needs no snapshot metadata file for selection.
             for (int id = 1; id <= 3; id++) {
+                if (legacy) {
+                    registerLegacySnapshot(bucket, id, Math.min(syncProgress, 60 + 20 * id));
+                    continue;
+                }
                 CLUSTER.getZooKeeperClient()
                         .registerTableBucketSnapshot(
                                 bucket,
@@ -167,6 +183,39 @@ class SyncIndexSnapshotITCase {
                 assertThat(snapshots.getLogOffset(0)).hasValue(60 + 20 * expected);
             }
         }
+    }
+
+    private void registerLegacySnapshot(TableBucket bucket, long snapshotId, long indexProgress)
+            throws Exception {
+        FsPath location =
+                new FsPath(
+                        CLUSTER.getRemoteDataDir()
+                                + "/legacy-snapshots/"
+                                + bucket.getTableId()
+                                + "/"
+                                + snapshotId);
+        CompletedSnapshot snapshot =
+                new CompletedSnapshot(
+                        bucket,
+                        snapshotId,
+                        location,
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0L),
+                        60 + 20 * snapshotId,
+                        null,
+                        indexProgress,
+                        null,
+                        null);
+        FsPath metadataPath = snapshot.getMetadataFilePath();
+        try (FSDataOutputStream out =
+                metadataPath.getFileSystem().create(metadataPath, FileSystem.WriteMode.OVERWRITE)) {
+            out.write(CompletedSnapshotJsonSerde.toJson(snapshot));
+        }
+        CLUSTER.getZooKeeperClient()
+                .registerTableBucketSnapshot(
+                        bucket,
+                        new BucketSnapshot(
+                                snapshotId, snapshot.getLogOffset(), metadataPath.toString()));
     }
 
     private static Configuration clusterConfig() {

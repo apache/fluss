@@ -1607,6 +1607,11 @@ class ZooKeeperClientTest {
             public void authorizeTable(OperationType operationType, long tableId) {}
 
             @Override
+            protected TablePath getReadAuthorizationTablePath(TablePath tablePath) {
+                return tablePath;
+            }
+
+            @Override
             protected TableInfo getTableInfo(long tableId) {
                 throw new UnsupportedOperationException();
             }

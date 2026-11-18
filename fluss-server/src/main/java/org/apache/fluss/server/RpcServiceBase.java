@@ -590,6 +590,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             return latest;
         }
         Long visibleOffset = latest.get().getSyncIndexPushedOffset();
+        if (visibleOffset == null) {
+            // Older ZooKeeper summaries have no SYNC evidence. The snapshot metadata contains
+            // either separate SYNC progress or the conservative confirmed all-index prefix.
+            CompletedSnapshot snapshot =
+                    latest.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
+            visibleOffset = snapshot.getSyncIndexPushedOffset();
+            if (visibleOffset == null) {
+                visibleOffset = snapshot.getIndexPushedOffset();
+            }
+        }
         if (visibleOffset == null || visibleOffset < 0) {
             throw new FlussRuntimeException(
                     "Missing or invalid SYNC index progress for snapshot "
@@ -597,12 +607,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             + " of "
                             + bucket);
         }
-        if (latest.get().getLogOffset() <= visibleOffset) {
+        final long confirmedVisibleOffset = visibleOffset;
+        if (latest.get().getLogOffset() <= confirmedVisibleOffset) {
             return latest;
         }
         return zkClient.getTableBucketAllSnapshotAndIds(bucket).stream()
                 .map(snapshot -> snapshot.f0)
-                .filter(snapshot -> snapshot.getLogOffset() <= visibleOffset)
+                .filter(snapshot -> snapshot.getLogOffset() <= confirmedVisibleOffset)
                 .max(Comparator.comparingLong(BucketSnapshot::getSnapshotId));
     }
 

@@ -27,7 +27,6 @@ import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.ReassignFieldId;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.EncodingUtils;
-import org.apache.fluss.utils.IndexTableUtils;
 import org.apache.fluss.utils.StringUtils;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.SchemaJsonSerde;
@@ -462,7 +461,6 @@ public final class Schema implements Serializable {
         public Builder column(String columnName, DataType dataType) {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
-            checkReservedSystemColumn(columnName);
             int id = highestFieldId.incrementAndGet();
             // Reassign field id especially for nested types.
             DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
@@ -488,20 +486,12 @@ public final class Schema implements Serializable {
             checkNotNull(columnName, "Column name must not be null.");
             checkNotNull(dataType, "Data type must not be null.");
             checkNotNull(aggFunction, "Aggregation function must not be null.");
-            checkReservedSystemColumn(columnName);
 
             int id = highestFieldId.incrementAndGet();
             // Reassign field id especially for nested types.
             DataType reassignDataType = ReassignFieldId.reassign(dataType, highestFieldId);
             columns.add(new Column(columnName, reassignDataType, null, id, aggFunction));
             return this;
-        }
-
-        private static void checkReservedSystemColumn(String columnName) {
-            checkArgument(
-                    !IndexTableUtils.RESERVED_INDEX_SYSTEM_COLUMNS.contains(columnName),
-                    "Column name '%s' is reserved for Index Table system use.",
-                    columnName);
         }
 
         /** Apply comment to the previous column. */

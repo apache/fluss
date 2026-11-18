@@ -38,6 +38,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -81,6 +82,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder()
                         .schema(schema)
                         .comment("test table with global secondary index")
+                        .property(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS, 1)
                         .distributedBy(3, "id")
                         .build();
 
@@ -98,6 +100,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
 
         assertThat(admin.tableExists(nameIndexTablePath).get()).isTrue();
         TableInfo nameIndexInfo = admin.getTableInfo(nameIndexTablePath).get();
+        assertThat(nameIndexInfo.getTableConfig().getMinInSyncReplicas()).hasValue(1);
         assertThat(nameIndexInfo.getTableConfig().getKvFormatVersion())
                 .hasValue(ConfigOptions.KV_FORMAT_VERSION_2);
         assertThat(nameIndexInfo.toTableDescriptor().getSchema().getPrimaryKeyColumnNames())
@@ -133,6 +136,42 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         IndexTableUtils.RECORD_KIND_SYSTEM_COLUMN,
                         IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN,
                         IndexTableUtils.ROW_KEY_SYSTEM_COLUMN);
+    }
+
+    @Test
+    void testInternalIndexColumnNamesOnlyConflictInTheDerivedSchema() throws Exception {
+        String column = IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN;
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(column, DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TablePath ordinary = TablePath.of(DB, "ordinary_index_column_name");
+        createTable(
+                ordinary, TableDescriptor.builder().schema(schema).distributedBy(1).build(), true);
+
+        String indexName = "idx";
+        TablePath indexed = TablePath.of(DB, "conflicting_index_column_name");
+        Schema indexedSchema =
+                Schema.newBuilder()
+                        .fromSchema(schema)
+                        .index(indexName, IndexType.SECONDARY, Collections.singletonList(column))
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                indexed,
+                                                TableDescriptor.builder()
+                                                        .schema(indexedSchema)
+                                                        .distributedBy(1)
+                                                        .build(),
+                                                false)
+                                        .get())
+                .hasRootCauseInstanceOf(InvalidTableException.class)
+                .hasStackTraceContaining(column);
+        assertThat(admin.tableExists(indexed).get()).isFalse();
+        assertThat(admin.tableExists(indexTablePath(indexed, indexName)).get()).isFalse();
     }
 
     @Test

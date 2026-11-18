@@ -34,7 +34,7 @@ Use these options in the Fluss catalog:
 |---|---|---|
 | `secondary-index.<name>.columns` | Required | Ordered index columns, supplied as a comma-separated list or a JSON string array. |
 | `secondary-index.<name>.visibility` | `sync` | Whether write acknowledgement waits for this index: `sync` or `async`. |
-| `secondary-index.<name>.bucket.num` | Main-table bucket count at creation | Positive number of buckets for this index. The replication factor is inherited from the main table. |
+| `secondary-index.<name>.bucket.num` | Main-table bucket count at creation | Positive number of buckets for this index. The index inherits the main table’s replication factor and any explicit `table.min-in-sync-replicas` setting at creation. |
 
 Each Index Table retains its persisted bucket count independently of subsequent changes to the main table's `bucket.num`.
 
@@ -88,7 +88,7 @@ The result contains current main-table rows rather than internal index records. 
 
 Flink first uses a primary-key lookup when the equality join conditions contain the complete primary key, then a supported prefix lookup when all required bucket and partition keys are present. Otherwise, it selects a secondary index whose columns are all covered by the conditions. Among eligible indexes, it prefers the one with the most columns, with a stable column-position ordering to break ties. Additional join conditions filter the returned rows.
 
-Flink's FULL lookup cache supports primary-key and prefix lookups. Use `lookup.cache = NONE` or `PARTIAL` for secondary-index lookups.
+Flink's FULL lookup cache supports primary-key and prefix lookups. Secondary-index lookups support `lookup.cache = NONE` and `PARTIAL`. A cache hit may return older results. Use `NONE` when a Lookup Join requires read-your-writes.
 
 Both synchronous and asynchronous Flink lookup execution are supported. The `lookup.async` option controls Flink execution and is independent of the index's write visibility. See [Flink Lookup Joins](../engine-flink/lookups.md#secondary-index-lookup) for an example.
 
@@ -98,7 +98,7 @@ Secondary indexes also support reverse lookups in eligible [foreign-key delta jo
 
 | Mode | Write acknowledgement | Lookup behavior |
 |---|---|---|
-| `sync` | Waits for the main-table write to commit and for the corresponding changes to reach every synchronous index. | A subsequent lookup through that index can observe the acknowledged write. |
+| `sync` | Waits for the main-table write to commit and for the corresponding changes to reach every synchronous index. | A subsequent lookup that reaches Fluss can observe the acknowledged write. |
 | `async` | Waits for the main-table write to commit. Index propagation continues independently. | Recent writes may be temporarily absent from index lookup results. |
 
 Both modes fetch and validate the current main-table row, so an obsolete index entry does not return a row whose indexed value no longer matches. This validation cannot recover candidates that have not reached an asynchronous index yet. A lookup does not provide a transactionally consistent snapshot across multiple main-table buckets.
@@ -109,7 +109,7 @@ With a synchronous index, even `acks=1` waits for the main-table high watermark 
 
 For tables with synchronous indexes, client log scans expose records only below both the main-table high watermark and the synchronous index replication progress. A stalled synchronous index therefore delays client log consumption as well as write acknowledgement. Remote log files are exposed only once all records in the file satisfy this visibility bound. Server-side log replication and index WAL consumption continue independently of this client read bound.
 
-Full reads select a retained snapshot using committed SYNC index progress, which may lag the live progress. If none qualifies, reconstruction starts at log offset 0 and fails if the required history is unavailable. Retaining more snapshots and a longer log TTL can preserve a usable starting point.
+Snapshot-based full reads select a retained snapshot using SYNC progress from the selected recovery snapshot. If no snapshot qualifies, reconstruction starts at log offset 0 and fails if the required history is unavailable. Retaining more snapshots and a longer log TTL can preserve a usable starting point. Live KV scans, including Java BatchScanner and Flink `SERVER_SCAN`, may see main-table rows before the index catches up.
 
 ## Table and Partition Lifecycle
 

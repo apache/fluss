@@ -19,11 +19,6 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.config.ConfigOption;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.Set;
-
 import static org.apache.fluss.config.ConfigBuilder.key;
 
 /** Utility constants and helpers shared by the Global Secondary Index Table layer. */
@@ -60,21 +55,6 @@ public final class IndexTableUtils {
     public static final byte DATA_RECORD_KIND = 0;
 
     public static final byte PROGRESS_RECORD_KIND = 1;
-
-    /**
-     * Reserved system column names that user-defined schemas must not declare on a main table
-     * (otherwise Index Table derivation would collide). Index Tables themselves may add these
-     * columns at derive time; user-facing schemas must keep their column namespace clean.
-     */
-    public static final Set<String> RESERVED_INDEX_SYSTEM_COLUMNS =
-            Collections.unmodifiableSet(
-                    new LinkedHashSet<>(
-                            Arrays.asList(
-                                    PARTITION_ID_SYSTEM_COLUMN,
-                                    RECORD_KIND_SYSTEM_COLUMN,
-                                    ROUTING_KEY_SYSTEM_COLUMN,
-                                    ROW_KEY_SYSTEM_COLUMN,
-                                    SOURCE_PROGRESS_SYSTEM_COLUMN)));
 
     /** Reserved, operationally distinct prefix for internal Index Tables. */
     public static final String INDEX_TABLE_NAME_PREFIX = "__idx__";

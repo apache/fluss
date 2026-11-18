@@ -158,6 +158,11 @@ class RpcServiceBaseTest {
         public void authorizeTable(OperationType operationType, long tableId) {}
 
         @Override
+        protected TablePath getReadAuthorizationTablePath(TablePath tablePath) {
+            return tablePath;
+        }
+
+        @Override
         protected TableInfo getTableInfo(long tableId) {
             return null;
         }

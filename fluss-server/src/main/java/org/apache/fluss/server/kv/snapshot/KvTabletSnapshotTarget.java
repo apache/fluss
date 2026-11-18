@@ -207,22 +207,18 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         snapshotLocation));
     }
 
-    private long reconcileUnconfirmedSnapshot(long snapshotId, long previousSnapshotId)
-            throws Exception {
+    private long reconcileUnconfirmedSnapshot(
+            CompletedSnapshot snapshotToCommit, long previousSnapshotId) throws Exception {
         Set<Long> unconfirmed = rocksIncrementalSnapshot.getUnconfirmedSnapshotIds();
-        unconfirmed.remove(snapshotId);
+        unconfirmed.remove(snapshotToCommit.getSnapshotID());
         if (unconfirmed.isEmpty()) {
             return previousSnapshotId;
         }
-        Optional<BucketSnapshot> selected =
-                zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+        Optional<BucketSnapshot> selected = getRecoverySnapshot(snapshotToCommit);
         if (selected.isPresent() && unconfirmed.contains(selected.get().getSnapshotId())) {
             CompletedSnapshot snapshot =
                     selected.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
-            updateStateOnCommitSuccess(
-                    snapshot.getSnapshotID(),
-                    snapshot.getLogOffset(),
-                    snapshot.getKvSnapshotHandle().getSnapshotSize());
+            updateStateOnCommitSuccess(snapshot, snapshot.getKvSnapshotHandle().getSnapshotSize());
             return snapshot.getSnapshotID();
         }
         return previousSnapshotId;
@@ -281,11 +277,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                     coordinatorEpoch,
                     bucketLeaderEpoch,
                     reconcileUnconfirmedSnapshot(
-                            snapshotId, snapshotResult.getPreviousSnapshotId()));
-            updateStateOnCommitSuccess(
-                    snapshotId,
-                    tabletState.getFlushedLogOffset(),
-                    snapshotResult.getSnapshotSize());
+                            completedSnapshot, snapshotResult.getPreviousSnapshotId()));
+            updateStateOnCommitSuccess(completedSnapshot, snapshotResult.getSnapshotSize());
         } catch (Exception e) {
             Throwable cause = ExceptionUtils.stripExecutionException(e);
             try {
@@ -306,13 +299,10 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                                         }
                                     });
                 } else {
-                    Optional<BucketSnapshot> selected =
-                            zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+                    Optional<BucketSnapshot> selected = getRecoverySnapshot(completedSnapshot);
                     if (selected.isPresent() && selected.get().getSnapshotId() == snapshotId) {
                         updateStateOnCommitSuccess(
-                                snapshotId,
-                                tabletState.getFlushedLogOffset(),
-                                snapshotResult.getSnapshotSize());
+                                completedSnapshot, snapshotResult.getSnapshotSize());
                         return;
                     }
                 }
@@ -375,14 +365,24 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
      * before the outward state catches up — see FLUSS-2624. The {@code finally} block also
      * guarantees the internal SST bookkeeping cleanup runs even if any outward update throws.
      */
-    private void updateStateOnCommitSuccess(long snapshotId, long flushedLogOffset, long size) {
+    private void updateStateOnCommitSuccess(CompletedSnapshot snapshot, long size) {
         try {
-            logOffsetOfLatestSnapshot = flushedLogOffset;
+            logOffsetOfLatestSnapshot = snapshot.getLogOffset();
+            indexPushedOffsetOfLatestSnapshot = snapshot.getIndexPushedOffset();
+            syncIndexPushedOffsetOfLatestSnapshot = snapshot.getSyncIndexPushedOffset();
             snapshotSize = size;
-            updateMinRetainOffset.accept(flushedLogOffset);
+            updateMinRetainOffset.accept(snapshot.getMinRetainLogOffset());
         } finally {
-            rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
+            rocksIncrementalSnapshot.notifySnapshotComplete(snapshot.getSnapshotID());
         }
+    }
+
+    private Optional<BucketSnapshot> getRecoverySnapshot(CompletedSnapshot snapshot)
+            throws Exception {
+        // The unselected legacy reference fallback cannot certify an indexed commit.
+        return snapshot.getIndexPushedOffset() == null
+                ? zooKeeperClient.getTableBucketLatestSnapshot(tableBucket)
+                : zooKeeperClient.getRecoveryBucketSnapshot(tableBucket);
     }
 
     private SnapshotRunner createSnapshotRunner(CloseableRegistry cancelStreamRegistry) {
