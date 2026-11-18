@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -134,6 +135,7 @@ import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server
@@ -1407,9 +1409,82 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.delete().forPath(path);
     }
 
+    /** Advances the recovery selection after its ordinary reference has been registered. */
+    public void updateRecoverySnapshot(
+            TableBucket bucket,
+            long snapshotId,
+            @Nullable Long previousSnapshotId,
+            int expectedLeaderEpoch)
+            throws Exception {
+        CuratorOp leaderCheck =
+                previousSnapshotId == null
+                        ? null
+                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+        Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
+        String path = ZkData.RecoverySnapshotZNode.path(bucket);
+        if (current.isPresent()
+                && previousSnapshotId != null
+                && current.get().data().longValue() != previousSnapshotId) {
+            throw new KeeperException.BadVersionException(path);
+        }
+        CuratorOp update =
+                current.isPresent()
+                        ? zkClient.transactionOp()
+                                .setData()
+                                .withVersion(current.get().zkVersion())
+                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId))
+                        : zkClient.transactionOp()
+                                .create()
+                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId));
+        if (leaderCheck == null) {
+            zkClient.transaction().forOperations(update);
+        } else {
+            zkClient.transaction().forOperations(update, leaderCheck);
+        }
+    }
+
+    private CuratorOp createSnapshotLeaderEpochCheck(TableBucket bucket, int expectedLeaderEpoch)
+            throws Exception {
+        Stat stat = new Stat();
+        String path = LeaderAndIsrZNode.path(bucket);
+        byte[] data =
+                getDataWithStat(path, stat)
+                        .orElseThrow(() -> new KeeperException.NoNodeException(path));
+        if (LeaderAndIsrZNode.decode(data).leaderEpoch() != expectedLeaderEpoch) {
+            throw new FencedLeaderEpochException("The snapshot belongs to a previous KV leader.");
+        }
+        return zkClient.transactionOp().check().withVersion(stat.getVersion()).forPath(path);
+    }
+
     public OptionalLong getTableBucketLatestSnapshotId(TableBucket tableBucket) throws Exception {
         String path = BucketSnapshotsZNode.path(tableBucket);
         return getChildren(path).stream().mapToLong(Long::parseLong).max();
+    }
+
+    /** Reads the selected recovery identity together with its ZK CAS version. */
+    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(TableBucket bucket)
+            throws Exception {
+        Stat stat = new Stat();
+        return getDataWithStat(ZkData.RecoverySnapshotZNode.path(bucket), stat)
+                .map(
+                        bytes ->
+                                new VersionedData<>(
+                                        ZkData.RecoverySnapshotZNode.decode(bytes),
+                                        stat.getVersion()));
+    }
+
+    /** Resolves the selected ordinary reference, never substituting another snapshot. */
+    public Optional<BucketSnapshot> getRecoveryBucketSnapshot(TableBucket bucket) throws Exception {
+        Optional<VersionedData<Long>> recovery = getRecoverySnapshotSelection(bucket);
+        if (!recovery.isPresent()) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                getTableBucketSnapshot(bucket, recovery.get().data())
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "Selected recovery snapshot reference is missing.")));
     }
 
     public Optional<BucketSnapshot> getTableBucketSnapshot(TableBucket tableBucket, long snapshotId)
@@ -1421,6 +1496,10 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the latest snapshot of the table bucket. */
     public Optional<BucketSnapshot> getTableBucketLatestSnapshot(TableBucket tableBucket)
             throws Exception {
+        Optional<BucketSnapshot> selected = getRecoveryBucketSnapshot(tableBucket);
+        if (selected.isPresent()) {
+            return selected;
+        }
         OptionalLong latestSnapshotId = getTableBucketLatestSnapshotId(tableBucket);
         if (latestSnapshotId.isPresent()) {
             return getTableBucketSnapshot(tableBucket, latestSnapshotId.getAsLong());
@@ -1476,57 +1555,66 @@ public class ZooKeeperClient implements AutoCloseable {
             long tableId, @Nullable Long partitionId, TableAssignment tableAssignment)
             throws Exception {
         Map<Integer, Optional<BucketSnapshot>> snapshots = new HashMap<>();
-        // first, put as empty for all buckets
-        for (Integer bucket : tableAssignment.getBuckets()) {
-            snapshots.put(bucket, Optional.empty());
-        }
-
-        // get the bucket ids
-        String bucketIdsPath =
-                partitionId == null
-                        ? BucketIdsZNode.pathOfTable(tableId)
-                        : BucketIdsZNode.pathOfPartition(partitionId);
         Map<String, TableBucket> snapshotPathToTableBucket = new HashMap<>();
-        for (String bucketIdStr : getChildren(bucketIdsPath)) {
-            int bucketId = Integer.parseInt(bucketIdStr);
+        for (Integer bucketId : tableAssignment.getBuckets()) {
             snapshots.put(bucketId, Optional.empty());
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-            snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(tableBucket), tableBucket);
+            TableBucket bucket = new TableBucket(tableId, partitionId, bucketId);
+            snapshotPathToTableBucket.put(BucketSnapshotsZNode.path(bucket), bucket);
         }
 
-        List<ZkGetChildrenResponse> childrenResponses =
-                getChildrenInBackground(snapshotPathToTableBucket.keySet());
-        Map<String, Integer> snapshotDataPathToBucketId = new HashMap<>();
-        for (ZkGetChildrenResponse response : childrenResponses) {
+        Map<Integer, Long> selectedIds = getRecoverySnapshotIds(snapshotPathToTableBucket.values());
+        Map<Integer, Long> snapshotIds = new HashMap<>(selectedIds);
+        Set<String> fallbackPaths = new HashSet<>();
+        for (Map.Entry<String, TableBucket> entry : snapshotPathToTableBucket.entrySet()) {
+            if (!selectedIds.containsKey(entry.getValue().getBucket())) {
+                fallbackPaths.add(entry.getKey());
+            }
+        }
+        for (ZkGetChildrenResponse response : getChildrenInBackground(fallbackPaths)) {
             if (response.getResultCode() == KeeperException.Code.NONODE) {
                 continue;
             }
             response.maybeThrow();
-
-            OptionalLong latestSnapshotId =
+            OptionalLong latestId =
                     response.getChildren().stream().mapToLong(Long::parseLong).max();
-            if (latestSnapshotId.isPresent()) {
-                TableBucket tableBucket =
-                        checkNotNull(snapshotPathToTableBucket.get(response.getPath()));
-                snapshotDataPathToBucketId.put(
-                        BucketSnapshotIdZNode.path(tableBucket, latestSnapshotId.getAsLong()),
-                        tableBucket.getBucket());
+            if (latestId.isPresent()) {
+                snapshotIds.put(
+                        checkNotNull(snapshotPathToTableBucket.get(response.getPath())).getBucket(),
+                        latestId.getAsLong());
             }
         }
-
-        List<ZkGetDataResponse> dataResponses =
-                getDataInBackground(snapshotDataPathToBucketId.keySet());
-        for (ZkGetDataResponse response : dataResponses) {
+        Map<String, Integer> referencePaths = new HashMap<>();
+        for (Map.Entry<Integer, Long> snapshot : snapshotIds.entrySet()) {
+            referencePaths.put(
+                    BucketSnapshotIdZNode.path(
+                            new TableBucket(tableId, partitionId, snapshot.getKey()),
+                            snapshot.getValue()),
+                    snapshot.getKey());
+        }
+        for (ZkGetDataResponse response : getDataInBackground(referencePaths.keySet())) {
+            int bucketId = checkNotNull(referencePaths.get(response.getPath()));
             if (response.getResultCode() == KeeperException.Code.NONODE) {
-                // The snapshot may be deleted between listing the children and reading its data.
+                checkState(
+                        !selectedIds.containsKey(bucketId),
+                        "Selected recovery snapshot reference is missing.");
                 continue;
             }
             response.maybeThrow();
-
-            int bucketId = checkNotNull(snapshotDataPathToBucketId.get(response.getPath()));
             snapshots.put(bucketId, Optional.of(BucketSnapshotIdZNode.decode(response.getData())));
         }
         return snapshots;
+    }
+
+    private Map<Integer, Long> getRecoverySnapshotIds(Collection<TableBucket> buckets)
+            throws Exception {
+        Map<String, TableBucket> paths = new HashMap<>();
+        for (TableBucket bucket : buckets) {
+            paths.put(ZkData.RecoverySnapshotZNode.path(bucket), bucket);
+        }
+        return processGetDataResponsesOrThrow(
+                getDataInBackground(paths.keySet()),
+                response -> checkNotNull(paths.get(response.getPath())).getBucket(),
+                ZkData.RecoverySnapshotZNode::decode);
     }
 
     public List<String> getKvSnapshotLeasesList() throws Exception {

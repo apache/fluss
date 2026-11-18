@@ -261,6 +261,7 @@ cargo build --example example-table --release
 | `writer_retries`                       | `i32::MAX`        | Max write retries                             |
 | `scanner_log_fetch_max_bytes`          | 16 MB             | Max bytes per fetch request                   |
 | `scanner_log_fetch_wait_max_time_ms`   | 500 ms            | Max wait time for fetch                       |
+| `scanner_log_check_crc`                | `true`            | Check the CRC of fetched log batches, except server-projected ones |
 | `scanner_remote_log_read_concurrency`  | 4                 | Concurrency for remote log reads              |
 | `scanner_io_tmp_dir`                  | OS temp dir/fluss | Parent for isolated remote log download directories |
 | `connect_timeout_ms`                   | 15 s              | Connection timeout                            |

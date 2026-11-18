@@ -34,6 +34,8 @@ import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -44,6 +46,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
@@ -51,6 +54,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropDatabase;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -112,14 +116,7 @@ class KvReplicaRestoreITCase {
             putRecordBatchAndAssertSuccess(tableBucket, leaderServer, kvRecordBatch);
         }
 
-        // wait for snapshot finish so that we can restore from snapshot
-        for (TableBucket tableBucket : tableBuckets) {
-            final long snapshot1Id = 0;
-            waitUntil(
-                    () -> completedSnapshotHandleStore.get(tableBucket, snapshot1Id).isPresent(),
-                    Duration.ofMinutes(2),
-                    "Fail to wait for the snapshot 0 for bucket " + tableBucket);
-        }
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshots(tableBuckets);
 
         // pick one bucket put kv to make it fail
         TableBucket tableBucket = tableBuckets.get(new Random().nextInt(tableBuckets.size()));
@@ -252,7 +249,7 @@ class KvReplicaRestoreITCase {
                         .retrieveCompleteSnapshot();
         assertThat(completedSnapshot.getRowCount()).isNotNull();
         assertThat(completedSnapshot.getRowCount()).isEqualTo(recordCount);
-
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         // Trigger another write to generate changelogs not in snapshot
         List<KvRecord> moreRecords = new ArrayList<>();
         for (int i = recordCount; i < recordCount + 10; i++) {
@@ -260,6 +257,26 @@ class KvReplicaRestoreITCase {
         }
         recordCount = recordCount + 10;
         putRecordBatchAndAssertSuccess(tableBucket, leaderServer, toKvRecordBatch(moreRecords));
+        CompletedSnapshot later = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
+        assertThat(later.getSnapshotID()).isGreaterThan(completedSnapshot.getSnapshotID());
+        waitUntil(
+                () ->
+                        zk.getRecoveryBucketSnapshot(tableBucket)
+                                        .map(BucketSnapshot::getSnapshotId)
+                                        .orElse(-1L)
+                                == later.getSnapshotID(),
+                Duration.ofSeconds(30),
+                "Later snapshot did not become the recovery snapshot");
+        // Recover from the earlier snapshot and replay the remaining WAL records.
+        registerRecoverySnapshot(
+                zk,
+                tableBucket,
+                new BucketSnapshot(
+                        completedSnapshot.getSnapshotID(),
+                        completedSnapshot.getLogOffset(),
+                        completedSnapshot.getMetadataFilePath().toString()));
+        assertThat(zk.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
+                .isEqualTo(completedSnapshot.getSnapshotID());
 
         // simulate failure and force failover
         int currentLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
@@ -279,6 +296,23 @@ class KvReplicaRestoreITCase {
             Replica newLeaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
             assertThat(newLeaderReplica.getLeaderId()).isEqualTo(newLeader.get());
             assertThat(newLeaderReplica.getRowCount()).isEqualTo(recordCount);
+            TabletServerGateway gateway =
+                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeader.get());
+            for (Tuple2<byte[], byte[]> row :
+                    getKeyValuePairs(Arrays.asList(records.get(0), moreRecords.get(0)))) {
+                assertLookupResponse(
+                        gateway.lookup(newLookupRequest(tableId, 0, row.f0)).get(), row.f1);
+            }
+            CompletedSnapshot next = FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tableBucket);
+            assertThat(next.getSnapshotID()).isGreaterThan(later.getSnapshotID());
+            waitUntil(
+                    () ->
+                            zk.getRecoveryBucketSnapshot(tableBucket)
+                                            .map(BucketSnapshot::getSnapshotId)
+                                            .orElse(-1L)
+                                    == next.getSnapshotID(),
+                    Duration.ofSeconds(30),
+                    "Snapshot after failover did not become the recovery snapshot");
         } finally {
             FLUSS_CLUSTER_EXTENSION.startTabletServer(currentLeader);
         }
@@ -287,8 +321,8 @@ class KvReplicaRestoreITCase {
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
-        // set a shorter interval for test
-        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1));
+        // Trigger snapshots explicitly to keep the recovery source stable.
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofDays(1));
         // Keep RocksDB write buffer small for tests, but above normal test batch size so the
         // backpressure admission gate does not reject successful restore writes.
         conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("64kb"));

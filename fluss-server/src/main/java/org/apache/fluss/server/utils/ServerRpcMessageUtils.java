@@ -361,6 +361,9 @@ public class ServerRpcMessageUtils {
             if (serverNode.serverTag() != null) {
                 pbServerNode.setServerTag(serverNode.serverTag().value);
             }
+            if (serverNode.softwareVersion() != null) {
+                pbServerNode.setSoftwareVersion(serverNode.softwareVersion());
+            }
             pbServerNodeList.add(pbServerNode);
         }
 
@@ -1981,13 +1984,20 @@ public class ServerRpcMessageUtils {
         return listOffsetsRequest;
     }
 
+    /** Creates a commit with the recovery identity captured by the original KV context. */
     public static CommitKvSnapshotRequest makeCommitKvSnapshotRequest(
-            CompletedSnapshot completedSnapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+            CompletedSnapshot completedSnapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable Long previousRecoverySnapshotId) {
         CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
         byte[] completedSnapshotBytes = CompletedSnapshotJsonSerde.toJson(completedSnapshot);
         request.setCompletedSnapshot(completedSnapshotBytes)
                 .setCoordinatorEpoch(coordinatorEpoch)
                 .setBucketLeaderEpoch(bucketLeaderEpoch);
+        if (previousRecoverySnapshotId != null) {
+            request.setPreviousRecoverySnapshotId(previousRecoverySnapshotId);
+        }
         return request;
     }
 

@@ -320,7 +320,7 @@ pub struct DescribeClusterRequest {}
 pub struct DescribeClusterResponse {
     #[prost(message, optional, tag = "1")]
     pub coordinator_server: ::core::option::Option<PbServerNode>,
-    /// Live tablet servers with addresses, racks and server tags.
+    /// Live tablet servers with addresses, racks, server tags and software versions.
     #[prost(message, repeated, tag = "2")]
     pub tablet_servers: ::prost::alloc::vec::Vec<PbServerNode>,
     /// Also includes offline servers with assigned replicas. Missing loads are not zero counts.
@@ -704,6 +704,9 @@ pub struct CommitKvSnapshotRequest {
     pub coordinator_epoch: i32,
     #[prost(int32, required, tag = "3")]
     pub bucket_leader_epoch: i32,
+    /// The recovery snapshot this commit expects to replace (CAS precondition).
+    #[prost(int64, optional, tag = "4")]
+    pub previous_recovery_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitKvSnapshotResponse {}
@@ -1326,6 +1329,9 @@ pub struct PbServerNode {
     pub rack: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int32, optional, tag = "6")]
     pub server_tag: ::core::option::Option<i32>,
+    /// Reported only for live tablet servers in DescribeClusterResponse.
+    #[prost(string, optional, tag = "7")]
+    pub software_version: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbTableMetadata {

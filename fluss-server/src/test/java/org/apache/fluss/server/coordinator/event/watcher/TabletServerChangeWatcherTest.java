@@ -24,6 +24,7 @@ import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -66,7 +67,9 @@ class TabletServerChangeWatcherTest {
                     new TabletServerRegistration(
                             "rack" + i,
                             Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
-                            System.currentTimeMillis());
+                            System.currentTimeMillis(),
+                            TabletServerResource.unknown(),
+                            null);
             expectedEvents.add(
                     new NewTabletServerEvent(
                             new ServerInfo(

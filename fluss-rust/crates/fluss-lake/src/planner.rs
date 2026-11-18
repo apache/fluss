@@ -297,11 +297,21 @@ fn select_context_tasks(
         context.partition_keys(),
     )?;
     let selected = context.is_bucket_scoped().then(|| &context.log_ranges()[0]);
+    // Tasks repeat a partition per bucket or file group, so match each partition once.
+    let mut in_scope = std::collections::HashMap::new();
     tasks
         .into_iter()
         .filter_map(|task| {
             let keep = (|| -> Result<bool> {
-                if !scope.matches(&task.partition)? {
+                let matches = match in_scope.get(&task.partition) {
+                    Some(&matches) => matches,
+                    None => {
+                        let matches = scope.matches(&task.partition)?;
+                        in_scope.insert(task.partition.clone(), matches);
+                        matches
+                    }
+                };
+                if !matches {
                     return Ok(false);
                 }
                 if let Some(range) = selected {
@@ -626,6 +636,7 @@ fn projected_arrow_schema(
 mod tests {
     use super::*;
     use fluss::metadata::{DataTypes, Schema, TableBucket, TablePath};
+    use fluss::predicate::col;
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -1179,6 +1190,28 @@ mod tests {
             };
             assert!(select_context_tasks(&context, vec![task]).is_err());
         }
+    }
+
+    #[test]
+    fn partition_scope_selects_every_task_of_a_matching_partition() {
+        let info = table_info(false, vec!["region".into()], HashMap::new());
+        let scope = col("region").ne("US");
+        let context =
+            FlussLakeReadContext::from_lake_snapshot(&info, Some(42), Some(&scope)).unwrap();
+        let tasks = [("US", 0), ("EU", 0), ("US", 1), ("EU", 1)]
+            .map(|(region, bucket_id)| crate::LakeSplit {
+                bucket_id,
+                partition: FlussLakePartitionIdentity::KeyValues(vec![(
+                    "region".into(),
+                    region.into(),
+                )]),
+                ..crate::source::testing_split()
+            })
+            .to_vec();
+        assert_eq!(
+            select_context_tasks(&context, tasks.clone()).unwrap(),
+            vec![tasks[1].clone(), tasks[3].clone()]
+        );
     }
 
     #[test]

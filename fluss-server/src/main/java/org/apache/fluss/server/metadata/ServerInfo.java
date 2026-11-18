@@ -45,6 +45,7 @@ public class ServerInfo {
     private final Map<String, Endpoint> endpointMap;
     private final ServerType serverType;
     private final TabletServerResource resource;
+    private final @Nullable String softwareVersion;
 
     public ServerInfo(
             Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
@@ -57,6 +58,17 @@ public class ServerInfo {
             List<Endpoint> endpoints,
             ServerType serverType,
             TabletServerResource resource) {
+        this(id, rack, endpoints, serverType, resource, null);
+    }
+
+    /** Creates server metadata with the software version reported at registration. */
+    public ServerInfo(
+            Integer id,
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            ServerType serverType,
+            TabletServerResource resource,
+            @Nullable String softwareVersion) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
@@ -64,6 +76,7 @@ public class ServerInfo {
                         .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
         this.serverType = serverType;
         this.resource = resource;
+        this.softwareVersion = softwareVersion;
     }
 
     public Integer id() {
@@ -96,12 +109,11 @@ public class ServerInfo {
         if (endpoint == null) {
             return null;
         }
-        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType, rack);
+        return toServerNode(endpoint);
     }
 
     public ServerNode nodeOrThrow(String listenerName) {
-        Endpoint endpoint = endpointOrThrow(listenerName);
-        return new ServerNode(id, endpoint.getHost(), endpoint.getPort(), serverType, rack);
+        return toServerNode(endpointOrThrow(listenerName));
     }
 
     public List<Endpoint> endpoints() {
@@ -110,6 +122,17 @@ public class ServerInfo {
 
     public TabletServerResource resource() {
         return resource;
+    }
+
+    private ServerNode toServerNode(Endpoint endpoint) {
+        return new ServerNode(
+                id,
+                endpoint.getHost(),
+                endpoint.getPort(),
+                serverType,
+                rack,
+                null,
+                softwareVersion);
     }
 
     @Override
@@ -121,12 +144,13 @@ public class ServerInfo {
         return Objects.equals(id, that.id)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(endpointMap, that.endpointMap)
-                && Objects.equals(resource, that.resource);
+                && Objects.equals(resource, that.resource)
+                && Objects.equals(softwareVersion, that.softwareVersion);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, rack, endpointMap, resource);
+        return Objects.hash(id, rack, endpointMap, resource, softwareVersion);
     }
 
     @Override
@@ -142,6 +166,8 @@ public class ServerInfo {
                 + serverType
                 + ", resource="
                 + resource
+                + ", softwareVersion="
+                + softwareVersion
                 + '}';
     }
 }

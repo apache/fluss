@@ -40,6 +40,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -121,6 +122,15 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         }
     }
 
+    /** Returns uploaded snapshots whose commit has not yet been confirmed. */
+    public Set<Long> getUnconfirmedSnapshotIds() {
+        synchronized (uploadedSstFiles) {
+            return uploadedSstFiles.keySet().stream()
+                    .filter(id -> id > lastCompletedSnapshotId)
+                    .collect(Collectors.toSet());
+        }
+    }
+
     public void notifySnapshotAbort(long abortedSnapshotId) {
         synchronized (uploadedSstFiles) {
             uploadedSstFiles.remove(abortedSnapshotId);
@@ -163,7 +173,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 snapshotId,
                 lastCompletedSnapshot,
                 uploadedSstFiles);
-        return new PreviousSnapshot(confirmedSstFiles);
+        return new PreviousSnapshot(lastCompletedSnapshot, confirmedSstFiles);
     }
 
     private void takeDBNativeSnapshot(@Nonnull File outputDirectory) throws Exception {
@@ -229,7 +239,10 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 final KvSnapshotHandle kvSnapshotHandle =
                         KvSnapshotHandle.create(sstFiles, miscFiles, snapshotIncrementalSize);
                 return new SnapshotResult(
-                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), tabletState);
+                        kvSnapshotHandle,
+                        snapshotLocation.getSnapshotDirectory(),
+                        tabletState,
+                        previousSnapshot.snapshotId);
             } finally {
                 if (!completed) {
                     cleanupIncompleteSnapshot(tmpResourcesRegistry);
@@ -354,10 +367,12 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** Previous snapshot with uploaded sst files. */
     protected static class PreviousSnapshot {
 
+        private final long snapshotId;
         @Nonnull private final Map<String, KvFileHandle> confirmedSstFiles;
 
         protected PreviousSnapshot(
-                @Nullable Collection<KvFileHandleAndLocalPath> confirmedSstFiles) {
+                long snapshotId, @Nullable Collection<KvFileHandleAndLocalPath> confirmedSstFiles) {
+            this.snapshotId = snapshotId;
             this.confirmedSstFiles =
                     confirmedSstFiles != null
                             ? confirmedSstFiles.stream()

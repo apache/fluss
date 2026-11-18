@@ -49,6 +49,7 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -61,7 +62,9 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.BucketIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
@@ -103,10 +106,12 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -173,12 +178,16 @@ class ZooKeeperClientTest {
                 new TabletServerRegistration(
                         "rack1",
                         Endpoint.fromListenersString("CLIENT://host1:3456"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         TabletServerRegistration registration2 =
                 new TabletServerRegistration(
                         "rack2",
                         Endpoint.fromListenersString("CLIENT://host2:3454"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         zookeeperClient.registerTabletServer(2, registration2);
         zookeeperClient.registerTabletServer(1, registration1);
         // now get the tablet servers
@@ -781,6 +790,11 @@ class ZooKeeperClientTest {
                 .containsExactlyInAnyOrderElementsOf(
                         Collections.singletonList(Tuple2.of(snapshot21, 1L)));
 
+        registerRecoverySnapshot(zookeeperClient, table1Bucket2, snapshot2);
+        zookeeperClient.registerTableBucketSnapshot(
+                table1Bucket2, new BucketSnapshot(3L, 30L, "oss://test/cp3"));
+        assertThat(zookeeperClient.getTableBucketLatestSnapshot(table1Bucket2)).contains(snapshot2);
+
         // check all table buckets' snapshots for table 1;
         Map<Integer, Optional<BucketSnapshot>> tableBucketsLatestSnapshot =
                 zookeeperClient.getTableLatestBucketSnapshot(table1Bucket2.getTableId());
@@ -791,6 +805,7 @@ class ZooKeeperClientTest {
         // now, delete snapshot1/snapshot2 for tableBucket
         zookeeperClient.deleteTableBucketSnapshot(table1Bucket2, 1);
         zookeeperClient.deleteTableBucketSnapshot(table1Bucket2, 2);
+        zookeeperClient.deleteTableBucketSnapshot(table1Bucket2, 3L);
         assertThat(zookeeperClient.getTableBucketAllSnapshotAndIds(table1Bucket2)).isEmpty();
         assertThat(zookeeperClient.getTableBucketSnapshot(table1Bucket2, 1)).isEmpty();
     }
@@ -803,6 +818,7 @@ class ZooKeeperClientTest {
         TableBucket bucketWithoutSnapshotsPath = new TableBucket(tableId, 2);
         TableBucket bucketWithEmptySnapshotsPath = new TableBucket(tableId, 3);
         TableBucket unassignedBucketWithoutSnapshotsPath = new TableBucket(tableId, 4);
+        TableBucket bucketWithRecoverySnapshot = new TableBucket(tableId, 5);
         zookeeperClient.registerTableAssignment(
                 tableId,
                 TableAssignment.builder()
@@ -810,12 +826,18 @@ class ZooKeeperClientTest {
                         .add(bucketWithoutPath.getBucket(), BucketAssignment.of(0))
                         .add(bucketWithoutSnapshotsPath.getBucket(), BucketAssignment.of(0))
                         .add(bucketWithEmptySnapshotsPath.getBucket(), BucketAssignment.of(0))
+                        .add(bucketWithRecoverySnapshot.getBucket(), BucketAssignment.of(0))
                         .build());
 
         BucketSnapshot olderSnapshot = new BucketSnapshot(1L, 10L, "oss://test/cp1");
         BucketSnapshot latestSnapshot = new BucketSnapshot(3L, 30L, "oss://test/cp3");
         zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, olderSnapshot);
         zookeeperClient.registerTableBucketSnapshot(bucketWithSnapshots, latestSnapshot);
+
+        BucketSnapshot recoverySnapshot = new BucketSnapshot(1L, 10L, "oss://test/recovery-cp1");
+        registerRecoverySnapshot(zookeeperClient, bucketWithRecoverySnapshot, recoverySnapshot);
+        zookeeperClient.registerTableBucketSnapshot(
+                bucketWithRecoverySnapshot, new BucketSnapshot(2L, 20L, "oss://test/recovery-cp2"));
 
         // Create a bucket path without its snapshots child path.
         zookeeperClient
@@ -837,10 +859,11 @@ class ZooKeeperClientTest {
 
         Map<Integer, Optional<BucketSnapshot>> expectedSnapshots = new HashMap<>();
         expectedSnapshots.put(bucketWithSnapshots.getBucket(), Optional.of(latestSnapshot));
+        expectedSnapshots.put(
+                bucketWithRecoverySnapshot.getBucket(), Optional.of(recoverySnapshot));
         expectedSnapshots.put(bucketWithoutPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithoutSnapshotsPath.getBucket(), Optional.empty());
         expectedSnapshots.put(bucketWithEmptySnapshotsPath.getBucket(), Optional.empty());
-        expectedSnapshots.put(unassignedBucketWithoutSnapshotsPath.getBucket(), Optional.empty());
 
         assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
                 .isEqualTo(expectedSnapshots);
@@ -858,7 +881,9 @@ class ZooKeeperClientTest {
                 partitionBucketAssignments.size());
         TableBucket partitionBucket = new TableBucket(tableId, partitionId, 0);
         BucketSnapshot partitionSnapshot = new BucketSnapshot(5L, 50L, "oss://test/partition-cp5");
-        zookeeperClient.registerTableBucketSnapshot(partitionBucket, partitionSnapshot);
+        registerRecoverySnapshot(zookeeperClient, partitionBucket, partitionSnapshot);
+        zookeeperClient.registerTableBucketSnapshot(
+                partitionBucket, new BucketSnapshot(6L, 60L, "oss://test/partition-cp6"));
 
         assertThat(zookeeperClient.getPartitionLatestBucketSnapshot(partitionId))
                 .containsEntry(partitionBucket.getBucket(), Optional.of(partitionSnapshot));
@@ -878,8 +903,18 @@ class ZooKeeperClientTest {
         zookeeperClient.registerTableAssignment(tableId, assignmentBuilder.build());
 
         for (Map.Entry<Integer, Optional<BucketSnapshot>> entry : expectedSnapshots.entrySet()) {
+            TableBucket bucket = new TableBucket(tableId, entry.getKey());
+            BucketSnapshot selected = entry.getValue().get();
+            zookeeperClient.registerTableBucketSnapshot(bucket, selected);
+            zookeeperClient
+                    .getCuratorClient()
+                    .create()
+                    .forPath(
+                            ZkData.RecoverySnapshotZNode.path(bucket),
+                            ZkData.RecoverySnapshotZNode.encode(selected.getSnapshotId()));
             zookeeperClient.registerTableBucketSnapshot(
-                    new TableBucket(tableId, entry.getKey()), entry.getValue().get());
+                    bucket,
+                    new BucketSnapshot(2L, selected.getLogOffset() + 1, "oss://test/newer"));
         }
 
         assertThat(zookeeperClient.getTableLatestBucketSnapshot(tableId))
@@ -900,18 +935,131 @@ class ZooKeeperClientTest {
         zookeeperClient.registerTableBucketSnapshot(tableBucket, olderSnapshot);
         zookeeperClient.registerTableBucketSnapshot(tableBucket, latestSnapshot);
 
-        ZooKeeperClient raceTestingClient = spy(zookeeperClient);
-        doAnswer(
-                        invocation -> {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        ZooKeeperClient raceTestingClient =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
+                    @Override
+                    List<ZkGetDataResponse> getDataInBackground(Collection<String> paths)
+                            throws Exception {
+                        if (paths.contains(
+                                BucketSnapshotIdZNode.path(
+                                        tableBucket, latestSnapshot.getSnapshotId()))) {
                             zookeeperClient.deleteTableBucketSnapshot(
                                     tableBucket, latestSnapshot.getSnapshotId());
-                            return invocation.callRealMethod();
-                        })
-                .when(raceTestingClient)
-                .getDataInBackground(anyCollection());
+                        }
+                        return super.getDataInBackground(paths);
+                    }
+                };
 
         assertThat(raceTestingClient.getTableLatestBucketSnapshot(tableId))
                 .containsEntry(tableBucket.getBucket(), Optional.empty());
+    }
+
+    @Test
+    void testMissingRecoverySnapshotDoesNotFallBack() throws Exception {
+        TableBucket bucket = new TableBucket(1L, 0);
+        zookeeperClient.registerTableAssignment(
+                1L, TableAssignment.builder().add(0, BucketAssignment.of(0)).build());
+        zookeeperClient.registerTableBucketSnapshot(
+                bucket, new BucketSnapshot(1L, 10L, "file:/snapshot-1"));
+        zookeeperClient
+                .getCuratorClient()
+                .create()
+                .forPath(
+                        ZkData.RecoverySnapshotZNode.path(bucket),
+                        ZkData.RecoverySnapshotZNode.encode(2L));
+        assertThatThrownBy(() -> zookeeperClient.getTableBucketLatestSnapshot(bucket))
+                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> zookeeperClient.getTableLatestBucketSnapshot(1L))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void testRecoverySnapshotCas() throws Exception {
+        TableBucket bucket = new TableBucket(1L, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                bucket, new LeaderAndIsr(0, 0), zkEpoch.getCoordinatorEpochZkVersion());
+        BucketSnapshot initial = new BucketSnapshot(4L, 30L, "file:/snapshot-4");
+        zookeeperClient.registerTableBucketSnapshot(bucket, initial);
+        zookeeperClient.updateRecoverySnapshot(bucket, 4L, -1L, 0);
+        BucketSnapshot next = new BucketSnapshot(5L, 30L, "file:/snapshot-5");
+        zookeeperClient.registerTableBucketSnapshot(bucket, next);
+        zookeeperClient.updateRecoverySnapshot(bucket, 5L, 4L, 0);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
+        BucketSnapshot rejected = new BucketSnapshot(7L, 50L, "file:/snapshot-7");
+        zookeeperClient.registerTableBucketSnapshot(bucket, rejected);
+        assertThatThrownBy(() -> zookeeperClient.updateRecoverySnapshot(bucket, 7L, 4L, 0))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 7L)).contains(rejected);
+        BucketSnapshot winner = new BucketSnapshot(6L, 40L, "file:/snapshot-6");
+        zookeeperClient.registerTableBucketSnapshot(bucket, winner);
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        ZooKeeperClient raced =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
+                    @Override
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket requested) throws Exception {
+                        Optional<VersionedData<Long>> captured =
+                                super.getRecoverySnapshotSelection(requested);
+                        zookeeperClient.updateRecoverySnapshot(bucket, 6L, 5L, 0);
+                        return captured;
+                    }
+                };
+        assertThatThrownBy(() -> raced.updateRecoverySnapshot(bucket, 7L, 5L, 0))
+                .isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
+        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 0);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(rejected);
+    }
+
+    @Test
+    void testOldLeaderCommitCannotInvalidateNewRecoveryContext() throws Exception {
+        TableBucket bucket = new TableBucket(1L, 0);
+        LeaderAndIsr initial =
+                new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
+        zookeeperClient.registerLeaderAndIsr(
+                bucket, initial, zkEpoch.getCoordinatorEpochZkVersion());
+        registerRecoverySnapshot(
+                zookeeperClient, bucket, new BucketSnapshot(4L, 30L, "file:/snapshot-4"));
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        ZooKeeperClient delayed =
+                new ZooKeeperClient(
+                        new CuratorFrameworkWithUnhandledErrorListener(
+                                zookeeperClient.getCuratorClient(), (message, error) -> {}),
+                        configuration) {
+                    @Override
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket requested) throws Exception {
+                        if (requested.equals(bucket)) {
+                            zookeeperClient.updateLeaderAndIsr(
+                                    bucket,
+                                    initial.newLeaderAndIsr(
+                                            2,
+                                            Collections.singletonList(2),
+                                            Collections.emptyList()),
+                                    zkEpoch.getCoordinatorEpochZkVersion());
+                        }
+                        return super.getRecoverySnapshotSelection(requested);
+                    }
+                };
+        zookeeperClient.registerTableBucketSnapshot(
+                bucket, new BucketSnapshot(5L, 40L, "file:/snapshot-5"));
+        Throwable failure = catchThrowable(() -> delayed.updateRecoverySnapshot(bucket, 5L, 4L, 0));
+        BucketSnapshot next = new BucketSnapshot(6L, 50L, "file:/snapshot-6");
+        zookeeperClient.registerTableBucketSnapshot(bucket, next);
+        zookeeperClient.updateRecoverySnapshot(bucket, 6L, 4L, 1);
+        assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
+        assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 5L)).isPresent();
     }
 
     @Test

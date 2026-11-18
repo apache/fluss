@@ -806,6 +806,15 @@ public class ConfigOptions {
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
 
+    public static final ConfigOption<String> TABLET_SERVER_SOFTWARE_VERSION =
+            key("tablet-server.software-version")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The software version this tablet server reports in Admin.describeCluster(). "
+                                    + "If unset or blank, the server uses the Implementation-Version "
+                                    + "from its JAR manifest. If neither is available, the version is omitted.");
+
     public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
             key("tablet-server.advertised-resource.cpu-cores")
                     .doubleType()

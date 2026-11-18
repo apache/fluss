@@ -19,6 +19,8 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +29,9 @@ import java.util.Optional;
  * Zookeeper, Kubernetes, etc.).
  */
 public interface CompletedSnapshotHandleStore {
+
+    /** Returns the explicitly selected source, or empty for legacy recovery. */
+    Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) throws Exception;
 
     /**
      * Persist the snapshot handle to coordination system(e.g. Zookeeper, Kubernetes, etc.).
@@ -40,6 +45,14 @@ public interface CompletedSnapshotHandleStore {
             TableBucket tableBucket,
             long snapshotId,
             CompletedSnapshotHandle completedSnapshotHandle)
+            throws Exception;
+
+    /** Advances recovery selection independently of ordinary reference registration. */
+    void updateRecoverySnapshot(
+            TableBucket bucket,
+            long snapshotId,
+            @Nullable Long previousSnapshotId,
+            int expectedLeaderEpoch)
             throws Exception;
 
     /**
