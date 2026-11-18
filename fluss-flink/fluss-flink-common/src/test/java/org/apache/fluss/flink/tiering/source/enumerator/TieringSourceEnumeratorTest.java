@@ -146,8 +146,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                         new KvSnapshots(
                                 tableId,
                                 partitionId,
-                                Collections.singletonMap(2, 1L),
-                                Collections.singletonMap(2, 6L)));
+                                Collections.emptyMap(),
+                                Collections.emptyMap()));
         AtomicInteger kvSnapshotRequests = new AtomicInteger();
         Admin tieringAdmin =
                 new TestAdminAdapter() {
@@ -190,7 +190,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         TieringSplitGenerator generator = new TieringSplitGenerator(tieringAdmin);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions)).isEmpty();
-        assertThat(kvSnapshotRequests).hasValue(0);
+        int emptyTableRequests = historicalPartition ? 0 : 1;
+        assertThat(kvSnapshotRequests).hasValue(emptyTableRequests);
 
         TableBucket bucket0 = new TableBucket(tableId, partitionId, 0);
         TableBucket bucket1 = new TableBucket(tableId, partitionId, 1);
@@ -205,8 +206,14 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 new TieringLogSplit(DEFAULT_TABLE_PATH, bucket0, partitionName, 0, 10, 0);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions)).containsExactly(logSplit);
-        assertThat(kvSnapshotRequests).hasValue(0);
+        assertThat(kvSnapshotRequests).hasValue(emptyTableRequests);
 
+        kvSnapshots.set(
+                new KvSnapshots(
+                        tableId,
+                        partitionId,
+                        Collections.singletonMap(2, 1L),
+                        Collections.singletonMap(2, 6L)));
         committedOffsets.remove(bucket1);
         committedOffsets.remove(bucket2);
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
@@ -224,14 +231,14 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
         assertThat(generator.generateTableSplits(tableInfo, partitions))
                 .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
-        assertThat(kvSnapshotRequests).hasValue(historicalPartition ? 0 : 1);
+        assertThat(kvSnapshotRequests).hasValue(emptyTableRequests * 2);
         if (!historicalPartition) {
             kvSnapshots.set(
                     new KvSnapshots(
                             tableId, partitionId, Collections.emptyMap(), Collections.emptyMap()));
             assertThat(generator.generateTableSplits(tableInfo, partitions))
                     .containsExactly(logSplit, bucket1LogSplit, bucket2LogSplit);
-            assertThat(kvSnapshotRequests).hasValue(2);
+            assertThat(kvSnapshotRequests).hasValue(3);
 
             kvSnapshots.set(null);
             assertThatThrownBy(() -> generator.generateTableSplits(tableInfo, partitions))

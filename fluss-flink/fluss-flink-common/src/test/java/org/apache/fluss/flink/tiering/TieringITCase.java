@@ -21,18 +21,30 @@ package org.apache.fluss.flink.tiering;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -48,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -161,6 +174,79 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                             - localBytesOutBefore;
             assertThat(localBytesOut).isEqualTo(localTailBytes);
         }
+    }
+
+    @Test
+    void testTiersInitialSnapshotWithoutWal() throws Exception {
+        TablePath source = TablePath.of("fluss", "zero_wal_snapshot_input");
+        TablePath target = TablePath.of("fluss", "zero_wal_tiering_target");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        long sourceId =
+                createTable(
+                        source,
+                        TableDescriptor.builder().schema(schema).distributedBy(1, "a").build());
+        long targetId = createTable(target, schema);
+        TableBucket bucket = new TableBucket(targetId, 0);
+        List<InternalRow> importedRows = createRows(0, 2);
+        writeRows(source, importedRows, false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(source);
+
+        publishInitialSnapshot(new TableBucket(sourceId, 0), target, bucket);
+        assertThat(getLeaderReplica(bucket).getLogTablet().localLogEndOffset()).isZero();
+
+        try (TieringJobScope ignored = startTieringJob(execEnv)) {
+            assertReplicaStatus(bucket, 0);
+            assertThat(admin.getLatestLakeSnapshot(target).get().getTableBucketsOffset())
+                    .containsEntry(bucket, 0L);
+            assertRows(target, importedRows);
+
+            List<InternalRow> laterRows = createRows(2, 1);
+            writeRows(target, laterRows, false);
+            assertReplicaStatus(bucket, 1);
+            importedRows.addAll(laterRows);
+            assertRows(target, importedRows);
+        }
+    }
+
+    private static void publishInitialSnapshot(
+            TableBucket source, TablePath target, TableBucket bucket) throws Exception {
+        ZooKeeperClient zk = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        CompletedSnapshot input =
+                zk.getTableBucketLatestSnapshot(source)
+                        .orElseThrow(AssertionError::new)
+                        .toCompletedSnapshotHandle()
+                        .retrieveCompleteSnapshot();
+        FsPath bucketDir =
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(FLUSS_CLUSTER_EXTENSION.getRemoteDataDir()),
+                        PhysicalTablePath.of(target),
+                        bucket);
+        long snapshotId =
+                new ZkSequenceIDCounter(
+                                zk.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                        .getAndIncrement();
+        CompletedSnapshot initial =
+                new CompletedSnapshot(
+                        bucket,
+                        snapshotId,
+                        FlussPaths.remoteKvSnapshotDir(bucketDir, snapshotId),
+                        input.getKvSnapshotHandle(),
+                        0,
+                        input.getRowCount(),
+                        input.getAutoIncIDRanges());
+        FsPath metadata = initial.getMetadataFilePath();
+        try (FSDataOutputStream output =
+                metadata.getFileSystem().create(metadata, FileSystem.WriteMode.NO_OVERWRITE)) {
+            output.write(CompletedSnapshotJsonSerde.toJson(initial));
+        }
+        registerRecoverySnapshot(
+                zk, bucket, new BucketSnapshot(snapshotId, 0, metadata.toString()));
     }
 
     private List<InternalRow> createRows(int start, int count) {
