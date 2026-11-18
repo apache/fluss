@@ -22,6 +22,7 @@ use core::fmt;
 use std::collections::HashMap;
 
 mod arrow;
+mod arrow_file;
 mod error;
 pub mod kv;
 mod log_record_batch;

@@ -31,6 +31,7 @@ use arrow::array::RecordBatch;
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
 use crc32c::crc32c;
+use parking_lot::Mutex;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -267,6 +268,8 @@ struct FileSource {
     file_size: usize,
     base_offset: usize,
     _cleanup: Option<FileCleanupGuard>, // Drops AFTER file (field order matters!)
+    #[cfg(test)]
+    bytes_read: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FileSource {
@@ -289,6 +292,8 @@ impl FileSource {
             file_size,
             base_offset,
             _cleanup: Some(FileCleanupGuard { file_path }),
+            #[cfg(test)]
+            bytes_read: Arc::default(),
         })
     }
 
@@ -297,6 +302,9 @@ impl FileSource {
     fn read_at(&mut self, pos: u64, buf: &mut [u8]) -> Result<()> {
         self.file.seek(SeekFrom::Start(pos))?;
         self.file.read_exact(buf)?;
+        #[cfg(test)]
+        self.bytes_read
+            .fetch_add(buf.len(), std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
@@ -337,7 +345,6 @@ impl FileSource {
             });
         }
 
-        // Read the full batch data
         let mut batch_buf = vec![0u8; size];
         self.read_at(actual_pos as u64, &mut batch_buf)?;
 
@@ -352,28 +359,28 @@ impl FileSource {
 /// Enum for different log record sources.
 enum LogRecordsSource {
     Memory(MemorySource),
-    File(FileSource),
+    File(Arc<Mutex<FileSource>>),
 }
 
 impl LogRecordsSource {
     fn read_batch_header(&mut self, pos: usize) -> Result<(i64, usize)> {
         match self {
             Self::Memory(s) => s.read_batch_header(pos),
-            Self::File(s) => s.read_batch_header(pos),
+            Self::File(s) => s.lock().read_batch_header(pos),
         }
     }
 
     fn read_batch_data(&mut self, pos: usize, size: usize) -> Result<Bytes> {
         match self {
             Self::Memory(s) => s.read_batch_data(pos, size),
-            Self::File(s) => s.read_batch_data(pos, size),
+            Self::File(s) => s.lock().read_batch_data(pos, size),
         }
     }
 
     fn total_size(&self) -> usize {
         match self {
             Self::Memory(s) => s.total_size(),
-            Self::File(s) => s.total_size(),
+            Self::File(s) => s.lock().total_size(),
         }
     }
 }
@@ -405,10 +412,56 @@ impl LogRecordsBatches {
         let source = FileSource::new(file, base_offset, file_path)?;
         let remaining_bytes = source.total_size();
         Ok(Self {
-            source: LogRecordsSource::File(source),
+            source: LogRecordsSource::File(Arc::new(Mutex::new(source))),
             current_pos: 0,
             remaining_bytes,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn file_bytes_read(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        let LogRecordsSource::File(source) = &self.source else {
+            panic!("expected file source")
+        };
+        Arc::clone(&source.lock().bytes_read)
+    }
+
+    /// Delay file body reads until the source schema is resolved when CRC is disabled.
+    pub(crate) fn next_for_scan(&mut self, check_crc: bool) -> Option<Result<LogRecordBatch>> {
+        if check_crc || matches!(self.source, LogRecordsSource::Memory(_)) {
+            return self.next();
+        }
+        let size = match self.next_batch_size() {
+            Ok(Some(size)) => size,
+            Ok(None) => return None,
+            Err(error) => return Some(Err(error)),
+        };
+        let LogRecordsSource::File(source) = &self.source else {
+            unreachable!()
+        };
+        let result = (|| {
+            let mut file = source.lock();
+            let prefix = file.read_batch_data(self.current_pos, size.min(MAGIC_OFFSET + 1))?;
+            let header_size = if prefix.len() > MAGIC_OFFSET {
+                record_batch_header_size(prefix[MAGIC_OFFSET])?.min(size)
+            } else {
+                prefix.len()
+            };
+            let data = file.read_batch_data(self.current_pos, header_size)?;
+            Ok(LogRecordBatch {
+                data,
+                file: Some(FileBatch {
+                    source: Arc::clone(source),
+                    position: self.current_pos,
+                    size,
+                }),
+            })
+        })();
+        if result.is_ok() {
+            self.current_pos += size;
+            self.remaining_bytes -= size;
+        }
+        Some(result)
     }
 
     /// Try to get the size of the next batch.
@@ -454,14 +507,22 @@ impl Iterator for LogRecordsBatches {
     }
 }
 
+struct FileBatch {
+    source: Arc<Mutex<FileSource>>,
+    position: usize,
+    size: usize,
+}
+
 pub struct LogRecordBatch {
+    // File-backed batches retain only the fixed header until decoded.
     data: Bytes,
+    file: Option<FileBatch>,
 }
 
 #[allow(dead_code)]
 impl LogRecordBatch {
     pub fn new(data: Bytes) -> Self {
-        LogRecordBatch { data }
+        LogRecordBatch { data, file: None }
     }
 
     pub fn magic(&self) -> u8 {
@@ -508,6 +569,13 @@ impl LogRecordBatch {
     /// Fails when the batch is shorter than its header or its CRC doesn't match its
     /// content, like Java `DefaultLogRecordBatch.ensureValid`.
     pub fn ensure_valid(&self) -> Result<()> {
+        if let Some(file) = &self.file {
+            let data = file
+                .source
+                .lock()
+                .read_batch_data(file.position, file.size)?;
+            return Self::new(data).ensure_valid();
+        }
         let header_size = self.ensure_header_complete()?;
         let size_in_bytes = self.size_in_bytes();
         if size_in_bytes < header_size {
@@ -639,60 +707,66 @@ impl LogRecordBatch {
         Ok(header_size + statistics_length as usize)
     }
 
-    /// Splits the batch body into its per-record change types and the trailing
-    /// Arrow IPC payload (see [`APPEND_ONLY_FLAG_MASK`] for the layout).
-    fn decode_change_types(&self) -> Result<(BatchChangeTypes, Bytes)> {
+    /// Reads change types before the Arrow payload, including for batch consumers
+    /// that discard them. Statistics do not need to be loaded to locate either.
+    fn read_records_data(&self, context: &ReadContext) -> Result<(BatchChangeTypes, Bytes)> {
         let records_offset = self.records_data_offset()?;
-        let body = self
-            .data
-            .get(records_offset..)
-            .ok_or_else(|| Error::UnexpectedError {
-                message: format!(
-                    "Corrupt log record batch: data length {} is less than the records offset {records_offset}",
-                    self.data.len(),
-                ),
-                source: None,
-            })?;
-
-        let record_count = self.record_count();
-        if record_count < 0 {
-            return Err(Error::UnexpectedError {
-                message: format!("Corrupt log record batch: negative record count {record_count}"),
-                source: None,
-            });
-        }
-
-        if self.is_append_only() {
-            return Ok((
+        let size = self.file.as_ref().map_or(self.data.len(), |file| file.size);
+        let body_len = size.checked_sub(records_offset).ok_or_else(|| Error::UnexpectedError {
+            message: format!("Corrupt log record batch: data length {size} is less than the records offset {records_offset}"),
+            source: None,
+        })?;
+        let count = self.record_count();
+        let count = usize::try_from(count).map_err(|_| Error::UnexpectedError {
+            message: format!("Corrupt log record batch: negative record count {count}"),
+            source: None,
+        })?;
+        let read_range = |offset: usize, length: usize| -> Result<Bytes> {
+            match &self.file {
+                Some(file) => file
+                    .source
+                    .lock()
+                    .read_batch_data(file.position + offset, length),
+                None => Ok(self.data.slice(offset..offset + length)),
+            }
+        };
+        let (change_types, arrow_offset) = if self.is_append_only() {
+            (
                 BatchChangeTypes::Uniform(ChangeType::AppendOnly),
-                self.data.slice(records_offset..),
-            ));
-        }
-
-        let record_count = record_count as usize;
-        let (change_type_bytes, _) =
-            body.split_at_checked(record_count)
-                .ok_or_else(|| Error::UnexpectedError {
+                records_offset,
+            )
+        } else {
+            if count > body_len {
+                return Err(Error::UnexpectedError {
                     message: format!(
-                        "Corrupt changelog batch: body length {} is smaller than its \
-                         {record_count}-record change-type vector",
-                        body.len()
+                        "Corrupt changelog batch: body length {body_len} is smaller than its {count}-record change-type vector"
                     ),
                     source: None,
-                })?;
-        let arrow_data = self.data.slice(records_offset + record_count..);
-
-        let mut change_types = Vec::with_capacity(record_count);
-        for &byte in change_type_bytes {
-            let change_type =
-                ChangeType::from_byte_value(byte).map_err(|message| Error::UnexpectedError {
-                    message,
-                    source: None,
-                })?;
-            change_types.push(change_type);
+                });
+            }
+            let bytes = read_range(records_offset, count)?;
+            let changes = bytes
+                .iter()
+                .map(|&byte| {
+                    ChangeType::from_byte_value(byte).map_err(|message| Error::UnexpectedError {
+                        message,
+                        source: None,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            (BatchChangeTypes::PerRecord(changes), records_offset + count)
+        };
+        let arrow_len = size - arrow_offset;
+        if let Some(file) = &self.file {
+            let mut source = file.source.lock();
+            let start = source.base_offset + file.position + arrow_offset;
+            if let Some(data) = context.read_projected_ipc(arrow_len, |offset, buffer| {
+                source.read_at((start + offset) as u64, buffer)
+            })? {
+                return Ok((change_types, data));
+            }
         }
-
-        Ok((BatchChangeTypes::PerRecord(change_types), arrow_data))
+        Ok((change_types, read_range(arrow_offset, arrow_len)?))
     }
 
     fn ensure_record_count(&self, arrow_row_count: usize) -> Result<()> {
@@ -716,7 +790,7 @@ impl LogRecordBatch {
             return Ok(LogRecordIterator::empty());
         }
 
-        let (change_types, arrow_data) = self.decode_change_types()?;
+        let (change_types, arrow_data) = self.read_records_data(read_context)?;
         let record_batch = read_context.record_batch(arrow_data)?;
         self.ensure_record_count(record_batch.num_rows())?;
         let arrow_reader = ArrowReader::new_with_fluss_row_type(
@@ -745,7 +819,7 @@ impl LogRecordBatch {
         }
 
         // Batch access drops the change-type vector; use `records()` for CDC.
-        let (_, arrow_data) = self.decode_change_types()?;
+        let (_, arrow_data) = self.read_records_data(read_context)?;
         let record_batch = read_context.record_batch(arrow_data)?;
         self.ensure_record_count(record_batch.num_rows())?;
         Ok(record_batch)
@@ -809,6 +883,63 @@ mod tests {
         build_append_only_batch, build_table_info, splice_change_type_vector,
         splice_statistics_section, uncompressed_arrow_batch_config, update_crc,
     };
+    fn lazy_file_batch(data: &[u8]) -> Result<LogRecordBatch> {
+        let mut temporary = tempfile::NamedTempFile::new()?;
+        temporary.write_all(&[0xFF; 7])?;
+        temporary.write_all(data)?;
+        let (file, path) = temporary.keep().map_err(|e| e.error)?;
+        let mut batches = LogRecordsBatches::from_file(file, 7, path.clone())?;
+        let batch = batches.next_for_scan(false).unwrap()?;
+        drop(batches);
+        assert!(path.exists(), "pending batch must retain the file");
+        Ok(batch)
+    }
+
+    #[test]
+    fn projected_changelog_file_skips_statistics_and_checks_change_types_first() -> Result<()> {
+        let (row_type, data) = build_append_only_batch(&[(1, "a"), (2, "b")]);
+        let context = ReadContext::with_projection_pushdown(
+            to_arrow_schema(&row_type)?,
+            Arc::new(row_type.project(&[0])?),
+            vec![0],
+            true,
+        )?;
+        let changes = [ChangeType::UpdateBefore, ChangeType::UpdateAfter];
+        let stats = vec![0; 65536];
+        let mut data =
+            splice_statistics_section(&splice_change_type_vector(&data, &changes), &stats);
+        let batch = lazy_file_batch(&data)?;
+        let records: Vec<_> = batch.records(&context)?.collect();
+        assert_eq!(
+            records.iter().map(|r| *r.change_type()).collect::<Vec<_>>(),
+            changes
+        );
+        assert_eq!(batch.record_batch(&context)?.num_rows(), 2);
+        let source = batch.file.as_ref().unwrap().source.lock();
+        assert!(source.bytes_read.load(std::sync::atomic::Ordering::Relaxed) < stats.len());
+        drop(source);
+
+        let offset = V1_RECORD_BATCH_HEADER_SIZE + stats.len();
+        data[offset..].fill(99);
+        let batch = lazy_file_batch(&data)?;
+        assert!(
+            batch
+                .records(&context)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("change type")
+        );
+        assert!(
+            batch
+                .record_batch(&context)
+                .unwrap_err()
+                .to_string()
+                .contains("change type")
+        );
+        Ok(())
+    }
+
     #[test]
     fn rejects_invalid_arrow_record_counts() -> Result<()> {
         let (row_type, data) = build_append_only_batch(&[(1, "a"), (2, "b")]);
@@ -849,23 +980,25 @@ mod tests {
                 let v1 = splice_statistics_section(&bytes, &[0xAB; 8]);
                 let v2 = splice_leader_epoch(&v1, 7);
                 for bytes in [bytes, v1, v2] {
-                    let batch = LogRecordBatch::new(Bytes::from(bytes));
-                    assert!(batch.is_valid(), "the checksum must not cause the failure");
-                    for context in &contexts {
-                        if count == 2 {
-                            assert_eq!(batch.records(context)?.count(), 2);
-                            assert_eq!(batch.record_batch(context)?.num_rows(), 2);
-                            continue;
-                        }
-                        let row_error = batch.records(context).err();
-                        let batch_error = batch.record_batch(context).err();
-                        assert!(
-                            row_error.is_some() && batch_error.is_some(),
-                            "count={count}, changelog={changelog}, magic={}: row={row_error:?}, batch={batch_error:?}",
-                            batch.magic()
-                        );
-                        for error in [row_error.unwrap(), batch_error.unwrap()] {
-                            assert!(error.to_string().contains("record count"), "{error}");
+                    let file_batch = lazy_file_batch(&bytes)?;
+                    for batch in [LogRecordBatch::new(Bytes::from(bytes)), file_batch] {
+                        assert!(batch.is_valid(), "the checksum must not cause the failure");
+                        for context in &contexts {
+                            if count == 2 {
+                                assert_eq!(batch.records(context)?.count(), 2);
+                                assert_eq!(batch.record_batch(context)?.num_rows(), 2);
+                                continue;
+                            }
+                            let row_error = batch.records(context).err();
+                            let batch_error = batch.record_batch(context).err();
+                            assert!(
+                                row_error.is_some() && batch_error.is_some(),
+                                "count={count}, changelog={changelog}, magic={}: row={row_error:?}, batch={batch_error:?}",
+                                batch.magic()
+                            );
+                            for error in [row_error.unwrap(), batch_error.unwrap()] {
+                                assert!(error.to_string().contains("record count"), "{error}");
+                            }
                         }
                     }
                 }
@@ -890,13 +1023,15 @@ mod tests {
             let v1 = splice_statistics_section(&bytes, &[]);
             let v2 = splice_leader_epoch(&v1, 7);
             for bytes in [bytes.clone(), v1, v2] {
-                let batch = LogRecordBatch::new(Bytes::from(bytes));
-                assert!(batch.is_valid());
-                assert_eq!(batch.next_log_offset(), 1);
-                assert_eq!(batch.records(&context)?.count(), 0);
-                let decoded = batch.record_batch(&context)?;
-                assert_eq!(decoded.num_rows(), 0);
-                assert_eq!(decoded.schema(), context.target_schema());
+                let file_batch = lazy_file_batch(&bytes)?;
+                for batch in [LogRecordBatch::new(Bytes::from(bytes)), file_batch] {
+                    assert!(batch.is_valid());
+                    assert_eq!(batch.next_log_offset(), 1);
+                    assert_eq!(batch.records(&context)?.count(), 0);
+                    let decoded = batch.record_batch(&context)?;
+                    assert_eq!(decoded.num_rows(), 0);
+                    assert_eq!(decoded.schema(), context.target_schema());
+                }
             }
         }
         Ok(())

@@ -1235,6 +1235,7 @@ pub struct ReadContext {
 
 #[derive(Clone)]
 struct DecodePlan {
+    file_read_plan: Option<super::arrow_file::FileReadPlan>,
     schema: SchemaRef,
     columns: Option<Vec<usize>>,
     alignment: Option<Arc<[i32]>>,
@@ -1259,6 +1260,7 @@ impl ReadContext {
             projection: None,
             fluss_row_type: None,
             decode_plan: DecodePlan {
+                file_read_plan: None,
                 schema: arrow_schema,
                 columns: None,
                 alignment: None,
@@ -1358,6 +1360,10 @@ impl ReadContext {
         };
         self.target_schema = target_schema;
         self.decode_plan.alignment = Some(schema_alignment);
+        self.decode_plan.file_read_plan = super::arrow_file::FileReadPlan::new(
+            &self.decode_plan.schema,
+            self.decode_plan.columns.as_deref(),
+        );
         self
     }
 
@@ -1410,6 +1416,7 @@ impl ReadContext {
             }),
             fluss_row_type: None,
             decode_plan: DecodePlan {
+                file_read_plan: super::arrow_file::FileReadPlan::new(&schema, columns.as_deref()),
                 schema,
                 columns,
                 alignment,
@@ -1449,6 +1456,18 @@ impl ReadContext {
         self.projection
             .as_ref()
             .map(|p| p.ordered_fields.as_slice())
+    }
+
+    pub(crate) fn read_projected_ipc(
+        &self,
+        length: usize,
+        read: impl FnMut(usize, &mut [u8]) -> Result<()>,
+    ) -> Result<Option<Bytes>> {
+        self.decode_plan
+            .file_read_plan
+            .as_ref()
+            .map(|plan| plan.read(length, read))
+            .transpose()
     }
 
     pub(crate) fn record_batch(&self, data: Bytes) -> Result<RecordBatch> {
@@ -2367,6 +2386,116 @@ mod tests {
     }
 
     #[test]
+    fn file_projection_rejects_invalid_metadata_before_reading_buffers() -> Result<()> {
+        let row_type = RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("unused", DataTypes::int(), None),
+        ]);
+        let schema = to_arrow_schema(&row_type)?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1])),
+                Arc::new(arrow::array::Int32Array::from(vec![2])),
+            ],
+        )?;
+        let data = encode_projection_batch(&batch, None)?;
+        let context = ReadContext::with_projection_pushdown(
+            schema,
+            Arc::new(row_type.project(&[0])?),
+            vec![0],
+            true,
+        )?;
+        let metadata_size = LittleEndian::read_u32(&data[4..8]) as usize;
+        let message = root_as_message(&data[8..8 + metadata_size]).unwrap();
+        let metadata = message.header_as_record_batch().unwrap();
+        let buffers = metadata.buffers().unwrap();
+        let buffers_offset = buffers.bytes().as_ptr() as usize - data.as_ptr() as usize;
+        let nodes_offset =
+            metadata.nodes().unwrap().bytes().as_ptr() as usize - data.as_ptr() as usize;
+        let mut cases = vec![data[..7].to_vec(), data[..data.len() - 1].to_vec()];
+        for (offset, value) in [
+            (4, u32::MAX),
+            (buffers_offset - 4, 0),
+            (nodes_offset - 4, 0),
+        ] {
+            let mut invalid = data.to_vec();
+            LittleEndian::write_u32(&mut invalid[offset..offset + 4], value);
+            cases.push(invalid);
+        }
+        // Both selected and skipped buffer descriptors must stay inside this batch.
+        for index in [1, 3] {
+            for (offset, size) in [(-1, 4), (0, -1), (i64::MAX, 4), (0, i64::MAX)] {
+                let mut invalid = data.to_vec();
+                let descriptor = arrow::ipc::Buffer::new(offset, size);
+                let start = buffers_offset + index * 16;
+                invalid[start..start + 16].copy_from_slice(&descriptor.0);
+                cases.push(invalid);
+            }
+        }
+        for invalid in cases {
+            let result = context.read_projected_ipc(invalid.len(), |offset, buffer| {
+                assert!(offset + buffer.len() <= invalid.len());
+                assert!(
+                    offset + buffer.len() <= 8 + metadata_size,
+                    "invalid metadata must not read the body"
+                );
+                buffer.copy_from_slice(&invalid[offset..offset + buffer.len()]);
+                Ok(())
+            });
+            assert!(result.is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_projection_reads_only_selected_buffers() -> Result<()> {
+        let row_type = Arc::new(RowType::new(vec![
+            DataField::new("id", DataTypes::int(), None),
+            DataField::new("payload", DataTypes::string(), None),
+        ]));
+        let schema = to_arrow_schema(&row_type)?;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2])),
+                Arc::new(arrow::array::StringArray::from(vec!["x".repeat(65536); 2])),
+            ],
+        )?;
+        let data = encode_projection_batch(&batch, None)?;
+        let context = ReadContext::with_projection_pushdown(
+            schema,
+            Arc::new(row_type.project(&[0])?),
+            vec![0],
+            true,
+        )?;
+        let mut bytes_read = 0;
+        let selected = context
+            .read_projected_ipc(data.len(), |offset, buffer| {
+                bytes_read += buffer.len();
+                buffer.copy_from_slice(&data[offset..offset + buffer.len()]);
+                Ok(())
+            })?
+            .unwrap();
+        assert_eq!(
+            context.record_batch(selected.clone())?,
+            batch.project(&[0])?
+        );
+        eprintln!(
+            "projected IPC: {bytes_read}/{} bytes read, {} bytes retained",
+            data.len(),
+            selected.len()
+        );
+        assert!(
+            bytes_read < data.len() / 10,
+            "read {bytes_read} of {} bytes",
+            data.len()
+        );
+        assert!(selected.len() < data.len() / 10);
+        Ok(())
+    }
+
+    #[test]
     fn remote_decode_projection_preserves_columns_and_rows() -> Result<()> {
         let row_type = Arc::new(RowType::new(vec![
             DataField::new("id", DataTypes::int(), None),
@@ -2427,6 +2556,17 @@ mod tests {
                     )?;
                     let expected = batch.project(&fields)?;
                     assert_eq!(context.record_batch(data.clone())?, expected);
+                    let selected = context.read_projected_ipc(data.len(), |offset, buffer| {
+                        buffer.copy_from_slice(&data[offset..offset + buffer.len()]);
+                        Ok(())
+                    })?;
+                    assert_eq!(
+                        selected.is_some(),
+                        (0..schema.fields().len()).any(|index| !fields.contains(&index))
+                    );
+                    if let Some(selected) = selected {
+                        assert_eq!(context.record_batch(selected)?, expected);
+                    }
                     let mut ordered = fields.clone();
                     ordered.sort_unstable();
                     // Duplicate columns are rejected by TabletServer, not by this decoder.
