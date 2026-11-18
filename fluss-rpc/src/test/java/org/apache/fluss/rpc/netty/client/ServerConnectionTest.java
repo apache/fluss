@@ -41,6 +41,7 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
@@ -78,6 +79,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_BYTES_IN_RATE_TOTAL;
@@ -352,6 +354,42 @@ public class ServerConnectionTest {
 
     @Test
     void testRejectOrderedPointAccessForOldServer() throws Exception {
+        AtomicInteger puts = new AtomicInteger();
+        AtomicInteger lookups = new AtomicInteger();
+        nettyServer.close();
+        buildNettyServer(
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return super.apiVersions(request)
+                                .thenApply(
+                                        response -> {
+                                            for (PbApiVersion version :
+                                                    response.getApiVersionsList()) {
+                                                if (version.getApiKey() == ApiKeys.PUT_KV.id) {
+                                                    version.setMaxVersion(3);
+                                                } else if (version.getApiKey()
+                                                        == ApiKeys.LOOKUP.id) {
+                                                    version.setMaxVersion(1);
+                                                }
+                                            }
+                                            return response;
+                                        });
+                    }
+
+                    @Override
+                    public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                        puts.incrementAndGet();
+                        return CompletableFuture.completedFuture(new PutKvResponse());
+                    }
+
+                    @Override
+                    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+                        lookups.incrementAndGet();
+                        return CompletableFuture.completedFuture(new LookupResponse());
+                    }
+                });
         ServerConnection connection =
                 new ServerConnection(
                         bootstrap,
@@ -360,24 +398,32 @@ public class ServerConnectionTest {
                         clientAuthenticator,
                         (con, ignore) -> {});
         try {
-            PutKvRequest put = new PutKvRequest();
-            LookupRequest lookup = new LookupRequest();
-            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 3, put);
-            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 1, lookup);
-            put.setOrderedKeys(true);
-            lookup.setOrderedKeys(true);
+            assertThat(connection.send(ApiKeys.PUT_KV, putKvRequest(null)).get())
+                    .isInstanceOf(PutKvResponse.class);
+            assertThat(connection.send(ApiKeys.LOOKUP, new LookupRequest().setTableId(1L)).get())
+                    .isInstanceOf(LookupResponse.class);
             assertThatThrownBy(
                             () ->
-                                    connection.validateVersionCompatibility(
-                                            ApiKeys.PUT_KV, (short) 3, put))
+                                    connection
+                                            .send(
+                                                    ApiKeys.PUT_KV,
+                                                    putKvRequest(null).setOrderedKeys(true))
+                                            .get())
+                    .rootCause()
                     .isInstanceOf(UnsupportedVersionException.class);
             assertThatThrownBy(
                             () ->
-                                    connection.validateVersionCompatibility(
-                                            ApiKeys.LOOKUP, (short) 1, lookup))
+                                    connection
+                                            .send(
+                                                    ApiKeys.LOOKUP,
+                                                    new LookupRequest()
+                                                            .setTableId(1L)
+                                                            .setOrderedKeys(true))
+                                            .get())
+                    .rootCause()
                     .isInstanceOf(UnsupportedVersionException.class);
-            connection.validateVersionCompatibility(ApiKeys.PUT_KV, (short) 4, put);
-            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 2, lookup);
+            assertThat(puts).hasValue(1);
+            assertThat(lookups).hasValue(1);
         } finally {
             connection.close().get();
         }
