@@ -711,7 +711,11 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(
+        &self,
+        timeout: Duration,
+        frozen_table: Option<TableId>,
+    ) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
@@ -721,7 +725,7 @@ impl LogScannerInner {
 
         loop {
             // Try to collect fetches
-            let fetch_result = self.poll_for_fetches().await?;
+            let fetch_result = self.poll_for_fetches(frozen_table).await?;
 
             if !fetch_result.is_empty() {
                 // We have data, send next round of fetches and return
@@ -1053,14 +1057,17 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
+    async fn poll_for_fetches(
+        &self,
+        frozen_table: Option<TableId>,
+    ) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
         let result = self.log_fetcher.collect_fetches().await?;
         if !result.is_empty() {
             return Ok(result);
         }
 
         // send any new fetches (won't resend pending fetches).
-        self.log_fetcher.send_fetches(None).await?;
+        self.log_fetcher.send_fetches(frozen_table).await?;
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches().await
@@ -1119,7 +1126,16 @@ impl LogScanner {
     /// Poll for records, returning collected records before a later fetch error.
     /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
-        self.inner.poll_records(timeout).await
+        self.inner.poll_records(timeout, None).await
+    }
+
+    /// Poll records from a frozen source. A metadata refresh confirming that
+    /// the subscribed partition or original table disappeared fails the read.
+    /// The caller enforces its stopping offsets; this method does not cap a batch.
+    pub async fn poll_frozen(&self, timeout: Duration) -> Result<ScanRecords> {
+        self.inner
+            .poll_records(timeout, Some(self.inner.table_id))
+            .await
     }
 
     pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
