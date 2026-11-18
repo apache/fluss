@@ -108,9 +108,17 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
     }
 
-    /** Gets the row-level TTL of the table. */
+    /** Gets the TTL of KV state, including deduplication key state. */
     public Optional<Duration> getKvTTL() {
-        return config.getOptional(ConfigOptions.TABLE_KV_TTL);
+        Optional<Duration> deduplicationTTL = getDeduplicationTTL();
+        return deduplicationTTL.isPresent()
+                ? deduplicationTTL
+                : config.getOptional(ConfigOptions.TABLE_KV_TTL);
+    }
+
+    /** Gets the retention of deduplication keys in a log table. */
+    public Optional<Duration> getDeduplicationTTL() {
+        return config.getOptional(ConfigOptions.TABLE_DEDUPLICATION_TTL);
     }
 
     /** Gets the optional row-level TTL time column of the table. */

@@ -77,7 +77,7 @@ public class FlinkConnectorOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "Comma-separated physical columns identifying records for permanent "
+                            "Comma-separated physical columns identifying records for "
                                     + "first-write deduplication in a log table. Columns must be NOT NULL "
                                     + "and include all partition columns. Mutually exclusive with a primary key.");
 

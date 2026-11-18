@@ -46,7 +46,7 @@ import java.util.concurrent.CompletableFuture;
 /** The writer to write data to the log table. */
 class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
     private static final AppendResult APPEND_SUCCESS = new AppendResult();
-
+    // Keep the previous path available for paired POC benchmarks.
     private final @Nullable BucketCalculator bucketCalculator;
 
     private final LogFormat logFormat;
@@ -106,6 +106,10 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         byte[] bucketKey = bucketCalculator != null ? bucketCalculator.encodeKey(row) : null;
 
         if (deduplicationKeyEncoder != null) {
+            if (logFormat == LogFormat.ARROW) {
+                return send(WriteRecord.forArrowAppend(tableInfo, physicalPath, row, bucketKey))
+                        .thenApply(ignored -> APPEND_SUCCESS);
+            }
             KvFormat kvFormat = tableInfo.getTableConfig().getKvFormat();
             BinaryRow binaryRow =
                     kvFormat == KvFormat.COMPACTED

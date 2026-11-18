@@ -148,13 +148,17 @@ class DeduplicationScopeITCase extends ClientToServerITCaseBase {
                 false);
         try (Table table = conn.getTable(path)) {
             AppendWriter writer = table.newAppend().createWriter();
+            List<CompletableFuture<AppendResult>> writes = new ArrayList<>();
             for (String tenant : Arrays.asList("a", "b")) {
                 for (int id = 0; id < 2; id++) {
-                    writer.append(row(tenant, id, "first"));
-                    writer.append(row(tenant, id, "replacement"));
+                    writes.add(writer.append(row(tenant, id, "first")));
+                    writes.add(writer.append(row(tenant, id, "replacement")));
                 }
             }
             writer.flush();
+            for (CompletableFuture<AppendResult> write : writes) {
+                write.get(30, TimeUnit.SECONDS);
+            }
             List<InternalRow> rows = new ArrayList<>();
             for (int bucket = 0; bucket < 4; bucket++) {
                 rows.addAll(

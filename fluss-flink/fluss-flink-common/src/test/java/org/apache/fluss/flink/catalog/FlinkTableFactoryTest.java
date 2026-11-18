@@ -99,6 +99,7 @@ abstract class FlinkTableFactoryTest {
                 ResolvedSchema.of(Column.physical("id", DataTypes.BIGINT().notNull()));
         Map<String, String> options = getBasicOptions();
         options.put("deduplication.key", "id");
+        options.put("table.deduplication.ttl", "24 h");
         options.put(FlinkConnectorOptions.BUCKET_NUMBER.key(), "1");
         FlinkTableSink sink = (FlinkTableSink) createTableSink(schema, options);
         assertThat(

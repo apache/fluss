@@ -26,6 +26,8 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
+import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -1103,19 +1105,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
-        if (newDescriptor.hasPrimaryKey()) {
+        if (newDescriptor.hasPrimaryKey()
+                || (newDescriptor.getSchema().getDeduplicationKey().isPresent()
+                        && newDescriptor
+                                .getProperties()
+                                .containsKey(ConfigOptions.TABLE_DEDUPLICATION_TTL.key()))) {
             Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
             Configuration newTableConf = Configuration.fromMap(newProperties);
             Integer formatVersion = newTableConf.get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
             // The option has no default so that its absence continues to identify legacy tables.
-            if (formatVersion == null) {
+            if (newDescriptor.hasPrimaryKey() && formatVersion == null) {
                 newProperties.put(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(CURRENT_KV_FORMAT_VERSION));
             }
 
             int layoutVersion =
-                    newTableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()
+                    new TableConfig(newTableConf).getKvTTL().isPresent()
                             ? KvValueLayout.TAGGED.version()
                             : KvValueLayout.PLAIN.version();
             newProperties.put(

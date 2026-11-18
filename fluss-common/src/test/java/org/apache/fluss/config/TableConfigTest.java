@@ -75,6 +75,23 @@ class TableConfigTest {
     }
 
     @Test
+    void testDeduplicationTtlUsesKvStateRetention() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+        assertThat(tableConfig.getDeduplicationTTL()).isEmpty();
+        assertThat(tableConfig.getKvTTL()).isEmpty();
+
+        conf.set(ConfigOptions.TABLE_DEDUPLICATION_TTL, Duration.ofDays(1));
+        assertThat(tableConfig.getDeduplicationTTL()).hasValue(Duration.ofDays(1));
+        assertThat(tableConfig.getKvTTL()).hasValue(Duration.ofDays(1));
+
+        conf.removeConfig(ConfigOptions.TABLE_DEDUPLICATION_TTL);
+        conf.set(ConfigOptions.TABLE_KV_TTL, Duration.ofHours(1));
+        assertThat(tableConfig.getDeduplicationTTL()).isEmpty();
+        assertThat(tableConfig.getKvTTL()).hasValue(Duration.ofHours(1));
+    }
+
+    @Test
     void testKvValueLayoutVersion() {
         Configuration conf = new Configuration();
         TableConfig tableConfig = new TableConfig(conf);

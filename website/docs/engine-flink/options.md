@@ -63,8 +63,13 @@ See more details about [ALTER TABLE ... SET](engine-flink/ddl.md#set-properties)
 
 The optional `deduplication.key` schema option is a comma-separated list of physical
 `NOT NULL` columns, including all partition columns. It has no default and is
-mutually exclusive with a primary key. It declares permanent first-write filtering
-within the table or each partition instance. Table creation requires client and
+mutually exclusive with a primary key. It declares first-write filtering
+within the table or each partition instance. Keys remain until their table or
+partition is dropped unless `table.deduplication.ttl` is configured. This optional
+duration uses the same best-effort compaction cleanup as primary-key row TTL,
+starts at the first accepted record, and is not refreshed by duplicates. It does
+not change log retention and cannot be altered after table creation.
+Table creation requires client and
 server support for deduplicating append; unsupported versions reject creation.
 
 | Option                                  | Type     | Default                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |

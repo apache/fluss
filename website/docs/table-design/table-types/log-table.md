@@ -56,6 +56,16 @@ Consequently, a duplicate may refer to a row that is no longer readable, and key
 state grows with the number of distinct keys. Dropping the table or partition
 removes that scope's keys.
 
+Set `'table.deduplication.ttl' = '24 h'` to limit key retention. The TTL starts
+when the first record is accepted; duplicates do not refresh it. Cleanup uses
+the same best-effort RocksDB compaction mechanism as primary-key row TTL.
+An expired key can remain present until compaction removes it, after which a
+new record with that key is accepted. Key expiration does not delete accepted
+log records or emit DELETE records; log retention remains controlled separately
+by `table.log.ttl`. If the option is omitted, keys remain until their table or
+partition is dropped. The TTL must be at least one millisecond and cannot be
+changed after table creation.
+
 Java applications define the key with `Schema.Builder.deduplicationKey(...)`
 and write through the normal append API. A successful `AppendResult` means that
 the request succeeded, including when all rows were duplicates. Writer retries,

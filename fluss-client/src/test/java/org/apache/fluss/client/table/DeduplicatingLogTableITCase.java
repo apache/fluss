@@ -22,13 +22,14 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingWriterMetricGroup;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.writer.AppendResult;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableAppend;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
@@ -36,12 +37,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.ApiMessage;
-import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -51,6 +53,7 @@ import org.apache.fluss.testutils.InternalRowListAssert;
 import org.apache.fluss.types.DataTypes;
 
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -88,7 +91,11 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
         long id =
                 createTable(
                         path,
-                        TableDescriptor.builder().schema(schema).distributedBy(1).build(),
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
                         false);
         TableBucket bucket = new TableBucket(id, null, 0);
         AtomicBoolean lost = new AtomicBoolean();
@@ -119,10 +126,10 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
                     @Override
                     public CompletableFuture<ApiMessage> sendRequest(
                             ServerNode node, ApiKeys api, ApiMessage request) {
-                        if (api == ApiKeys.PUT_KV
+                        if (api == ApiKeys.PRODUCE_LOG
                                 && rejectedBeforeAppend
                                 && lost.compareAndSet(false, true)) {
-                            PutKvResponse rejected = new PutKvResponse();
+                            ProduceLogResponse rejected = new ProduceLogResponse();
                             rejected.addBucketsResp()
                                     .setBucketId(0)
                                     .setErrorCode(Errors.NOT_LEADER_OR_FOLLOWER.code())
@@ -131,7 +138,7 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
                         }
                         CompletableFuture<ApiMessage> response =
                                 delegate.sendRequest(node, api, request);
-                        if (api == ApiKeys.PUT_KV
+                        if (api == ApiKeys.PRODUCE_LOG
                                 && !rejectedBeforeAppend
                                 && lost.compareAndSet(false, true)) {
                             return response.thenCompose(
@@ -194,6 +201,62 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
             if (stopped.get() >= 0) {
                 FLUSS_CLUSTER_EXTENSION.startTabletServer(stopped.get());
             }
+        }
+    }
+
+    @Test
+    void testResumeFromOffsetInsideMixedBatch() throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofSeconds(30));
+        TablePath path = TablePath.of("dedup_offsets", "events");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .deduplicationKey("id")
+                        .build();
+        long tableId =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        false);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        try (Table table = conn.getTable(path)) {
+            AppendWriter writer = table.newAppend().createWriter();
+            flushRows(writer, row(2, "seed"));
+            flushRows(writer, row(1, "first"), row(2, "duplicate"), row(3, "last"));
+            flushRows(writer, row(2, "filtered"));
+            flushRows(writer, row(4, "next"));
+
+            List<Long> offsets = new ArrayList<>();
+            List<Integer> keys = new ArrayList<>();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            try (LogScanner scanner = table.newScan().createLogScanner()) {
+                scanner.subscribe(0, 2);
+                while (offsets.size() < 2) {
+                    assertThat(System.nanoTime()).isLessThan(deadline);
+                    for (LogRecord record : scanner.poll(Duration.ofSeconds(1)).records(bucket)) {
+                        offsets.add(record.logOffset());
+                        keys.add(record.getRow().getInt(0));
+                    }
+                }
+            }
+            assertThat(offsets).containsExactly(2L, 4L);
+            assertThat(keys).containsExactly(3, 4);
+        }
+    }
+
+    private static void flushRows(AppendWriter writer, GenericRow... rows) throws Exception {
+        List<CompletableFuture<AppendResult>> results = new ArrayList<>();
+        for (GenericRow row : rows) {
+            results.add(writer.append(row));
+        }
+        writer.flush();
+        for (CompletableFuture<AppendResult> result : results) {
+            result.get(30, TimeUnit.SECONDS);
         }
     }
 
@@ -320,7 +383,7 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
                 assertThat(count).isEqualTo(4);
             }
             assertThatThrownBy(() -> leader.appendRecordsToLeader(MemoryLogRecords.EMPTY, -1))
-                    .isInstanceOf(InvalidPartitionException.class);
+                    .isInstanceOf(InvalidTableException.class);
             int server =
                     FLUSS_CLUSTER_EXTENSION
                             .getZooKeeperClient()

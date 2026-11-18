@@ -305,7 +305,10 @@ public class KvRecoverHelper {
                             throw new IllegalStateException(
                                     "Invalid change in deduplicating append log.");
                         }
-                        value = new byte[] {1};
+                        value =
+                                KvStateValueEncoder.encodePresenceMarker(
+                                        kvTablet.getKvValueLayout(),
+                                        logRecordBatch.commitTimestamp());
                     } else if (changeType != ChangeType.DELETE) {
                         // the log row format may not compatible with kv row format,
                         // e.g, arrow vs. compacted, thus needs a conversion here.

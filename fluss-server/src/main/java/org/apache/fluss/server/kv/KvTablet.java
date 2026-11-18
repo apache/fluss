@@ -31,10 +31,12 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
@@ -71,6 +73,7 @@ import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.function.ThrowingSupplier;
 
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
@@ -251,11 +254,9 @@ public final class KvTablet {
         this.deduplicating =
                 schemaGetter.getLatestSchemaInfo().getSchema().getDeduplicationKey().isPresent();
         this.stateValueEncoder =
-                deduplicating
-                        ? (value, offset) -> new byte[] {1}
-                        : historicalPartition
-                                ? valueEncoder::encodeValue
-                                : (value, logOffset) -> valueEncoder.encodeValue(value);
+                historicalPartition
+                        ? valueEncoder::encodeValue
+                        : (value, logOffset) -> valueEncoder.encodeValue(value);
         this.historicalCleanupOffset = historicalCleanupOffset;
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
         this.rowTtlEnabled = rowTtlEnabled;
@@ -272,6 +273,7 @@ public final class KvTablet {
                         changelogImage,
                         autoIncrementManager,
                         stateValueEncoder,
+                        kvValueLayout,
                         valueDecoder,
                         rowTtlTimestampProvider,
                         clock,
@@ -846,16 +848,41 @@ public final class KvTablet {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        return appendUnderKvLock(
+                kvRecords.sizeInBytes(),
+                () ->
+                        kvWriteProcessor.putAsLeader(
+                                kvRecords,
+                                targetColumns,
+                                mergeMode,
+                                kvStateAccessor,
+                                originalPartitionName,
+                                historicalValueLookup));
+    }
+
+    /** Appends an Arrow batch through the same KV admission and commit path as PutKv. */
+    public LogAppendInfo appendDeduplicatingArrow(
+            MemoryLogRecords records, TableInfo tableInfo, int bucketCount) throws Exception {
+        return appendUnderKvLock(
+                records.sizeInBytes(),
+                () ->
+                        kvWriteProcessor.appendDeduplicatingArrow(
+                                records,
+                                tableInfo,
+                                bucketCount,
+                                physicalPath.getPartitionName(),
+                                kvStateAccessor));
+    }
+
+    private LogAppendInfo appendUnderKvLock(
+            int inputBytes, ThrowingSupplier<LogAppendInfo, Exception> append) throws Exception {
         return inWriteLock(
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
 
                     long pendingFlushBytesAfterWrite =
-                            kvPreWriteBuffer.pendingFlushBytes() + kvRecords.sizeInBytes();
-
-                    // Write-path admission gate: reject the request if accepting this batch would
-                    // push the buffered KV view beyond RocksDB's safe write budget.
+                            kvPreWriteBuffer.pendingFlushBytes() + inputBytes;
                     if (rocksDBKv.wouldExceedFlushBudget(pendingFlushBytesAfterWrite)) {
                         requestFlushInternal(
                                 Math.max(requestedFlushOffset, logTablet.getHighWatermark()));
@@ -866,17 +893,8 @@ public final class KvTablet {
                                                 + "Retry after backoff.",
                                         tableBucket));
                     }
-
-                    LogAppendInfo appendInfo =
-                            kvWriteProcessor.putAsLeader(
-                                    kvRecords,
-                                    targetColumns,
-                                    mergeMode,
-                                    kvStateAccessor,
-                                    originalPartitionName,
-                                    historicalValueLookup);
+                    LogAppendInfo appendInfo = append.get();
                     if (!appendInfo.duplicated()) {
-                        // KvWriteProcessor appends one WAL batch for each accepted KV batch.
                         kvPreWriteBuffer.markWalBatchEnd(appendInfo.lastOffset() + 1);
                     }
                     return appendInfo;

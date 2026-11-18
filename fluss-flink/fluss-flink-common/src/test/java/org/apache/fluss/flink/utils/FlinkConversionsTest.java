@@ -77,6 +77,9 @@ public class FlinkConversionsTest {
 
     @Test
     void testDeduplicationKeyRoundTripRemainsLogTable() {
+        Map<String, String> options = new HashMap<>();
+        options.put("deduplication.key", "id");
+        options.put("table.deduplication.ttl", "24 h");
         ResolvedSchema resolvedSchema =
                 ResolvedSchema.of(
                         Column.physical(
@@ -87,7 +90,7 @@ public class FlinkConversionsTest {
                         Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
                         null,
                         Collections.emptyList(),
-                        Collections.singletonMap("deduplication.key", "id"));
+                        options);
         TableDescriptor descriptor =
                 FlinkConversions.toFlussTable(
                         new ResolvedCatalogTable(catalogTable, resolvedSchema));
@@ -96,6 +99,7 @@ public class FlinkConversionsTest {
         assertThat(descriptor.getSchema().getDeduplicationKeyColumnNames()).containsExactly("id");
         assertThat(descriptor.getBucketKeys()).containsExactly("id");
         assertThat(descriptor.getCustomProperties()).doesNotContainKey("deduplication.key");
+        assertThat(descriptor.getProperties()).containsEntry("table.deduplication.ttl", "24 h");
         TableInfo tableInfo =
                 TableInfo.of(
                         TablePath.of("db", "events"),
@@ -107,6 +111,7 @@ public class FlinkConversionsTest {
                         0L);
         CatalogTable restored = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);
         assertThat(restored.getOptions()).containsEntry("deduplication.key", "id");
+        assertThat(restored.getOptions()).containsEntry("table.deduplication.ttl", "24 h");
         assertThat(new TestSchemaResolver().resolve(restored.getUnresolvedSchema()).getPrimaryKey())
                 .isEmpty();
     }

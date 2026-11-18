@@ -1280,18 +1280,34 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
-                    // Writes with persistent key state must update the log and KV state together.
-                    if (isKvTable()) {
+                    TableInfo tableInfo = getTableInfo();
+                    if (isKvTable() && !tableInfo.hasDeduplicationKey()) {
                         throw new InvalidPartitionException(
-                                "Produce-log request must not target a table with persistent key state.");
+                                "Produce-log request must not target a primary-key table.");
                     }
-
                     validateInSyncReplicaSize(requiredAcks);
 
-                    // TODO WRITE a leader epoch.
                     LogAppendInfo appendInfo;
                     try {
-                        appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+                        if (tableInfo.hasDeduplicationKey()) {
+                            KvTablet kv =
+                                    checkNotNull(kvTablet, "Deduplication tablet is not ready");
+                            Integer bucketCount = getRoutingBucketCount();
+                            if (bucketCount == null && tableBucket.getPartitionId() != null) {
+                                throw new InvalidPartitionException(
+                                        "Partition routing metadata is not ready for "
+                                                + tableBucket);
+                            }
+                            appendInfo =
+                                    kv.appendDeduplicatingArrow(
+                                            memoryLogRecords,
+                                            tableInfo,
+                                            bucketCount == null
+                                                    ? tableInfo.getNumBuckets()
+                                                    : bucketCount);
+                        } else {
+                            appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+                        }
                     } catch (IOException e) {
                         LOG.error("Error while appending records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
