@@ -2212,6 +2212,34 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testTableDeletionDoesNotOverwriteOnlineReplicaTableInfo() {
+        makeLogTableAsLeader(0);
+        Replica replica = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        TableInfo original = replica.getTableInfo();
+        TableInfo marker =
+                TableInfo.of(
+                        original.getTablePath(),
+                        original.getTableId(),
+                        0,
+                        TableDescriptor.builder()
+                                .schema(Schema.newBuilder().build())
+                                .distributedBy(0)
+                                .build(),
+                        "",
+                        -1L,
+                        -1L);
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                new ClusterMetadata(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(marker, Collections.emptyList(), true)),
+                        Collections.emptyList()));
+        assertThat(replica.getTableInfo()).isEqualTo(original);
+    }
+
+    @Test
     void testUpdateMetadata() throws Exception {
         // check the server metadata before update.
         TablePath nonePartitionTablePath = TablePath.of("test_db_1", "test_update_metadata_table");

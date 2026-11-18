@@ -1361,6 +1361,10 @@ pub struct PbTableMetadata {
     /// When present, bucket_count_epoch is also present, including epoch zero.
     #[prost(int32, optional, tag = "10")]
     pub bucket_count: ::core::option::Option<i32>,
+    /// UPDATE_METADATA v1: a deletion applies only to the table instance identified by table_id.
+    /// Version 0 uses a sentinel table_id or table_path instead.
+    #[prost(bool, optional, tag = "11")]
+    pub deleted: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {

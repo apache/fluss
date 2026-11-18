@@ -707,6 +707,9 @@ public class ServerRpcMessageUtils {
                 .setTableName(tablePath.getTableName());
         pbTableMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        if (tableMetadata.isDeleted() && tableInfo.getTableId() != TableMetadata.DELETED_TABLE_ID) {
+            pbTableMetadata.setDeleted(true);
+        }
         return pbTableMetadata;
     }
 
@@ -761,12 +764,10 @@ public class ServerRpcMessageUtils {
     }
 
     private static TableMetadata toTableMetaData(PbTableMetadata pbTableMetadata) {
-        TablePath tablePath = toTablePath(pbTableMetadata.getTablePath());
-        long tableId = pbTableMetadata.getTableId();
         TableInfo tableInfo =
                 TableInfo.of(
-                        tablePath,
-                        tableId,
+                        toTablePath(pbTableMetadata.getTablePath()),
+                        pbTableMetadata.getTableId(),
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
                         // For backward capability. When an older Coordinator sends an
@@ -789,7 +790,10 @@ public class ServerRpcMessageUtils {
             bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
         }
 
-        return new TableMetadata(tableInfo, bucketMetadata);
+        return new TableMetadata(
+                tableInfo,
+                bucketMetadata,
+                pbTableMetadata.hasDeleted() && pbTableMetadata.isDeleted());
     }
 
     private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {
