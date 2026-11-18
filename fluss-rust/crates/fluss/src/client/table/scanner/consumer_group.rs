@@ -218,13 +218,14 @@ macro_rules! group_methods {
                 self.commit_offsets_async(self.inner.delivered_offsets()?)
             }
 
-            /// Enqueues explicit next offsets. Commits on this scanner execute in call order.
+            /// Enqueues explicit next offsets. The scanner submits commits in call order.
             /// Dropping or aborting the handle does not cancel the commit. No ordering or fencing is
             /// provided across scanners/processes using the same group and bucket.
             /// At most 64 commits may be pending per scanner. A full queue returns
             /// `Error::BufferExhausted` before enqueueing; retry after a pending commit finishes.
-            /// Unknown outcomes block subsequent commits on this scanner; fetching the
-            /// current offset does not fence a late write from the previous operation.
+            /// After a possibly late write, the scanner accepts a higher offset or an identical
+            /// offset and metadata for that bucket. An unsafe rewind, even after a seek, returns
+            /// `NeedsRecovery`. A late write can overwrite a higher commit and cause replay.
             pub fn commit_offsets_async(
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,
@@ -243,7 +244,7 @@ macro_rules! group_methods {
             }
 
             /// Awaits persistence of explicit next offsets and optional metadata.
-            /// Offset decreases are permitted. All bucket outcomes must be inspected.
+            /// Inspect every bucket outcome. The rewind rules of `commit_offsets_async` apply.
             pub async fn commit_offsets_sync(
                 &self,
                 offsets: HashMap<TableBucket, OffsetAndMetadata>,

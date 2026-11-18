@@ -239,7 +239,7 @@ configured commit group. Restore and Admin queries use a 30-second deadline for 
 Existing explicit-offset subscriptions keep their behavior. Rust uses distinct names for explicit
 commits because it does not support method overloading.
 
-Commits on one scanner execute in invocation order; offset decreases are allowed. Drive poll,
+A scanner submits commits in invocation order and normally permits offset decreases. Drive poll,
 subscription changes and commit initiation from one consumer task. Different scanners/processes
 using the same group are independent writers: assign each bucket to one active consumer yourself.
 There is no membership management or rebalance. Group IDs are sent unchanged and validated by the
@@ -253,12 +253,20 @@ on the group. Authorization failures are returned to the caller and never trigge
 Reading after processing without a successful commit can replay records after reconnecting;
 closing a scanner or connection does not commit automatically.
 
-Connection failures known to precede transmission trigger owner rediscovery and retry within the
-operation deadline. Request rejection is `OffsetCommitError::Rejected`. Transport failures after dispatch, ACK timeouts
-and unclassified write errors can have an unknown outcome; these block further commits on that
-scanner. A partial response retains successful buckets and distinguishes metadata rejection from
-unknown write results. Never retry the entire batch blindly. Reading the saved offset does not
-fence a delayed write: settle the previous writer before resuming with a new scanner. Processing
+On a broken connection or an owner change, the scanner rediscovers the owner and retries the same
+offsets and metadata within the operation deadline. Inspect every bucket in a partial response;
+do not retry successful buckets just because another failed. A rejection means the write is known
+not to have applied. If a dispatched attempt may have applied, the result can be unknown even if a
+retry was rejected.
+
+If a write may still arrive, the same scanner can commit a higher offset for that bucket or repeat
+the same offset and metadata. A batch that goes below the highest potentially late offset or changes
+its metadata at that offset fails with `NeedsRecovery`, even after a seek. Other buckets can still
+be committed separately. A late write can overwrite a higher acknowledged offset, so recovery may
+replay records. Neither reading the stored offset nor creating a new scanner fences that write:
+settle outstanding writes before intentionally rewinding.
+
+Processing
 followed by commit provides at-least-once recovery while the required records remain retained and
 each group/bucket has one active consumer. Downstream effects must tolerate replay: a crash after
 processing but before a successful commit can deliver the same records again. Offset commits are
@@ -267,8 +275,7 @@ consumer requires stopping the previous writer before the replacement starts com
 
 `ConsumerGroupOptions::timeout` defaults to 30 seconds, covering discovery, connections and retries
 after preceding queued commits finish. A scanner admits up to 64 pending commits. If admission returns
-`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A timeout while
-waiting to start a socket write rejects only that commit. Background auto-commit is disabled. Existing scanners with
+`Error::BufferExhausted`, wait for an outstanding commit to finish before retrying. A deadline reached before any attempt starts writing rejects only that commit. Background auto-commit is disabled. Existing scanners with
 no group retain their behavior. Offset persistence requires a server implementing discovery,
 commit and fetch; unsupported APIs return an error. Bounded readers and UnionRead do not manage
 consumer offsets. A committed offset that has expired from log retention is not silently reset.
