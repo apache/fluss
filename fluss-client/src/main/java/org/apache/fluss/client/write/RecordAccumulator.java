@@ -26,6 +26,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegment;
@@ -60,6 +61,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -394,6 +396,7 @@ public final class RecordAccumulator {
         Set<Integer> readyNodes = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
         Set<PhysicalTablePath> unknownLeaderTables = new HashSet<>();
+        Set<PhysicalTablePath> bucketLayoutCheckTables = new HashSet<>();
         // Go table by table so that we can get queue sizes for buckets in a table and calculate
         // cumulative frequency table (used in bucket assigner).
 
@@ -403,6 +406,7 @@ public final class RecordAccumulator {
                             bucketAndWriteBatches,
                             readyNodes,
                             unknownLeaderTables,
+                            bucketLayoutCheckTables,
                             cluster,
                             nextReadyCheckDelayMs);
         }
@@ -412,11 +416,13 @@ public final class RecordAccumulator {
         // Keep the normal polling cadence for idle writers and unresolved metadata.
         if (!readyNodes.isEmpty()
                 || !unknownLeaderTables.isEmpty()
+                || !bucketLayoutCheckTables.isEmpty()
                 || nextReadyCheckDelayMs == Long.MAX_VALUE) {
             nextReadyCheckDelayMs = Math.min(nextReadyCheckDelayMs, batchTimeoutMs);
         }
 
-        return new ReadyCheckResult(readyNodes, nextReadyCheckDelayMs, unknownLeaderTables);
+        return new ReadyCheckResult(
+                readyNodes, nextReadyCheckDelayMs, unknownLeaderTables, bucketLayoutCheckTables);
     }
 
     /**
@@ -798,6 +804,7 @@ public final class RecordAccumulator {
             BucketAndWriteBatches bucketAndWriteBatches,
             Set<Integer> readyNodes,
             Set<PhysicalTablePath> unknownLeaderTables,
+            Set<PhysicalTablePath> bucketLayoutCheckTables,
             Cluster cluster,
             long nextReadyCheckDelayMs) {
         PhysicalTablePath targetPath = bucketAndWriteBatches.targetPath;
@@ -822,6 +829,8 @@ public final class RecordAccumulator {
             applyNewBucketCount(bucketAndWriteBatches, partitionId, actualBucketCount);
         }
 
+        // Looked up lazily, only for buckets without a known leader.
+        Integer currentBucketCount = null;
         Map<Integer, Deque<WriteBatch>> batches = bucketAndWriteBatches.batches;
         // Collect the queue sizes for available buckets to be used in adaptive bucket allocate.
         boolean exhausted = writerBufferPool.queued() > 0;
@@ -854,6 +863,18 @@ public final class RecordAccumulator {
 
             Integer leader = cluster.leaderFor(tableBucket);
             if (leader == null) {
+                if (currentBucketCount == null) {
+                    currentBucketCount =
+                            cluster.getBucketCount(TableOrPartition.of(tableId, partitionId))
+                                    .orElse(Integer.MAX_VALUE);
+                }
+                if (bucketId >= currentBucketCount) {
+                    // The bucket is missing from the cached layout, so its leader may never be
+                    // found, e.g. when the table was re-created with fewer buckets. The cache can
+                    // be stale, so the sender checks the layout with the coordinator first.
+                    bucketLayoutCheckTables.add(targetPath);
+                    continue;
+                }
                 // This is a bucket for which leader is not known, but messages are
                 // available to send. Note that entries are currently not removed from
                 // batches when deque is empty. Reported regardless of any pending throttle gate:
@@ -884,6 +905,94 @@ public final class RecordAccumulator {
         }
 
         return nextReadyCheckDelayMs;
+    }
+
+    /**
+     * Aborts the batches of the table or partition that were routed with a bucket count other than
+     * {@code bucketCount}, if some of its queued batches target a bucket beyond it. The count must
+     * come from the coordinator, as a tablet server's cached layout can be stale.
+     *
+     * @return whether the queued batches targeted a bucket beyond {@code bucketCount}
+     */
+    boolean abortBatchesBeyondBucketCount(PhysicalTablePath targetPath, int bucketCount) {
+        BucketAndWriteBatches context = writeBatches.get(targetPath);
+        if (context == null) {
+            return false;
+        }
+        boolean beyondBucketCount = false;
+        synchronized (context) {
+            for (Map.Entry<Integer, Deque<WriteBatch>> entry : context.batches.entrySet()) {
+                if (entry.getKey() >= bucketCount) {
+                    synchronized (entry.getValue()) {
+                        beyondBucketCount |= !entry.getValue().isEmpty();
+                    }
+                }
+            }
+        }
+        if (beyondBucketCount) {
+            abortBatchesWithStaleBucketCount(context, bucketCount);
+        }
+        return beyondBucketCount;
+    }
+
+    /**
+     * Aborts the queued batches that were routed with a bucket count other than the one in the
+     * latest metadata, and routes new records with the latest count. Only the affected table or
+     * partition is touched, so the writer keeps sending to the others.
+     */
+    private void abortBatchesWithStaleBucketCount(
+            BucketAndWriteBatches context, int currentBucketCount) {
+        List<WriteBatch> aborted = new ArrayList<>();
+        int staleBucketCount;
+        synchronized (context) {
+            staleBucketCount = context.routingBucketCount();
+            for (Deque<WriteBatch> deque : context.batches.values()) {
+                synchronized (deque) {
+                    Iterator<WriteBatch> iterator = deque.iterator();
+                    while (iterator.hasNext()) {
+                        WriteBatch batch = iterator.next();
+                        if (batch.getBucketCount() != currentBucketCount && batch.trySetAborted()) {
+                            iterator.remove();
+                            // This also releases an Arrow batch's writer without building it.
+                            batch.abortRecordAppends();
+                            aborted.add(batch);
+                        }
+                    }
+                }
+            }
+            context.bucketCount = currentBucketCount;
+        }
+
+        InvalidBucketRoutingException failure =
+                new InvalidBucketRoutingException(
+                        String.format(
+                                "The bucket count of %s changed from %d to %d, e.g. because the "
+                                        + "table was dropped and re-created. Buffered records "
+                                        + "routed with the old count were not sent. Retry the "
+                                        + "failed records with the same writer to use the "
+                                        + "current bucket count.",
+                                context.targetPath, staleBucketCount, currentBucketCount));
+        LOG.warn("{} Aborting {} batch(es).", failure.getMessage(), aborted.size());
+        // Callbacks may retry using the current count. Invoke them outside the context and deque
+        // locks, after detaching every stale batch across all bucket queues.
+        for (WriteBatch batch : aborted) {
+            try {
+                if (idempotenceManager.idempotenceEnabled() && batch.hasBatchSequence()) {
+                    // A retried batch already has a sequence, so later batches of the bucket must
+                    // not wait for it.
+                    idempotenceManager.handleFailedBatch(
+                            new ReadyWriteBatch(
+                                    new TableBucket(
+                                            batch.tableId(), context.partitionId, batch.bucketId()),
+                                    batch),
+                            failure,
+                            true);
+                }
+                batch.completeAbort(failure);
+            } finally {
+                deallocate(batch);
+            }
+        }
     }
 
     private void applyNewBucketCount(
@@ -1617,14 +1726,18 @@ public final class RecordAccumulator {
         public final Set<Integer> readyNodes;
         public final long nextReadyCheckDelayMs;
         public final Set<PhysicalTablePath> unknownLeaderTables;
+        /** Tables or partitions with queued batches for buckets missing from the cached layout. */
+        public final Set<PhysicalTablePath> bucketLayoutCheckTables;
 
         public ReadyCheckResult(
                 Set<Integer> readyNodes,
                 long nextReadyCheckDelayMs,
-                Set<PhysicalTablePath> unknownLeaderTables) {
+                Set<PhysicalTablePath> unknownLeaderTables,
+                Set<PhysicalTablePath> bucketLayoutCheckTables) {
             this.readyNodes = readyNodes;
             this.nextReadyCheckDelayMs = nextReadyCheckDelayMs;
             this.unknownLeaderTables = unknownLeaderTables;
+            this.bucketLayoutCheckTables = bucketLayoutCheckTables;
         }
     }
 

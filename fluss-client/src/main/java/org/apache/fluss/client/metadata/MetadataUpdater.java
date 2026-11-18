@@ -32,6 +32,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -51,7 +52,9 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeoutException;
@@ -224,6 +227,39 @@ public class MetadataUpdater {
         Collection<Long> partitionIds =
                 partitionId == null ? null : Collections.singleton(partitionId);
         updateMetadata(Collections.singleton(tablePath), null, partitionIds);
+    }
+
+    /**
+     * Returns the bucket count of the table or partition at {@code physicalTablePath} from the
+     * coordinator, which reads it from ZooKeeper rather than from a tablet server's cache. Empty if
+     * the path no longer resolves to {@code tableId} and {@code partitionId}, e.g. because it was
+     * dropped and re-created. The cached cluster is not updated.
+     */
+    public OptionalInt getBucketCountFromCoordinator(
+            PhysicalTablePath physicalTablePath, long tableId, @Nullable Long partitionId)
+            throws Exception {
+        TablePath tablePath = physicalTablePath.getTablePath();
+        boolean partitioned = physicalTablePath.getPartitionName() != null;
+        Cluster coordinatorCluster =
+                sendMetadataRequestAndRebuildCluster(
+                        newCoordinatorServerClient(),
+                        true,
+                        cluster,
+                        Collections.singleton(tablePath),
+                        partitioned ? Collections.singleton(physicalTablePath) : null,
+                        null);
+        Long currentPartitionId =
+                partitioned
+                        ? coordinatorCluster.getPartitionId(physicalTablePath).orElse(null)
+                        : null;
+        if (!coordinatorCluster.getTableId(tablePath).equals(Optional.of(tableId))
+                || !Objects.equals(currentPartitionId, partitionId)) {
+            return OptionalInt.empty();
+        }
+        return coordinatorCluster
+                .getBucketCount(TableOrPartition.of(tableId, partitionId))
+                .map(OptionalInt::of)
+                .orElse(OptionalInt.empty());
     }
 
     /** Update the table or partition metadata info. */
