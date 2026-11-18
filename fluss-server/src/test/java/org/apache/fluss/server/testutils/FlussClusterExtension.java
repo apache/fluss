@@ -53,6 +53,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -114,7 +115,8 @@ import static org.assertj.core.api.Assertions.fail;
 /**
  * A Junit {@link Extension} which starts a Fluss Cluster.
  *
- * <p>Note: after each test, it'll always drop all the databases and tables.
+ * <p>After each test, drops all databases and tables unless system tables are configured to be
+ * preserved. Tests that preserve system tables must clean up their own system-table records.
  */
 public final class FlussClusterExtension
         implements BeforeAllCallback, AfterAllCallback, BeforeEachCallback, AfterEachCallback {
@@ -141,6 +143,7 @@ public final class FlussClusterExtension
     private final String[] racks;
     private final List<String> remoteDirNames;
     private final boolean useRemoteDataDir;
+    private final boolean preserveSystemTables;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
@@ -155,7 +158,8 @@ public final class FlussClusterExtension
             Clock clock,
             String[] racks,
             List<String> remoteDirNames,
-            boolean useRemoteDataDir) {
+            boolean useRemoteDataDir,
+            boolean preserveSystemTables) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.coordinatorServerListeners = coordinatorServerListeners;
@@ -169,6 +173,7 @@ public final class FlussClusterExtension
         this.racks = racks;
         this.remoteDirNames = remoteDirNames;
         this.useRemoteDataDir = useRemoteDataDir;
+        this.preserveSystemTables = preserveSystemTables;
     }
 
     @Override
@@ -192,6 +197,10 @@ public final class FlussClusterExtension
         CoordinatorGateway coordinatorGateway = newCoordinatorClient();
         List<CompletableFuture<?>> dropFutures = new ArrayList<>();
         for (String db : dbs) {
+            if (preserveSystemTables && SystemTables.SYSTEM_DATABASE.equals(db)) {
+                // Cached system-table metadata remains valid for the lifetime of the servers.
+                continue;
+            }
             if (BUILTIN_DATABASE.equals(db)) {
                 // if it's built-in database, we just drop all tables in it but not drop the
                 // database itself.
@@ -1069,6 +1078,7 @@ public final class FlussClusterExtension
         private String[] racks = new String[] {"rack-0"};
         private List<String> remoteDirNames = Collections.emptyList();
         private boolean useRemoteDataDir = true;
+        private boolean preserveSystemTables;
 
         private final Configuration clusterConf = new Configuration();
 
@@ -1135,6 +1145,15 @@ public final class FlussClusterExtension
             return this;
         }
 
+        /**
+         * Preserves system tables between tests while the servers keep running. Tests must clean up
+         * their own system-table records when this is enabled.
+         */
+        public Builder setPreserveSystemTables(boolean preserveSystemTables) {
+            this.preserveSystemTables = preserveSystemTables;
+            return this;
+        }
+
         public FlussClusterExtension build() {
             if (numOfTabletServers > 1 && racks.length == 1) {
                 String[] racks = new String[numOfTabletServers];
@@ -1152,7 +1171,8 @@ public final class FlussClusterExtension
                     clock,
                     racks,
                     remoteDirNames,
-                    useRemoteDataDir);
+                    useRemoteDataDir,
+                    preserveSystemTables);
         }
     }
 }

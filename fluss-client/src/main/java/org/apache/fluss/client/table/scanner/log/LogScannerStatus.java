@@ -18,6 +18,8 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.client.admin.OffsetMetadata;
+import org.apache.fluss.exception.NoOffsetForTableBucketException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.log.FairBucketStatusMap;
 
@@ -25,8 +27,13 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /** The status of a {@link LogScanner}. */
@@ -34,6 +41,7 @@ import java.util.function.Predicate;
 @Internal
 public class LogScannerStatus {
     private final FairBucketStatusMap<BucketScanStatus> bucketStatusMap;
+    private final Set<TableBucket> awaitingCommittedOffsets = new HashSet<>();
 
     public LogScannerStatus() {
         this.bucketStatusMap = new FairBucketStatusMap<>();
@@ -73,6 +81,57 @@ public class LogScannerStatus {
         return recordsLag;
     }
 
+    synchronized void assignFromCommittedOffset(TableBucket tableBucket) {
+        BucketScanStatus status = bucketStatusMap.statusValue(tableBucket);
+        if (status == null) {
+            status = new BucketScanStatus(0L);
+        }
+        bucketStatusMap.update(tableBucket, status);
+        awaitingCommittedOffsets.add(tableBucket);
+    }
+
+    synchronized Set<TableBucket> missingCommittedOffsets() {
+        return Collections.unmodifiableSet(new HashSet<>(awaitingCommittedOffsets));
+    }
+
+    synchronized void resolveCommittedOffsets(
+            Map<TableBucket, OffsetMetadata> committedOffsets, String resetPolicy) {
+        Set<TableBucket> unresolved = new HashSet<>();
+        Iterator<TableBucket> pending = awaitingCommittedOffsets.iterator();
+        while (pending.hasNext()) {
+            TableBucket tableBucket = pending.next();
+            OffsetMetadata committed = committedOffsets.get(tableBucket);
+            long offset;
+            if (committed != null) {
+                offset = committed.getOffset();
+            } else if ("earliest".equals(resetPolicy)) {
+                offset = LogScanner.EARLIEST_OFFSET;
+            } else if ("latest".equals(resetPolicy)) {
+                offset = LogScanner.LATEST_OFFSET;
+            } else {
+                unresolved.add(tableBucket);
+                continue;
+            }
+            bucketStatusMap.statusValue(tableBucket).setOffset(offset);
+            pending.remove();
+        }
+        if (!unresolved.isEmpty()) {
+            throw new NoOffsetForTableBucketException(unresolved);
+        }
+    }
+
+    synchronized Map<TableBucket, OffsetMetadata> allConsumed() {
+        Map<TableBucket, OffsetMetadata> offsets = new LinkedHashMap<>();
+        bucketStatusMap.forEach(
+                (tableBucket, status) -> {
+                    if (!awaitingCommittedOffsets.contains(tableBucket)
+                            && status.getOffset() >= 0) {
+                        offsets.put(tableBucket, new OffsetMetadata(status.getOffset()));
+                    }
+                });
+        return offsets;
+    }
+
     synchronized void assignScanBuckets(Map<TableBucket, Long> scanBucketAndOffsets) {
         for (Map.Entry<TableBucket, Long> entry : scanBucketAndOffsets.entrySet()) {
             TableBucket scanBucket = entry.getKey();
@@ -84,12 +143,14 @@ public class LogScannerStatus {
                 bucketScanStatus.setOffset(offset);
             }
             bucketStatusMap.update(scanBucket, bucketScanStatus);
+            awaitingCommittedOffsets.remove(scanBucket);
         }
     }
 
     synchronized void unassignScanBuckets(List<TableBucket> buckets) {
         for (TableBucket bucket : buckets) {
             bucketStatusMap.remove(bucket);
+            awaitingCommittedOffsets.remove(bucket);
         }
     }
 
@@ -99,7 +160,8 @@ public class LogScannerStatus {
         List<TableBucket> result = new ArrayList<>();
         bucketStatusMap.forEach(
                 ((tableBucket, bucketScanStatus) -> {
-                    if (isAvailable.test(tableBucket)) {
+                    if (!awaitingCommittedOffsets.contains(tableBucket)
+                            && isAvailable.test(tableBucket)) {
                         result.add(tableBucket);
                     }
                 }));

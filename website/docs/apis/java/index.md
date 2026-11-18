@@ -282,6 +282,29 @@ while (true) {
 }
 ```
 
+#### Consumer Group Configuration
+
+Set these options on the `Configuration` passed to `ConnectionFactory.createConnection` before
+creating a `LogScanner` or `MultiTableLogScanner`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `client.consumer.group.id` | String | (None) | Consumer group whose offsets are stored and retrieved. Required to commit offsets or subscribe from a committed offset. Without a group ID, automatic commits do not run. |
+| `client.consumer.auto-commit.enabled` | Boolean | `true` | Commit consumed offsets asynchronously when a poll finds that the commit interval has elapsed. Closing the scanner performs a final synchronous commit. Explicitly setting this to `true` without a group ID is invalid. |
+| `client.consumer.auto-commit.interval` | Duration | `5s` | Interval between automatic commits. The scanner checks it during polling; no periodic commit is triggered between polls. |
+| `client.consumer.auto-offset-reset` | String | `earliest` | Starting position if `subscribeFromCommittedOffset` finds no offset: `earliest`, `latest`, or `none` (fail instead of choosing a position). |
+
+For example, configure a group and disable automatic commits if the application commits offsets
+explicitly with `scanner.commitSync()` or `scanner.commitAsync()`:
+
+```java
+Configuration conf = new Configuration();
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.consumer.group.id", "orders-reader");
+conf.setBoolean("client.consumer.auto-commit.enabled", false);
+Connection connection = ConnectionFactory.createConnection(conf);
+```
+
 #### Filter Pushdown
 
 Filter pushdown can reduce the data read by a `LogScanner`. Fluss evaluates the predicate against

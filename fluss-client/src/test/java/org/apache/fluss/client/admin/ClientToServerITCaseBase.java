@@ -80,6 +80,7 @@ public abstract class ClientToServerITCaseBase {
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
+                    .setPreserveSystemTables(true)
                     .build();
 
     protected Connection conn;

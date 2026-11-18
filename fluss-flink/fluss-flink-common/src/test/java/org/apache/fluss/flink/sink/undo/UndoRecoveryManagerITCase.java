@@ -21,10 +21,12 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.OffsetCommitCallback;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
@@ -912,8 +914,18 @@ public class UndoRecoveryManagerITCase {
         }
 
         @Override
+        public void subscribeFromCommittedOffset(int bucket) {
+            delegate.subscribeFromCommittedOffset(bucket);
+        }
+
+        @Override
         public void subscribe(long partitionId, int bucket, long offset) {
             delegate.subscribe(partitionId, bucket, offset);
+        }
+
+        @Override
+        public void subscribeFromCommittedOffset(long partitionId, int bucket) {
+            delegate.subscribeFromCommittedOffset(partitionId, bucket);
         }
 
         @Override
@@ -924,6 +936,42 @@ public class UndoRecoveryManagerITCase {
         @Override
         public void unsubscribe(int bucket) {
             delegate.unsubscribe(bucket);
+        }
+
+        @Override
+        public void commitSync() {
+            delegate.commitSync();
+        }
+
+        @Override
+        public void commitSync(Duration timeout) {
+            delegate.commitSync(timeout);
+        }
+
+        @Override
+        public void commitSync(Map<TableBucket, OffsetMetadata> offsets) {
+            delegate.commitSync(offsets);
+        }
+
+        @Override
+        public void commitSync(Map<TableBucket, OffsetMetadata> offsets, Duration timeout) {
+            delegate.commitSync(offsets, timeout);
+        }
+
+        @Override
+        public void commitAsync() {
+            delegate.commitAsync();
+        }
+
+        @Override
+        public void commitAsync(OffsetCommitCallback callback) {
+            delegate.commitAsync(callback);
+        }
+
+        @Override
+        public void commitAsync(
+                Map<TableBucket, OffsetMetadata> offsets, OffsetCommitCallback callback) {
+            delegate.commitAsync(offsets, callback);
         }
 
         @Override
