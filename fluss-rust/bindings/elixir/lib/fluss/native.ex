@@ -23,6 +23,30 @@ defmodule Fluss.Native do
     crate: "fluss_nif",
     mode: if(Mix.env() == :prod, do: :release, else: :debug)
 
+  def consumer_scanner_new(_table, _group, _timeout_ms, _auto_commit_ms),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def consumer_scanner_multi_new(_conn, _tables, _group, _timeout_ms, _auto_commit_ms),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def consumer_scanner_subscribe(_scanner, _buckets, _steps),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def consumer_scanner_unsubscribe(_scanner, _bucket), do: :erlang.nif_error(:nif_not_loaded)
+  def consumer_scanner_commit(_scanner, _offsets), do: :erlang.nif_error(:nif_not_loaded)
+  def consumer_scanner_poll(_scanner, _timeout_ms), do: :erlang.nif_error(:nif_not_loaded)
+  def admin_get_consumer_offsets(_admin, _group, _buckets), do: :erlang.nif_error(:nif_not_loaded)
+  def admin_list_consumer_offsets(_admin, _group), do: :erlang.nif_error(:nif_not_loaded)
+  def admin_list_consumer_groups(_admin), do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_alter_consumer_offsets(_admin, _group, _offsets),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_delete_consumer_offsets(_admin, _group, _buckets),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def admin_delete_consumer_groups(_admin, _groups), do: :erlang.nif_error(:nif_not_loaded)
+
   # Connection
   def connection_new(_config), do: :erlang.nif_error(:nif_not_loaded)
 

@@ -131,33 +131,42 @@ fn encode_scan_records<'a>(
     let mut result = Vec::new();
 
     for record in scan_records {
-        let row_map = row_convert::row_to_term(env, record.row(), columns, &column_atoms)
-            .map_err(|e| format!("failed to convert row at offset {}: {e}", record.offset()))?;
-        let change_type_atom = match record.change_type() {
-            ChangeType::AppendOnly => atoms::append_only().encode(env),
-            ChangeType::Insert => atoms::insert().encode(env),
-            ChangeType::UpdateBefore => atoms::update_before().encode(env),
-            ChangeType::UpdateAfter => atoms::update_after().encode(env),
-            ChangeType::Delete => atoms::delete().encode(env),
-        };
-
-        let record_map = rustler::Term::map_from_pairs(
-            env,
-            &[
-                (atoms::offset().encode(env), record.offset().encode(env)),
-                (
-                    atoms::timestamp().encode(env),
-                    record.timestamp().encode(env),
-                ),
-                (atoms::change_type().encode(env), change_type_atom),
-                (atoms::row().encode(env), row_map),
-            ],
-        )
-        .map_err(|_| "failed to create record map".to_string())?;
-        result.push(record_map);
+        result.push(encode_record(env, &record, columns, &column_atoms)?);
     }
 
     Ok(result.encode(env))
+}
+
+pub(crate) fn encode_record<'a>(
+    env: Env<'a>,
+    record: &fluss::record::ScanRecord,
+    columns: &[Column],
+    column_atoms: &[rustler::Atom],
+) -> Result<Term<'a>, String> {
+    let row_map = row_convert::row_to_term(env, record.row(), columns, column_atoms)
+        .map_err(|e| format!("failed to convert row at offset {}: {e}", record.offset()))?;
+    let change_type_atom = match record.change_type() {
+        ChangeType::AppendOnly => atoms::append_only().encode(env),
+        ChangeType::Insert => atoms::insert().encode(env),
+        ChangeType::UpdateBefore => atoms::update_before().encode(env),
+        ChangeType::UpdateAfter => atoms::update_after().encode(env),
+        ChangeType::Delete => atoms::delete().encode(env),
+    };
+
+    let record_map = rustler::Term::map_from_pairs(
+        env,
+        &[
+            (atoms::offset().encode(env), record.offset().encode(env)),
+            (
+                atoms::timestamp().encode(env),
+                record.timestamp().encode(env),
+            ),
+            (atoms::change_type().encode(env), change_type_atom),
+            (atoms::row().encode(env), row_map),
+        ],
+    )
+    .map_err(|_| "failed to create record map".to_string())?;
+    Ok(record_map)
 }
 
 #[rustler::nif]

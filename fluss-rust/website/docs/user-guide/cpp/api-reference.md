@@ -1346,3 +1346,30 @@ inline const char* ChangeTypeShortString(ChangeType ct) {
 | `Earliest`  | Earliest available offset      |
 | `Latest`    | Latest offset                  |
 | `Timestamp` | Offset at a specific timestamp |
+
+## Consumer offset management
+
+```cpp
+fluss::ConsumerGroupOptions options{"orders"};
+fluss::LogScanner scanner;
+auto status = table.NewScan().WithConsumerGroup(options).CreateLogScanner(scanner);
+// Check status before using the scanner.
+status = scanner.Subscribe(buckets, fluss::OffsetsInitializer::Committed("orders"));
+fluss::ScanRecords records;
+status = scanner.Poll(1000, records);
+// Finish processing every returned record first.
+fluss::OffsetCommitResult committed = scanner.CommitSync();
+if (!committed.Ok()) { /* inspect request and individual bucket results */ }
+```
+
+Buckets include table ID and optional partition ID. Explicit commits accept `std::vector<ConsumerOffset>`; offsets identify the **next** record to read. Metadata distinguishes `std::nullopt` from an empty string. `CommitAsync()` queues immediately and returns a `std::future<OffsetCommitResult>`. Invocations on a scanner stay ordered even when their futures are awaited in another order. Releasing a future may wait for completion; it does not cancel the queued write.
+
+Check `OffsetCommitResult::Ok()` and inspect request/per-bucket `result` and `outcome_unknown`. An unknown write outcome blocks later commits on that scanner; settle the old writer before recovering. Different scanners and processes are not fenced.
+
+`OffsetsInitializer::Committed(group)` restores saved positions and defaults missing commits to earliest. Its fallback overload accepts `Earliest()`, `Latest()`, `Timestamp(epoch_ms)`, `Offset(next_offset)` or `Fail()`. Authorization and RPC failures never select a fallback.
+
+`ConsumerGroupOptions::auto_commit_interval_ms` defaults to zero (disabled). A positive value commits previously delivered positions before a later poll when due. Process every record before polling again and call `CommitSync()` after the last processed batch. Dropping a scanner performs no final commit; bounded readers do not support auto-commit.
+
+`Connection::CreateMultiTableLogScanner(paths, options, out)` and `CreateMultiTableRecordBatchLogScanner` share the same group queue across tables. Table-qualified `Subscribe` and `Unsubscribe` select buckets; every result retains its source schema. Drive polling, assignment and commits from one consumer thread. Assignment is manual, without membership or rebalance.
+
+Admin exposes `GetConsumerOffsets`, `ListConsumerOffsets`, `ListConsumerGroups`, `AlterConsumerOffsets`, `DeleteConsumerOffsets`, and `DeleteConsumerGroups`. Selected queries require GROUP DESCRIBE and TABLE DESCRIBE on every requested table; all-offset listing omits unauthorized tables. Reset uses GROUP READ plus TABLE READ, selected deletion uses GROUP WRITE, and group deletion uses GROUP DROP. Check all per-bucket/group outcomes, stop writers before mutations, and do not blindly repeat unknown deletions. A later commit can recreate a group. Group listing queries every current TabletServer and fails if any cannot be queried; it is not a transactional snapshot.

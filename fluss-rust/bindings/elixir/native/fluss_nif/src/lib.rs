@@ -29,6 +29,7 @@ mod async_nif;
 mod atoms;
 mod config;
 mod connection;
+mod consumer_offsets;
 mod log_scanner;
 mod lookuper;
 mod row_convert;

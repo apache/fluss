@@ -46,6 +46,55 @@ impl FlussConnection {
         })
     }
 
+    /// Creates a manually assigned multi-table record or Arrow scanner with one commit queue.
+    #[pyo3(signature=(tables, group_id, timeout_ms=30000, auto_commit_interval_ms=None, arrow=false))]
+    fn create_multi_table_scanner<'py>(
+        &self,
+        py: Python<'py>,
+        tables: Vec<TablePath>,
+        group_id: String,
+        timeout_ms: u64,
+        auto_commit_interval_ms: Option<u64>,
+        arrow: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let connection = self.inner.clone();
+        let tables: Vec<_> = tables.iter().map(TablePath::to_core).collect();
+        future_into_py(py, async move {
+            let options = fcore::client::ConsumerGroupOptions {
+                group_id,
+                timeout: Duration::from_millis(timeout_ms),
+            };
+            let mut scan = connection
+                .new_multi_table_scan(&tables, options)
+                .await
+                .map_err(|error| FlussError::from_core_error(&error))?;
+            if let Some(ms) = auto_commit_interval_ms {
+                scan = scan
+                    .with_auto_commit(Duration::from_millis(ms))
+                    .map_err(|error| FlussError::from_core_error(&error))?;
+            }
+            let mut schemas = std::collections::HashMap::new();
+            for info in scan.table_infos() {
+                schemas.insert(info.table_id, info.get_row_type().clone());
+            }
+            let inner = if arrow {
+                crate::consumer_offsets::MultiKind::Batch(
+                    scan.create_record_batch_log_scanner()
+                        .map_err(|error| FlussError::from_core_error(&error))?,
+                )
+            } else {
+                crate::consumer_offsets::MultiKind::Record(
+                    scan.create_log_scanner()
+                        .map_err(|error| FlussError::from_core_error(&error))?,
+                )
+            };
+            Ok(MultiTableLogScanner {
+                inner: Arc::new(inner),
+                schemas: Arc::new(schemas),
+            })
+        })
+    }
+
     /// Get admin interface
     fn get_admin(&self, py: Python<'_>) -> PyResult<Py<FlussAdmin>> {
         let admin = self

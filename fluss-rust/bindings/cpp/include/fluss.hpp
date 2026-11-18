@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -236,6 +237,12 @@ struct ErrorCode {
     static constexpr int HISTORICAL_PARTITION_THROTTLED = 73;
     /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
     static constexpr int INVALID_BUCKET_ROUTING = 74;
+    static constexpr int INVALID_CONSUMER_GROUP_ID = 75;
+    static constexpr int CONSUMER_GROUP_OWNER_LOADING = 76;
+    static constexpr int CONSUMER_GROUP_OWNER_NOT_AVAILABLE = 77;
+    static constexpr int NOT_CONSUMER_GROUP_OWNER = 78;
+    static constexpr int CONSUMER_GROUP_ID_NOT_FOUND = 79;
+    static constexpr int CONSUMER_OFFSET_METADATA_TOO_LARGE = 80;
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
@@ -244,12 +251,12 @@ struct ErrorCode {
                code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
                code == CORRUPT_RECORD_EXCEPTION ||
                code == UNKNOWN_TABLE_OR_BUCKET_EXCEPTION || code == REQUEST_TIME_OUT ||
-               code == STORAGE_EXCEPTION ||
-               code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
+               code == STORAGE_EXCEPTION || code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
-               code == NOT_COORDINATOR_LEADER_EXCEPTION ||
-               code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
-               code == HISTORICAL_PARTITION_THROTTLED;
+               code == NOT_COORDINATOR_LEADER_EXCEPTION || code == STORAGE_BACKPRESSURE_EXCEPTION ||
+               code == DISK_WRITE_LOCKED || code == HISTORICAL_PARTITION_THROTTLED ||
+               code == CONSUMER_GROUP_OWNER_LOADING || code == CONSUMER_GROUP_OWNER_NOT_AVAILABLE ||
+               code == NOT_CONSUMER_GROUP_OWNER;
     }
 };
 
@@ -1278,6 +1285,88 @@ struct TableBucket {
     bool operator!=(const TableBucket& other) const { return !(*this == other); }
 };
 
+/// Persisted next offset, with null metadata distinct from an empty string.
+struct OffsetAndMetadata {
+    int64_t offset;
+    std::optional<std::string> metadata;
+};
+
+/// Starting positions for manually assigned log buckets. Fallback is used only for missing commits.
+class OffsetsInitializer {
+   public:
+    static OffsetsInitializer Earliest() { return Offset(EARLIEST_OFFSET); }
+    static OffsetsInitializer Latest() { return OffsetsInitializer({1, 0, {}}); }
+    /// Unix timestamp in milliseconds.
+    static OffsetsInitializer Timestamp(int64_t timestamp_ms) {
+        return OffsetsInitializer({2, timestamp_ms, {}});
+    }
+    /// Explicit nonnegative offset for every selected bucket.
+    static OffsetsInitializer Offset(int64_t offset) { return OffsetsInitializer({0, offset, {}}); }
+    /// Fail if a preceding strategy leaves any bucket unresolved.
+    static OffsetsInitializer Fail() { return OffsetsInitializer({3, 0, {}}); }
+    /// Restore saved offsets; default fallback is earliest. Group may differ from the commit group.
+    static OffsetsInitializer Committed(std::string group_id,
+                                        OffsetsInitializer fallback = Earliest()) {
+        fallback.steps_.insert(fallback.steps_.begin(), {4, 0, std::move(group_id)});
+        return fallback;
+    }
+
+   private:
+    friend class LogScanner;
+    struct Step {
+        int32_t kind;
+        int64_t value;
+        std::string group_id;
+    };
+    explicit OffsetsInitializer(Step step) : steps_{std::move(step)} {}
+    std::vector<Step> steps_;
+};
+
+struct ConsumerGroupOptions {
+    std::string group_id;
+    uint64_t timeout_ms{30000};
+    /// Zero disables periodic commits; otherwise checked before each poll.
+    uint64_t auto_commit_interval_ms{0};
+};
+
+struct ConsumerOffset {
+    TableBucket bucket;
+    OffsetAndMetadata value;
+};
+
+struct CommittedOffset {
+    TableBucket bucket;
+    /// Absent means this group currently has no saved offset for the bucket.
+    std::optional<OffsetAndMetadata> value;
+};
+
+struct BucketOffsetCommitResult {
+    TableBucket bucket;
+    Result result;
+    bool outcome_unknown{false};
+};
+
+/// Inspect both the request result and every bucket outcome.
+struct OffsetCommitResult {
+    Result result;
+    bool outcome_unknown{false};
+    std::vector<BucketOffsetCommitResult> buckets;
+
+    bool Ok() const {
+        if (!result.Ok() || outcome_unknown) return false;
+        for (const auto& bucket : buckets) {
+            if (!bucket.result.Ok() || bucket.outcome_unknown) return false;
+        }
+        return true;
+    }
+};
+
+struct ConsumerGroupDeleteResult {
+    std::string group_id;
+    Result result;
+    bool outcome_unknown{false};
+};
+
 /// A single scan record. Contains metadata and a RowView for field access.
 ///
 /// ScanRecord is a value type that can be freely copied, stored, and
@@ -1743,6 +1832,13 @@ class Connection {
 
     bool Available() const;
 
+    /// Creates a scanner sharing one commit queue across tables. Use table-qualified
+    /// Subscribe and Unsubscribe; each poll retains its source table/schema.
+    Result CreateMultiTableLogScanner(const std::vector<TablePath>& tables,
+                                      const ConsumerGroupOptions& group, LogScanner& out);
+    Result CreateMultiTableRecordBatchLogScanner(const std::vector<TablePath>& tables,
+                                                 const ConsumerGroupOptions& group,
+                                                 RecordBatchLogScanner& out);
     Result GetAdmin(Admin& out);
     Result GetTable(const TablePath& table_path, Table& out);
 
@@ -1772,6 +1868,22 @@ class Admin {
     Result DropTable(const TablePath& table_path, bool ignore_if_not_exists = false);
 
     Result GetTableInfo(const TablePath& table_path, TableInfo& out);
+
+    /// Queries saved next offsets across tables without moving a scanner. Missing commits
+    /// have no value. Any bucket error fails the query; deadline is 30 seconds including retries.
+    /// Queries all visible saved offsets; unauthorized source tables are omitted.
+    Result ListConsumerOffsets(const std::string& group_id, std::vector<CommittedOffset>& out);
+    /// Stop consumers before altering/deleting offsets; unknown outcomes must not be retried
+    /// blindly.
+    OffsetCommitResult AlterConsumerOffsets(const std::string& group_id,
+                                            const std::vector<ConsumerOffset>& offsets);
+    OffsetCommitResult DeleteConsumerOffsets(const std::string& group_id,
+                                             const std::vector<TableBucket>& buckets);
+    Result ListConsumerGroups(std::vector<std::string>& out);
+    Result DeleteConsumerGroups(const std::vector<std::string>& groups,
+                                std::vector<ConsumerGroupDeleteResult>& out);
+    Result GetConsumerOffsets(const std::string& group_id, const std::vector<TableBucket>& buckets,
+                              std::vector<CommittedOffset>& out);
 
     Result GetLatestLakeSnapshot(const TablePath& table_path, LakeSnapshot& out);
 
@@ -1935,6 +2047,8 @@ class TableLookup {
     ffi::Table* table_{nullptr};
 };
 
+class ConsumerGroupScan;
+
 class TableScan {
    public:
     TableScan(const TableScan&) = delete;
@@ -1952,6 +2066,10 @@ class TableScan {
     TableScan& Filter(Predicate predicate);
 
     TableScan& Limit(int32_t row_number);
+
+    /// Enables explicit offset commits. Group ID is an opaque, nonempty string.
+    /// Consumes this builder. Use Subscribe with OffsetsInitializer::Committed to restore offsets.
+    ConsumerGroupScan WithConsumerGroup(ConsumerGroupOptions options);
 
     /// Creates a record-mode log scanner, polled for individual `ScanRecord`s.
     ///
@@ -1995,13 +2113,32 @@ class TableScan {
     explicit TableScan(ffi::Table* table) noexcept;
 
     std::vector<size_t> ResolveNameProjection() const;
+    friend class ConsumerGroupScan;
+    friend class Connection;
     Result DoCreateScanner(LogScanner& out, bool is_record_batch);
+    Result DoCreateScanner(LogScanner& out, bool is_record_batch,
+                           const ConsumerGroupOptions* group);
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;
     std::vector<std::string> name_projection_;
     std::optional<Predicate> predicate_;
     std::optional<int32_t> limit_;
+};
+
+/// Scan configuration with persisted consumer offsets. Owns the moved scan builder;
+/// the originating Table must remain alive until scanner creation completes.
+class ConsumerGroupScan {
+   public:
+    Result CreateLogScanner(LogScanner& out);
+    Result CreateRecordBatchLogScanner(RecordBatchLogScanner& out);
+
+   private:
+    friend class TableScan;
+    ConsumerGroupScan(TableScan scan, ConsumerGroupOptions options)
+        : scan_(std::move(scan)), options_(std::move(options)) {}
+    TableScan scan_;
+    ConsumerGroupOptions options_;
 };
 
 class WriteResult {
@@ -2292,6 +2429,9 @@ class PrefixLookuper {
 
 class LogScanner {
    public:
+    /// Removes a table-qualified bucket from a multi-table scanner without committing it.
+    Result Unsubscribe(const TableBucket& bucket);
+
     LogScanner() noexcept;
     ~LogScanner() noexcept;
 
@@ -2301,6 +2441,22 @@ class LogScanner {
     LogScanner& operator=(LogScanner&& other) noexcept;
 
     bool Available() const;
+
+    /// Resolve positions before updating selected buckets; retain other subscriptions.
+    /// Resolution failure leaves subscriptions unchanged. Assignment remains manual.
+    Result Subscribe(const std::vector<TableBucket>& buckets,
+                     const OffsetsInitializer& initializer);
+    /// Commits positions delivered by Poll. Process all returned records first.
+    OffsetCommitResult CommitSync();
+    /// Commits explicit next offsets, allowing partially processed poll results.
+    OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
+    /// Enqueues a snapshot now. Calls on one scanner execute in invocation order.
+    /// The operation owns its resources and survives scanner destruction. Destroying
+    /// the returned future may wait for completion. No cross-scanner fencing exists.
+    /// Unknown outcomes block further commits; reads do not fence a late write.
+    /// Drive polls, subscriptions and commit initiation from one consumer thread.
+    std::future<OffsetCommitResult> CommitAsync();
+    std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
@@ -2314,6 +2470,8 @@ class LogScanner {
    private:
     friend class Table;
     friend class TableScan;
+    friend class ConsumerGroupScan;
+    friend class Connection;
     friend class RecordBatchLogScanner;
     LogScanner(ffi::LogScanner* scanner) noexcept;
 
@@ -2350,6 +2508,9 @@ class LogScanner {
 /// Use this type for unbounded batch polling, or move it into a bounded reader.
 class RecordBatchLogScanner {
    public:
+    /// Removes a table-qualified bucket from a multi-table scanner without committing it.
+    Result Unsubscribe(const TableBucket& bucket);
+
     RecordBatchLogScanner() noexcept;
     ~RecordBatchLogScanner() noexcept;
 
@@ -2359,6 +2520,17 @@ class RecordBatchLogScanner {
     RecordBatchLogScanner& operator=(RecordBatchLogScanner&& other) noexcept;
 
     bool Available() const;
+
+    /// Consumer offset methods have the same contracts as LogScanner's methods.
+    /// Process all batches returned by Poll before calling no-argument CommitSync/Async.
+    /// Use explicit offsets for partially processed batches. Drive the scanner from one
+    /// consumer thread; commits are ordered, and unknown outcomes block later commits.
+    Result Subscribe(const std::vector<TableBucket>& buckets,
+                     const OffsetsInitializer& initializer);
+    OffsetCommitResult CommitSync();
+    OffsetCommitResult CommitSync(const std::vector<ConsumerOffset>& offsets);
+    std::future<OffsetCommitResult> CommitAsync();
+    std::future<OffsetCommitResult> CommitAsync(const std::vector<ConsumerOffset>& offsets);
 
     Result Subscribe(int32_t bucket_id, int64_t start_offset);
     Result Subscribe(const std::vector<BucketSubscription>& bucket_offsets);
@@ -2379,6 +2551,8 @@ class RecordBatchLogScanner {
 
    private:
     friend class TableScan;
+    friend class ConsumerGroupScan;
+    friend class Connection;
     explicit RecordBatchLogScanner(ffi::LogScanner* scanner) noexcept;
 
     /// Transfers this scanner into a reader bounded by per-bucket offset ranges,

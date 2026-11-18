@@ -22,10 +22,11 @@ from types import TracebackType
 from typing import (
     Any,
     AsyncIterator,
-    NoReturn,
+    Awaitable,
     Dict,
     Iterator,
     List,
+    NoReturn,
     Optional,
     Tuple,
     Union,
@@ -328,6 +329,14 @@ class Config:
 
 @final
 class FlussConnection:
+    async def create_multi_table_scanner(
+        self,
+        tables: List[TablePath],
+        group_id: str,
+        timeout_ms: int = 30000,
+        auto_commit_interval_ms: Optional[int] = None,
+        arrow: bool = False,
+    ) -> MultiTableLogScanner: ...
     @staticmethod
     async def create(config: Config) -> FlussConnection: ...
     def get_admin(self) -> FlussAdmin: ...
@@ -377,6 +386,22 @@ class ServerNode:
 
 @final
 class FlussAdmin:
+    async def get_consumer_offsets(
+        self, group_id: str, buckets: List[TableBucket]
+    ) -> Dict[TableBucket, Optional[OffsetAndMetadata]]: ...
+    async def list_consumer_offsets(
+        self, group_id: str
+    ) -> Dict[TableBucket, OffsetAndMetadata]: ...
+    async def list_consumer_groups(self) -> List[str]: ...
+    async def alter_consumer_offsets(
+        self, group_id: str, offsets: List[Tuple[TableBucket, OffsetAndMetadata]]
+    ) -> OffsetCommitResult: ...
+    async def delete_consumer_offsets(
+        self, group_id: str, buckets: List[TableBucket]
+    ) -> OffsetCommitResult: ...
+    async def delete_consumer_groups(
+        self, groups: List[str]
+    ) -> Dict[str, OffsetOperationOutcome]: ...
     async def create_database(
         self,
         database_name: str,
@@ -669,6 +694,10 @@ class TableScan:
         ```
     """
 
+    def with_consumer_group(
+        self, group_id: str, timeout_ms: int = 30000
+    ) -> TableScan: ...
+    def with_auto_commit(self, interval_ms: int) -> TableScan: ...
     def project(self, indices: List[int]) -> "TableScan":
         """Project to specific columns by their indices.
 
@@ -1102,6 +1131,15 @@ class LogScanner:
         scanner = await table.new_scan().project([0, 1]).create_log_scanner()
     """
 
+    async def subscribe_with_initializer(
+        self, buckets: List[TableBucket], initializer: OffsetsInitializer
+    ) -> None: ...
+    def commit_async(
+        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
+    ) -> Awaitable[OffsetCommitResult]: ...
+    def commit_sync(
+        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
+    ) -> OffsetCommitResult: ...
     def subscribe(self, bucket_id: int, start_offset: int) -> None:
         """Subscribe to a single bucket at a specific offset (non-partitioned tables).
 
@@ -1556,3 +1594,61 @@ NO_COMMIT_TIMESTAMP: int
 NO_SCHEMA_ID: int
 
 __version__: str
+
+@final
+class OffsetAndMetadata:
+    def __new__(
+        cls, offset: int, metadata: Optional[str] = None
+    ) -> OffsetAndMetadata: ...
+    @property
+    def offset(self) -> int: ...
+    @property
+    def metadata(self) -> Optional[str]: ...
+
+@final
+class OffsetsInitializer:
+    @staticmethod
+    def earliest() -> OffsetsInitializer: ...
+    @staticmethod
+    def latest() -> OffsetsInitializer: ...
+    @staticmethod
+    def timestamp(timestamp_ms: int) -> OffsetsInitializer: ...
+    @staticmethod
+    def offset(offset: int) -> OffsetsInitializer: ...
+    @staticmethod
+    def fail() -> OffsetsInitializer: ...
+    @staticmethod
+    def committed(
+        group_id: str, fallback: Optional[OffsetsInitializer] = None
+    ) -> OffsetsInitializer: ...
+
+@final
+class OffsetOperationOutcome:
+    @property
+    def status(self) -> str: ...
+    @property
+    def error_code(self) -> Optional[int]: ...
+    @property
+    def message(self) -> str: ...
+
+@final
+class OffsetCommitResult:
+    @property
+    def request(self) -> OffsetOperationOutcome: ...
+    @property
+    def buckets(self) -> Dict[TableBucket, OffsetOperationOutcome]: ...
+
+@final
+class MultiTableLogScanner:
+    async def subscribe_with_initializer(
+        self, buckets: List[TableBucket], initializer: OffsetsInitializer
+    ) -> None: ...
+    async def unsubscribe(self, bucket: TableBucket) -> None: ...
+    async def poll(self, timeout_ms: int) -> ScanRecords: ...
+    async def poll_record_batch(self, timeout_ms: int) -> List[RecordBatch]: ...
+    def commit_async(
+        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
+    ) -> Awaitable[OffsetCommitResult]: ...
+    def commit_sync(
+        self, offsets: Optional[List[Tuple[TableBucket, OffsetAndMetadata]]] = None
+    ) -> OffsetCommitResult: ...

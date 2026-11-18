@@ -21,6 +21,8 @@ pub use ::fluss as fcore;
 use pyo3::prelude::*;
 use tokio::runtime::Runtime;
 
+mod consumer_offsets;
+pub use consumer_offsets::*;
 mod admin;
 mod config;
 mod connection;
@@ -104,6 +106,11 @@ impl OffsetSpec {
 #[pymodule]
 fn _fluss(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register all classes
+    m.add_class::<OffsetAndMetadata>()?;
+    m.add_class::<OffsetsInitializer>()?;
+    m.add_class::<OffsetOperationOutcome>()?;
+    m.add_class::<OffsetCommitResult>()?;
+    m.add_class::<MultiTableLogScanner>()?;
     m.add_class::<Config>()?;
     m.add_class::<FlussConnection>()?;
     m.add_class::<TablePath>()?;

@@ -427,3 +427,37 @@ scanner.subscribe(bucket_id=0, start_offset=offsets[0])
 | `ChangeType.UpdateBefore` (2) | `-U`         | Previous value of updated row |
 | `ChangeType.UpdateAfter` (3)  | `+U`         | New value of updated row      |
 | `ChangeType.Delete` (4)       | `-D`         | Delete                        |
+
+## Consumer offset management
+
+Configure a group before creating a scanner. Committed offsets always identify the **next** record to read.
+
+```python
+scanner = await table.new_scan().with_consumer_group("orders").create_log_scanner()
+await scanner.subscribe_with_initializer(
+    [bucket], fluss.OffsetsInitializer.committed("orders"))
+records = await scanner.poll(1000)
+# Finish processing every returned record before committing.
+result = await scanner.commit_async()
+assert result.request.status == "success"
+assert all(value.status == "success" for value in result.buckets.values())
+```
+
+`commit_sync()` blocks with the GIL released; `commit_async()` enqueues immediately and returns an awaitable. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order; cancelling the awaitable stops waiting but leaves the queued commit running. An `unknown` write outcome blocks subsequent commits with `needs_recovery`; settle the old writer before recovering through a new scanner. The server does not fence competing writers.
+
+`OffsetsInitializer.committed(group, fallback=None)` uses earliest for missing commits by default. Alternatives are `latest()`, `timestamp(epoch_ms)`, `offset(next_offset)`, or `fail()`. Authorization and transport failures are propagated, never treated as missing commits.
+
+`table.new_scan().with_consumer_group(group).with_auto_commit(interval_ms)` enables automatic commits **before a subsequent poll** when due. Process the previous poll completely before polling again. No background timer commits during processing, and dropping a scanner does not commit the final batch. Bounded readers do not support auto-commit.
+
+For multiple tables use `await connection.create_multi_table_scanner(paths, group, auto_commit_interval_ms=None, arrow=False)`. Assign table-qualified buckets with `subscribe_with_initializer`, then use `poll(timeout_ms)` or, with `arrow=True`, `poll_record_batch(timeout_ms)`. Each table retains its own schema. Polls, assignment changes and commits must be driven by one consumer task. Subscription is manual; there is no automatic membership or rebalance.
+
+| Admin method | Result and permissions |
+| --- | --- |
+| `get_consumer_offsets(group, buckets)` | Bucket-to-optional-offset map. Requires GROUP DESCRIBE and TABLE DESCRIBE on every requested table. |
+| `list_consumer_offsets(group)` | All saved offsets on visible tables. Requires GROUP DESCRIBE; unauthorized tables are omitted. |
+| `list_consumer_groups()` | Visible groups across current TabletServers; failure querying one server fails the operation. |
+| `alter_consumer_offsets(group, offsets)` | `OffsetCommitResult`; GROUP READ and source TABLE READ. |
+| `delete_consumer_offsets(group, buckets)` | `OffsetCommitResult`; GROUP WRITE, missing offsets succeed. |
+| `delete_consumer_groups(groups)` | Group-to-`OffsetOperationOutcome` map; GROUP DROP, missing groups succeed. |
+
+All Admin methods are awaitable. Mutations expose `success`, `rejected`, `unknown`, and `needs_recovery` statuses with `error_code` and `message`. Inspect the request outcome and every bucket/group outcome. Stop consumers before administrative reset or deletion; concurrent commits are not fenced, and a later commit can recreate a deleted group. Listing is not a transactional snapshot across owner movement.

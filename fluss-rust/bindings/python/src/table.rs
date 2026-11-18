@@ -185,8 +185,8 @@ impl RecordBatch {
 /// Returned by `LogScanner.poll()`. Records are grouped by `TableBucket`.
 #[pyclass]
 pub struct ScanRecords {
-    records_by_bucket: IndexMap<TableBucket, Vec<Py<ScanRecord>>>,
-    total_count: usize,
+    pub(crate) records_by_bucket: IndexMap<TableBucket, Vec<Py<ScanRecord>>>,
+    pub(crate) total_count: usize,
 }
 
 #[pymethods]
@@ -444,6 +444,8 @@ pub struct TableScan {
     fixed_schema: bool,
     limit: Option<i32>,
     filter: Option<Predicate>,
+    consumer_group: Option<fcore::client::ConsumerGroupOptions>,
+    auto_commit_ms: Option<u64>,
 }
 
 /// Scanner type for internal use
@@ -454,6 +456,36 @@ enum ScannerType {
 
 #[pymethods]
 impl TableScan {
+    /// Enables manual consumer offset commits. Existing explicit subscriptions are unchanged.
+    #[pyo3(signature=(group_id, timeout_ms=30000))]
+    fn with_consumer_group(
+        mut slf: PyRefMut<'_, Self>,
+        group_id: String,
+        timeout_ms: u64,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        if group_id.is_empty() || timeout_ms == 0 {
+            return Err(FlussError::new_err(
+                "Group ID and timeout must be nonempty/nonzero",
+            ));
+        }
+        slf.consumer_group = Some(fcore::client::ConsumerGroupOptions {
+            group_id,
+            timeout: Duration::from_millis(timeout_ms),
+        });
+        Ok(slf)
+    }
+    /// Commits the previously processed poll when the interval expires. Drop never commits.
+    fn with_auto_commit(
+        mut slf: PyRefMut<'_, Self>,
+        interval_ms: u64,
+    ) -> PyResult<PyRefMut<'_, Self>> {
+        if interval_ms == 0 {
+            return Err(FlussError::new_err("Auto-commit interval must be positive"));
+        }
+        slf.auto_commit_ms = Some(interval_ms);
+        Ok(slf)
+    }
+
     /// Project to specific columns by their indices.
     ///
     /// Args:
@@ -534,6 +566,11 @@ impl TableScan {
     /// Returns:
     ///     A BatchScanner for `bucket`.
     pub fn create_bucket_batch_scanner(&self, bucket: &TableBucket) -> PyResult<BatchScanner> {
+        if self.consumer_group.is_some() || self.auto_commit_ms.is_some() {
+            return Err(FlussError::new_err(
+                "Consumer offsets require a log scanner",
+            ));
+        }
         let limit = self.limit.ok_or_else(|| {
             FlussError::new_err("create_bucket_batch_scanner requires a limit set via .limit(n)")
         })?;
@@ -613,16 +650,29 @@ impl TableScan {
         let projection = self.projection.clone();
         let fixed_schema = self.fixed_schema;
         let filter = self.filter.clone();
+        let group = self.consumer_group.clone();
+        let auto_commit_ms = self.auto_commit_ms;
 
         future_into_py(py, async move {
             let fluss_table = fcore::client::FlussTable::new(&conn, metadata, table_info.clone());
 
             let projection_indices = resolve_projection_indices(&projection, &table_info)?;
-            let table_scan = apply_filter(
+            let mut table_scan = apply_filter(
                 apply_projection(fluss_table.new_scan(), projection)?,
                 &filter,
             )?
             .with_fixed_schema(fixed_schema);
+
+            if let Some(group) = group {
+                table_scan = table_scan
+                    .with_consumer_group(group)
+                    .map_err(|error| FlussError::from_core_error(&error))?;
+            }
+            if let Some(ms) = auto_commit_ms {
+                table_scan = table_scan
+                    .with_auto_commit(Duration::from_millis(ms))
+                    .map_err(|error| FlussError::from_core_error(&error))?;
+            }
 
             let admin = conn
                 .get_admin()
@@ -766,6 +816,8 @@ impl FlussTable {
             fixed_schema: false,
             limit: None,
             filter: None,
+            consumer_group: None,
+            auto_commit_ms: None,
         }
     }
 
@@ -2418,7 +2470,7 @@ impl PyRecordBatchLogReader {
 
 /// Wraps the two scanner variants so we never have an impossible state
 /// (both None or both Some).
-enum ScannerKind {
+pub(crate) enum ScannerKind {
     Record(fcore::client::LogScanner),
     Batch(fcore::client::RecordBatchLogScanner),
 }
@@ -2472,6 +2524,53 @@ pub struct LogScanner {
 
 #[pymethods]
 impl LogScanner {
+    fn subscribe_with_initializer<'py>(
+        &self,
+        py: Python<'py>,
+        buckets: Vec<TableBucket>,
+        initializer: OffsetsInitializer,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let scanner = self.kind.clone();
+        let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
+        future_into_py(py, async move {
+            with_scanner!(
+                &scanner,
+                subscribe_with_initializer(&buckets, &initializer.inner)
+            )
+            .map_err(|error| FlussError::from_core_error(&error))
+        })
+    }
+    /// Captures offsets immediately. Cancellation only stops waiting; commits stay ordered.
+    #[pyo3(signature=(offsets=None))]
+    fn commit_async<'py>(
+        &self,
+        py: Python<'py>,
+        offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
+        future_into_py(py, async move {
+            Ok(crate::consumer_offsets::commit_result(
+                handle.await.unwrap_or_else(|error| Err(error.into())),
+            ))
+        })
+    }
+    /// Blocks with the GIL released. Check request and every bucket outcome.
+    #[pyo3(signature=(offsets=None))]
+    fn commit_sync(
+        &self,
+        py: Python<'_>,
+        offsets: Option<Vec<(TableBucket, OffsetAndMetadata)>>,
+    ) -> PyResult<OffsetCommitResult> {
+        let handle = crate::consumer_offsets::enqueue(&self.kind, offsets)?;
+        Ok(py.detach(|| {
+            crate::consumer_offsets::commit_result(
+                TOKIO_RUNTIME
+                    .block_on(handle)
+                    .unwrap_or_else(|error| Err(error.into())),
+            )
+        }))
+    }
+
     /// Subscribe to a single bucket at a specific offset (non-partitioned tables).
     ///
     /// Args:

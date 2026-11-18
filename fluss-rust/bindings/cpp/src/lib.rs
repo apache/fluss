@@ -113,6 +113,45 @@ mod ffi {
         error_message: String,
     }
 
+    struct FfiConsumerGroupOptions {
+        enabled: bool,
+        group_id: String,
+        timeout_ms: u64,
+        auto_commit_ms: u64,
+    }
+    struct FfiConsumerOffset {
+        table_id: i64,
+        bucket_id: i32,
+        has_partition: bool,
+        partition_id: i64,
+        has_offset: bool,
+        offset: i64,
+        has_metadata: bool,
+        metadata: String,
+        result: FfiResult,
+        unknown: bool,
+    }
+
+    struct FfiOffsetsInitializer {
+        kind: i32,
+        value: i64,
+        group_id: String,
+    }
+    struct FfiConsumerGroupResult {
+        group_id: String,
+        result: FfiResult,
+        unknown: bool,
+    }
+    struct FfiConsumerGroupsResult {
+        result: FfiResult,
+        groups: Vec<FfiConsumerGroupResult>,
+    }
+    struct FfiConsumerOffsetsResult {
+        result: FfiResult,
+        unknown: bool,
+        offsets: Vec<FfiConsumerOffset>,
+    }
+
     struct FfiTablePath {
         database_name: String,
         table_name: String,
@@ -433,6 +472,8 @@ mod ffi {
         type AppendWriter;
         type WriteResult;
         type LogScanner;
+        type OffsetCommitTask;
+        fn wait(self: &mut OffsetCommitTask) -> FfiConsumerOffsetsResult;
         type RecordBatchLogReader;
         type BatchScanner;
         type UpsertWriter;
@@ -455,6 +496,14 @@ mod ffi {
         // Connection
         fn new_connection(config: &FfiConfig) -> FfiPtrResult;
         unsafe fn delete_connection(conn: *mut Connection);
+        fn create_multi_table_scanner(
+            self: &Connection,
+            tables: Vec<FfiTablePath>,
+            group_id: String,
+            timeout_ms: u64,
+            auto_commit_ms: u64,
+            batch: bool,
+        ) -> FfiPtrResult;
         fn get_admin(self: &Connection) -> FfiPtrResult;
         fn get_table(self: &Connection, table_path: &FfiTablePath) -> FfiPtrResult;
 
@@ -537,6 +586,7 @@ mod ffi {
             column_indices: Vec<usize>,
             predicate_nodes: Vec<FfiPredicateNode>,
             batch: bool,
+            group: FfiConsumerGroupOptions,
         ) -> FfiPtrResult;
         fn create_bucket_batch_scanner(
             self: &Table,
@@ -871,6 +921,35 @@ mod ffi {
         ) -> Result<Box<ValueInner>>;
 
         // LogScanner
+        fn subscribe_with_initializer(
+            self: &LogScanner,
+            buckets: Vec<FfiConsumerOffset>,
+            initializer: Vec<FfiOffsetsInitializer>,
+        ) -> FfiResult;
+        fn list_consumer_offsets(self: &Admin, group_id: &str) -> FfiConsumerOffsetsResult;
+        fn alter_consumer_offsets(
+            self: &Admin,
+            group_id: &str,
+            offsets: Vec<FfiConsumerOffset>,
+        ) -> FfiConsumerOffsetsResult;
+        fn delete_consumer_offsets(
+            self: &Admin,
+            group_id: &str,
+            buckets: Vec<FfiConsumerOffset>,
+        ) -> FfiConsumerOffsetsResult;
+        fn list_consumer_groups(self: &Admin) -> FfiConsumerGroupsResult;
+        fn delete_consumer_groups(self: &Admin, groups: Vec<String>) -> FfiConsumerGroupsResult;
+        fn unsubscribe_table_bucket(self: &LogScanner, bucket: FfiConsumerOffset) -> FfiResult;
+        fn get_consumer_offsets(
+            self: &Admin,
+            group_id: &str,
+            buckets: Vec<FfiConsumerOffset>,
+        ) -> FfiConsumerOffsetsResult;
+        fn begin_commit(
+            self: &LogScanner,
+            current: bool,
+            offsets: Vec<FfiConsumerOffset>,
+        ) -> Box<OffsetCommitTask>;
         unsafe fn delete_log_scanner(scanner: *mut LogScanner);
         fn subscribe(self: &LogScanner, bucket_id: i32, start_offset: i64) -> FfiResult;
         fn subscribe_buckets(
@@ -1060,6 +1139,8 @@ pub struct WriteResult {
 enum ScannerKind {
     Record(fcore::client::LogScanner),
     Batch(fcore::client::RecordBatchLogScanner),
+    MultiRecord(fcore::client::MultiTableLogScanner),
+    MultiBatch(fcore::client::MultiTableRecordBatchLogScanner),
 }
 
 pub struct LogScanner {
@@ -1067,6 +1148,7 @@ pub struct LogScanner {
     /// Fluss columns matching the projected Arrow fields (1:1 by index).
     /// For non-projected scanners this is the full table schema columns.
     projected_columns: Vec<fcore::metadata::Column>,
+    table_columns: HashMap<i64, Vec<fcore::metadata::Column>>,
 }
 
 pub struct RecordBatchLogReader {
@@ -2054,10 +2136,30 @@ impl Table {
         column_indices: Vec<usize>,
         predicate_nodes: Vec<ffi::FfiPredicateNode>,
         batch: bool,
+        group: ffi::FfiConsumerGroupOptions,
     ) -> ffi::FfiPtrResult {
         RUNTIME.block_on(async {
             let fluss_table = self.fluss_table();
             let scan = fluss_table.new_scan();
+            let scan = if group.enabled {
+                match scan.with_consumer_group(fcore::client::ConsumerGroupOptions {
+                    group_id: group.group_id,
+                    timeout: std::time::Duration::from_millis(group.timeout_ms),
+                }) {
+                    Ok(scan) => scan,
+                    Err(error) => return err_ptr_from_core(&error),
+                }
+            } else {
+                scan
+            };
+            let scan = if group.auto_commit_ms > 0 {
+                match scan.with_auto_commit(Duration::from_millis(group.auto_commit_ms)) {
+                    Ok(scan) => scan,
+                    Err(error) => return err_ptr_from_core(&error),
+                }
+            } else {
+                scan
+            };
             let scan =
                 match predicate_from_ffi_nodes(&predicate_nodes, self.table_info.get_row_type()) {
                     Ok(Some(predicate)) => match scan.filter(predicate) {
@@ -2097,6 +2199,7 @@ impl Table {
             let ptr = Box::into_raw(Box::new(LogScanner {
                 scanner,
                 projected_columns,
+                table_columns: HashMap::new(),
             }));
             ok_ptr(ptr as usize)
         })
@@ -2517,6 +2620,7 @@ macro_rules! dispatch_scanner {
             match &$self.scanner {
                 ScannerKind::Record(s) => s.$method($($arg),*).await,
                 ScannerKind::Batch(s) => s.$method($($arg),*).await,
+                _ => Err(fcore::error::Error::IllegalArgument { message: "Use table-qualified bucket methods for multi-table scanners".into() }),
             }
         }) {
             Ok(_) => ok_result(),
@@ -2570,19 +2674,26 @@ impl LogScanner {
     }
 
     fn poll(&self, timeout_ms: i64) -> Box<ScanResultInner> {
-        let ScannerKind::Record(ref inner) = self.scanner else {
-            return Box::new(ScanResultInner::from_error(
-                CLIENT_ERROR_CODE,
-                "Record-based scanner not available".to_string(),
-            ));
-        };
-
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-        let result = RUNTIME.block_on(async { inner.poll(timeout).await });
+        let result = RUNTIME.block_on(async {
+            match &self.scanner {
+                ScannerKind::Record(inner) => inner.poll(timeout).await,
+                ScannerKind::MultiRecord(inner) => inner.poll(timeout).await,
+                _ => Err(fcore::error::Error::IllegalArgument {
+                    message: "Record-based scanner not available".into(),
+                }),
+            }
+        });
 
         match result {
             Ok(records) => {
-                let columns = self.projected_columns.clone();
+                let columns = records
+                    .records_by_buckets()
+                    .keys()
+                    .next()
+                    .and_then(|bucket| self.table_columns.get(&bucket.table_id()))
+                    .unwrap_or(&self.projected_columns)
+                    .clone();
                 let mut total_count = 0usize;
                 let mut buckets = Vec::new();
                 let mut bucket_infos = Vec::new();
@@ -2617,15 +2728,16 @@ impl LogScanner {
     }
 
     fn poll_record_batch(&self, timeout_ms: i64) -> ffi::FfiArrowRecordBatchesResult {
-        let ScannerKind::Batch(ref inner_batch) = self.scanner else {
-            return ffi::FfiArrowRecordBatchesResult {
-                result: client_err("Batch-based scanner not available".to_string()),
-                arrow_batches: ffi::FfiArrowRecordBatches { batches: vec![] },
-            };
-        };
-
         let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
-        let result = RUNTIME.block_on(async { inner_batch.poll(timeout).await });
+        let result = RUNTIME.block_on(async {
+            match &self.scanner {
+                ScannerKind::Batch(inner) => inner.poll(timeout).await,
+                ScannerKind::MultiBatch(inner) => inner.poll(timeout).await,
+                _ => Err(fcore::error::Error::IllegalArgument {
+                    message: "Batch-based scanner not available".into(),
+                }),
+            }
+        });
 
         match result {
             Ok(batches) => arrow_batches_result(types::core_scan_batches_to_ffi(&batches)),
@@ -4621,3 +4733,6 @@ fn structurally_compatible(a: &fcore::metadata::DataType, b: &fcore::metadata::D
         _ => false,
     }
 }
+
+mod consumer_offsets;
+use consumer_offsets::OffsetCommitTask;

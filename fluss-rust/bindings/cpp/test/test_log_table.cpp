@@ -2662,3 +2662,117 @@ TEST_F(LogTableTest, ScalarTypeMetadataPreservedInTableInfo) {
 
     ASSERT_OK(adm.DropTable(table_path, false));
 }
+
+TEST_F(LogTableTest, ConsumerOffsetsAcrossTablesAndBindings) {
+    auto& conn = connection();
+    auto& adm = admin();
+    const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::string group = "cpp-" + suffix;
+    std::vector<fluss::TablePath> paths{{"fluss", "offset_a_" + suffix},
+                                        {"fluss", "offset_b_" + suffix}};
+    std::vector<fluss::TableBucket> buckets;
+    for (size_t index = 0; index < paths.size(); ++index) {
+        auto schema = fluss::Schema::NewBuilder()
+                          .AddColumn(index == 0 ? "id" : "name",
+                                     index == 0 ? DataType::Int() : DataType::String())
+                          .Build();
+        auto descriptor = fluss::TableDescriptor::NewBuilder()
+                              .SetSchema(schema)
+                              .SetBucketCount(1)
+                              .SetProperty("table.replication.factor", "1")
+                              .Build();
+        fluss_test::CreateTable(adm, paths[index], descriptor);
+        fluss::Table table;
+        ASSERT_OK(conn.GetTable(paths[index], table));
+        buckets.push_back({table.GetTableInfo().table_id, 0});
+        fluss::AppendWriter writer;
+        ASSERT_OK(table.NewAppend().CreateWriter(writer));
+        std::shared_ptr<arrow::RecordBatch> batch;
+        if (index == 0) {
+            arrow::Int32Builder values;
+            ASSERT_TRUE(values.AppendValues({0, 1, 2}).ok());
+            batch = arrow::RecordBatch::Make(arrow::schema({arrow::field("id", arrow::int32())}), 3,
+                                             {values.Finish().ValueOrDie()});
+        } else {
+            arrow::StringBuilder values;
+            ASSERT_TRUE(values.AppendValues({"0", "1", "2"}).ok());
+            batch = arrow::RecordBatch::Make(arrow::schema({arrow::field("name", arrow::utf8())}),
+                                             3, {values.Finish().ValueOrDie()});
+        }
+        ASSERT_OK(writer.AppendArrowBatch(batch));
+        ASSERT_OK(writer.Flush());
+    }
+    fluss::LogScanner scanner;
+    ASSERT_OK(conn.CreateMultiTableLogScanner(paths, {group}, scanner));
+    ASSERT_OK(scanner.Subscribe(buckets, fluss::OffsetsInitializer::Committed(group)));
+    fluss::ScanRecords first, second;
+    ASSERT_OK(scanner.Poll(10000, first));
+    ASSERT_OK(scanner.Poll(10000, second));
+    ASSERT_EQ(first.Count(), 3);
+    ASSERT_EQ(second.Count(), 3);
+    // Keep the first result alive across another table's poll; its column mapping must remain
+    // valid.
+    const auto& integers = first.Buckets()[0] == buckets[0] ? first : second;
+    const auto& strings = first.Buckets()[0] == buckets[1] ? first : second;
+    EXPECT_EQ(integers.Records(buckets[0])[1].row.GetInt32(0), 1);
+    EXPECT_EQ(strings.Records(buckets[1])[1].row.GetString(0), "1");
+    auto partial = scanner.CommitSync(
+        {{buckets[0], {1, std::nullopt}}, {buckets[1], {1, std::string(5000, 'x')}}});
+    EXPECT_TRUE(partial.result.Ok());
+    EXPECT_FALSE(partial.Ok());
+    ASSERT_EQ(partial.buckets.size(), 2);
+    for (const auto& entry : partial.buckets) {
+        EXPECT_FALSE(entry.outcome_unknown);
+        EXPECT_EQ(entry.result.Ok(), entry.bucket == buckets[0]);
+    }
+    auto earlier = scanner.CommitAsync({{buckets[0], {2, std::string("")}}});
+    auto later = scanner.CommitAsync({{buckets[0], {1, std::nullopt}}});
+    EXPECT_TRUE(later.get().Ok());
+    EXPECT_TRUE(earlier.get().Ok());
+    std::vector<fluss::CommittedOffset> saved;
+    ASSERT_OK(adm.GetConsumerOffsets(group, buckets, saved));
+    ASSERT_EQ(saved.size(), 2);
+    for (const auto& entry : saved) {
+        if (entry.bucket == buckets[0]) {
+            ASSERT_TRUE(entry.value);
+            EXPECT_EQ(entry.value->offset, 1);
+            EXPECT_FALSE(entry.value->metadata);
+        } else
+            EXPECT_FALSE(entry.value);
+    }
+    EXPECT_TRUE(adm.AlterConsumerOffsets(group, {{buckets[0], {1, std::string("")}},
+                                                 {buckets[1], {2, std::string("checkpoint")}}})
+                    .Ok());
+    ASSERT_OK(adm.ListConsumerOffsets(group, saved));
+    ASSERT_EQ(saved.size(), 2);
+    std::vector<std::string> groups;
+    ASSERT_OK(adm.ListConsumerGroups(groups));
+    EXPECT_NE(std::find(groups.begin(), groups.end(), group), groups.end());
+    fluss::RecordBatchLogScanner restored;
+    ASSERT_OK(conn.CreateMultiTableRecordBatchLogScanner(paths, {group}, restored));
+    ASSERT_OK(restored.Subscribe(buckets, fluss::OffsetsInitializer::Committed(group)));
+    fluss::ArrowRecordBatches batches;
+    ASSERT_OK(restored.Poll(10000, batches));
+    ASSERT_FALSE(batches.Empty());
+    EXPECT_EQ(batches[0]->GetBaseOffset(), batches[0]->GetTableId() == buckets[0].table_id ? 1 : 2);
+    EXPECT_TRUE(restored.CommitSync().Ok());
+    fluss::Table single_table;
+    ASSERT_OK(conn.GetTable(paths[0], single_table));
+    fluss::LogScanner single;
+    ASSERT_OK(
+        single_table.NewScan().WithConsumerGroup({group, 30000, 10}).CreateLogScanner(single));
+    ASSERT_OK(single.Subscribe({buckets[0]}, fluss::OffsetsInitializer::Offset(1)));
+    fluss::ScanRecords remaining;
+    ASSERT_OK(single.Poll(10000, remaining));
+    EXPECT_EQ(remaining.Count(), 2);
+    EXPECT_TRUE(single.CommitSync().Ok());
+    EXPECT_TRUE(adm.DeleteConsumerOffsets(group, {buckets[0]}).Ok());
+    std::vector<fluss::ConsumerGroupDeleteResult> deleted;
+    ASSERT_OK(adm.DeleteConsumerGroups({group}, deleted));
+    ASSERT_EQ(deleted.size(), 1);
+    EXPECT_TRUE(deleted[0].result.Ok());
+    EXPECT_FALSE(deleted[0].outcome_unknown);
+    ASSERT_OK(adm.ListConsumerOffsets(group, saved));
+    EXPECT_TRUE(saved.empty());
+    for (const auto& path : paths) ASSERT_OK(adm.DropTable(path, false));
+}

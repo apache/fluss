@@ -37,6 +37,7 @@ rustler::atoms! {
     fluss_records,
     fluss_poll_error,
 
+    table_bucket,
     // Record map keys
     offset,
     timestamp,

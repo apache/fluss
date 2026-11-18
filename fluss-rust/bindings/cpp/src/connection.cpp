@@ -85,4 +85,30 @@ Result Connection::GetTable(const TablePath& table_path, Table& out) {
     return result;
 }
 
+Result Connection::CreateMultiTableLogScanner(const std::vector<TablePath>& tables,
+                                              const ConsumerGroupOptions& group, LogScanner& out) {
+    if (!Available()) return utils::make_client_error("Connection not available");
+    rust::Vec<ffi::FfiTablePath> paths;
+    for (const auto& path : tables) paths.push_back(utils::to_ffi_table_path(path));
+    auto response =
+        conn_->create_multi_table_scanner(std::move(paths), rust::String(group.group_id),
+                                          group.timeout_ms, group.auto_commit_interval_ms, false);
+    auto result = utils::from_ffi_result(response.result);
+    if (result.Ok()) out = LogScanner(utils::ptr_from_ffi<ffi::LogScanner>(response));
+    return result;
+}
+Result Connection::CreateMultiTableRecordBatchLogScanner(const std::vector<TablePath>& tables,
+                                                         const ConsumerGroupOptions& group,
+                                                         RecordBatchLogScanner& out) {
+    if (!Available()) return utils::make_client_error("Connection not available");
+    rust::Vec<ffi::FfiTablePath> paths;
+    for (const auto& path : tables) paths.push_back(utils::to_ffi_table_path(path));
+    auto response =
+        conn_->create_multi_table_scanner(std::move(paths), rust::String(group.group_id),
+                                          group.timeout_ms, group.auto_commit_interval_ms, true);
+    auto result = utils::from_ffi_result(response.result);
+    if (result.Ok()) out.scanner_ = LogScanner(utils::ptr_from_ffi<ffi::LogScanner>(response));
+    return result;
+}
+
 }  // namespace fluss

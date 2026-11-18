@@ -514,4 +514,28 @@ defmodule Fluss.Admin do
     raise ArgumentError,
           "expected :earliest, :latest or {:timestamp, milliseconds}, got: #{inspect(spec)}"
   end
+
+  @doc "Reads selected `{table_id, partition_id_or_nil, bucket_id}` keys. Missing commits are nil; values are `{next_offset, metadata_or_nil}`. Any unauthorized selected table fails the request."
+  def get_consumer_offsets(admin, group, buckets),
+    do: Native.admin_get_consumer_offsets(admin, group, buckets) |> Native.await_nif()
+
+  @doc "Lists committed offsets on visible tables. Tables without DESCRIBE are omitted; missing group DESCRIBE fails the request."
+  def list_consumer_offsets(admin, group),
+    do: Native.admin_list_consumer_offsets(admin, group) |> Native.await_nif()
+
+  @doc "Lists visible groups across TabletServers. Fails on an unavailable server instead of returning a partial list."
+  def list_consumer_groups(admin),
+    do: Native.admin_list_consumer_groups(admin) |> Native.await_nif()
+
+  @doc "Resets explicit offsets, including rewinds. Stop writers first; inspect request and per-bucket statuses as for `Fluss.LogScanner.commit_sync/2`."
+  def alter_consumer_offsets(admin, group, offsets),
+    do: Native.admin_alter_consumer_offsets(admin, group, offsets) |> Native.await_nif()
+
+  @doc "Deletes selected offsets using GROUP WRITE; missing offsets succeed. Stop writers first and inspect request and per-bucket statuses."
+  def delete_consumer_offsets(admin, group, buckets),
+    do: Native.admin_delete_consumer_offsets(admin, group, buckets) |> Native.await_nif()
+
+  @doc "Deletes each group and its offsets using GROUP DROP. Returns a group-to-outcome map; stop writers first since a later commit recreates the group."
+  def delete_consumer_groups(admin, groups),
+    do: Native.admin_delete_consumer_groups(admin, groups) |> Native.await_nif()
 end

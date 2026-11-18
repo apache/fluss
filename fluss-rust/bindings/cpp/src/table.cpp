@@ -1480,7 +1480,30 @@ Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
 }
 
+ConsumerGroupScan TableScan::WithConsumerGroup(ConsumerGroupOptions options) {
+    return ConsumerGroupScan(std::move(*this), std::move(options));
+}
+
+Result ConsumerGroupScan::CreateLogScanner(LogScanner& out) {
+    return scan_.DoCreateScanner(out, false, &options_);
+}
+
+Result ConsumerGroupScan::CreateRecordBatchLogScanner(RecordBatchLogScanner& out) {
+    LogScanner scanner;
+    auto result = scan_.DoCreateScanner(scanner, true, &options_);
+    if (result.Ok()) {
+        out = RecordBatchLogScanner(scanner.scanner_);
+        scanner.scanner_ = nullptr;
+    }
+    return result;
+}
+
 Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
+    return DoCreateScanner(out, is_record_batch, nullptr);
+}
+
+Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch,
+                                  const ConsumerGroupOptions* group) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
     }
@@ -1530,8 +1553,10 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
             append_node(predicate_->root_);
         }
 
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
-                                                 is_record_batch);
+        auto ffi_result = table_->create_scanner(
+            std::move(rust_indices), std::move(rust_predicate), is_record_batch,
+            {group != nullptr, rust::String(group ? group->group_id : ""),
+             group ? group->timeout_ms : 30000, group ? group->auto_commit_interval_ms : 0});
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
             out.scanner_ = utils::ptr_from_ffi<ffi::LogScanner>(ffi_result);
@@ -2319,6 +2344,185 @@ LogScanner& LogScanner::operator=(LogScanner&& other) noexcept {
 }
 
 bool LogScanner::Available() const { return scanner_ != nullptr; }
+
+namespace {
+ffi::FfiConsumerOffset offset_entry(const TableBucket& bucket) {
+    ffi::FfiConsumerOffset value{};
+    value.table_id = bucket.table_id;
+    value.bucket_id = bucket.bucket_id;
+    value.has_partition = bucket.partition_id.has_value();
+    value.partition_id = bucket.partition_id.value_or(0);
+    return value;
+}
+
+rust::Vec<ffi::FfiConsumerOffset> offset_buckets(const std::vector<TableBucket>& buckets) {
+    rust::Vec<ffi::FfiConsumerOffset> values;
+    for (const auto& bucket : buckets) values.push_back(offset_entry(bucket));
+    return values;
+}
+
+TableBucket offset_bucket(const ffi::FfiConsumerOffset& value) {
+    return {value.table_id, value.bucket_id,
+            value.has_partition ? std::optional<int64_t>(value.partition_id) : std::nullopt};
+}
+
+OffsetCommitResult commit_result(ffi::FfiConsumerOffsetsResult value) {
+    OffsetCommitResult result{utils::from_ffi_result(value.result), value.unknown, {}};
+    for (const auto& entry : value.offsets) {
+        result.buckets.push_back(
+            {offset_bucket(entry), utils::from_ffi_result(entry.result), entry.unknown});
+    }
+    return result;
+}
+
+rust::Vec<ffi::FfiConsumerOffset> commit_values(const std::vector<ConsumerOffset>& offsets) {
+    rust::Vec<ffi::FfiConsumerOffset> values;
+    for (const auto& offset : offsets) {
+        auto value = offset_entry(offset.bucket);
+        value.has_offset = true;
+        value.offset = offset.value.offset;
+        value.has_metadata = offset.value.metadata.has_value();
+        value.metadata = rust::String(offset.value.metadata.value_or(""));
+        values.push_back(std::move(value));
+    }
+    return values;
+}
+
+std::future<OffsetCommitResult> start_commit(ffi::LogScanner* scanner, bool current,
+                                             const std::vector<ConsumerOffset>& offsets) {
+    if (!scanner) {
+        std::promise<OffsetCommitResult> result;
+        result.set_value({utils::make_client_error("LogScanner not available"), false, {}});
+        return result.get_future();
+    }
+    auto task = scanner->begin_commit(current, commit_values(offsets));
+    return std::async(std::launch::async,
+                      [task = std::move(task)]() mutable { return commit_result(task->wait()); });
+}
+}  // namespace
+
+Result LogScanner::Subscribe(const std::vector<TableBucket>& buckets,
+                             const OffsetsInitializer& initializer) {
+    if (!Available()) return utils::make_client_error("LogScanner not available");
+    rust::Vec<ffi::FfiOffsetsInitializer> steps;
+    for (const auto& step : initializer.steps_) {
+        steps.push_back({step.kind, step.value, rust::String(step.group_id)});
+    }
+    return utils::from_ffi_result(
+        scanner_->subscribe_with_initializer(offset_buckets(buckets), std::move(steps)));
+}
+
+Result Admin::GetConsumerOffsets(const std::string& group_id,
+                                 const std::vector<TableBucket>& buckets,
+                                 std::vector<CommittedOffset>& out) {
+    out.clear();
+    if (!Available()) return utils::make_client_error("Admin not available");
+    auto response = admin_->get_consumer_offsets(group_id, offset_buckets(buckets));
+    auto result = utils::from_ffi_result(response.result);
+    if (!result.Ok()) return result;
+    for (const auto& value : response.offsets) {
+        std::optional<OffsetAndMetadata> saved;
+        if (value.has_offset) {
+            saved = OffsetAndMetadata{value.offset,
+                                      value.has_metadata
+                                          ? std::optional<std::string>(std::string(value.metadata))
+                                          : std::nullopt};
+        }
+        out.push_back({offset_bucket(value), std::move(saved)});
+    }
+    return result;
+}
+
+Result Admin::ListConsumerOffsets(const std::string& group_id, std::vector<CommittedOffset>& out) {
+    out.clear();
+    if (!Available()) return utils::make_client_error("Admin not available");
+    auto response = admin_->list_consumer_offsets(group_id);
+    auto result = utils::from_ffi_result(response.result);
+    if (!result.Ok()) return result;
+    for (const auto& value : response.offsets) {
+        out.push_back(
+            {offset_bucket(value),
+             OffsetAndMetadata{value.offset, value.has_metadata ? std::optional<std::string>(
+                                                                      std::string(value.metadata))
+                                                                : std::nullopt}});
+    }
+    return result;
+}
+OffsetCommitResult Admin::AlterConsumerOffsets(const std::string& group_id,
+                                               const std::vector<ConsumerOffset>& offsets) {
+    if (!Available()) return {utils::make_client_error("Admin not available"), false, {}};
+    return commit_result(admin_->alter_consumer_offsets(group_id, commit_values(offsets)));
+}
+OffsetCommitResult Admin::DeleteConsumerOffsets(const std::string& group_id,
+                                                const std::vector<TableBucket>& buckets) {
+    if (!Available()) return {utils::make_client_error("Admin not available"), false, {}};
+    return commit_result(admin_->delete_consumer_offsets(group_id, offset_buckets(buckets)));
+}
+Result Admin::ListConsumerGroups(std::vector<std::string>& out) {
+    out.clear();
+    if (!Available()) return utils::make_client_error("Admin not available");
+    auto response = admin_->list_consumer_groups();
+    auto result = utils::from_ffi_result(response.result);
+    if (result.Ok())
+        for (const auto& group : response.groups) out.push_back(std::string(group.group_id));
+    return result;
+}
+Result Admin::DeleteConsumerGroups(const std::vector<std::string>& groups,
+                                   std::vector<ConsumerGroupDeleteResult>& out) {
+    out.clear();
+    if (!Available()) return utils::make_client_error("Admin not available");
+    rust::Vec<rust::String> values;
+    for (const auto& group : groups) values.push_back(rust::String(group));
+    auto response = admin_->delete_consumer_groups(std::move(values));
+    auto result = utils::from_ffi_result(response.result);
+    if (result.Ok())
+        for (const auto& group : response.groups) {
+            out.push_back(
+                {std::string(group.group_id), utils::from_ffi_result(group.result), group.unknown});
+        }
+    return result;
+}
+Result LogScanner::Unsubscribe(const TableBucket& bucket) {
+    if (!Available()) return utils::make_client_error("LogScanner not available");
+    return utils::from_ffi_result(scanner_->unsubscribe_table_bucket(offset_entry(bucket)));
+}
+Result RecordBatchLogScanner::Unsubscribe(const TableBucket& bucket) {
+    return scanner_.Unsubscribe(bucket);
+}
+
+std::future<OffsetCommitResult> LogScanner::CommitAsync() {
+    return start_commit(scanner_, true, {});
+}
+std::future<OffsetCommitResult> LogScanner::CommitAsync(
+    const std::vector<ConsumerOffset>& offsets) {
+    return start_commit(scanner_, false, offsets);
+}
+OffsetCommitResult LogScanner::CommitSync() {
+    if (!Available()) return {utils::make_client_error("LogScanner not available"), false, {}};
+    auto task = scanner_->begin_commit(true, {});
+    return commit_result(task->wait());
+}
+OffsetCommitResult LogScanner::CommitSync(const std::vector<ConsumerOffset>& offsets) {
+    if (!Available()) return {utils::make_client_error("LogScanner not available"), false, {}};
+    auto task = scanner_->begin_commit(false, commit_values(offsets));
+    return commit_result(task->wait());
+}
+
+Result RecordBatchLogScanner::Subscribe(const std::vector<TableBucket>& buckets,
+                                        const OffsetsInitializer& initializer) {
+    return scanner_.Subscribe(buckets, initializer);
+}
+std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync() {
+    return scanner_.CommitAsync();
+}
+std::future<OffsetCommitResult> RecordBatchLogScanner::CommitAsync(
+    const std::vector<ConsumerOffset>& offsets) {
+    return scanner_.CommitAsync(offsets);
+}
+OffsetCommitResult RecordBatchLogScanner::CommitSync() { return scanner_.CommitSync(); }
+OffsetCommitResult RecordBatchLogScanner::CommitSync(const std::vector<ConsumerOffset>& offsets) {
+    return scanner_.CommitSync(offsets);
+}
 
 Result LogScanner::Subscribe(int32_t bucket_id, int64_t start_offset) {
     if (!Available()) {

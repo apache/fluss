@@ -40,6 +40,105 @@ fn validate_bucket_ids(bucket_ids: &[i32]) -> PyResult<()> {
 
 #[pymethods]
 impl FlussAdmin {
+    fn get_consumer_offsets<'py>(
+        &self,
+        py: Python<'py>,
+        group_id: String,
+        buckets: Vec<TableBucket>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
+        future_into_py(py, async move {
+            admin
+                .get_consumer_offsets(&group_id, &buckets)
+                .await
+                .map(crate::consumer_offsets::saved)
+                .map_err(|error| FlussError::from_core_error(&error))
+        })
+    }
+    fn list_consumer_offsets<'py>(
+        &self,
+        py: Python<'py>,
+        group_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        future_into_py(py, async move {
+            admin
+                .list_consumer_offsets(&group_id)
+                .await
+                .map(|values| {
+                    crate::consumer_offsets::saved(
+                        values.into_iter().map(|(k, v)| (k, Some(v))).collect(),
+                    )
+                })
+                .map_err(|error| FlussError::from_core_error(&error))
+        })
+    }
+    fn list_consumer_groups<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        future_into_py(py, async move {
+            admin
+                .list_consumer_groups()
+                .await
+                .map_err(|error| FlussError::from_core_error(&error))
+        })
+    }
+    /// Stop writers before resetting offsets. Inspect partial and unknown outcomes.
+    fn alter_consumer_offsets<'py>(
+        &self,
+        py: Python<'py>,
+        group_id: String,
+        offsets: Vec<(TableBucket, OffsetAndMetadata)>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let values = crate::consumer_offsets::values(offsets)?;
+        future_into_py(py, async move {
+            Ok(crate::consumer_offsets::commit_result(
+                admin.alter_consumer_offsets(&group_id, values).await,
+            ))
+        })
+    }
+    fn delete_consumer_offsets<'py>(
+        &self,
+        py: Python<'py>,
+        group_id: String,
+        buckets: Vec<TableBucket>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        let buckets: Vec<_> = buckets.iter().map(TableBucket::to_core).collect();
+        future_into_py(py, async move {
+            Ok(crate::consumer_offsets::delete_result(
+                admin.delete_consumer_offsets(&group_id, &buckets).await,
+            ))
+        })
+    }
+    fn delete_consumer_groups<'py>(
+        &self,
+        py: Python<'py>,
+        groups: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let admin = self.__admin.clone();
+        future_into_py(py, async move {
+            admin
+                .delete_consumer_groups(&groups)
+                .await
+                .map(|results| {
+                    results
+                        .into_iter()
+                        .map(|(group, result)| {
+                            (
+                                group,
+                                result.map_or_else(OffsetOperationOutcome::error, |_| {
+                                    OffsetOperationOutcome::success()
+                                }),
+                            )
+                        })
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .map_err(|error| FlussError::from_core_error(&error))
+        })
+    }
+
     /// Create a database.
     ///
     /// Args:
