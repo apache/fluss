@@ -41,11 +41,23 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
     }
 
     @Override
+    public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+        return Optional.empty();
+    }
+
+    @Override
     public void add(
             TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
             throws Exception {
         addFunction.apply(snapshotHandle);
     }
+
+    @Override
+    public void updateRecoverySnapshot(
+            TableBucket bucket,
+            long snapshotId,
+            Long previousSnapshotId,
+            int expectedLeaderEpoch) {}
 
     @Override
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {}

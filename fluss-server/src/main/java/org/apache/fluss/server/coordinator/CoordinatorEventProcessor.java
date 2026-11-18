@@ -2505,7 +2505,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                                         tablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
-                        completedSnapshotStore.add(completedSnapshot);
+                        Long previousRecoverySnapshotId =
+                                event.getAddCompletedSnapshotData().getPreviousRecoverySnapshotId();
+                        completedSnapshotStore.add(
+                                completedSnapshot,
+                                previousRecoverySnapshotId,
+                                event.getBucketLeaderEpoch());
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
                                         tb, completedSnapshot.getLogOffset()));

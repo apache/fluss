@@ -136,7 +136,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 0);
         CompletedSnapshotStore store = createTestStore(snapshot -> false);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), null, 0);
         }
         injectStore(tb, store);
 
@@ -161,7 +161,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 1);
         CompletedSnapshotStore store = createTestStore(snapshot -> snapshot.getSnapshotID() == 1L);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), null, 0);
         }
         injectStore(tb, store);
 
@@ -195,7 +195,7 @@ class CoordinatorServiceOrphanRpcsITCase {
     // -------------------------------------------------------------------------
 
     private CompletedSnapshotStore createTestStore(
-            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) throws Exception {
         return new CompletedSnapshotStore(
                 MAX_SNAPSHOTS_TO_RETAIN,
                 new SharedKvFileRegistry(),
@@ -231,10 +231,22 @@ class CoordinatorServiceOrphanRpcsITCase {
     private static class NoOpSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
         @Override
+        public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+            return Optional.empty();
+        }
+
+        @Override
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
                 CompletedSnapshotHandle completedSnapshotHandle) {}
+
+        @Override
+        public void updateRecoverySnapshot(
+                TableBucket bucket,
+                long snapshotId,
+                Long previousSnapshotId,
+                int expectedLeaderEpoch) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) {}

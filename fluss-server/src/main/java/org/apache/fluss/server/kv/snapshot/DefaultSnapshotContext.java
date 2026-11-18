@@ -151,10 +151,10 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
             getLatestCompletedSnapshotProvider() {
         return (tableBucket) -> {
-            Optional<CompletedSnapshotHandle> optSnapshotHandle =
+            Optional<CompletedSnapshotHandle> snapshotHandle =
                     completedSnapshotHandleStore.getLatestCompletedSnapshotHandle(tableBucket);
-            if (optSnapshotHandle.isPresent()) {
-                return optSnapshotHandle.get().retrieveCompleteSnapshot();
+            if (snapshotHandle.isPresent()) {
+                return snapshotHandle.get().retrieveCompleteSnapshot();
             } else {
                 return null;
             }

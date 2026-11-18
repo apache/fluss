@@ -547,6 +547,8 @@ message CommitKvSnapshotRequest {
   required bytes completed_snapshot = 1;
   required int32 coordinator_epoch = 2;
   required int32 bucket_leader_epoch = 3;
+  // The recovery snapshot this commit expects to replace (CAS precondition).
+  optional int64 previous_recovery_snapshot_id = 4;
 }
 
 message CommitKvSnapshotResponse {
