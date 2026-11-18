@@ -43,7 +43,7 @@ import java.util.regex.Pattern;
  * Versioned BulkLoad persistence. Callers resolve physical registrations before constructing a
  * mutation; their version checks are included in the same multi as the durable result.
  */
-final class BulkLoadMetadataStore {
+public final class BulkLoadMetadataStore {
     private static final Pattern BULK_LOAD_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}");
     private static final String ROOT = "/bulk_load/tables";
     private final ZooKeeperClient client;
@@ -99,6 +99,22 @@ final class BulkLoadMetadataStore {
         return read(
                 targetPath(transaction.tableId, transaction.bulkLoadId, partitionId),
                 bytes -> BulkLoadTarget.fromJson(partitionId, bytes));
+    }
+
+    void allocate(
+            Versioned<BulkLoadTransaction> transaction,
+            Versioned<BulkLoadTarget> target,
+            TableBucket bucket,
+            BulkLoadBucket allocation,
+            List<CuratorOp> physicalChecks,
+            int epochVersion)
+            throws Exception {
+        List<CuratorOp> ops = mutationChecks(transaction, target, physicalChecks);
+        ops.add(
+                create(
+                        bucketPath(transaction.value.tableId, transaction.value.bulkLoadId, bucket),
+                        allocation.toJson()));
+        submit(ops, epochVersion);
     }
 
     /** Persists the bucket result, snapshot reference, and recovery selection atomically. */
@@ -206,10 +222,10 @@ final class BulkLoadMetadataStore {
     }
 
     /** A value and its version are read together for subsequent CAS operations. */
-    static final class Versioned<T> {
+    public static final class Versioned<T> {
         private final String path;
         private final int version;
-        final T value;
+        public final T value;
 
         private Versioned(String path, int version, T value) {
             this.path = path;

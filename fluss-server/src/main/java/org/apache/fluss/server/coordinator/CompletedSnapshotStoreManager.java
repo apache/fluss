@@ -163,6 +163,14 @@ public class CompletedSnapshotStoreManager {
                 });
     }
 
+    /** Reconciles an uncertain local publication without reloading persisted snapshot files. */
+    public void reconcileUnconfirmedImport(TableBucket bucket) throws Exception {
+        CompletedSnapshotStore cached = bucketCompletedSnapshotStores.get(bucket);
+        if (cached != null) {
+            cached.reconcileUnconfirmedImport();
+        }
+    }
+
     public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
         for (TableBucket tableBucket : tableBuckets) {
             bucketCompletedSnapshotStores.remove(tableBucket);

@@ -140,7 +140,7 @@ public class CompletedSnapshotStore {
         return inLock(
                 lock,
                 () -> {
-                    reconcileUnconfirmedImport();
+                    reconcileUnconfirmedImportUnderLock();
                     try {
                         persist.run();
                     } catch (KeeperException.ConnectionLossException
@@ -163,7 +163,12 @@ public class CompletedSnapshotStore {
         recoverySnapshotId = snapshot.getSnapshotID();
     }
 
-    private void reconcileUnconfirmedImport() throws Exception {
+    /** Resolves an uncertain publication before acknowledging a retry. */
+    public void reconcileUnconfirmedImport() throws Exception {
+        inLock(lock, this::reconcileUnconfirmedImportUnderLock);
+    }
+
+    private void reconcileUnconfirmedImportUnderLock() throws Exception {
         if (unconfirmedImport == null) {
             return;
         }
@@ -175,6 +180,18 @@ public class CompletedSnapshotStore {
             rememberImportedSnapshot(unconfirmedImport);
         }
         unconfirmedImport = null;
+    }
+
+    /** Runs retention after an imported snapshot has become the recovery source. */
+    public void retainSnapshotsAfterImport() throws Exception {
+        inLock(
+                lock,
+                () -> {
+                    reconcileUnconfirmedImportUnderLock();
+                    if (!completedSnapshots.isEmpty()) {
+                        subsumeOldSnapshots(completedSnapshots.getLast());
+                    }
+                });
     }
 
     public long getPhysicalStorageRemoteKvSize() {
@@ -211,7 +228,7 @@ public class CompletedSnapshotStore {
             @Nullable Long previousRecoverySnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        reconcileUnconfirmedImport();
+        reconcileUnconfirmedImportUnderLock();
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);

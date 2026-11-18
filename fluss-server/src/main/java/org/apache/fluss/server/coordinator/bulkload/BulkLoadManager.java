@@ -29,6 +29,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
+import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -50,20 +51,20 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** Validates and atomically publishes an allocated BulkLoad bucket snapshot. */
-final class BulkLoadManager {
+public final class BulkLoadManager {
     private final ZooKeeperClient client;
     private final MetadataManager metadata;
     private final BulkLoadMetadataStore store;
     private final int epochVersion;
 
-    BulkLoadManager(ZooKeeperClient client, MetadataManager metadata, int epochVersion) {
+    public BulkLoadManager(ZooKeeperClient client, MetadataManager metadata, int epochVersion) {
         this.client = client;
         this.metadata = metadata;
         this.store = new BulkLoadMetadataStore(client);
         this.epochVersion = epochVersion;
     }
 
-    Versioned<BulkLoadTransaction> transaction(long tableId, String id) throws Exception {
+    public Versioned<BulkLoadTransaction> transaction(long tableId, String id) throws Exception {
         Versioned<BulkLoadTransaction> transaction =
                 store.transaction(tableId, id)
                         .orElseThrow(
@@ -76,6 +77,47 @@ final class BulkLoadManager {
             throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
         }
         return transaction;
+    }
+
+    /** Allocation retries return the original result before reading the current leader again. */
+    public BulkLoadBucket allocate(
+            Versioned<BulkLoadTransaction> transaction,
+            @Nullable Long partition,
+            int bucketId,
+            FunctionWithException<TableBucket, Long, Exception> leaderOffset)
+            throws Exception {
+        BulkLoadTransaction value = transaction.value;
+        TableBucket bucket = new TableBucket(value.tableId, partition, bucketId);
+        Versioned<BulkLoadTarget> target = target(transaction, partition, bucketId);
+        Optional<Versioned<BulkLoadBucket>> previous = store.bucket(transaction.value, bucket);
+        if (previous.isPresent() && previous.get().value.state == BulkLoadBucket.COMMITTED) {
+            return previous.get().value;
+        }
+        requireRunning(transaction);
+        List<CuratorOp> checks = buildContextChecks(transaction, target);
+        if (previous.isPresent()) {
+            return previous.get().value;
+        }
+        long sid =
+                new ZkSequenceIDCounter(
+                                client.getCuratorClient(),
+                                ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                        .getAndIncrement();
+        long offset = leaderOffset.apply(bucket);
+        BulkLoadBucket allocation = new BulkLoadBucket(sid, offset, BulkLoadBucket.ALLOCATED);
+        try {
+            store.allocate(transaction, target, bucket, allocation, checks, epochVersion);
+        } catch (KeeperException.NodeExistsException e) {
+            return allocate(
+                    transaction(value.tableId, value.bulkLoadId),
+                    partition,
+                    bucketId,
+                    leaderOffset);
+        } catch (KeeperException.BadVersionException e) {
+            requireRunning(transaction(value.tableId, value.bulkLoadId));
+            throw e;
+        }
+        return allocation;
     }
 
     private Versioned<BulkLoadTarget> target(
@@ -150,7 +192,7 @@ final class BulkLoadManager {
     }
 
     /** Persists a bucket once; retries do not reread input or republish an overwrite. */
-    boolean commitBucket(
+    public boolean commitBucket(
             Versioned<BulkLoadTransaction> transaction,
             @Nullable Long partition,
             int bucketId,
@@ -167,6 +209,7 @@ final class BulkLoadManager {
                                         new InvalidBulkLoadRequestException(
                                                 "Bucket has not been allocated."));
         if (allocation.value.state == BulkLoadBucket.COMMITTED) {
+            snapshots.reconcileUnconfirmedImport(bucket);
             return false;
         }
         requireRunning(transaction);
@@ -210,6 +253,7 @@ final class BulkLoadManager {
                 requireRunning(current);
                 throw e;
             }
+            snapshots.reconcileUnconfirmedImport(bucket);
             return false;
         }
     }

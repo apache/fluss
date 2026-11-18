@@ -23,6 +23,8 @@ import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.AddServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
@@ -31,6 +33,8 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -273,4 +277,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
     CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
+
+    /** AllocateBulkLoadBucketSnapshot. */
+    @RPC(api = ApiKeys.ALLOCATE_BULK_LOAD_BUCKET_SNAPSHOT)
+    CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
+            AllocateBulkLoadBucketSnapshotRequest request);
+
+    /** CommitBulkLoadBucketSnapshot. */
+    @RPC(api = ApiKeys.COMMIT_BULK_LOAD_BUCKET_SNAPSHOT)
+    CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
+            CommitBulkLoadBucketSnapshotRequest request);
 }

@@ -450,6 +450,17 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.NOTIFY_LEADER_AND_ISR && version < 1) {
+            org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest request =
+                    (org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest) rawRequest;
+            for (org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket bucket :
+                    request.getNotifyBucketsLeaderReqsList()) {
+                if (bucket.hasRecoverySnapshotId()) {
+                    throw new UnsupportedVersionException(
+                            "BulkLoad recovery requires NotifyLeaderAndIsr version 1.");
+                }
+            }
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

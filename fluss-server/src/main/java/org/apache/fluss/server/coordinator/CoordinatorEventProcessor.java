@@ -63,6 +63,9 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadRecoveryManager;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadRecoveryScheduler;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -122,6 +125,7 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -197,6 +201,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
+
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
@@ -205,6 +210,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
+    private final BulkLoadRecoveryScheduler bulkLoadRecoveryScheduler;
+    private final BulkLoadRecoveryManager bulkLoadRecoveryManager;
     private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
@@ -304,6 +311,28 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
+        this.bulkLoadRecoveryManager =
+                new BulkLoadRecoveryManager(
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        coordinatorChannelManager,
+                        completedSnapshotStoreManager,
+                        ioExecutor);
+        this.bulkLoadRecoveryScheduler =
+                new BulkLoadRecoveryScheduler(
+                        scheduler,
+                        ioExecutor,
+                        () -> {
+                            AccessContextEvent<ZkEpoch> event =
+                                    new AccessContextEvent<>(
+                                            ctx ->
+                                                    new ZkEpoch(
+                                                            ctx.getCoordinatorEpoch(),
+                                                            ctx.getCoordinatorZkVersion()));
+                            coordinatorEventManager.put(event);
+                            return event.getResultFuture();
+                        },
+                        bulkLoadRecoveryManager);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -316,6 +345,15 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     public CoordinatorContext getCoordinatorContext() {
         return coordinatorContext;
+    }
+
+    CoordinatorChannelManager getCoordinatorChannelManager() {
+        return coordinatorChannelManager;
+    }
+
+    void requestBulkLoadRecovery(TableBucket bucket) {
+        bulkLoadRecoveryManager.request(bucket);
+        bulkLoadRecoveryScheduler.trigger();
     }
 
     @VisibleForTesting
@@ -355,12 +393,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
+        bulkLoadRecoveryScheduler.start();
 
         // start rebalance manager.
         rebalanceManager.startup();
     }
 
     public void shutdown() {
+        bulkLoadRecoveryScheduler.close();
         clearOfflineLeaderRetryTask();
         // Cancel periodic event producers before stopping the event loop.
         rebalanceManager.stopTimeoutChecker();
@@ -1297,6 +1337,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             NotifyLeaderAndIsrResponseReceivedEvent notifyLeaderAndIsrResponseReceivedEvent) {
         // get the server that receives the response
         int serverId = notifyLeaderAndIsrResponseReceivedEvent.getResponseServerId();
+        List<TableBucket> recoveringBuckets = new ArrayList<>();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
         List<TableBucket> succeededBuckets = new ArrayList<>();
         // get all the results for each bucket
@@ -1305,6 +1346,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
             TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
+            if (notifyLeaderAndIsrResultForBucket.getErrorCode()
+                    == Errors.KV_RECOVERY_IN_PROGRESS.code()) {
+                recoveringBuckets.add(tableBucket);
+                continue;
+            }
             // Replica liveness bookkeeping must not depend on how fresh the request was: a replica
             // that failed to apply the state is offline even when the leader has bumped the bucket
             // epoch in the meantime.
@@ -1332,6 +1378,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             onReplicaBecomeOffline(offlineReplicas);
         }
 
+        if (!recoveringBuckets.isEmpty()) {
+            retryRoleNotifications(serverId, recoveringBuckets);
+        }
+
         // Try to complete rebalance tasks for the buckets in the response.
         // This is essential for leader-only migrations to ensure they wait for the tablet
         // server to acknowledge the leader change before proceeding to the next migration.
@@ -1339,12 +1389,53 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // completing a rebalance task requires an acknowledgement of the state we last sent.
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
+            if (notifyLeaderAndIsrResultForBucket.getErrorCode()
+                    == Errors.KV_RECOVERY_IN_PROGRESS.code()) {
+                continue;
+            }
             tryToCompleteRebalanceTask(
                     notifyLeaderAndIsrResultForBucket,
                     serverId,
                     notifyLeaderAndIsrResponseReceivedEvent.getRequestContext(
                             notifyLeaderAndIsrResultForBucket.getTableBucket()));
         }
+    }
+
+    private void retryRoleNotifications(int serverId, List<TableBucket> buckets) {
+        int coordinatorEpoch = coordinatorContext.getCoordinatorEpoch();
+        scheduler.scheduleOnce(
+                "retry-role-after-kv-recovery",
+                () ->
+                        coordinatorEventManager.put(
+                                new AccessContextEvent<Void>(
+                                        ctx -> {
+                                            if (ctx.getCoordinatorEpoch() != coordinatorEpoch) {
+                                                return null;
+                                            }
+                                            coordinatorRequestBatch.newBatch();
+                                            for (TableBucket bucket : buckets) {
+                                                List<Integer> assignment =
+                                                        ctx.getAssignment(bucket);
+                                                if (ctx.isToBeDeleted(bucket)
+                                                        || !assignment.contains(serverId)) {
+                                                    continue;
+                                                }
+                                                ctx.getBucketLeaderAndIsr(bucket)
+                                                        .ifPresent(
+                                                                role ->
+                                                                        addRoleNotification(
+                                                                                Collections
+                                                                                        .singleton(
+                                                                                                serverId),
+                                                                                bucket,
+                                                                                assignment,
+                                                                                role));
+                                            }
+                                            coordinatorRequestBatch.sendRequestToTabletServers(
+                                                    coordinatorEpoch);
+                                            return null;
+                                        })),
+                1_000L);
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
@@ -2986,6 +3077,17 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private void sendLeaderAndIsrRequest(
             TableBucket tableBucket, List<Integer> replicas, LeaderAndIsr leaderAndIsr) {
+        coordinatorRequestBatch.newBatch();
+        addRoleNotification(new HashSet<>(replicas), tableBucket, replicas, leaderAndIsr);
+        coordinatorRequestBatch.sendRequestToTabletServers(
+                coordinatorContext.getCoordinatorEpoch());
+    }
+
+    private void addRoleNotification(
+            Set<Integer> recipients,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr) {
         String partitionName = null;
         if (tableBucket.getPartitionId() != null) {
             partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
@@ -2995,17 +3097,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             }
         }
 
-        coordinatorRequestBatch.newBatch();
         coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                new HashSet<>(replicas),
+                recipients,
                 PhysicalTablePath.of(
                         coordinatorContext.getTablePathById(tableBucket.getTableId()),
                         partitionName),
                 tableBucket,
                 replicas,
                 leaderAndIsr);
-        coordinatorRequestBatch.sendRequestToTabletServers(
-                coordinatorContext.getCoordinatorEpoch());
     }
 
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {

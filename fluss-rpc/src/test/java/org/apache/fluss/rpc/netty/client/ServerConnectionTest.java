@@ -471,6 +471,34 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testBulkLoadRecoveryCannotDowngradeToOrdinaryRoleNotification() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest request =
+                    new org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest()
+                            .setCoordinatorEpoch(1);
+            connection.validateVersionCompatibility(
+                    ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 0, request);
+            request.addNotifyBucketsLeaderReq().setRecoverySnapshotId(7);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 0, request))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(
+                    ApiKeys.NOTIFY_LEADER_AND_ISR, (short) 1, request);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectHistoricalWritesForOldServer() throws Exception {
         nettyServer.close();
         buildNettyServer(new OldWriteGatewayService());

@@ -976,6 +976,29 @@ message GetClusterHealthResponse {
 }
 
 
+message PbBulkLoadHandle {
+  required int64 table_id = 1;
+  required string bulk_load_id = 2;
+}
+
+message AllocateBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message AllocateBulkLoadBucketSnapshotResponse {
+  required int64 snapshot_id = 1;
+  required int32 state = 2;
+  required int64 log_offset = 3;
+}
+message CommitBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message CommitBulkLoadBucketSnapshotResponse {}
 // --------------- Inner classes ----------------
 message PbTabletServerLoad {
   required int32 server_id = 1;
@@ -1273,12 +1296,14 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 standby_replicas = 8 [packed = true];
   optional int32 bucket_count = 9;
   optional int64 bucket_count_epoch = 10;
+  optional int64 recovery_snapshot_id = 11;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
   required PbTableBucket table_bucket = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+  optional int64 recovered_snapshot_id = 4;
 }
 
 message PbStopReplicaReqForBucket {

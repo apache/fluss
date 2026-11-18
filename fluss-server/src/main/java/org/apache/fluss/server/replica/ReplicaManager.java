@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.KvRecoveryInProgressException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -602,47 +603,94 @@ public class ReplicaManager implements ServerReconfigurable {
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
             Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
+        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> activations = new ArrayList<>();
         inLock(
                 replicaStateChangeLock,
                 () -> {
-                    // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
-
-                    List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
-                    List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
+                    List<NotifyLeaderAndIsrData> leaders = new ArrayList<>();
+                    List<NotifyLeaderAndIsrData> followers = new ArrayList<>();
                     for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        TableBucket bucket = data.getTableBucket();
                         LOG.info(
                                 "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
-                                data.getTableBucket(),
+                                bucket,
                                 data.getLeaderAndIsr(),
                                 data.getReplicas());
-                        TableBucket tb = data.getTableBucket();
+                        if (result.containsKey(bucket)) {
+                            continue;
+                        }
                         try {
-                            boolean becomeLeader = validateAndGetIsBecomeLeader(data);
-                            if (becomeLeader) {
-                                replicasToBeLeader.add(data);
+                            if (data.getRecoverySnapshotId() != null) {
+                                activations.add(
+                                        queryBulkLoadRestore(data, requestCoordinatorEpoch));
+                                continue;
+                            }
+                            HostedReplica hosted = allReplicas.get(bucket);
+                            if (hosted instanceof OnlineReplica
+                                    && ((OnlineReplica) hosted)
+                                            .getReplica()
+                                            .hasKvRecoveryInProgress()) {
+                                throw new KvRecoveryInProgressException(
+                                        "KV recovery is still running; retry the role notification.");
+                            }
+                            if (validateAndGetIsBecomeLeader(data)) {
+                                leaders.add(data);
                             } else {
-                                replicasToBeFollower.add(data);
+                                followers.add(data);
                             }
                         } catch (Exception e) {
                             result.put(
-                                    tb,
+                                    bucket,
                                     new NotifyLeaderAndIsrResultForBucket(
-                                            tb, ApiError.fromThrowable(e)));
+                                            bucket, ApiError.fromThrowable(e)));
                         }
                     }
-
-                    makeLeaders(replicasToBeLeader, result);
-                    makeFollowers(replicasToBeFollower, result);
-
-                    // We initialize highWatermark thread after the first LeaderAndIsr request. This
-                    // ensures that all the replicas have been completely populated before starting
-                    // the checkpointing there by avoiding weird race conditions
+                    makeLeaders(leaders, result);
+                    makeFollowers(followers, result);
+                    // Initialize checkpoints only after role requests have populated the replicas.
                     startHighWatermarkCheckPointThread();
                     replicaFetcherManager.shutdownIdleFetcherThreads();
                 });
+        CompletableFuture.allOf(activations.toArray(new CompletableFuture<?>[0]))
+                .whenComplete(
+                        (ignored, error) -> {
+                            for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> activation :
+                                    activations) {
+                                NotifyLeaderAndIsrResultForBucket completed = activation.join();
+                                result.put(completed.getTableBucket(), completed);
+                            }
+                            responseCallback.accept(new ArrayList<>(result.values()));
+                        });
+    }
 
-        responseCallback.accept(new ArrayList<>(result.values()));
+    private CompletableFuture<NotifyLeaderAndIsrResultForBucket> queryBulkLoadRestore(
+            NotifyLeaderAndIsrData data, int requestCoordinatorEpoch) {
+        Replica replica = getReplicaOrException(data.getTableBucket());
+        if (data.getLeader() != serverId
+                || !data.getReplicas().contains(serverId)
+                || !replica.getPhysicalTablePath().equals(data.getPhysicalTablePath())
+                || replica.getBucketEpoch() != data.getBucketEpoch()) {
+            throw new NotLeaderOrFollowerException(
+                    "BulkLoad recovery requires the matching physical leader.");
+        }
+        return replica.requestBulkLoadRestore(
+                        data.getRecoverySnapshotId(),
+                        data.getLeaderEpoch(),
+                        requestCoordinatorEpoch,
+                        localDiskManager::ensureWritable,
+                        ioExecutor)
+                .handle(
+                        (restored, error) -> {
+                            if (error != null) {
+                                return new NotifyLeaderAndIsrResultForBucket(
+                                        data.getTableBucket(), ApiError.fromThrowable(error));
+                            }
+                            return restored == null
+                                    ? new NotifyLeaderAndIsrResultForBucket(data.getTableBucket())
+                                    : new NotifyLeaderAndIsrResultForBucket(
+                                            data.getTableBucket(), restored);
+                        });
     }
 
     public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {

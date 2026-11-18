@@ -35,14 +35,7 @@ public final class NotifyLeaderAndIsrData {
     // null when a legacy coordinator omits the fields
     private final @Nullable Integer bucketCount;
     private final @Nullable Long bucketCountEpoch;
-
-    public NotifyLeaderAndIsrData(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr) {
-        this(physicalTablePath, tableBucket, replicas, leaderAndIsr, null, null);
-    }
+    private final @Nullable Long recoverySnapshotId;
 
     public NotifyLeaderAndIsrData(
             PhysicalTablePath physicalTablePath,
@@ -50,13 +43,15 @@ public final class NotifyLeaderAndIsrData {
             List<Integer> replicas,
             LeaderAndIsr leaderAndIsr,
             @Nullable Integer bucketCount,
-            @Nullable Long bucketCountEpoch) {
+            @Nullable Long bucketCountEpoch,
+            @Nullable Long recoverySnapshotId) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.replicas = replicas;
         this.leaderAndIsr = leaderAndIsr;
         this.bucketCount = bucketCount;
         this.bucketCountEpoch = bucketCountEpoch;
+        this.recoverySnapshotId = recoverySnapshotId;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -119,5 +114,9 @@ public final class NotifyLeaderAndIsrData {
     /** The bucket layout epoch of the owning table, or null if not carried. */
     public @Nullable Long getBucketCountEpoch() {
         return bucketCountEpoch;
+    }
+
+    public @Nullable Long getRecoverySnapshotId() {
+        return recoverySnapshotId;
     }
 }

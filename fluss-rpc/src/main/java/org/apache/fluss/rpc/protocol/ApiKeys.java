@@ -61,7 +61,7 @@ public enum ApiKeys {
     //            primary key, enabling prefix lookup support.
     LOOKUP(1017, 0, 1, PUBLIC),
 
-    NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
+    NOTIFY_LEADER_AND_ISR(1018, 0, 1, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
     ADJUST_ISR(1020, 0, 0, PRIVATE),
     LIST_OFFSETS(1021, 0, 0, PUBLIC),
@@ -131,7 +131,9 @@ public enum ApiKeys {
     LIST_CONSUMER_GROUPS(1072, 0, 0, PUBLIC),
     DELETE_CONSUMER_GROUPS(1073, 0, 0, PUBLIC),
     CREATE_TABLE_FROM_LAKE(1074, 0, 0, PUBLIC),
-    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC);
+    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC),
+    ALLOCATE_BULK_LOAD_BUCKET_SNAPSHOT(1077, 0, 0, PUBLIC),
+    COMMIT_BULK_LOAD_BUCKET_SNAPSHOT(1078, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

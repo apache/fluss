@@ -1559,6 +1559,50 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                                 }));
     }
 
+    @Test
+    void testRoleNotificationRetriesDuringKvRecoveryWithoutOffliningReplica() throws Exception {
+        initCoordinatorChannel();
+        TablePath path = TablePath.of(defaultDatabase, "notify_during_kv_recovery");
+        TableAssignment assignment =
+                generateAssignment(1, 1, new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        path,
+                        remoteDataDir,
+                        TEST_TABLE.withBucketCount(1).withReplicationFactor(1),
+                        assignment,
+                        false);
+        verifyTableCreated(tableId, assignment, 1, 1);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        int leader =
+                fromCtx(
+                        ctx -> {
+                            ctx.addPendingLeaderActivation(bucket);
+                            return ctx.getBucketLeaderAndIsr(bucket).get().leader();
+                        });
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                bucket,
+                                                new ApiError(
+                                                        Errors.KV_RECOVERY_IN_PROGRESS, null))),
+                                leader));
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
+                    return null;
+                });
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
+                    assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
+                });
+    }
+
     private void putFailedNotifyResponse(
             TableBucket tableBucket,
             int serverId,
