@@ -276,6 +276,13 @@ impl FlussLakeScan {
             }
             return Ok(source.clone());
         }
+        #[cfg(feature = "paimon")]
+        if format == "paimon" {
+            return Ok(Arc::new(crate::paimon::PaimonLakeSource::new(
+                info,
+                &self.catalog_property_overrides,
+            )?));
+        }
         Err(FlussLakeError::PlanningFailed(format!(
             "no LakeSource for {format}; enable its feature or supply a custom source"
         )))

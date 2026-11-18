@@ -42,3 +42,27 @@ use storage_s3::*;
 mod storage_oss;
 #[cfg(feature = "storage-oss")]
 use storage_oss::*;
+
+#[cfg(any(feature = "storage-s3", feature = "storage-oss"))]
+fn storage_http_client() -> crate::error::Result<opendal::raw::HttpClient> {
+    use std::sync::LazyLock;
+
+    // Transitive features must not change TLS or decode stored object bytes.
+    static CLIENT: LazyLock<Result<reqwest::Client, reqwest::Error>> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .use_rustls_tls()
+            .no_gzip()
+            .no_deflate()
+            .no_brotli()
+            .no_zstd()
+            .build()
+    });
+    match &*CLIENT {
+        Ok(client) => Ok(opendal::raw::HttpClient::with(client.clone())),
+        Err(error) => Err(opendal::Error::new(
+            opendal::ErrorKind::Unexpected,
+            format!("failed to build storage HTTP client: {error}"),
+        )
+        .into()),
+    }
+}
