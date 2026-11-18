@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
@@ -26,6 +27,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -49,10 +51,13 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -78,8 +83,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.BiPredicate;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -248,6 +257,93 @@ public class LogFetcher implements Closeable {
 
     public void wakeup() {
         logFetchBuffer.wakeup();
+    }
+
+    /**
+     * Resolves the latest position for the given buckets with {@code ListOffsets}.
+     *
+     * @param tableBuckets the buckets whose latest offsets are requested
+     * @param timeoutMs the time to wait for the responses; must not be negative
+     * @return the latest offset per bucket, or {@code null} when the timeout elapses before all
+     *     responses arrive
+     */
+    public Map<TableBucket, Long> listLatestOffsets(Set<TableBucket> tableBuckets, long timeoutMs)
+            throws InterruptedException {
+        checkAndUpdateMetadata(new ArrayList<>(tableBuckets));
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+
+        // Group the buckets by leader and table so each request carries one table's buckets.
+        Map<Integer, Map<Long, Map<Long, List<TableBucket>>>> bucketsByLeader = new HashMap<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            Integer leader = getTableBucketLeader(tableBucket);
+            if (leader == null) {
+                throw new LeaderNotAvailableException(
+                        "Leader is not available for bucket " + tableBucket);
+            }
+            bucketsByLeader
+                    .computeIfAbsent(leader, ignored -> new HashMap<>())
+                    .computeIfAbsent(tableBucket.getTableId(), ignored -> new HashMap<>())
+                    .computeIfAbsent(
+                            tableBucket.getPartitionId() == null
+                                    ? -1L
+                                    : tableBucket.getPartitionId(),
+                            ignored -> new ArrayList<>())
+                    .add(tableBucket);
+        }
+
+        Map<TableBucket, Long> latestOffsets = new HashMap<>();
+        for (Map.Entry<Integer, Map<Long, Map<Long, List<TableBucket>>>> leaderEntry :
+                bucketsByLeader.entrySet()) {
+            TabletServerGateway gateway =
+                    metadataUpdater.newTabletServerClientForNode(leaderEntry.getKey());
+            for (Map.Entry<Long, Map<Long, List<TableBucket>>> tableEntry :
+                    leaderEntry.getValue().entrySet()) {
+                long tableId = tableEntry.getKey();
+                for (Map.Entry<Long, List<TableBucket>> partitionEntry :
+                        tableEntry.getValue().entrySet()) {
+                    List<TableBucket> buckets = partitionEntry.getValue();
+                    List<Integer> bucketIds = new ArrayList<>(buckets.size());
+                    for (TableBucket bucket : buckets) {
+                        bucketIds.add(bucket.getBucket());
+                    }
+                    ListOffsetsRequest request =
+                            makeListOffsetsRequest(
+                                    tableId,
+                                    partitionEntry.getKey() < 0 ? null : partitionEntry.getKey(),
+                                    bucketIds,
+                                    new OffsetSpec.LatestSpec(),
+                                    metadataUpdater.getCluster());
+                    ListOffsetsResponse response;
+                    long remainingNanos = deadlineNanos - System.nanoTime();
+                    if (remainingNanos <= 0) {
+                        return null;
+                    }
+                    try {
+                        response =
+                                gateway.listOffsets(request)
+                                        .get(remainingNanos, TimeUnit.NANOSECONDS);
+                    } catch (ExecutionException e) {
+                        Throwable cause = e.getCause() != null ? e.getCause() : e;
+                        if (cause instanceof RuntimeException) {
+                            throw (RuntimeException) cause;
+                        }
+                        throw new FlussRuntimeException("Failed to list latest offsets", cause);
+                    } catch (TimeoutException e) {
+                        return null;
+                    }
+                    Long partitionId = partitionEntry.getKey() < 0 ? null : partitionEntry.getKey();
+                    for (PbListOffsetsRespForBucket resp : response.getBucketsRespsList()) {
+                        if (resp.hasErrorCode()) {
+                            throw ApiError.fromErrorMessage(resp).exception();
+                        }
+                        latestOffsets.put(
+                                new TableBucket(tableId, partitionId, resp.getBucketId()),
+                                resp.getOffset());
+                    }
+                }
+            }
+        }
+        return latestOffsets;
     }
 
     private void checkAndUpdateMetadata(List<TableBucket> tableBuckets) {
