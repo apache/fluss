@@ -20,6 +20,11 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.BulkLoadConflictException;
+import org.apache.fluss.exception.BulkLoadIncompleteException;
+import org.apache.fluss.exception.BulkLoadNotFoundException;
+import org.apache.fluss.exception.BulkLoadStateException;
+import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.ConsumerGroupIdNotFoundException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
@@ -40,6 +45,8 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
+import org.apache.fluss.exception.InvalidBulkLoadRequestException;
+import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
@@ -324,7 +331,22 @@ public enum Errors {
     INVALID_REQUEST(
             81,
             "The request contains an invalid combination or value of parameters.",
-            InvalidRequestException::new);
+            InvalidRequestException::new),
+    INVALID_BULK_LOAD_REQUEST(
+            82, "Invalid BulkLoad request.", InvalidBulkLoadRequestException::new),
+    BULK_LOAD_NOT_FOUND(83, "BulkLoad transaction does not exist.", BulkLoadNotFoundException::new),
+    BULK_LOAD_CONFLICT(
+            84, "BulkLoad conflicts with another operation.", BulkLoadConflictException::new),
+    BULK_LOAD_INCOMPLETE(
+            85, "BulkLoad transaction has incomplete buckets.", BulkLoadIncompleteException::new),
+    BULK_LOAD_STATE_CONFLICT(
+            86,
+            "BulkLoad operation conflicts with the transaction state.",
+            BulkLoadStateException::new),
+    INVALID_BULK_LOAD_SNAPSHOT(
+            87, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
+    BULK_LOAD_TARGET_WITHDRAWN(
+            88, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

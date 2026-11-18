@@ -426,6 +426,22 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
         }
     }
 
+    /** Persists an advanced overwrite tail before checkpointing; existing later WAL is retained. */
+    public void initializeOverwriteLocalTail(TableBucket tableBucket, long snapshotOffset) {
+        LogTablet logTablet = currentLogs.get(tableBucket);
+        if (logTablet == null) {
+            throw new LogStorageException("Log tablet does not exist for " + tableBucket + ".");
+        }
+        if (logTablet.initializeOverwriteLocalTail(snapshotOffset)) {
+            try {
+                logTablet.flush(true);
+            } catch (IOException e) {
+                throw new LogStorageException("Failed to flush the overwritten local tail.", e);
+            }
+            checkpointRecoveryOffsets(logTablet.getDataDir());
+        }
+    }
+
     /** Durably initializes an empty local log at the given snapshot offset. */
     public void initializeEmptyLocalTail(TableBucket tableBucket, long endOffset) {
         LogTablet logTablet = currentLogs.get(tableBucket);

@@ -975,6 +975,94 @@ message GetClusterHealthResponse {
 }
 
 
+message PbBulkLoadHandle {
+  required int64 table_id = 1;
+  required string bulk_load_id = 2;
+}
+
+message PbBulkLoadStatus {
+  required PbBulkLoadHandle handle = 1;
+  required int32 state = 2;
+  required int64 created_time = 3;
+  optional int64 finished_time = 4;
+  optional string abort_message = 5;
+}
+
+message PbBulkLoadTargetInfo {
+  optional int64 partition_id = 1;
+  optional string partition_name = 2;
+  required int32 bucket_count = 3;
+  required string remote_data_dir = 4;
+}
+message BeginBulkLoadRequest {
+  required PbTablePath table_path = 1;
+  repeated string partition_names = 2;
+  optional string bulk_load_id = 3;
+}
+
+message BeginBulkLoadResponse {
+  required PbBulkLoadStatus status = 1;
+  required PbTableInfo table_info = 2;
+  repeated PbBulkLoadTargetInfo targets = 3;
+}
+message AllocateBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message AllocateBulkLoadBucketSnapshotResponse {
+  required int64 snapshot_id = 1;
+  required int32 state = 2;
+  required int64 log_offset = 3;
+}
+message CommitBulkLoadBucketSnapshotRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+}
+
+message CommitBulkLoadBucketSnapshotResponse {}
+message CommitBulkLoadRequest {
+  required PbBulkLoadHandle handle = 1;
+}
+
+message CommitBulkLoadResponse {
+  required PbBulkLoadStatus status = 1;
+}
+message AbortBulkLoadRequest {
+  required PbBulkLoadHandle handle = 1;
+  optional string abort_message = 2;
+}
+
+message AbortBulkLoadResponse {
+  required PbBulkLoadStatus status = 1;
+}
+message GetBulkLoadInfoRequest {
+  required PbBulkLoadHandle handle = 1;
+}
+
+message PbBulkLoadTargetProgress {
+  optional int64 partition_id = 1;
+  required int32 bucket_count = 2;
+  required int64 allocated_bucket_count = 3;
+  required int64 committed_bucket_count = 4;
+  required bool withdrawn = 5;
+}
+
+message GetBulkLoadInfoResponse {
+  required PbBulkLoadStatus status = 1;
+  repeated PbBulkLoadTargetProgress targets = 2;
+}
+message ListInProgressBulkLoadsRequest {
+  required PbTablePath table_path = 1;
+  repeated string partition_names = 2;
+}
+
+message ListInProgressBulkLoadsResponse {
+  repeated PbBulkLoadStatus transactions = 1;
+}
+
 // --------------- Inner classes ----------------
 message PbTabletServerLoad {
   required int32 server_id = 1;
@@ -1272,12 +1360,14 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 standby_replicas = 8 [packed = true];
   optional int32 bucket_count = 9;
   optional int64 bucket_count_epoch = 10;
+  optional int64 recovery_snapshot_id = 11;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
   required PbTableBucket table_bucket = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
+  optional int64 recovered_snapshot_id = 4;
 }
 
 message PbStopReplicaReqForBucket {

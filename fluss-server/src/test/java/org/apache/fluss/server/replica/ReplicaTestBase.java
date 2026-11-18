@@ -483,7 +483,8 @@ public class ReplicaTestBase {
                                         INITIAL_BUCKET_EPOCH),
                                 // all test tables are created distributedBy(3)
                                 TEST_ROUTING_BUCKET_COUNT,
-                                0L)));
+                                0L,
+                                null)));
     }
 
     // TODO this is only for single tablet server unit test.
@@ -529,14 +530,19 @@ public class ReplicaTestBase {
                                         leaderEpoch),
                                 // all test tables are created distributedBy(3)
                                 TEST_ROUTING_BUCKET_COUNT,
-                                0L)));
+                                0L,
+                                null)));
     }
 
     /** The routing bucket count carried by test notifications; test tables are distributedBy(3). */
     protected static final Integer TEST_ROUTING_BUCKET_COUNT = 3;
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
-        replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
+        java.util.concurrent.CompletableFuture<
+                        List<org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket>>
+                completed = new java.util.concurrent.CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, completed::complete);
+        completed.join();
     }
 
     protected void updateTableConfig(

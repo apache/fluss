@@ -248,7 +248,8 @@ class ConsumerGroupManagerTest extends ReplicaTestBase {
                                 INITIAL_COORDINATOR_EPOCH,
                                 INITIAL_LEADER_EPOCH + 1),
                         TEST_ROUTING_BUCKET_COUNT,
-                        0L));
+                        0L,
+                        null));
         assertThat(replica.isLeader()).isFalse();
         long logEndOffset = replica.getLogTablet().localLogEndOffset();
 

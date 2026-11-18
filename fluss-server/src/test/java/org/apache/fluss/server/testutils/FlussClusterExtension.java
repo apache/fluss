@@ -925,7 +925,8 @@ public final class FlussClusterExtension
                                 replicas,
                                 leaderAndIsr,
                                 3,
-                                0L));
+                                0L,
+                                null));
         NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
                 ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                         0, Collections.singletonList(reqForBucket));

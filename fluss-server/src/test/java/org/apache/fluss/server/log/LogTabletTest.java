@@ -492,6 +492,35 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testOverwriteTailKeepsLaterWalAndDoesNotRaiseHwToSnapshot() throws Exception {
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"})));
+        assertThat(logTablet.initializeOverwriteLocalTail(2)).isFalse();
+        assertThat(logTablet.localLogStartOffset()).isZero();
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(3);
+        assertThat(logTablet.getHighWatermark()).isZero();
+    }
+
+    @Test
+    void testOverwriteTailAdvancesLaggingLogAndRetriesPersistence() throws Exception {
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        assertThat(logTablet.initializeOverwriteLocalTail(17)).isTrue();
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(17);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(17);
+        assertThat(logTablet.getHighWatermark()).isEqualTo(17);
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        assertThat(logTablet.initializeOverwriteLocalTail(17)).isTrue();
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(18);
+        assertThat(logTablet.getHighWatermark()).isEqualTo(17);
+    }
+
+    @Test
     void testWriterStateTruncateFullyAndStartAt() throws Exception {
         MemoryLogRecords records =
                 genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));

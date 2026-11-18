@@ -21,11 +21,15 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.UnknownServerException;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -34,14 +38,17 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.channel.ControlRequestSendThread;
 import org.apache.fluss.server.coordinator.channel.QueueItem;
 import org.apache.fluss.server.coordinator.channel.TabletServerChannelState;
+import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.utils.RpcGatewayManager;
 
 import org.slf4j.Logger;
@@ -345,6 +352,47 @@ public class CoordinatorChannelManager {
 
     protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
         return rpcGatewayManager.getRpcGateway(targetServerId);
+    }
+
+    /** Sends a worker-side asynchronous recovery query to the matching current leader. */
+    public CompletableFuture<NotifyLeaderAndIsrResponse> bulkLoadRestore(
+            int leader, NotifyLeaderAndIsrRequest request) {
+        return getTabletServerGateway(leader)
+                .orElseThrow(
+                        () ->
+                                new NotLeaderOrFollowerException(
+                                        "BulkLoad bucket leader is unavailable."))
+                .notifyLeaderAndIsr(request);
+    }
+
+    /** Reads the current leader LEO for a per-bucket BulkLoad allocation on a worker thread. */
+    public long bulkLoadLogEndOffset(int leader, TableBucket bucket) throws Exception {
+        TabletServerGateway gateway =
+                getTabletServerGateway(leader)
+                        .orElseThrow(
+                                () ->
+                                        new NotLeaderOrFollowerException(
+                                                "BulkLoad bucket leader is unavailable."));
+        ListOffsetsRequest request =
+                new ListOffsetsRequest()
+                        .setTableId(bucket.getTableId())
+                        .setFollowerServerId(leader)
+                        .setOffsetType(ListOffsetsParam.LATEST_OFFSET_TYPE);
+        request.addBucketId(bucket.getBucket());
+        if (bucket.getPartitionId() != null) {
+            request.setPartitionId(bucket.getPartitionId());
+        }
+        PbListOffsetsRespForBucket response =
+                gateway.listOffsets(request).get().getBucketsRespAt(0);
+        if (response.hasErrorCode() && response.getErrorCode() != 0) {
+            throw Errors.forCode(response.getErrorCode())
+                    .exception(response.hasErrorMessage() ? response.getErrorMessage() : null);
+        }
+        if (!response.hasOffset() || response.getBucketId() != bucket.getBucket()) {
+            throw new UnknownServerException(
+                    "Leader did not return the requested BulkLoad bucket offset.");
+        }
+        return response.getOffset();
     }
 
     /** A functional interface to send request via TabletServerGateway. */

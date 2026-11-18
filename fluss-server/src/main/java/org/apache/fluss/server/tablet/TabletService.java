@@ -28,6 +28,7 @@ import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
@@ -648,6 +649,15 @@ public final class TabletService extends RpcServiceBase
     @Override
     public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest) {
+        if (currentSession().getApiVersion() < 1) {
+            for (org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket bucket :
+                    notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList()) {
+                if (bucket.hasRecoverySnapshotId()) {
+                    throw new UnsupportedVersionException(
+                            "BulkLoad recovery requires NotifyLeaderAndIsr version 1.");
+                }
+            }
+        }
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
         int coordinatorEpoch = notifyLeaderAndIsrRequest.getCoordinatorEpoch();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =

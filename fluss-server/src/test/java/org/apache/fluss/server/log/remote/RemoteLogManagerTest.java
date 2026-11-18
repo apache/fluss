@@ -85,6 +85,29 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link RemoteLogManager}. */
 class RemoteLogManagerTest extends RemoteLogTestBase {
 
+    @Test
+    void testKvRemoteExpiryDoesNotCrossRecoveryBoundary() throws Exception {
+        TableBucket bucket = makeTableBucket(false, true);
+        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, false);
+        LogTablet log = replicaManager.getReplicaOrException(bucket).getLogTablet();
+        addMultiSegmentsToLogTablet(log, 5, false);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        RemoteLogTablet remote = remoteLogManager.remoteLogTablet(bucket);
+        assertThat(remote.allRemoteLogSegments()).hasSize(4);
+        manualClock.advanceTime(Duration.ofDays(8));
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remote.allRemoteLogSegments()).hasSize(4);
+        assertThat(log.getMinRetainOffset()).isZero();
+        log.updateMinRetainOffset(20);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remote.allRemoteLogSegments())
+                .hasSize(2)
+                .allSatisfy(
+                        segment ->
+                                assertThat(segment.remoteLogStartOffset())
+                                        .isGreaterThanOrEqualTo(20));
+    }
+
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
@@ -524,7 +547,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 INITIAL_COORDINATOR_EPOCH,
                                 INITIAL_BUCKET_EPOCH + 1),
                         3,
-                        0L));
+                        0L,
+                        null));
 
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
                 new CompletableFuture<>();

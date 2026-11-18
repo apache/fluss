@@ -1276,7 +1276,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 leaderFuture::complete);
         assertThat(leaderFuture.get(10, TimeUnit.SECONDS))
                 .containsOnly(new NotifyLeaderAndIsrResultForBucket(TABLE_BUCKET));
@@ -1298,7 +1299,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         INITIAL_COORDINATOR_EPOCH,
                         INITIAL_BUCKET_EPOCH + 1),
                 3,
-                0L);
+                0L,
+                null);
     }
 
     private static NotifyLeaderAndIsrData leaderStateAfterFollower() {
@@ -1315,7 +1317,8 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         INITIAL_COORDINATOR_EPOCH,
                         INITIAL_BUCKET_EPOCH + 2),
                 3,
-                0L);
+                0L,
+                null);
     }
 
     private static void await(CountDownLatch latch) {

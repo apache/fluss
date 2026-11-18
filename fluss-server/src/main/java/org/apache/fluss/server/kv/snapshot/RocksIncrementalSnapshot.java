@@ -122,6 +122,13 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         }
     }
 
+    boolean hasSnapshot(long snapshotId) {
+        synchronized (uploadedSstFiles) {
+            return lastCompletedSnapshotId == snapshotId
+                    || uploadedSstFiles.containsKey(snapshotId);
+        }
+    }
+
     /** Returns uploaded snapshots whose commit has not yet been confirmed. */
     public Set<Long> getUnconfirmedSnapshotIds() {
         synchronized (uploadedSstFiles) {
