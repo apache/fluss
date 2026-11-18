@@ -22,6 +22,8 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.function.RunnableWithException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -74,6 +76,8 @@ public class CompletedSnapshotStore {
     private final ReentrantLock lock = new ReentrantLock();
 
     @Nullable private Long recoverySnapshotId;
+
+    @Nullable private CompletedSnapshot unconfirmedImport;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -130,6 +134,49 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
+    /** Publishes a validated snapshot and protects its shared files before releasing the bucket. */
+    public boolean commitImportedSnapshot(CompletedSnapshot snapshot, RunnableWithException persist)
+            throws Exception {
+        return inLock(
+                lock,
+                () -> {
+                    reconcileUnconfirmedImport();
+                    try {
+                        persist.run();
+                    } catch (KeeperException.ConnectionLossException
+                            | KeeperException.OperationTimeoutException e) {
+                        unconfirmedImport = snapshot;
+                        throw e;
+                    }
+                    if (recoverySnapshotId != null
+                            && recoverySnapshotId == snapshot.getSnapshotID()) {
+                        return false;
+                    }
+                    rememberImportedSnapshot(snapshot);
+                    return true;
+                });
+    }
+
+    private void rememberImportedSnapshot(CompletedSnapshot snapshot) {
+        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        completedSnapshots.addLast(snapshot);
+        recoverySnapshotId = snapshot.getSnapshotID();
+    }
+
+    private void reconcileUnconfirmedImport() throws Exception {
+        if (unconfirmedImport == null) {
+            return;
+        }
+        Optional<CompletedSnapshotHandle> selected =
+                completedSnapshotHandleStore.getRecoverySnapshot(
+                        unconfirmedImport.getTableBucket());
+        if (selected.isPresent()
+                && selected.get().getSnapshotId() == unconfirmedImport.getSnapshotID()) {
+            rememberImportedSnapshot(unconfirmedImport);
+        }
+        unconfirmedImport = null;
+    }
+
     public long getPhysicalStorageRemoteKvSize() {
         return sharedKvFileRegistry.getFileSize();
     }
@@ -164,6 +211,7 @@ public class CompletedSnapshotStore {
             @Nullable Long previousRecoverySnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
+        reconcileUnconfirmedImport();
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
