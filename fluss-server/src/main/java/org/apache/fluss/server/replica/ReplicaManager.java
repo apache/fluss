@@ -659,6 +659,10 @@ public class ReplicaManager implements ServerReconfigurable {
                     startHighWatermarkCheckPointThread();
                     replicaFetcherManager.shutdownIdleFetcherThreads();
                 });
+        if (activations.isEmpty()) {
+            responseCallback.accept(new ArrayList<>(result.values()));
+            return;
+        }
         CompletableFuture.allOf(activations.toArray(new CompletableFuture<?>[0]))
                 .whenComplete(
                         (ignored, error) -> {

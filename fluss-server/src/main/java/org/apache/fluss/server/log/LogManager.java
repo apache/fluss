@@ -437,10 +437,7 @@ public final class LogManager extends TabletManagerBase implements ServerReconfi
         if (!advanced
                 && (snapshotOffset == 0
                         || logTablet.localLogStartOffset() != snapshotOffset
-                        || recoveryPointCheckpoints
-                                        .get(dataDir)
-                                        .read()
-                                        .getOrDefault(tableBucket, 0L)
+                        || recoveryPointCheckpoints.get(dataDir).getPersistedOffset(tableBucket)
                                 >= snapshotOffset)) {
             return;
         }

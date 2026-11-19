@@ -32,6 +32,8 @@ import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -165,7 +167,11 @@ public class CompletedSnapshotStoreManager {
 
     /** Checks the persisted retention window without loading remote snapshot files. */
     public boolean isSnapshotRetentionExceeded(TableBucket bucket) throws Exception {
-        return zooKeeperClient.listBucketSnapshotIds(bucket).size() > maxNumberOfSnapshotsToRetain;
+        return zooKeeperClient
+                        .getStat(BucketSnapshotsZNode.path(bucket))
+                        .map(Stat::getNumChildren)
+                        .orElse(0)
+                > maxNumberOfSnapshotsToRetain;
     }
 
     /** Reconciles an uncertain local publication without reloading persisted snapshot files. */

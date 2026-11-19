@@ -65,7 +65,6 @@ import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadRecoveryManager;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadRecoveryScheduler;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -210,7 +209,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
-    private final BulkLoadRecoveryScheduler bulkLoadRecoveryScheduler;
     private final BulkLoadRecoveryManager bulkLoadRecoveryManager;
     private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
@@ -317,22 +315,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                         coordinatorEventManager,
                         coordinatorChannelManager,
                         completedSnapshotStoreManager,
-                        ioExecutor);
-        this.bulkLoadRecoveryScheduler =
-                new BulkLoadRecoveryScheduler(
-                        scheduler,
                         ioExecutor,
-                        () -> {
-                            AccessContextEvent<ZkEpoch> event =
-                                    new AccessContextEvent<>(
-                                            ctx ->
-                                                    new ZkEpoch(
-                                                            ctx.getCoordinatorEpoch(),
-                                                            ctx.getCoordinatorZkVersion()));
-                            coordinatorEventManager.put(event);
-                            return event.getResultFuture();
-                        },
-                        bulkLoadRecoveryManager);
+                        scheduler,
+                        new ZkEpoch(
+                                coordinatorContext.getCoordinatorEpoch(),
+                                coordinatorContext.getCoordinatorZkVersion()));
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -353,7 +340,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     void requestBulkLoadRecovery(TableBucket bucket) {
         bulkLoadRecoveryManager.request(bucket);
-        bulkLoadRecoveryScheduler.trigger();
     }
 
     @VisibleForTesting
@@ -393,14 +379,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
-        bulkLoadRecoveryScheduler.start();
+        bulkLoadRecoveryManager.start();
 
         // start rebalance manager.
         rebalanceManager.startup();
     }
 
     public void shutdown() {
-        bulkLoadRecoveryScheduler.close();
+        bulkLoadRecoveryManager.close();
         clearOfflineLeaderRetryTask();
         // Cancel periodic event producers before stopping the event loop.
         rebalanceManager.stopTimeoutChecker();

@@ -32,6 +32,7 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,15 +47,18 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** Retries independent cache adoption and leader recovery from physical bucket records. */
-public final class BulkLoadRecoveryManager {
+public final class BulkLoadRecoveryManager implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(BulkLoadRecoveryManager.class);
     private static final int MAX_IN_FLIGHT_RECOVERIES = 16;
+    private static final int MAX_BUCKETS_PER_SCAN = 128;
+    private static final long RETRY_INTERVAL_MS = 1_000L;
     private static final Object RECONCILE_AFTER_TAKEOVER = new Object();
 
     private final ZooKeeperClient client;
@@ -64,37 +68,111 @@ public final class BulkLoadRecoveryManager {
     private final Map<TableBucket, Object> active = new ConcurrentHashMap<>();
     private final Set<TableBucket> inFlight = ConcurrentHashMap.newKeySet();
     private final Executor executor;
+    private final Scheduler scheduler;
+    private final ZkEpoch epoch;
     private Iterator<Map.Entry<TableBucket, Object>> recoveryRound = Collections.emptyIterator();
-    private int scannedEpoch = -1;
+    private boolean takeoverScanned;
+    private ScheduledFuture<?> scheduled;
+    private boolean closed = true;
+    private boolean running;
 
     public BulkLoadRecoveryManager(
             ZooKeeperClient client,
             CoordinatorEventManager events,
             CoordinatorChannelManager channels,
             CompletedSnapshotStoreManager snapshots,
-            Executor executor) {
+            Executor executor,
+            Scheduler scheduler,
+            ZkEpoch epoch) {
         this.client = client;
         this.events = events;
         this.channels = channels;
         this.snapshots = snapshots;
         this.executor = executor;
+        this.scheduler = scheduler;
+        this.epoch = epoch;
     }
 
-    public void request(TableBucket bucket) {
-        active.put(bucket, new Object());
+    /** Schedules discovery of incomplete recoveries when this Coordinator takes over. */
+    public synchronized void start() {
+        if (epoch.getCoordinatorEpochZkVersion() < 0) {
+            return;
+        }
+        closed = false;
+        scheduleScan(0);
     }
 
-    boolean hasPendingWork() {
-        return !active.isEmpty();
+    /** Schedules reconciliation of the currently selected snapshot for the bucket. */
+    public synchronized void request(TableBucket bucket) {
+        if (!closed) {
+            active.put(bucket, new Object());
+            scheduleScan(0);
+        }
     }
 
-    void recoverImports(ZkEpoch epoch) throws Exception {
-        int version = epoch.getCoordinatorEpochZkVersion();
-        if (scannedEpoch != version) {
+    private void scheduleScan(long delayMs) {
+        if (scheduled == null && !running) {
+            scheduled = scheduler.scheduleOnce("bulk-load-recovery", this::submitScan, delayMs);
+        }
+    }
+
+    private synchronized void submitScan() {
+        scheduled = null;
+        if (closed) {
+            return;
+        }
+        running = true;
+        try {
+            executor.execute(this::runScan);
+        } catch (RuntimeException e) {
+            finishScan(e);
+        }
+    }
+
+    private void runScan() {
+        Exception failure = null;
+        try {
+            synchronized (this) {
+                if (closed) {
+                    return;
+                }
+            }
+            recoverImports();
+        } catch (Exception e) {
+            failure = e;
+        } finally {
+            finishScan(failure);
+        }
+    }
+
+    private synchronized void finishScan(Exception failure) {
+        running = false;
+        if (closed) {
+            return;
+        }
+        if (failure != null) {
+            LOG.warn("BulkLoad recovery scan failed; the next pass will retry.", failure);
+        }
+        if (failure != null || !takeoverScanned || !active.isEmpty()) {
+            scheduleScan(RETRY_INTERVAL_MS);
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        closed = true;
+        if (scheduled != null) {
+            scheduled.cancel(false);
+            scheduled = null;
+        }
+    }
+
+    private void recoverImports() throws Exception {
+        if (!takeoverScanned) {
             AccessContextEvent<Set<TableBucket>> event =
                     new AccessContextEvent<>(
                             ctx ->
-                                    ctx.getAllBuckets().stream()
+                                    ctx.getKvBuckets().stream()
                                             .filter(
                                                     bucket -> {
                                                         TableInfo table =
@@ -123,13 +201,17 @@ public final class BulkLoadRecoveryManager {
             for (TableBucket bucket : event.getResultFuture().get(30, TimeUnit.SECONDS)) {
                 active.putIfAbsent(bucket, RECONCILE_AFTER_TAKEOVER);
             }
-            scannedEpoch = version;
+            takeoverScanned = true;
         }
         if (!recoveryRound.hasNext()) {
             recoveryRound = active.entrySet().iterator();
         }
         // Resume the same sweep when all slots are busy so retries cannot starve later buckets.
-        while (inFlight.size() < MAX_IN_FLIGHT_RECOVERIES && recoveryRound.hasNext()) {
+        for (int scanned = 0;
+                scanned < MAX_BUCKETS_PER_SCAN
+                        && inFlight.size() < MAX_IN_FLIGHT_RECOVERIES
+                        && recoveryRound.hasNext();
+                scanned++) {
             Map.Entry<TableBucket, Object> pending = recoveryRound.next();
             TableBucket bucket = pending.getKey();
             Object request = pending.getValue();

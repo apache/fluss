@@ -46,7 +46,6 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
-import org.apache.fluss.server.testutils.TestingBulkLoadSnapshot;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -321,6 +320,32 @@ class BulkLoadBucketCommitTest {
                                         .get(30, TimeUnit.SECONDS)
                                         .getState())
                         .isEqualTo(BulkLoadBucket.ALLOCATED);
+            } else if (scenario == BucketCommitScenario.COORDINATOR_TAKEOVER) {
+                // Persist the commit without sending its recovery notification. The TabletServer
+                // keeps the same leader role, so only Coordinator takeover can dispatch recovery.
+                int leaderEpoch = cluster.waitAndGetLeaderReplica(target).getLeaderEpoch();
+                int coordinatorVersion = zk.getCurrentEpoch().getCoordinatorEpochZkVersion();
+                cluster.stopCoordinatorServer();
+                BulkLoadMetadataStore metadataStore = new BulkLoadMetadataStore(zk);
+                BulkLoadMetadataStore.Versioned<BulkLoadTransaction> transaction =
+                        metadataStore.transaction(tableId, LOAD_ID).get();
+                metadataStore.commitBucket(
+                        transaction,
+                        metadataStore.target(transaction.value, null).get(),
+                        target,
+                        metadataStore.bucket(transaction.value, target).get(),
+                        new BucketSnapshot(
+                                uploaded.getSnapshotId(),
+                                uploaded.getLogOffset(),
+                                uploaded.getMetadataFilePath().toString()),
+                        Collections.emptyList(),
+                        coordinatorVersion);
+                cluster.startCoordinatorServer();
+
+                Tuple2<byte[], byte[]> imported = getKeyValuePairs(rows).get(0);
+                retry(Duration.ofSeconds(30), () -> assertLookupRow(leader, tableId, imported));
+                assertThat(cluster.waitAndGetLeaderReplica(target).getLeaderEpoch())
+                        .isEqualTo(leaderEpoch);
             } else if (scenario == BucketCommitScenario.RECOVERY_FAILS) {
                 // A valid-size CURRENT file passes publication validation but RocksDB cannot open
                 // it.
@@ -471,6 +496,7 @@ class BulkLoadBucketCommitTest {
     private enum BucketCommitScenario {
         RECOVERY_SUCCEEDS,
         WAL_ADVANCED,
+        COORDINATOR_TAKEOVER,
         RECOVERY_FAILS
     }
 }

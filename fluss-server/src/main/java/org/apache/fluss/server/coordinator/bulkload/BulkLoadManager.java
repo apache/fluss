@@ -46,6 +46,7 @@ import org.apache.fluss.utils.function.FunctionWithException;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -64,6 +65,7 @@ public final class BulkLoadManager {
         this.epochVersion = epochVersion;
     }
 
+    /** Resolves the transaction and checks that its original physical table still exists. */
     public Versioned<BulkLoadTransaction> transaction(long tableId, String id) throws Exception {
         Versioned<BulkLoadTransaction> transaction =
                 store.transaction(tableId, id)
@@ -94,7 +96,7 @@ public final class BulkLoadManager {
             return previous.get().value;
         }
         requireRunning(transaction);
-        List<CuratorOp> checks = buildContextChecks(transaction, target);
+        List<CuratorOp> checks = validateBuildContext(transaction, target, !previous.isPresent());
         if (previous.isPresent()) {
             return previous.get().value;
         }
@@ -134,8 +136,10 @@ public final class BulkLoadManager {
     }
 
     /** Checks construction context without adding DDL serialization. */
-    private List<CuratorOp> buildContextChecks(
-            Versioned<BulkLoadTransaction> transaction, Versioned<BulkLoadTarget> target)
+    private List<CuratorOp> validateBuildContext(
+            Versioned<BulkLoadTransaction> transaction,
+            Versioned<BulkLoadTarget> target,
+            boolean willPersist)
             throws Exception {
         if (target.value.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
@@ -159,9 +163,12 @@ public final class BulkLoadManager {
                 table.toTableDescriptor().equals(original.toTableDescriptor())
                         && Objects.equals(table.getRemoteDataDir(), original.getRemoteDataDir()),
                 "BulkLoad build context changed.");
-        List<CuratorOp> checks = new ArrayList<>();
-        checks.add(
-                store.check(ZkData.TableZNode.path(original.getTablePath()), current.zkVersion()));
+        List<CuratorOp> checks = willPersist ? new ArrayList<>(2) : Collections.emptyList();
+        if (willPersist) {
+            checks.add(
+                    store.check(
+                            ZkData.TableZNode.path(original.getTablePath()), current.zkVersion()));
+        }
         if (target.value.partitionId != null) {
             Optional<VersionedData<PartitionRegistration>> partition =
                     client.getPartitionWithVersion(
@@ -182,11 +189,13 @@ public final class BulkLoadManager {
                                     partition.get().data().getRemoteDataDir(),
                                     target.value.remoteDataDir),
                     "BulkLoad target build context changed.");
-            checks.add(
-                    store.check(
-                            ZkData.PartitionZNode.path(
-                                    original.getTablePath(), target.value.partitionName),
-                            partition.get().zkVersion()));
+            if (willPersist) {
+                checks.add(
+                        store.check(
+                                ZkData.PartitionZNode.path(
+                                        original.getTablePath(), target.value.partitionName),
+                                partition.get().zkVersion()));
+            }
         }
         return checks;
     }
@@ -213,7 +222,7 @@ public final class BulkLoadManager {
             return false;
         }
         requireRunning(transaction);
-        List<CuratorOp> checks = buildContextChecks(transaction, target);
+        List<CuratorOp> checks = validateBuildContext(transaction, target, true);
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(
                         transaction.value.tableInfo, target.value, bucket, allocation.value);

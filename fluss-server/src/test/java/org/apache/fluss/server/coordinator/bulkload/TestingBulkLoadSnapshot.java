@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.testutils;
+package org.apache.fluss.server.coordinator.bulkload;
 
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
@@ -45,10 +45,10 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /** Writes an external RocksDB checkpoint in the BulkLoad input format. */
-public final class TestingBulkLoadSnapshot {
+final class TestingBulkLoadSnapshot {
     private TestingBulkLoadSnapshot() {}
 
-    public static CompletedSnapshotHandle writeSnapshot(
+    static CompletedSnapshotHandle writeSnapshot(
             FsPath remoteDataDir,
             PhysicalTablePath physical,
             TableBucket bucket,

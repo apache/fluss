@@ -127,12 +127,15 @@ public final class BulkLoadMetadataStore {
             List<CuratorOp> physicalChecks,
             int epochVersion)
             throws Exception {
-        String snapshotsPath = ZkData.BucketSnapshotsZNode.path(bucket);
-        // Never recreate physical bucket parents after deletion.
-        try {
-            curator.create().forPath(snapshotsPath);
-        } catch (KeeperException.NodeExistsException ignored) {
-            // Ordinary snapshots may already have created this directory.
+        Optional<VersionedData<Long>> previous = client.getRecoverySnapshotSelection(bucket);
+        if (!previous.isPresent()) {
+            // A selection already implies a snapshot directory for this physical bucket.
+            // Never recreate physical bucket parents after deletion.
+            try {
+                curator.create().forPath(ZkData.BucketSnapshotsZNode.path(bucket));
+            } catch (KeeperException.NodeExistsException ignored) {
+                // An ordinary snapshot may have registered the directory.
+            }
         }
         List<CuratorOp> ops = mutationChecks(transaction, target, physicalChecks);
         ops.add(
@@ -150,7 +153,6 @@ public final class BulkLoadMetadataStore {
         String recoveryPath = ZkData.RecoverySnapshotZNode.path(bucket);
         byte[] data = ZkData.RecoverySnapshotZNode.encode(snapshot.getSnapshotId());
         while (true) {
-            Optional<VersionedData<Long>> previous = client.getRecoverySnapshotSelection(bucket);
             List<CuratorOp> attempt = new ArrayList<>(ops);
             attempt.add(
                     previous.isPresent()
@@ -172,6 +174,7 @@ public final class BulkLoadMetadataStore {
                         .equals(current.map(VersionedData::zkVersion))) {
                     throw e;
                 }
+                previous = current;
             }
         }
     }
