@@ -1364,7 +1364,7 @@ if (!committed.Ok()) { /* inspect request and individual bucket results */ }
 
 Buckets include table ID and optional partition ID. Explicit commits accept `std::vector<ConsumerOffset>`; offsets identify the **next** record to read. Metadata distinguishes `std::nullopt` from an empty string. `CommitAsync()` queues immediately and returns a `std::future<OffsetCommitResult>`. Invocations on a scanner stay ordered even when their futures are awaited in another order. Releasing a future may wait for completion; it does not cancel the queued write.
 
-Check `OffsetCommitResult::Ok()` and inspect request/per-bucket `result` and `outcome_unknown`. An unknown write outcome blocks later commits on that scanner; settle the old writer before recovering. Different scanners and processes are not fenced.
+Check `OffsetCommitResult::Ok()` and inspect request/per-bucket `result` and `outcome_unknown`. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind sets `needs_recovery`: this request was not sent. A late write may cause replay even after a higher commit succeeds. Different scanners and processes are not fenced.
 
 `OffsetsInitializer::Committed(group)` restores saved positions and defaults missing commits to earliest. Its fallback overload accepts `Earliest()`, `Latest()`, `Timestamp(epoch_ms)`, `Offset(next_offset)` or `Fail()`. Authorization and RPC failures never select a fallback.
 

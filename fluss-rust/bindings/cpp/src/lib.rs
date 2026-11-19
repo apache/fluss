@@ -153,6 +153,7 @@ mod ffi {
     struct FfiConsumerOffsetsResult {
         result: FfiResult,
         unknown: bool,
+        needs_recovery: bool,
         offsets: Vec<FfiConsumerOffset>,
     }
 

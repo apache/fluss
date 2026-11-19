@@ -2367,7 +2367,8 @@ TableBucket offset_bucket(const ffi::FfiConsumerOffset& value) {
 }
 
 OffsetCommitResult commit_result(ffi::FfiConsumerOffsetsResult value) {
-    OffsetCommitResult result{utils::from_ffi_result(value.result), value.unknown, {}};
+    OffsetCommitResult result{utils::from_ffi_result(value.result), value.unknown, {},
+                              value.needs_recovery};
     for (const auto& entry : value.offsets) {
         result.buckets.push_back(
             {offset_bucket(entry), utils::from_ffi_result(entry.result), entry.unknown});

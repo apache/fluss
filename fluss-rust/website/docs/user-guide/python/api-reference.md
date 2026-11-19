@@ -443,7 +443,7 @@ assert result.request.status == "success"
 assert all(value.status == "success" for value in result.buckets.values())
 ```
 
-`commit_sync()` blocks with the GIL released; `commit_async()` enqueues immediately and returns an awaitable. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order; cancelling the awaitable stops waiting but leaves the queued commit running. An `unknown` write outcome blocks subsequent commits with `needs_recovery`; settle the old writer before recovering through a new scanner. The server does not fence competing writers.
+`commit_sync()` blocks with the GIL released; `commit_async()` enqueues immediately and returns an awaitable. Both accept an optional list of `(TableBucket, OffsetAndMetadata(next_offset, metadata))` for partial processing or rewinds. `None` metadata and an empty string are distinct. Commits on one scanner retain invocation order; cancelling the awaitable stops waiting but leaves the queued commit running. After a possibly late write, the scanner accepts a higher offset for that bucket or the same offset and metadata. An unsafe rewind returns `needs_recovery`, even after a seek. A late write may cause replay. The server does not fence competing writers.
 
 `OffsetsInitializer.committed(group, fallback=None)` uses earliest for missing commits by default. Alternatives are `latest()`, `timestamp(epoch_ms)`, `offset(next_offset)`, or `fail()`. Authorization and transport failures are propagated, never treated as missing commits.
 

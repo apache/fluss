@@ -54,13 +54,15 @@ impl ffi::FfiConsumerOffsetsResult {
         Self {
             result: ok_result(),
             unknown: offsets.iter().any(|offset| offset.unknown),
+            needs_recovery: false,
             offsets,
         }
     }
 
     fn failure(error: OffsetCommitError) -> Self {
         Self {
-            unknown: !matches!(&error, OffsetCommitError::Rejected(_)),
+            unknown: matches!(&error, OffsetCommitError::Unknown(_)),
+            needs_recovery: matches!(&error, OffsetCommitError::NeedsRecovery),
             result: match error {
                 OffsetCommitError::Rejected(error) | OffsetCommitError::Unknown(error) => {
                     err_from_core_error(&error)
@@ -443,5 +445,22 @@ fn commit_response(
                 .collect(),
         ),
         Err(error) => ffi::FfiConsumerOffsetsResult::failure(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewind_guard_is_distinct_from_an_unknown_write() {
+        let refused = ffi::FfiConsumerOffsetsResult::failure(OffsetCommitError::NeedsRecovery);
+        assert!(refused.needs_recovery && !refused.unknown);
+        let unknown = ffi::FfiConsumerOffsetsResult::failure(OffsetCommitError::Unknown(
+            fcore::error::Error::IllegalArgument {
+                message: "test".into(),
+            },
+        ));
+        assert!(unknown.unknown && !unknown.needs_recovery);
     }
 }

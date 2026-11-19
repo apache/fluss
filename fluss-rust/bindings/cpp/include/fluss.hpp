@@ -1351,6 +1351,8 @@ struct OffsetCommitResult {
     Result result;
     bool outcome_unknown{false};
     std::vector<BucketOffsetCommitResult> buckets;
+    /// This request was not sent: an earlier write could overwrite the requested rewind.
+    bool needs_recovery{false};
 
     bool Ok() const {
         if (!result.Ok() || outcome_unknown) return false;
@@ -2524,7 +2526,7 @@ class RecordBatchLogScanner {
     /// Consumer offset methods have the same contracts as LogScanner's methods.
     /// Process all batches returned by Poll before calling no-argument CommitSync/Async.
     /// Use explicit offsets for partially processed batches. Drive the scanner from one
-    /// consumer thread; commits are ordered, and unknown outcomes block later commits.
+    /// consumer thread; the scanner submits commits in order and guards rewinds after an unknown outcome.
     Result Subscribe(const std::vector<TableBucket>& buckets,
                      const OffsetsInitializer& initializer);
     OffsetCommitResult CommitSync();
