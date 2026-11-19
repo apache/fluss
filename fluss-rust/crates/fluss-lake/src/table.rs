@@ -19,11 +19,14 @@
 
 use crate::error::planning_client_error;
 use crate::planner::{plan_union_read, plan_with_context};
-use crate::{FlussLakeError, FlussLakeReadContext, FlussLakeReadPlan, LakeSource, Result};
+use crate::{
+    FlussLakeError, FlussLakeReadContext, FlussLakeReadPlan, FlussLakeReader, LakeSource, Result,
+};
 use fluss::client::FlussConnection;
 use fluss::metadata::{RowType, SchemaInfo, TableInfo, TablePath};
 use fluss::predicate::{BoundPredicate, Predicate};
 use fluss::protocol::PbUnionReadContext;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -39,6 +42,7 @@ enum FlussLakeProjection {
 pub(crate) struct BoundScan {
     pub(crate) projection: Option<Vec<usize>>,
     pub(crate) filter: BoundPredicate,
+    pub(crate) filter_digest: [u8; 32],
 }
 
 /// Entry point for bounded reads over a Fluss table.
@@ -79,6 +83,7 @@ impl FlussLakeTable {
             table_path: self.table_path.clone(),
             projection: None,
             filter: None,
+            max_batch_size: None,
             lake_only: false,
             lake_source: None,
             catalog_property_overrides: self.catalog_property_overrides.clone(),
@@ -129,7 +134,7 @@ impl FlussLakeTable {
         let mut live = admin
             .get_table_info(&self.table_path)
             .await
-            .map_err(|e| planning_client_error("resolve boundary table", e))?;
+            .map_err(|e| crate::error::execution_client_error("resolve boundary table", e))?;
         validate_wire_identity(boundary, &live)?;
         let schema_id = required(boundary.schema_id, "schema_id")?;
         let schema = if schema_id == live.schema_id {
@@ -138,7 +143,7 @@ impl FlussLakeTable {
             admin
                 .get_table_schema(&self.table_path, Some(schema_id))
                 .await
-                .map_err(|e| planning_client_error("resolve captured schema", e))?
+                .map_err(|e| crate::error::execution_client_error("resolve captured schema", e))?
         };
         let context = FlussLakeReadContext::from_protobuf(boundary, &live, &schema)?;
         if schema_id != live.schema_id {
@@ -146,7 +151,7 @@ impl FlussLakeTable {
             let current = admin
                 .get_table_info(&self.table_path)
                 .await
-                .map_err(|e| planning_client_error("recheck boundary table", e))?;
+                .map_err(|e| crate::error::execution_client_error("recheck boundary table", e))?;
             context.validate_table(&current)?;
             live = current;
         }
@@ -190,6 +195,7 @@ pub struct FlussLakeScan {
     table_path: TablePath,
     projection: Option<FlussLakeProjection>,
     filter: Option<Predicate>,
+    max_batch_size: Option<usize>,
     lake_only: bool,
     lake_source: Option<Arc<dyn crate::LakeSource>>,
     catalog_property_overrides: HashMap<String, String>,
@@ -220,6 +226,12 @@ impl FlussLakeScan {
         self
     }
 
+    /// Limits rows per output batch. Smaller batches are not coalesced.
+    pub fn with_max_batch_size(mut self, max_batch_size: usize) -> Self {
+        self.max_batch_size = Some(max_batch_size);
+        self
+    }
+
     /// Enables or disables lake-only execution.
     /// Requires a lake-enabled table; before its first snapshot the result is empty.
     pub fn with_lake_only(mut self, lake_only: bool) -> Self {
@@ -233,9 +245,20 @@ impl FlussLakeScan {
     /// Other predicates still participate in planning and exact result filtering.
     /// Use `FlussLakeTable::capture_read_context` for a table-wide boundary shared by scans.
     ///
-    /// Lake planning uses the source supplied through `with_lake_source`.
+    /// Create the reader using this scan's `new_reader()`. Lake planning and reading
+    /// use the injected source or the feature-selected default implementation.
     pub async fn plan(&self) -> Result<FlussLakeReadPlan> {
         plan_union_read(self).await
+    }
+
+    /// Creates a reader without planning or refreshing read boundaries.
+    ///
+    /// The reader filter must match the filter used to plan the split. Preserve the projection and read mode
+    /// and supply a compatible lake backend; the filter check does not validate these settings.
+    /// A task can outlive its plan without changing its bounds.
+    /// Create one reader per execution attempt; all its splits share lazy initialization.
+    pub fn new_reader(&self) -> FlussLakeReader {
+        FlussLakeReader::from_scan(self.clone())
     }
 
     /// Builds a default plan without choosing new snapshots or log offsets.
@@ -338,6 +361,7 @@ impl FlussLakeScan {
             ));
         }
         let info = Arc::new(context.table_info(&live)?);
+        let filter_digest = self.bind(info.row_type())?.filter_digest;
         let keys = physical_primary_key_indexes(&info)?;
         let scope = crate::partition::PartitionScope::bind(
             context.partition_scope(),
@@ -358,6 +382,7 @@ impl FlussLakeScan {
                         "duplicate imported split identity".into(),
                     ));
                 }
+                descriptor.validate_filter(&filter_digest)?;
                 descriptor.validate(
                     &context,
                     ranges.get(descriptor.table_bucket()).copied(),
@@ -372,11 +397,16 @@ impl FlussLakeScan {
 
     /// Shares predicate coercion and projection resolution between planning and reading.
     pub(crate) fn bind(&self, row_type: &RowType) -> Result<BoundScan> {
+        let filter = BoundPredicate::bind(self.filter(), row_type).map_err(|error| {
+            FlussLakeError::PlanningFailed(format!("failed to bind filter predicate: {error}"))
+        })?;
+        let bytes = filter.exact_filter_bytes(row_type).map_err(|error| {
+            FlussLakeError::PlanningFailed(format!("failed to encode planned filter: {error}"))
+        })?;
         Ok(BoundScan {
             projection: self.resolve_projection(row_type)?,
-            filter: BoundPredicate::bind(self.filter(), row_type).map_err(|error| {
-                FlussLakeError::PlanningFailed(format!("failed to bind filter predicate: {error}"))
-            })?,
+            filter,
+            filter_digest: Sha256::digest(bytes).into(),
         })
     }
 
@@ -427,6 +457,10 @@ impl FlussLakeScan {
         self.filter.as_ref()
     }
 
+    pub(crate) fn max_batch_size(&self) -> Option<usize> {
+        self.max_batch_size
+    }
+
     pub(crate) fn lake_only(&self) -> bool {
         self.lake_only
     }
@@ -435,6 +469,11 @@ impl FlussLakeScan {
         if self.table_path.database().is_empty() || self.table_path.table().is_empty() {
             return Err(FlussLakeError::PlanningFailed(
                 "database and table names must not be empty".to_string(),
+            ));
+        }
+        if self.max_batch_size == Some(0) {
+            return Err(FlussLakeError::PlanningFailed(
+                "batch size must be greater than zero".to_string(),
             ));
         }
         Ok(())
@@ -448,6 +487,7 @@ impl Debug for FlussLakeScan {
             .field("table_path", &self.table_path)
             .field("projection", &self.projection)
             .field("filter", &self.filter)
+            .field("max_batch_size", &self.max_batch_size)
             .field("lake_only", &self.lake_only)
             .field(
                 "catalog_property_override_count",

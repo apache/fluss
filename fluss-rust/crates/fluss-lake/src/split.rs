@@ -19,8 +19,6 @@
 
 pub use crate::partition::FlussLakePartitionIdentity;
 use crate::{FlussLakeError, FlussLakeSplitDescriptor, Result};
-#[cfg(test)]
-use fluss::metadata::TableBucket;
 use fluss::metadata::{TableInfo, TablePath};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -110,10 +108,21 @@ impl FlussLakeReadSplit {
         }
     }
 
+    pub(crate) fn set_filter_digest(&mut self, digest: [u8; 32]) {
+        Arc::make_mut(&mut self.descriptor).filter_digest = Some(digest);
+    }
+
     pub(crate) fn append_id(&mut self, suffix: &str) {
         Arc::make_mut(&mut self.descriptor)
             .split_id
             .push_str(suffix);
+    }
+
+    pub(crate) fn table_info(&self) -> &TableInfo {
+        &self.table_info
+    }
+    pub(crate) fn validate_live_table(&self, live: &TableInfo) -> Result<()> {
+        crate::read_context::validate_frozen_table(&self.table_info, live)
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
@@ -236,6 +245,12 @@ impl FlussLakeReadSplit {
         !self.primary_key_indexes.is_empty()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.descriptor.start_offset == self.descriptor.stop_offset
+            && self.descriptor.lake_splits.is_empty()
+            && self.descriptor.kv_snapshot_id.is_none()
+    }
+
     pub(crate) fn is_append_lake(&self) -> bool {
         !self.is_primary_key()
             && self.descriptor.lake_splits.len() == 1
@@ -287,6 +302,7 @@ pub(crate) fn testing_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluss::metadata::TableBucket;
 
     #[test]
     fn lake_tasks_without_a_live_bucket_cannot_carry_a_tail() {
@@ -309,6 +325,7 @@ mod tests {
                 lake.bucket_count = -1;
             }
             let mut task = crate::FlussLakeSplitDescriptor {
+                filter_digest: None,
                 split_id: "test".into(),
                 table_bucket: TableBucket::new(7, bucket_id),
                 partition,
@@ -324,5 +341,43 @@ mod tests {
             task.stop_offset = 1;
             assert!(FlussLakeReadSplit::try_new(info, task, vec![]).is_err());
         }
+    }
+
+    #[test]
+    fn frozen_metadata_allows_schema_evolution_but_rejects_recreated_sources() {
+        let mut info = testing_table(TablePath::new("fluss", "orders"), 1, false, 7);
+        info.properties
+            .insert("private-key".into(), "SECRET".into());
+        let task = FlussLakeReadSplit::try_new(
+            Arc::new(info.clone()),
+            crate::FlussLakeSplitDescriptor {
+                filter_digest: None,
+                split_id: "test".into(),
+                table_bucket: TableBucket::new(7, 0),
+                partition: FlussLakePartitionIdentity::Unpartitioned,
+                start_offset: 0,
+                stop_offset: 10,
+                snapshot_id: None,
+                lake_splits: vec![],
+                estimated_rows: None,
+                estimated_size: None,
+                kv_snapshot_id: None,
+            },
+            vec![],
+        )
+        .unwrap();
+        assert!(!format!("{task:?}").contains("SECRET"));
+        info.schema_id += 1;
+        task.validate_live_table(&info).unwrap();
+        assert_eq!(task.table_info().schema_id, 1);
+        info.table_id += 1;
+        assert!(matches!(
+            task.validate_live_table(&info),
+            Err(FlussLakeError::DataUnavailable(_))
+        ));
+        info.table_id -= 1;
+        info.properties
+            .insert("table.datalake.table-name".into(), "other".into());
+        assert!(task.validate_live_table(&info).is_err());
     }
 }

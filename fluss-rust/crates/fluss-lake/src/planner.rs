@@ -63,16 +63,7 @@ pub(crate) async fn plan_with_context(
     let table_info = admin
         .get_table_info(scan.table_path())
         .await
-        .map_err(|error| {
-            if error.api_error() == Some(fluss::error::FlussError::TableNotExist) {
-                FlussLakeError::DataUnavailable(format!(
-                    "table {} from the frozen context no longer exists",
-                    context.table_path()
-                ))
-            } else {
-                planning_client_error("get table metadata", error)
-            }
-        })?;
+        .map_err(|error| crate::error::execution_client_error("get frozen source table", error))?;
     let table_info = context.table_info(&table_info)?;
     let bound = scan.bind(table_info.row_type())?;
     plan_prepared(scan, context, &table_info, bound).await
@@ -92,6 +83,7 @@ async fn plan_prepared(
     let BoundScan {
         projection: output_projection,
         filter,
+        filter_digest,
     } = bound;
     let output_schema = projected_arrow_schema(
         scan.table_path(),
@@ -284,6 +276,9 @@ async fn plan_prepared(
             true,
         )?);
     }
+    for split in &mut splits {
+        split.set_filter_digest(filter_digest);
+    }
     FlussLakeReadPlan::new(context.clone(), output_schema, splits)
 }
 
@@ -458,6 +453,7 @@ fn create_logical_split(
     Ok(FlussLakeReadSplit::from_planned(
         table_info.clone(),
         FlussLakeSplitDescriptor {
+            filter_digest: None,
             kv_snapshot_id: match bucket_range.baseline() {
                 crate::FlussLakeBaseline::KvSnapshot { snapshot_id } if lake_splits.is_empty() => {
                     Some(snapshot_id)

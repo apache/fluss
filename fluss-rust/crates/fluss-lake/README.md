@@ -18,7 +18,7 @@ limitations under the License.
 
 # Bounded UnionRead
 
-`fluss-lake` captures reusable source boundaries and plans bounded Fluss-only or lake-plus-log reads. Enable `paimon` for pinned Paimon planning and baseline reading, or supply a custom `LakeSource`. Combined lake/log execution is added separately.
+`fluss-lake` plans and executes bounded Append or lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -101,7 +101,7 @@ Append lake tasks and bucket log tails are independent. PK tasks group a complet
 
 `LakePlannerContext` carries the exact partition scope and optional selected bucket to the backend. Sources should prune before expensive planning when supported; returned tasks are also checked against the captured scope. Partition identities use the core Fluss partition encoding. Lake filters may include mutable PK columns, provided the backend preserves its current-view merge/deletion semantics; the complete Fluss tail is folded before final exact filtering.
 
-Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.
+Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The worker must rebuild the planning filter. Import and execution compare its exact bound predicate with the digest on the task. Replan descriptors created before the digest was recorded. The adapter still supplies the projection, read mode and credentials. Expired lake-only partitions remain discoverable through the pinned snapshot.
 
 ## Paimon backend
 
@@ -118,3 +118,11 @@ Task payloads preserve Paimon's native file paths, including `data-file.external
 Partition scope is passed to Paimon before planning. Paimon 0.5 does not expose a public bucket filter, so selected-bucket planning still scans the selected partitions' manifests and filters the resulting tasks by bucket.
 
 Fluss S3/OSS data requests use rustls and return the stored object bytes without HTTP decompression, independently of reqwest features enabled by Paimon. Paimon 0.5 still enables native TLS, so the combined build retains OpenSSL on Linux. OpenDAL's credential providers use a separate internal HTTP client; their TLS selection also requires an upstream fix.
+
+## Append execution
+
+Create one reader per execution attempt with `scan.new_reader()`. The reader and its clones share the initial table identity lookup and lake source across splits. Create a fresh reader on retry. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
+
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. PK lake/log reconciliation is introduced separately and is explicitly rejected in this layer.
+
+Tasks with a persisted KV snapshot baseline are rejected before reading until the default executor integrates that baseline. An empty log tail does not make a KV task empty.
