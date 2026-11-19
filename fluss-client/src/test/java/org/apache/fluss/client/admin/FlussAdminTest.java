@@ -26,6 +26,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.ConsumerOffsetMetadataTooLargeException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnsupportedVersionException;
@@ -374,7 +375,7 @@ class FlussAdminTest {
     }
 
     @Test
-    void testDeleteConsumerGroupsSkipsInvalidIdsAndDeduplicatesBeforeDiscovery() {
+    void testDeleteConsumerGroupsValidatesAndDeduplicatesBeforeDiscovery() {
         AtomicInteger discoveries = new AtomicInteger();
         AtomicInteger deletions = new AtomicInteger();
         CompletableFuture<ApiMessage> pendingDelete = new CompletableFuture<>();
@@ -391,8 +392,15 @@ class FlussAdminTest {
                         });
 
         try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
+            for (String invalidId : Arrays.asList(null, "bad group")) {
+                assertThatThrownBy(() -> admin.deleteConsumerGroups(Arrays.asList("g1", invalidId)))
+                        .isInstanceOf(InvalidConsumerGroupIdException.class);
+            }
+            assertThat(discoveries).hasValue(0);
+            assertThat(deletions).hasValue(0);
+
             DeleteConsumerGroupsResult result =
-                    admin.deleteConsumerGroups(Arrays.asList("g1", null, "g1"));
+                    admin.deleteConsumerGroups(Arrays.asList("g1", "g1"));
             assertThat(result.perGroupFutures()).containsOnlyKeys("g1");
             assertThat(discoveries).hasValue(1);
             assertThat(deletions).hasValue(1);

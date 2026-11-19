@@ -36,7 +36,6 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
@@ -879,11 +878,7 @@ public class FlussAdmin implements Admin {
         checkNotNull(groupIds, "groupIds must not be null");
         Set<String> uniqueGroupIds = new HashSet<>();
         for (String groupId : groupIds) {
-            try {
-                uniqueGroupIds.add(GroupId.of(groupId).getGroupId());
-            } catch (InvalidConsumerGroupIdException ignored) {
-                // An invalid ID must not prevent deletion of other groups in the batch.
-            }
+            uniqueGroupIds.add(GroupId.of(groupId).getGroupId());
         }
         Map<String, CompletableFuture<Void>> results = new HashMap<>();
         for (String groupId : uniqueGroupIds) {

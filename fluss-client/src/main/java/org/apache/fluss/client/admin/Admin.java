@@ -35,6 +35,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
@@ -700,12 +701,12 @@ public interface Admin extends AutoCloseable {
     /**
      * Deletes the given consumer groups.
      *
-     * <p>Deleting a group removes its committed offsets. The returned result exposes a future per
-     * group, so callers can inspect which deletions succeeded and which failed. Invalid group ids,
-     * including null, are ignored; duplicate valid ids are deleted only once.
+     * <p>All group IDs are validated before any deletion starts. Deleting a group removes its
+     * committed offsets. Each distinct group ID is deleted once and has its own result future.
      *
      * @param groupIds the consumer group ids to delete
      * @return a result exposing per-group futures and an aggregate future
+     * @throws InvalidConsumerGroupIdException if any group ID is null or invalid
      */
     DeleteConsumerGroupsResult deleteConsumerGroups(Collection<String> groupIds);
 
