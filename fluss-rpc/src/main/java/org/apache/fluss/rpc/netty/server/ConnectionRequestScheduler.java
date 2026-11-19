@@ -64,7 +64,7 @@ final class ConnectionRequestScheduler {
         private volatile int depth;
         private boolean paused;
         private int running;
-        private boolean sealed;
+        private boolean shuttingDown;
 
         Queue(int threshold) {
             this(threshold, ConnectionRequestScheduler.this);
@@ -111,7 +111,7 @@ final class ConnectionRequestScheduler {
                 Connection connection =
                         connections.computeIfAbsent(id, key -> new Connection(this));
                 Queue owner = connection.owner;
-                if (sealed || owner.sealed) {
+                if (shuttingDown || owner.shuttingDown) {
                     return false;
                 }
                 connection.incoming.addLast(request);
@@ -138,7 +138,7 @@ final class ConnectionRequestScheduler {
                     if (tryPull(this)) {
                         break;
                     }
-                    if (sealed && depth == 0) {
+                    if (shuttingDown && depth == 0) {
                         return ShutdownRequest.INSTANCE;
                     }
                     long remaining = deadline - System.nanoTime();
@@ -190,7 +190,7 @@ final class ConnectionRequestScheduler {
         @Override
         public void putShutdownRequest() {
             synchronized (lock) {
-                sealed = true;
+                shuttingDown = true;
                 lock.notifyAll();
             }
         }
@@ -339,7 +339,7 @@ final class ConnectionRequestScheduler {
     }
 
     private boolean tryPull(Queue target) {
-        if (!handoff || target.sealed) {
+        if (!handoff || target.shuttingDown) {
             return false;
         }
         Queue donor = null;
@@ -347,7 +347,7 @@ final class ConnectionRequestScheduler {
         for (Queue source : queues) {
             if (source == target
                     || source.group != target.group
-                    || source.sealed
+                    || source.shuttingDown
                     || source.ready.size() + source.running < 2) {
                 continue;
             }
@@ -371,14 +371,14 @@ final class ConnectionRequestScheduler {
     }
 
     private void tryPush(Queue source) {
-        if (!handoff || source.sealed || source.depth < Math.max(1, source.high - 1)) {
+        if (!handoff || source.shuttingDown || source.depth < Math.max(1, source.high - 1)) {
             return;
         }
         Queue target = null;
         for (Queue queue : queues) {
             if (queue != source
                     && queue.group == source.group
-                    && !queue.sealed
+                    && !queue.shuttingDown
                     && (target == null || queue.depth < target.depth)) {
                 target = queue;
             }
