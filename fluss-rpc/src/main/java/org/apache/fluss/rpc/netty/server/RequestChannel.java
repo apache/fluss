@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.netty.server;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 
 import org.slf4j.Logger;
@@ -187,6 +188,12 @@ public class RequestChannel {
                     associatedChannels.size(),
                     isBackpressureActive);
         }
+    }
+
+    /** Returns whether the given channel is currently registered to this RequestChannel. */
+    @VisibleForTesting
+    public boolean isChannelRegistered(Channel channel) {
+        return associatedChannels.contains(channel);
     }
 
     /** Reconciles the backpressure state with the current queue size. */

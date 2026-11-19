@@ -164,14 +164,21 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
         this.remoteAddress = ctx.channel().remoteAddress();
         isActive.set(true);
         LOG.info("New connection from {}", ctx.channel().remoteAddress());
+        // Track the channel so RequestChannel backpressure can pause/resume its reads.
+        requestChannel.registerChannel(ctx.channel());
         // TODO Channel metrics
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         LOG.info("Connection closed from {}", ctx.channel().remoteAddress());
-        deactivate();
-        super.channelInactive(ctx);
+        try {
+            // Stop tracking the channel; it must not receive further pause/resume tasks.
+            requestChannel.unregisterChannel(ctx.channel());
+            deactivate();
+        } finally {
+            super.channelInactive(ctx);
+        }
         // TODO Channel metrics
     }
 
