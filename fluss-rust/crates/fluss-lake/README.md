@@ -126,3 +126,29 @@ Create one reader per execution attempt with `scan.new_reader()`. The reader and
 The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a deduplicate PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
 
 Without the `kv-snapshot` feature the reader rejects KV tasks before reading. An empty log tail still returns the snapshot rows.
+
+## Snapshot followed by a live changelog
+
+For an Append table, the bootstrap emits the captured lake and log rows. For a default deduplicate PK table, it emits the reconciled current view. Once all assigned splits finish, the stream emits a single marker and follows each captured bucket from its exclusive stop offset. Writes during bootstrap are picked up from the log, in order within each bucket. PK changes retain their original change types, including deletes and update-before records when present.
+
+```rust,no_run
+# use fluss_lake::{FlussLakeTable, Result};
+# use futures::TryStreamExt;
+# async fn import(table: &FlussLakeTable) -> Result<()> {
+let context = table.capture_read_context().await?;
+let scan = table.new_stream_scan();
+let mut events = scan.start(&context).await?;
+while let Some(event) = events.try_next().await? {
+    use fluss_lake::UnionReadEvent::*;
+    match event {
+        Snapshot(batch) => { /* stage rows */ }
+        SnapshotFinished(next) => { /* commit staged rows and offsets together */ }
+        Changes(records) => { /* apply per bucket and commit next offsets with the data */ }
+    }
+}
+# Ok(()) }
+```
+
+If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Keep the original context with the checkpoint. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
+
+Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Streaming reads return full rows without row-filter pushdown. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.

@@ -820,3 +820,181 @@ async fn kv_snapshot_and_retained_tail_recover_the_frozen_pk_view() {
     );
     admin.drop_table(&path, false).await.unwrap();
 }
+
+#[tokio::test]
+async fn stream_append_reads_writes_made_during_bootstrap() {
+    use fluss::row::DataGetters;
+    use fluss_lake::UnionReadEvent::*;
+
+    let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = conn.get_admin().unwrap();
+    let path = TablePath::new("fluss", "stream_append_cutover");
+    let desc = TableDescriptor::builder()
+        .schema(append_schema())
+        .partitioned_by(vec!["name"])
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &desc).await;
+    for name in ["east", "west"] {
+        let spec =
+            fluss::metadata::PartitionSpec::new(std::collections::HashMap::from([("name", name)]));
+        admin.create_partition(&path, &spec, false).await.unwrap();
+    }
+    let table = conn.get_table(&path).await.unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
+    writer
+        .append_arrow_batch(append_batch(vec![1], vec!["east"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    let source = FlussLakeTable::new(conn.clone(), &path);
+    let context = source.capture_read_context().await.unwrap();
+    let mut events = source.new_stream_scan().start(&context).await.unwrap();
+    writer
+        .append_arrow_batch(append_batch(vec![2, 3], vec!["east", "west"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    let mut baseline = vec![];
+    loop {
+        match events.try_next().await.unwrap().unwrap() {
+            Snapshot(batch) => baseline.extend(sorted_ids(&[batch])),
+            SnapshotFinished(_) => break,
+            Changes(_) => panic!("change before initial import"),
+        }
+    }
+    assert_eq!(baseline, [1]);
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let mut ids = vec![];
+        while ids.len() < 2 {
+            let Changes(batch) = events.try_next().await.unwrap().unwrap() else {
+                panic!("unexpected bootstrap")
+            };
+            ids.extend(
+                batch
+                    .into_iter()
+                    .map(|r| (r.offset(), r.row().get_int(0).unwrap())),
+            );
+        }
+        ids.sort_unstable();
+        assert_eq!(ids, [(0, 3), (1, 2)]);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn stream_pk_lake_handoff_and_checkpoint_resume() {
+    use fluss::record::ChangeType;
+    use fluss::row::{DataGetters, GenericRow};
+    use fluss_lake::UnionReadEvent::*;
+
+    let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = conn.get_admin().unwrap();
+    let path = TablePath::new("fluss", "stream_pk_cutover");
+    let desc = TableDescriptor::builder()
+        .schema(pk_schema())
+        .property("table.datalake.enabled", "true")
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &desc).await;
+    let table = conn.get_table(&path).await.unwrap();
+    let writer = table.new_upsert().unwrap().create_writer().unwrap();
+    let row = |id: i32, name: &'static str| {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, id);
+        row.set_field(1, name);
+        row
+    };
+    writer.upsert(&row(1, "baseline")).unwrap().await.unwrap();
+    writer.upsert(&row(2, "tail")).unwrap().await.unwrap();
+    let ctx = lake_context(table.get_table_info(), 1, 2);
+    let bucket = ctx.log_ranges()[0].table_bucket().clone();
+    let source = FlussLakeTable::new(conn.clone(), &path);
+    let scan = || {
+        source
+            .new_stream_scan()
+            .with_lake_source(Arc::new(Baseline))
+    };
+    let limited =
+        scan().with_memory_budget(Arc::new(fluss::client::LimitedReadMemoryBudget::new(0)));
+    let mut failed = limited.start(&ctx).await.unwrap();
+    assert!(matches!(
+        failed.try_next().await,
+        Err(FlussLakeError::MemoryLimitExceeded(_))
+    ));
+    assert!(failed.try_next().await.unwrap().is_none());
+    let source = scan();
+    let mut events = source.start(&ctx).await.unwrap();
+    writer.upsert(&row(1, "updated")).unwrap().await.unwrap();
+    writer.delete(&row(2, "tail")).unwrap().await.unwrap();
+    // The target lost its uncommitted staging area. Even with newer log records,
+    // bootstrapping again from the same context must emit the original view.
+    assert!(matches!(
+        events.try_next().await.unwrap(),
+        Some(Snapshot(_))
+    ));
+    drop(events);
+    let mut events = source.start(&ctx).await.unwrap();
+    let mut ids = vec![];
+    let mut checkpoint = loop {
+        match events.try_next().await.unwrap().unwrap() {
+            Snapshot(batch) => ids.extend(sorted_ids(&[batch])),
+            SnapshotFinished(cp) => break cp,
+            Changes(_) => panic!("change before initial import"),
+        }
+    };
+    ids.sort();
+    assert_eq!(ids, [1, 2]);
+    assert_eq!(checkpoint[&bucket], 2);
+    let mut seen_update = false;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let Changes(batch) = events.try_next().await.unwrap().unwrap() else {
+                panic!("repeated bootstrap")
+            };
+            for record in batch.records(&bucket) {
+                assert_eq!(checkpoint[&bucket], record.offset());
+                checkpoint.insert(bucket.clone(), record.offset() + 1);
+                match record.change_type() {
+                    ChangeType::UpdateBefore => {
+                        assert_eq!(record.row().get_string(1).unwrap(), "baseline")
+                    }
+                    ChangeType::UpdateAfter => {
+                        assert_eq!(record.row().get_int(0).unwrap(), 1);
+                        assert_eq!(record.row().get_string(1).unwrap(), "updated");
+                        seen_update = true;
+                    }
+                    ChangeType::Delete => {
+                        assert!(seen_update);
+                        assert_eq!(record.row().get_int(0).unwrap(), 2);
+                        return;
+                    }
+                    kind => panic!("unexpected change {kind:?}"),
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(events);
+    writer
+        .upsert(&row(3, "after restart"))
+        .unwrap()
+        .await
+        .unwrap();
+    let mut resumed = source.resume(&ctx, checkpoint.clone()).await.unwrap();
+    let Changes(batch) = tokio::time::timeout(Duration::from_secs(15), resumed.try_next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("repeated bootstrap")
+    };
+    let records = batch.records(&bucket);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].offset(), checkpoint[&bucket]);
+    assert_eq!(*records[0].change_type(), ChangeType::Insert);
+    assert_eq!(records[0].row().get_int(0).unwrap(), 3);
+}
