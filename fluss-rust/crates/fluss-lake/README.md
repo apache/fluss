@@ -16,9 +16,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Bounded UnionRead
+# UnionRead
 
-`fluss-lake` captures reusable source boundaries and plans bounded Fluss-only or lake-plus-log reads. Enable `paimon` for pinned Paimon planning and baseline reading, or supply a custom `LakeSource`. Combined lake/log execution is added separately.
+`fluss-lake` plans and executes bounded Append, deduplicate PK and lake-only reads. Enable `paimon` for the default lake source or supply a custom `LakeSource`.
 
 ```rust,no_run
 # use std::sync::Arc;
@@ -81,7 +81,7 @@ The protocol starts at version 1. Optional additive fields are compatible only w
 | `None`, Append table | Start at the captured earliest retained offset. |
 | `None`, PK table | Complete log history from offset zero. Truncated history fails with `DataUnavailable`, even if the retained range is empty. |
 
-Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; opening the snapshot and reconciling rows belong to the subsequent PK executor. Boundary capture preserves merge-engine metadata; the subsequent default executor targets deduplicate semantics, while other merge engines require explicit executor support.
+Without a baseline, retained PK changes cannot recover keys whose last update has expired. Capture prefers a readable lake baseline, then a persisted KV snapshot, then complete logs. For live PK buckets without a lake seam, union planning ignores lake tasks and preserves the captured KV or complete-log fallback; lake-only scans still use the selected lake snapshot. Planning preserves the KV snapshot ID and seam in a bucket task, including when the log tail is empty; the reader rejects these tasks until KV snapshot execution is available. Boundary capture preserves merge-engine metadata; the default PK executor supports deduplicate tables.
 
 Call `validate_available()` for required ranges after safe pruning. It detects a baseline seam already below the captured retention boundary; execution must also detect later retention or truncation. Missing required data fails the attempt rather than advancing offsets or substituting a newer snapshot. Engines discard partial results before retrying; a fresh context may observe different data and is not guaranteed to recover missing history.
 
@@ -89,7 +89,7 @@ KV capture queries metadata only and does not require the `kv-snapshot` feature 
 
 ## Follow-ups
 
-Streaming discovery, progress and checkpointing require a future API; this context describes bounded reads. Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
+Query-filter accepted/remaining negotiation belongs to the adapter layer and is distinct from the exact partition scope.
 
 Tables with `table.datalake.historical-partition.enabled=true` are rejected during boundary capture and import: writes to expired partitions can remain in the shared `__historical__` log before tiering and are missing from ordinary partition ranges and the lake snapshot. Shared historical-log support is tracked in [#5001](https://github.com/apache/fluss/issues/5001). Expired partitions already present in a lake snapshot remain supported when this option is disabled.
 
@@ -101,7 +101,7 @@ Append lake tasks and bucket log tails are independent. PK tasks group a complet
 
 `LakePlannerContext` carries the exact partition scope and optional selected bucket to the backend. Sources should prune before expensive planning when supported; returned tasks are also checked against the captured scope. Partition identities use the core Fluss partition encoding. Lake filters may include mutable PK columns, provided the backend preserves its current-view merge/deletion semantics; the complete Fluss tail is folded before final exact filtering.
 
-Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.
+Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The worker must rebuild the planning filter. Import and execution compare its exact bound predicate with the digest on the task. Replan descriptors created before the digest was recorded. The adapter still supplies the projection, read mode and credentials. Expired lake-only partitions remain discoverable through the pinned snapshot.
 
 ## Paimon backend
 
@@ -118,3 +118,37 @@ Task payloads preserve Paimon's native file paths, including `data-file.external
 Partition scope is passed to Paimon before planning. Paimon 0.5 does not expose a public bucket filter, so selected-bucket planning still scans the selected partitions' manifests and filters the resulting tasks by bucket.
 
 Fluss S3/OSS data requests use rustls and return the stored object bytes without HTTP decompression, independently of reqwest features enabled by Paimon. Paimon 0.5 still enables native TLS, so the combined build retains OpenSSL on Linux. OpenDAL's credential providers use a separate internal HTTP client; their TLS selection also requires an upstream fix.
+
+## Bounded execution
+
+Create one reader per execution attempt with `scan.new_reader()`. The reader and its clones share the initial table identity lookup and lake source across splits. Create a fresh reader on retry. `read_split(split)` synchronously returns a lazy stream; polling starts I/O. `read_splits(splits)` reads tasks sequentially. Engines control parallelism by scheduling separate streams. Dropping a stream cancels pending work; after an error, discard partial results before retrying the query.
+
+The reader applies the exact filter before removing hidden columns and sizing output batches. Append tasks retain their fixed stop offsets. Lake-only reads use the source's baseline semantics. For a deduplicate PK table, each bucket's unfiltered changelog tail is folded before the pinned baseline is reconciled. Filtering and output projection happen on the resulting current view. Use `reader.with_memory_budget(...)` to bound retained PK state across tasks; exhaustion fails the attempt without spilling.
+
+Tasks with a persisted KV snapshot baseline are rejected before reading until the default executor integrates that baseline. An empty log tail does not make a KV task empty.
+
+## Snapshot followed by a live changelog
+
+For an Append table, the bootstrap emits the captured lake and log rows. For a default deduplicate PK table, it emits the reconciled current view. Once all assigned splits finish, the stream emits a single marker and follows each captured bucket from its exclusive stop offset. Writes during bootstrap are picked up from the log, in order within each bucket. PK changes retain their original change types, including deletes and update-before records when present.
+
+```rust,no_run
+# use fluss_lake::{FlussLakeTable, Result};
+# use futures::TryStreamExt;
+# async fn import(table: &FlussLakeTable) -> Result<()> {
+let context = table.capture_read_context().await?;
+let scan = table.new_stream_scan();
+let mut events = scan.start(&context).await?;
+while let Some(event) = events.try_next().await? {
+    use fluss_lake::UnionReadEvent::*;
+    match event {
+        Snapshot(batch) => { /* stage rows */ }
+        SnapshotFinished(next) => { /* commit staged rows and offsets together */ }
+        Changes(records) => { /* apply per bucket and commit next offsets with the data */ }
+    }
+}
+# Ok(()) }
+```
+
+If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Keep the original context with the checkpoint. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
+
+Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Streaming reads return full rows without row-filter pushdown. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.

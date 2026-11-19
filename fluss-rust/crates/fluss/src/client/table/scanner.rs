@@ -711,7 +711,11 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_records(&self, timeout: Duration) -> Result<ScanRecords> {
+    async fn poll_records(
+        &self,
+        timeout: Duration,
+        frozen_table: Option<TableId>,
+    ) -> Result<ScanRecords> {
         // Pairs record_poll_start (now) with record_poll_end
         // (drop). Runs on every exit, including the cancellation path
         // where the caller drops this future.
@@ -721,7 +725,7 @@ impl LogScannerInner {
 
         loop {
             // Try to collect fetches
-            let fetch_result = self.poll_for_fetches().await?;
+            let fetch_result = self.poll_for_fetches(frozen_table).await?;
 
             if !fetch_result.is_empty() {
                 // We have data, send next round of fetches and return
@@ -1053,14 +1057,17 @@ impl LogScannerInner {
         Ok(())
     }
 
-    async fn poll_for_fetches(&self) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
+    async fn poll_for_fetches(
+        &self,
+        frozen_table: Option<TableId>,
+    ) -> Result<HashMap<TableBucket, Vec<ScanRecord>>> {
         let result = self.log_fetcher.collect_fetches().await?;
         if !result.is_empty() {
             return Ok(result);
         }
 
         // send any new fetches (won't resend pending fetches).
-        self.log_fetcher.send_fetches().await?;
+        self.log_fetcher.send_fetches(frozen_table).await?;
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches().await
@@ -1105,7 +1112,11 @@ impl LogScannerInner {
             return Ok(result);
         }
 
-        self.log_fetcher.send_fetches().await?;
+        let bounded_table = self
+            .reader_active
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then_some(self.table_id);
+        self.log_fetcher.send_fetches(bounded_table).await?;
         self.log_fetcher.collect_batches().await
     }
 }
@@ -1115,7 +1126,16 @@ impl LogScanner {
     /// Poll for records, returning collected records before a later fetch error.
     /// Deferred errors are discarded if the bucket is unsubscribed or its offset changes.
     pub async fn poll(&self, timeout: Duration) -> Result<ScanRecords> {
-        self.inner.poll_records(timeout).await
+        self.inner.poll_records(timeout, None).await
+    }
+
+    /// Poll records from a frozen source. A metadata refresh confirming that
+    /// the subscribed partition or original table disappeared fails the read.
+    /// The caller enforces its stopping offsets; this method does not cap a batch.
+    pub async fn poll_frozen(&self, timeout: Duration) -> Result<ScanRecords> {
+        self.inner
+            .poll_records(timeout, Some(self.inner.table_id))
+            .await
     }
 
     pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {
@@ -1622,7 +1642,11 @@ impl LogFetcher {
         }
     }
 
-    async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
+    async fn check_and_update_metadata(
+        &self,
+        table_buckets: &[TableBucket],
+        bounded_table: Option<TableId>,
+    ) -> Result<()> {
         let mut partition_ids = Vec::new();
         let mut need_update = false;
 
@@ -1639,7 +1663,10 @@ impl LogFetcher {
             }
         }
 
-        let update_result = if self.is_partitioned && !partition_ids.is_empty() {
+        if !need_update && partition_ids.is_empty() {
+            return Ok(());
+        }
+        let update_result = if self.is_partitioned {
             self.metadata
                 .update_tables_metadata(
                     &HashSet::from([&self.table_path]),
@@ -1647,14 +1674,25 @@ impl LogFetcher {
                     partition_ids,
                 )
                 .await
-        } else if need_update {
-            self.metadata.update_table_metadata(&self.table_path).await
         } else {
-            Ok(())
+            self.metadata.update_table_metadata(&self.table_path).await
         };
+        if update_result.is_ok()
+            && let Some(expected) = bounded_table
+            && self
+                .metadata
+                .get_cluster()
+                .get_table_id(&self.table_path)
+                .is_some_and(|live| live != expected)
+        {
+            return Err(Error::table_not_exist(format!(
+                "frozen table {} (id {expected}) no longer exists",
+                self.table_path
+            )));
+        }
 
         update_result.or_else(|error| {
-            if matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
+            if bounded_table.is_none() && matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
                 warn!(
                     "Received PartitionNotExists while updating scanner metadata; ignoring it: {error}"
                 );
@@ -1709,8 +1747,8 @@ impl LogFetcher {
     }
 
     /// Send fetch requests asynchronously without waiting for responses
-    async fn send_fetches(&self) -> Result<()> {
-        self.check_and_update_metadata(self.fetchable_buckets().as_slice())
+    async fn send_fetches(&self, bounded_table: Option<TableId>) -> Result<()> {
+        self.check_and_update_metadata(self.fetchable_buckets().as_slice(), bounded_table)
             .await?;
         self.send_fetches_without_metadata_refresh();
         Ok(())
@@ -2193,7 +2231,7 @@ impl LogFetcher {
                         message: format!(
                             "The fetching offset {fetch_offset} is out of range: {error_message}"
                         ),
-                        source: None,
+                        source: Some(Box::new(Error::from(api_error.clone()))),
                     });
                 }
                 FetchErrorAction::Authorization => {

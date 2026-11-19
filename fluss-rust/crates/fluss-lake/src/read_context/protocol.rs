@@ -211,21 +211,16 @@ impl FlussLakeReadContext {
 }
 
 pub(crate) fn validate_wire_identity(pb: &PbUnionReadContext, live: &TableInfo) -> Result<()> {
-    crate::table::validate_supported_table(live)?;
     if pb.version != Some(1) {
         return Err(invalid_context(
             "unsupported or missing read boundary version",
         ));
     }
-    if pb.table_id != Some(live.table_id)
-        || pb.database_name.as_deref() != Some(live.table_path.database())
-        || pb.table_name.as_deref() != Some(live.table_path.table())
-    {
-        return Err(FlussLakeError::SchemaIncompatible(
-            "read boundary belongs to a different source table".into(),
-        ));
-    }
-    Ok(())
+    let path = TablePath::new(
+        required(pb.database_name.as_deref(), "database_name")?,
+        required(pb.table_name.as_deref(), "table_name")?,
+    );
+    super::validate_source_identity(&path, required(pb.table_id, "table_id")?, live)
 }
 
 pub(crate) fn required<T>(value: Option<T>, field: &str) -> Result<T> {
