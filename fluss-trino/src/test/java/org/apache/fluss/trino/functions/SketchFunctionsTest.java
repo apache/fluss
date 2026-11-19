@@ -30,13 +30,119 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import javax.management.JMException;
+import javax.management.ObjectName;
+
+import java.lang.foreign.MemorySegment;
+import java.lang.management.ManagementFactory;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
+
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** SQL registration, grouped/intermediate state and legacy-byte compatibility tests. */
 class SketchFunctionsTest {
+    /** Opt-in SQL benchmark; iteration 0 and 1 warm up the engine. */
+    @Test
+    void benchmarkSql() {
+        assumeTrue(Boolean.parseBoolean(System.getenv("FLUSS_SKETCH_BENCHMARK")));
+        int events = 1_000_000;
+        for (String workload : Arrays.asList("global", "grouped", "merge")) {
+            int groups = workload.equals("global") ? 1 : 10_000;
+            int outputGroups = workload.equals("grouped") ? groups : 1;
+            String query =
+                    "SELECT mod(id, "
+                            + groups
+                            + ") AS g, fluss_hll_build_agg(id) AS h, "
+                            + "fluss_kll_double_build_agg(CAST(id AS DOUBLE)) AS q FROM "
+                            + "(SELECT a * BIGINT '1000' + b AS id FROM UNNEST(sequence(BIGINT '0', BIGINT '999')) t(a) "
+                            + "CROSS JOIN UNNEST(sequence(BIGINT '0', BIGINT '999')) u(b)) GROUP BY mod(id, "
+                            + groups
+                            + ")";
+            if (workload.equals("merge")) {
+                query =
+                        "SELECT BIGINT '0' AS g, fluss_hll_merge_agg(h) AS h, fluss_kll_double_merge_agg(q) AS q FROM ("
+                                + query
+                                + ")";
+            }
+            query =
+                    "SELECT g, h, q, fluss_hll_estimate(h), fluss_kll_double_quantile(q, 0.5) FROM ("
+                            + query
+                            + ")";
+            runner.execute("EXPLAIN (TYPE DISTRIBUTED) " + query)
+                    .getMaterializedRows()
+                    .forEach(System.out::println);
+            for (int iteration = 0; iteration < 7; iteration++) {
+                long allocatedBefore = allocatedBytes();
+                long start = System.nanoTime();
+                List<MaterializedRow> result = runner.execute(query).getMaterializedRows();
+                long elapsed = System.nanoTime() - start;
+                long allocatedAfter = allocatedBytes();
+                long allocated =
+                        allocatedBefore < 0 || allocatedAfter < allocatedBefore
+                                ? -1
+                                : allocatedAfter - allocatedBefore;
+                assertThat(result).hasSize(outputGroups);
+                long bytes = 0;
+                double hllError = 0;
+                double rankError = 0;
+                for (MaterializedRow row : result) {
+                    long key = ((Number) row.getField(0)).longValue();
+                    byte[] h = (byte[]) row.getField(1);
+                    byte[] q = (byte[]) row.getField(2);
+                    bytes += h.length + q.length;
+                    KllDoublesSketch kll = KllDoublesSketch.heapify(MemorySegment.ofArray(q));
+                    long count = events / outputGroups;
+                    assertThat(kll.getN()).isEqualTo(count);
+                    assertThat(kll.getMinItem()).isEqualTo((double) key);
+                    assertThat(kll.getMaxItem()).isEqualTo((double) (events - outputGroups + key));
+                    hllError = Math.max(hllError, Math.abs((Double) row.getField(3) / count - 1));
+                    rankError =
+                            Math.max(
+                                    rankError,
+                                    Math.abs(
+                                            ((Double) row.getField(4) - key) / outputGroups / count
+                                                    - 0.5));
+                }
+                assertThat(hllError).isLessThan(0.08);
+                assertThat(rankError).isLessThan(0.04);
+                // Timing includes planning, source generation, exchange and collection, not
+                // validation.
+                System.out.println(
+                        String.format(
+                                Locale.ROOT,
+                                "SKETCH_SQL_BENCH engine=trino workload=%s iteration=%d events=%d output_groups=%d elapsed_ms=%.3f allocated_bytes=%d sketch_bytes=%d hll_error=%.6f kll_rank_error=%.6f",
+                                workload,
+                                iteration,
+                                events,
+                                outputGroups,
+                                elapsed / 1_000_000.0,
+                                allocated,
+                                bytes,
+                                hllError,
+                                rankError));
+            }
+        }
+    }
+
+    private static long allocatedBytes() {
+        try {
+            return (Long)
+                    ManagementFactory.getPlatformMBeanServer()
+                            .getAttribute(
+                                    new ObjectName("java.lang:type=Threading"),
+                                    "TotalThreadAllocatedBytes");
+        } catch (JMException e) {
+            // Older JVMs do not expose the all-thread allocation counter.
+            return -1;
+        }
+    }
+
     @Test
     void testLargeLegacySketches() throws Exception {
         byte[] hll =
