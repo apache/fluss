@@ -6,7 +6,7 @@ C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) cli
 
 - Rust (see [rust-toolchain.toml](../../rust-toolchain.toml) at repo root)
 - C++17-capable compiler
-- CMake 3.18+ and/or Bazel
+- CMake 3.22+ and/or Bazel
 - Apache Arrow (for Arrow-based APIs)
 
 ## Build
@@ -32,6 +32,50 @@ bazel build //...
 ```
 `ci.sh` defaults to optimized builds via `-c opt` (override with `BAZEL_BUILD_FLAGS` if needed).
 See [ci.sh](ci.sh) for the CI build sequence.
+
+## Local C++ installation
+
+From the repository root, build and install the C++ binding with an existing
+Arrow C++ installation:
+
+```bash
+cmake -S fluss-rust/bindings/cpp -B /path/to/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DFLUSS_CPP_DEP_MODE=system \
+  -DFLUSS_CPP_ARROW_SYSTEM_ROOT=/path/to/arrow
+cmake --build /path/to/build
+cmake --install /path/to/build --prefix /path/to/install
+```
+
+The C++ package installs `include/fluss.hpp`, `lib/libfluss_cpp.a` (C++ wrapper),
+`lib/libfluss_rust.a` (Rust implementation), `lib/cmake/FlussCpp/FlussCppConfig.cmake`
+and its native-link dependency metadata, plus `share/fluss/LICENSE` and `NOTICE`.
+Cargo's build output remains named `libfluss_cpp.a`; only its installed copy is
+renamed. Both archives are required parts of the local C++ package.
+
+The install directory can be moved as a unit. An independent consumer needs only:
+
+```cmake
+cmake_minimum_required(VERSION 3.22)
+project(consumer LANGUAGES CXX)
+find_package(FlussCpp CONFIG REQUIRED)
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE FlussCpp::fluss_cpp)
+```
+
+```bash
+cmake -S /path/to/consumer -B /path/to/consumer-build \
+  -DCMAKE_PREFIX_PATH="/new/location/install;/path/to/arrow"
+cmake --build /path/to/consumer-build
+```
+
+The imported target supplies C++17, installed headers, both static archives and
+the native link requirements reported by rustc. Consumers do not need Cargo,
+the Fluss source tree or the original build directory. Arrow C++ is discovered
+with `find_package(Arrow CONFIG)` and is not bundled, including when Fluss builds
+Arrow from source. Provide an ABI-compatible Arrow installation and its runtime
+libraries if using shared Arrow. This is local installation, not a release or a
+separately published Rust SDK.
 
 ## Log filter pushdown
 
