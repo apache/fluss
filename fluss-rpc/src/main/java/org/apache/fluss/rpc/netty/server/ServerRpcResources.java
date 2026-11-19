@@ -40,7 +40,8 @@ final class ServerRpcResources {
             RequestHandler<?>[] requestHandlers,
             RequestsMetrics requestsMetrics,
             int processorIndexOffset,
-            String threadSuffix) {
+            String threadSuffix,
+            ConnectionRequestScheduler connections) {
         this.numNetworkThreads = conf.getInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS);
         this.threadSuffix = threadSuffix;
         this.workerPool =
@@ -51,7 +52,8 @@ final class ServerRpcResources {
                         requestHandlers,
                         requestsMetrics,
                         processorIndexOffset,
-                        "fluss-netty-server-worker" + threadSuffix);
+                        "fluss-netty-server-worker" + threadSuffix,
+                        connections);
     }
 
     void start() {

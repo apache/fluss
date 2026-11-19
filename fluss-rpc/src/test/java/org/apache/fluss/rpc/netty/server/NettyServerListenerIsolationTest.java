@@ -29,6 +29,8 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.TestingGatewayService;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
@@ -38,10 +40,18 @@ import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.utils.NetUtils;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
@@ -51,7 +61,9 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,6 +79,131 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Verifies listener isolation through real RPC connections. */
 class NettyServerListenerIsolationTest {
+
+    @ParameterizedTest
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
+    @CsvSource({
+        "true,  TABLET_SERVER, CLIENT,          true",
+        "true,  TABLET_SERVER, INTERNAL,        true",
+        "true,  TABLET_SERVER, CLIENT+INTERNAL, true",
+        "true,  TABLET_SERVER, CLIENT+KAFKA,    false",
+        "true,  COORDINATOR,    CLIENT,          false",
+        "false, TABLET_SERVER, CLIENT,          false"
+    })
+    void testConnectionSchedulingListenerScope(
+            boolean enabled, ServerType serverType, String listeners, boolean expected)
+            throws Exception {
+        List<String> listenerNames = Arrays.asList(listeners.split("\\+"));
+        List<String> flussListeners =
+                listenerNames.stream()
+                        .filter(name -> !name.equals("KAFKA"))
+                        .collect(Collectors.toList());
+        Map<String, RequestChannel[]> channelsByListener = new HashMap<>();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 2);
+        conf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
+        FlussProtocolPlugin flussProtocol =
+                new FlussProtocolPlugin(serverType, flussListeners) {
+                    @Override
+                    public ChannelHandler createChannelHandler(
+                            RequestChannel[] channels, String name, RequestsMetrics metrics) {
+                        channelsByListener.put(name, channels);
+                        return super.createChannelHandler(channels, name, metrics);
+                    }
+                };
+        flussProtocol.setup(conf);
+        List<NetworkProtocolPlugin> protocols = new ArrayList<>();
+        protocols.add(flussProtocol);
+        if (listenerNames.contains("KAFKA")) {
+            protocols.add(kafkaTestProtocol());
+        }
+        TestingGatewayService service =
+                serverType == ServerType.TABLET_SERVER
+                        ? new TestingTabletGatewayService()
+                        : new TestingGatewayService();
+        MetricGroup metrics = NOPMetricsGroup.newInstance();
+        List<Endpoint> endpoints =
+                listenerNames.stream()
+                        .map(name -> new Endpoint("localhost", 0, name))
+                        .collect(Collectors.toList());
+        RequestsMetrics requestsMetrics =
+                serverType == ServerType.TABLET_SERVER
+                        ? RequestsMetrics.createTabletServerRequestMetrics(metrics)
+                        : RequestsMetrics.createCoordinatorServerRequestMetrics(metrics);
+
+        String property = "fluss.poc.connectionScheduling";
+        String previous = System.setProperty(property, enabled ? "bucket-handoff" : "legacy");
+        try (NettyServer server =
+                new NettyServer(conf, endpoints, service, metrics, requestsMetrics, protocols)) {
+            server.start();
+            for (String name : flussListeners) {
+                assertThat(channelsByListener.get(name))
+                        .hasSize(2)
+                        .allSatisfy(
+                                channel ->
+                                        assertThat(
+                                                        channel
+                                                                instanceof
+                                                                ConnectionRequestScheduler.Queue)
+                                                .isEqualTo(expected));
+            }
+        } finally {
+            if (previous == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, previous);
+            }
+        }
+    }
+
+    private static NetworkProtocolPlugin kafkaTestProtocol() {
+        return new NetworkProtocolPlugin() {
+            @Override
+            public String name() {
+                return "kafka";
+            }
+
+            @Override
+            public void setup(Configuration conf) {}
+
+            @Override
+            public List<String> listenerNames() {
+                return Collections.singletonList("KAFKA");
+            }
+
+            @Override
+            public ChannelHandler createChannelHandler(
+                    RequestChannel[] channels, String name, RequestsMetrics metrics) {
+                assertThat(channels)
+                        .allSatisfy(
+                                channel ->
+                                        assertThat(channel)
+                                                .isNotInstanceOf(
+                                                        ConnectionRequestScheduler.Queue.class));
+                return new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel channel) {}
+                };
+            }
+
+            @Override
+            public RequestHandler<?> createRequestHandler(RpcGatewayService service) {
+                return new RequestHandler<RpcRequest>() {
+                    @Override
+                    public RequestType requestType() {
+                        return RequestType.KAFKA;
+                    }
+
+                    @Override
+                    public void processRequest(RpcRequest request) {}
+
+                    @Override
+                    public void close() {}
+                };
+            }
+        };
+    }
 
     @Test
     void testReplicationCompletesUnderExternalBackpressure() throws Exception {

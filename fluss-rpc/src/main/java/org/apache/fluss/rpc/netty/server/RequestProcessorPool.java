@@ -56,16 +56,20 @@ final class RequestProcessorPool {
             RequestHandler<?>[] requestHandlers,
             RequestsMetrics requestsMetrics,
             int processorIndexOffset,
-            String threadName) {
+            String threadName,
+            ConnectionRequestScheduler connections) {
         this.processors = new RequestProcessor[numProcessors];
         this.requestChannels = new RequestChannel[numProcessors];
         this.threadName = threadName;
 
+        int queueThreshold = totalQueueCapacity / numProcessors;
         for (int i = 0; i < numProcessors; i++) {
-            RequestChannel requestChannel = new RequestChannel(totalQueueCapacity / numProcessors);
+            RequestChannel requestChannel =
+                    connections == null
+                            ? new RequestChannel(queueThreshold)
+                            : connections.new Queue(queueThreshold, this);
             requestChannels[i] = requestChannel;
-            // bind processor to a single channel to make requests from the
-            // same channel processed serializable
+            // Each processor has one home queue.
             int processorIndex = processorIndexOffset + i;
             processors[i] =
                     new RequestProcessor(processorIndex, requestChannel, service, requestHandlers);
