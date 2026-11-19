@@ -119,6 +119,35 @@ async fn append_log_plan_uses_frozen_stop_offset_after_planning() {
             .read_split(&splits[0]),
         Err(FlussLakeError::PlanningFailed(_))
     ));
+    // Neither prefix is pushed into Fluss log statistics. The task must still
+    // distinguish their exact row filters when the worker rebuilds the scan.
+    let filtered = scan.clone().with_filter(col("name").starts_with("t"));
+    let plan = filtered.plan_with_context(&context).await.unwrap();
+    let task = &plan.splits()[0];
+    let wire = context.to_protobuf().unwrap();
+    let descriptors = std::slice::from_ref(task.descriptor());
+    let imported = filtered.import_splits(&wire, descriptors).await.unwrap();
+    assert_eq!(
+        sorted_ids(
+            &filtered
+                .new_reader()
+                .read_splits(&imported)
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+        ),
+        [2, 3]
+    );
+    assert!(matches!(
+        scan.new_reader().read_split(task),
+        Err(FlussLakeError::InvalidReadContext(_))
+    ));
+    let wrong = scan.clone().with_filter(col("name").starts_with("o"));
+    assert!(matches!(
+        wrong.import_splits(&wire, descriptors).await,
+        Err(FlussLakeError::InvalidReadContext(_))
+    ));
     drop(writer);
     admin.drop_table(&path, false).await.unwrap();
     assert!(matches!(

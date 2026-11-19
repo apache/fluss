@@ -101,7 +101,7 @@ Append lake tasks and bucket log tails are independent. PK tasks group a complet
 
 `LakePlannerContext` carries the exact partition scope and optional selected bucket to the backend. Sources should prune before expensive planning when supported; returned tasks are also checked against the captured scope. Partition identities use the core Fluss partition encoding. Lake filters may include mutable PK columns, provided the backend preserves its current-view merge/deletion semantics; the complete Fluss tail is folded before final exact filtering.
 
-Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The adapter must preserve scan settings and provide credentials at execution time. Expired lake-only partitions remain discoverable through the pinned snapshot.
+Engines own scheduling and transport. `split.descriptor()` exports immutable source inputs, and `scan.import_splits(&boundary, &descriptors).await?` restores assigned tasks without replanning. The worker must rebuild the planning filter. Import and execution compare its exact bound predicate with the digest on the task. Replan descriptors created before the digest was recorded. The adapter still supplies the projection, read mode and credentials. Expired lake-only partitions remain discoverable through the pinned snapshot.
 
 ## Paimon backend
 

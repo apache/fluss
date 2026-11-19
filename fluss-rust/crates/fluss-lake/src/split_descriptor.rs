@@ -22,7 +22,7 @@ use crate::{FlussLakeError, FlussLakePartitionIdentity, FlussLakeReadContext, La
 use fluss::metadata::TableBucket;
 use serde::{Deserialize, Serialize};
 
-/// A frozen logical task without connections, credentials or scan configuration.
+/// A frozen logical task without connections or credentials.
 ///
 /// Export with `FlussLakeReadSplit::descriptor` and restore through
 /// `FlussLakeScan::import_splits`. Adapters must preserve these inputs and the
@@ -41,6 +41,9 @@ pub struct FlussLakeSplitDescriptor {
     pub(crate) estimated_size: Option<usize>,
     #[serde(default)]
     pub(crate) kv_snapshot_id: Option<i64>,
+    // Older descriptors did not record which filter pruned the task set.
+    #[serde(default)]
+    pub(crate) filter_digest: Option<[u8; 32]>,
 }
 
 impl FlussLakeSplitDescriptor {
@@ -93,6 +96,18 @@ impl FlussLakeSplitDescriptor {
     /// Best-effort input bytes.
     pub fn estimated_size(&self) -> Option<usize> {
         self.estimated_size
+    }
+
+    pub(crate) fn validate_filter(&self, expected: &[u8; 32]) -> Result<()> {
+        match &self.filter_digest {
+            Some(digest) if digest == expected => Ok(()),
+            Some(_) => Err(FlussLakeError::InvalidReadContext(
+                "split and reader filters differ".into(),
+            )),
+            None => Err(FlussLakeError::InvalidReadContext(
+                "split has no planning filter identity; replan the tasks".into(),
+            )),
+        }
     }
 
     pub(crate) fn validate(

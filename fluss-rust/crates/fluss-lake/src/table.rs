@@ -26,6 +26,7 @@ use fluss::client::FlussConnection;
 use fluss::metadata::{RowType, SchemaInfo, TableInfo, TablePath};
 use fluss::predicate::{BoundPredicate, Predicate};
 use fluss::protocol::PbUnionReadContext;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -41,6 +42,7 @@ enum FlussLakeProjection {
 pub(crate) struct BoundScan {
     pub(crate) projection: Option<Vec<usize>>,
     pub(crate) filter: BoundPredicate,
+    pub(crate) filter_digest: [u8; 32],
 }
 
 /// Entry point for bounded reads over a Fluss table.
@@ -251,10 +253,9 @@ impl FlussLakeScan {
 
     /// Creates a reader without planning or refreshing read boundaries.
     ///
-    /// Use the same projection, filter, read mode and batch size that produced
-    /// the tasks, with a compatible lake backend. Task metadata does not encode
-    /// these settings; mismatches can produce incomplete results or the wrong
-    /// output schema. A task can outlive its plan without changing its bounds.
+    /// The reader filter must match the filter used to plan the split. Preserve the projection and read mode
+    /// and supply a compatible lake backend; the filter check does not validate these settings.
+    /// A task can outlive its plan without changing its bounds.
     /// Create one reader per execution attempt; all its splits share lazy initialization.
     pub fn new_reader(&self) -> FlussLakeReader {
         FlussLakeReader::from_scan(self.clone())
@@ -360,6 +361,7 @@ impl FlussLakeScan {
             ));
         }
         let info = Arc::new(context.table_info(&live)?);
+        let filter_digest = self.bind(info.row_type())?.filter_digest;
         let keys = physical_primary_key_indexes(&info)?;
         let scope = crate::partition::PartitionScope::bind(
             context.partition_scope(),
@@ -380,6 +382,7 @@ impl FlussLakeScan {
                         "duplicate imported split identity".into(),
                     ));
                 }
+                descriptor.validate_filter(&filter_digest)?;
                 descriptor.validate(
                     &context,
                     ranges.get(descriptor.table_bucket()).copied(),
@@ -394,11 +397,16 @@ impl FlussLakeScan {
 
     /// Shares predicate coercion and projection resolution between planning and reading.
     pub(crate) fn bind(&self, row_type: &RowType) -> Result<BoundScan> {
+        let filter = BoundPredicate::bind(self.filter(), row_type).map_err(|error| {
+            FlussLakeError::PlanningFailed(format!("failed to bind filter predicate: {error}"))
+        })?;
+        let bytes = filter.exact_filter_bytes(row_type).map_err(|error| {
+            FlussLakeError::PlanningFailed(format!("failed to encode planned filter: {error}"))
+        })?;
         Ok(BoundScan {
             projection: self.resolve_projection(row_type)?,
-            filter: BoundPredicate::bind(self.filter(), row_type).map_err(|error| {
-                FlussLakeError::PlanningFailed(format!("failed to bind filter predicate: {error}"))
-            })?,
+            filter,
+            filter_digest: Sha256::digest(bytes).into(),
         })
     }
 

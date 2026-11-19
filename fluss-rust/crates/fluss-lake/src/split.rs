@@ -108,6 +108,10 @@ impl FlussLakeReadSplit {
         }
     }
 
+    pub(crate) fn set_filter_digest(&mut self, digest: [u8; 32]) {
+        Arc::make_mut(&mut self.descriptor).filter_digest = Some(digest);
+    }
+
     pub(crate) fn append_id(&mut self, suffix: &str) {
         Arc::make_mut(&mut self.descriptor)
             .split_id
@@ -321,6 +325,7 @@ mod tests {
                 lake.bucket_count = -1;
             }
             let mut task = crate::FlussLakeSplitDescriptor {
+                filter_digest: None,
                 split_id: "test".into(),
                 table_bucket: TableBucket::new(7, bucket_id),
                 partition,
@@ -346,6 +351,7 @@ mod tests {
         let task = FlussLakeReadSplit::try_new(
             Arc::new(info.clone()),
             crate::FlussLakeSplitDescriptor {
+                filter_digest: None,
                 split_id: "test".into(),
                 table_bucket: TableBucket::new(7, 0),
                 partition: FlussLakePartitionIdentity::Unpartitioned,

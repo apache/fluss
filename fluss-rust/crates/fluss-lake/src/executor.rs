@@ -38,6 +38,7 @@ use tokio::sync::OnceCell;
 #[derive(Default)]
 pub(crate) struct ReadResources {
     metadata: OnceCell<TableInfo>,
+    binding: std::sync::OnceLock<(fluss::TableId, i32, Arc<BoundScan>)>,
     lake_source: OnceCell<Arc<dyn crate::LakeSource>>,
 }
 
@@ -68,11 +69,28 @@ pub(crate) fn execute_split(
             "lake-only reader cannot execute a log range".into(),
         ));
     }
+    let info = split.table_info();
+    let bound = match resources.binding.get() {
+        Some((table_id, schema_id, bound))
+            if (*table_id, *schema_id) == (info.table_id, info.schema_id) =>
+        {
+            bound.clone()
+        }
+        _ => {
+            let bound = Arc::new(scan.bind(info.row_type())?);
+            let _ = resources
+                .binding
+                .set((info.table_id, info.schema_id, bound.clone()));
+            bound
+        }
+    };
+    descriptor.validate_filter(&bound.filter_digest)?;
     if split.is_empty() {
         return Ok(Box::pin(futures::stream::empty()));
     }
     Ok(lazy_stream(open_logical_stream(
         split.clone(),
+        bound,
         scan.clone(),
         resources,
     )))
@@ -80,6 +98,7 @@ pub(crate) fn execute_split(
 
 async fn open_logical_stream(
     split: FlussLakeReadSplit,
+    bound: Arc<BoundScan>,
     scan: Arc<FlussLakeScan>,
     resources: Arc<ReadResources>,
 ) -> Result<RecordBatchStream> {
@@ -103,8 +122,8 @@ async fn open_logical_stream(
     let BoundScan {
         projection: output_projection,
         filter,
-    } = scan.bind(table_info.row_type())?;
-    let filter = &filter;
+        ..
+    } = bound.as_ref();
     let physical =
         PhysicalProjection::resolve(table_info.row_type(), output_projection.as_deref(), filter)?;
     let physical_schema = physical.arrow_schema(table_info.row_type())?;
