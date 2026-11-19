@@ -18,19 +18,24 @@
 package org.apache.fluss.spark.extensions
 
 import org.apache.fluss.spark.FlussSparkSessionExtensions
+import org.apache.fluss.spark.catalog.SupportsProcedures
 import org.apache.fluss.spark.catalyst.plans.logical.{FlussCallArgument, FlussCallStatement, FlussNamedArgument, FlussPositionalArgument}
+import org.apache.fluss.spark.procedure.Procedure
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.parser.ParserInterface
+import org.apache.spark.sql.connector.catalog.{CatalogPlugin, Identifier}
 import org.apache.spark.sql.types.DataTypes
-import org.scalatest.{BeforeAndAfterEach, FunSuite}
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.scalatest.BeforeAndAfterEach
+import org.scalatest.funsuite.AnyFunSuite
 
 import java.math.BigDecimal
 import java.sql.Timestamp
 import java.time.Instant
 
-class CallStatementParserTest extends FunSuite with BeforeAndAfterEach {
+class CallStatementParserTest extends AnyFunSuite with BeforeAndAfterEach {
 
   private var spark: SparkSession = _
   private var parser: ParserInterface = _
@@ -45,6 +50,9 @@ class CallStatementParserTest extends FunSuite with BeforeAndAfterEach {
       .builder()
       .master("local[2]")
       .config("spark.sql.extensions", classOf[FlussSparkSessionExtensions].getName)
+      .config("spark.sql.catalog.cat", classOf[CallParserTestCatalog].getName)
+      .config("spark.sql.catalog.catalog", classOf[CallParserTestCatalog].getName)
+      .config("spark.sql.catalog.system", classOf[CallParserTestCatalog].getName)
       .getOrCreate()
 
     parser = spark.sessionState.sqlParser
@@ -151,4 +159,15 @@ class CallStatementParserTest extends FunSuite with BeforeAndAfterEach {
 
     assert(callStatement.args(index).expr == Literal.create(expectedValue, expectedType))
   }
+}
+
+/** Parser tests need a Fluss procedure catalog without opening a client connection. */
+class CallParserTestCatalog extends CatalogPlugin with SupportsProcedures {
+  private var catalogName: String = _
+  override def initialize(name: String, options: CaseInsensitiveStringMap): Unit = {
+    catalogName = name
+  }
+  override def name(): String = catalogName
+  override def loadProcedure(identifier: Identifier): Procedure =
+    throw new UnsupportedOperationException("Parser tests do not load procedures")
 }

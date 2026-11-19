@@ -22,7 +22,7 @@ import org.apache.fluss.metadata.{DataLakeFormat, TableBucketSnapshot}
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussUpsertInputPartition}
 
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{DataFrame, Row}
 
 import java.nio.file.Files
 
@@ -35,6 +35,10 @@ import java.nio.file.Files
 abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
 
   private val TVF = "fluss_incremental_between_timestamp"
+
+  protected def readTimeRange(tableName: String, start: Long, end: Long): DataFrame = {
+    sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$tableName', '$start', '$end') ORDER BY id")
+  }
 
   test("Spark Lake Read: log table time-range forces log-only (skips lake snapshot)") {
     withTable("t_lake_tr_log") {
@@ -61,8 +65,7 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
       sql(s"""INSERT INTO $DEFAULT_DATABASE.t_lake_tr_log VALUES (5, "lake")""")
       Thread.sleep(200)
 
-      val df =
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_lake_tr_log', '$t1', '$t2') ORDER BY id")
+      val df = readTimeRange("t_lake_tr_log", t1, t2)
       val partitions = lakeInputPartitions(df)
       assert(partitions.nonEmpty, "expected at least one Fluss log partition")
       assert(
@@ -108,8 +111,7 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
              |""".stripMargin)
       Thread.sleep(200)
 
-      val df =
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_lake_tr_pk', '$t1', '$t2') ORDER BY id")
+      val df = readTimeRange("t_lake_tr_pk", t1, t2)
       val partitions = lakeInputPartitions(df)
       assert(partitions.nonEmpty, "expected at least one Fluss changelog partition")
       assert(

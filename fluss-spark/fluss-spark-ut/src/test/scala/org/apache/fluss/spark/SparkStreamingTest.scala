@@ -20,14 +20,13 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.spark.read.{FlussMicroBatchStream, FlussSourceOffset}
+import org.apache.fluss.spark.util.SparkStreamingTestSupport.{MemoryStream, StreamExecution, StreamingSourceRelation}
 import org.apache.fluss.spark.write.{FlussAppendDataWriter, FlussUpsertDataWriter}
 import org.apache.fluss.utils.json.TableBucketOffsets
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.streaming.{Offset, SparkDataStream}
-import org.apache.spark.sql.execution.datasources.v2.StreamingDataSourceV2Relation
-import org.apache.spark.sql.execution.streaming.{MemoryStream, StreamExecution}
 import org.apache.spark.sql.streaming.{StreamTest, Trigger}
 import org.apache.spark.sql.streaming.util.StreamManualClock
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
@@ -97,6 +96,44 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
               |expect data:${expectedOutputs.mkString("\n", "\n", "\n")}
               |fluss data:${rowsWithType.mkString("\n", "\n", "\n")}
               |""".stripMargin)
+    }
+  }
+
+  test("read: checkpoint recovery resumes offsets across existing partitions") {
+    withTable("checkpoint_rows") {
+      sql("CREATE TABLE checkpoint_rows (id INT, value STRING, part STRING) PARTITIONED BY (part)")
+      withTempDir {
+        root =>
+          val checkpoint = new File(root, "checkpoint").getAbsolutePath
+          val output = new File(root, "output").getAbsolutePath
+          def copyAvailable(): Unit = {
+            val query = spark.readStream
+              .option("scan.startup.mode", "earliest")
+              .table("checkpoint_rows")
+              .writeStream
+              .format("parquet")
+              .option("checkpointLocation", checkpoint)
+              .start(output)
+            try {
+              query.processAllAvailable()
+            } finally {
+              query.stop()
+            }
+          }
+
+          sql("INSERT INTO checkpoint_rows VALUES (1, 'before-1', 'p1'), (2, 'before-2', 'p2')")
+          copyAvailable()
+          checkAnswer(
+            spark.read.parquet(output),
+            Row(1, "before-1", "p1") :: Row(2, "before-2", "p2") :: Nil)
+
+          sql("INSERT INTO checkpoint_rows VALUES (3, 'after-1', 'p1'), (4, 'after-2', 'p2')")
+          copyAvailable()
+          checkAnswer(
+            spark.read.parquet(output),
+            Row(1, "before-1", "p1") :: Row(2, "before-2", "p2") ::
+              Row(3, "after-1", "p1") :: Row(4, "after-2", "p2") :: Nil)
+      }
     }
   }
 
@@ -362,7 +399,7 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         "Cannot add data when there is no query for finding the active fluss stream source")
       val sources: Seq[FlussMicroBatchStream] = {
         query.get.logicalPlan.collect {
-          case r: StreamingDataSourceV2Relation if r.stream.isInstanceOf[FlussMicroBatchStream] =>
+          case r: StreamingSourceRelation if r.stream.isInstanceOf[FlussMicroBatchStream] =>
             r.stream
         }
       }.distinct.map(_.asInstanceOf[FlussMicroBatchStream])

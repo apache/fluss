@@ -552,7 +552,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       df.queryExecution.executedPlan.collect {
         case b: BatchScanExec => b.scan
       } ++ df.queryExecution.optimizedPlan.collect {
-        case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
+        case relation: DataSourceV2ScanRelation => relation.scan
       }
     scans.collectFirst { case f: FlussUpsertScan => f }
   }

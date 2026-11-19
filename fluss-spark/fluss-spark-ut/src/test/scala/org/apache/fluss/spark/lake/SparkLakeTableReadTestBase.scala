@@ -144,7 +144,7 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
       df.queryExecution.executedPlan.collect {
         case b: BatchScanExec => b.scan
       } ++ df.queryExecution.optimizedPlan.collect {
-        case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
+        case relation: DataSourceV2ScanRelation => relation.scan
       }
     scans.collect { case s: FlussScan => s }
   }
@@ -168,7 +168,7 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
       df.queryExecution.executedPlan.collect {
         case b: BatchScanExec => b.scan
       } ++ df.queryExecution.optimizedPlan.collect {
-        case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
+        case relation: DataSourceV2ScanRelation => relation.scan
       }
     scans
       .collect {

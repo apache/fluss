@@ -20,16 +20,16 @@ package org.apache.fluss.spark
 import org.apache.fluss.spark.catalyst.analysis.{FlussProcedureResolver, FlussTableValuedFunctionResolver}
 import org.apache.fluss.spark.catalyst.plans.logical.FlussTableValuedFunctions
 import org.apache.fluss.spark.execution.FlussStrategy
+import org.apache.fluss.spark.extensions.FlussParserFactory
 
 import org.apache.spark.sql.SparkSessionExtensions
-import org.apache.spark.sql.catalyst.parser.FlussSparkSqlParser
 
 /** Spark session extensions for Fluss. */
 class FlussSparkSessionExtensions extends (SparkSessionExtensions => Unit) {
 
   override def apply(extensions: SparkSessionExtensions): Unit = {
     // parser extensions
-    extensions.injectParser { case (_, parser) => new FlussSparkSqlParser(parser) }
+    extensions.injectParser { case (spark, parser) => FlussParserFactory.create(spark, parser) }
 
     // analyzer extensions
     extensions.injectResolutionRule(spark => FlussProcedureResolver(spark))
