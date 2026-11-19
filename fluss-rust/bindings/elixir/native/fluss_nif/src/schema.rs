@@ -58,7 +58,7 @@ pub enum DataType {
     NotNull(Box<DataType>),
 }
 
-fn to_fluss_type(dt: &DataType) -> metadata::DataType {
+pub(crate) fn to_fluss_type(dt: &DataType) -> metadata::DataType {
     match dt {
         DataType::Boolean => DataTypes::boolean(),
         DataType::Tinyint => DataTypes::tinyint(),

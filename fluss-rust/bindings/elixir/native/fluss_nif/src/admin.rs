@@ -18,12 +18,13 @@
 use crate::async_nif;
 use crate::atoms::to_nif_err;
 use crate::connection::ConnectionResource;
-use crate::schema::{NifSchema, TableDescriptorResource};
+use crate::schema::{DataType, NifSchema, TableDescriptorResource, to_fluss_type};
 use fluss::client::{FlussAdmin, Metadata};
 use fluss::error::Error;
 use fluss::metadata::{
-    DatabaseDescriptor, DatabaseInfo, PartitionInfo, PartitionSpec, ResolvedPartitionSpec,
-    SchemaInfo, TableInfo, TablePath,
+    AddColumn, AlterConfig, AlterConfigOpType, AlterTableChanges, ColumnPositionType,
+    DatabaseDescriptor, DatabaseInfo, DropColumn, JsonSerde, ModifyColumn, PartitionInfo,
+    PartitionSpec, RenameColumn, ResolvedPartitionSpec, SchemaInfo, TableInfo, TablePath,
 };
 use fluss::rpc::message::OffsetSpec;
 use fluss::{ServerNode, ServerType};
@@ -198,6 +199,16 @@ pub struct DropPartitionOpts {
     ignore_if_not_exists: bool,
 }
 
+#[derive(NifMap)]
+pub struct AlterTableOpts {
+    ignore_if_not_exists: bool,
+}
+
+#[derive(NifMap)]
+pub struct AlterDatabaseOpts {
+    ignore_if_not_exists: bool,
+}
+
 pub struct AdminResource {
     pub inner: Arc<FlussAdmin>,
     /// The connection's metadata cache, for partition keys.
@@ -274,6 +285,48 @@ fn admin_drop_database<'a>(
     })
 }
 
+/// Built by `Fluss.Admin`: a `nil` comment is already sent as `""`.
+#[derive(NifTaggedEnum)]
+pub enum NifDatabaseChange {
+    SetProperty(String, String),
+    ResetProperty(String),
+    SetComment(String),
+}
+
+#[rustler::nif]
+fn admin_alter_database<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    changes: Vec<NifDatabaseChange>,
+    opts: AlterDatabaseOpts,
+) -> Term<'a> {
+    async_nif::spawn_task(env, async move {
+        let mut config_changes = Vec::new();
+        let mut comment = None;
+        for change in changes {
+            match change {
+                NifDatabaseChange::SetProperty(key, value) => {
+                    config_changes.push(AlterConfig::new(key, Some(value), AlterConfigOpType::Set))
+                }
+                NifDatabaseChange::ResetProperty(key) => {
+                    config_changes.push(AlterConfig::new(key, None, AlterConfigOpType::Delete))
+                }
+                NifDatabaseChange::SetComment(new_comment) => comment = Some(new_comment),
+            }
+        }
+        admin
+            .inner
+            .alter_database(
+                &database_name,
+                config_changes,
+                comment.as_deref(),
+                opts.ignore_if_not_exists,
+            )
+            .await
+    })
+}
+
 #[rustler::nif]
 fn admin_list_databases<'a>(env: Env<'a>, admin: ResourceArc<AdminResource>) -> Term<'a> {
     async_nif::spawn_task_with_result(env, async move { admin.inner.list_databases().await })
@@ -321,6 +374,88 @@ fn admin_drop_table<'a>(
         admin
             .inner
             .drop_table(&path, opts.ignore_if_not_exists)
+            .await
+    })
+}
+
+/// Built by `Fluss.Admin`: types are valid, `nil` means "no change" (a `nil` modify comment is
+/// already sent as `""`), and there is at most one bucket count.
+#[derive(NifTaggedEnum)]
+pub enum NifTableChange {
+    AddColumn(String, DataType, Option<String>),
+    DropColumn(String),
+    RenameColumn(String, String),
+    ModifyColumn(String, Option<DataType>, Option<String>),
+    SetProperty(String, String),
+    ResetProperty(String),
+    SetBucketCount(i32),
+}
+
+fn type_json(data_type: &DataType) -> Result<Vec<u8>, Error> {
+    Ok(to_fluss_type(data_type)
+        .serialize_json()?
+        .to_string()
+        .into_bytes())
+}
+
+fn to_alter_table_changes(changes: Vec<NifTableChange>) -> Result<AlterTableChanges, Error> {
+    let mut result = AlterTableChanges::default();
+    for change in changes {
+        match change {
+            NifTableChange::AddColumn(column_name, data_type, comment) => {
+                result.add_columns.push(AddColumn {
+                    column_name,
+                    data_type_json: type_json(&data_type)?,
+                    comment,
+                    position: ColumnPositionType::Last,
+                })
+            }
+            NifTableChange::DropColumn(column_name) => {
+                result.drop_columns.push(DropColumn { column_name })
+            }
+            NifTableChange::RenameColumn(old_column_name, new_column_name) => {
+                result.rename_columns.push(RenameColumn {
+                    old_column_name,
+                    new_column_name,
+                })
+            }
+            NifTableChange::ModifyColumn(column_name, data_type, comment) => {
+                result.modify_columns.push(ModifyColumn {
+                    column_name,
+                    data_type_json: data_type.as_ref().map(type_json).transpose()?,
+                    comment,
+                    position: None,
+                })
+            }
+            NifTableChange::SetProperty(key, value) => result
+                .config_changes
+                .push(AlterConfig::new(key, Some(value), AlterConfigOpType::Set)),
+            NifTableChange::ResetProperty(key) => {
+                result
+                    .config_changes
+                    .push(AlterConfig::new(key, None, AlterConfigOpType::Delete))
+            }
+            NifTableChange::SetBucketCount(count) => result.new_bucket_count = Some(count),
+        }
+    }
+    Ok(result)
+}
+
+#[rustler::nif]
+fn admin_alter_table<'a>(
+    env: Env<'a>,
+    admin: ResourceArc<AdminResource>,
+    database_name: String,
+    table_name: String,
+    changes: Vec<NifTableChange>,
+    opts: AlterTableOpts,
+) -> Term<'a> {
+    async_nif::spawn_task(env, async move {
+        let path = TablePath::new(&database_name, &table_name);
+        let changes = to_alter_table_changes(changes)?;
+        admin
+            .inner
+            .alter_table(&path, opts.ignore_if_not_exists, changes)
             .await
     })
 }
