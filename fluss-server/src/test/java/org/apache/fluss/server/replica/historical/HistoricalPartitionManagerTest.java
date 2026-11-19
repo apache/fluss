@@ -309,6 +309,52 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testHistoricalPutCompletesDelayedFollowerFetch() throws Exception {
+        int followerId = TABLET_SERVER_ID + 1;
+        TableInfo tableInfo =
+                registerHistoricalTableAndBecomeLeader(
+                        ChangelogImage.WAL, false, Arrays.asList(TABLET_SERVER_ID, followerId));
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        long fetchOffset = replica.getLocalLogEndOffset();
+
+        // Followers read up to the log end offset, so a KV flush alone does not wake them.
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> followerFetch =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(followerId, Integer.MAX_VALUE, 1, Duration.ofMinutes(3).toMillis()),
+                Collections.singletonMap(
+                        TABLE_BUCKET, new FetchReqInfo(TABLE_ID, fetchOffset, Integer.MAX_VALUE)),
+                null,
+                followerFetch::complete);
+        assertThat(followerFetch).isNotDone();
+
+        // A full-row upsert with the WAL changelog image does not need a lake lookup.
+        CompletableFuture<List<PutKvResultForBucket>> putResponse = new CompletableFuture<>();
+        replicaManager.putHistoricalRecordsToKv(
+                10_000,
+                1,
+                Collections.singletonList(
+                        new PutKvDataForBucket(
+                                TABLE_BUCKET,
+                                batch(
+                                        tableInfo.getRowType(),
+                                        upsert(1, "us", ORIGINAL_PARTITION, "v1")),
+                                ORIGINAL_PARTITION)),
+                null,
+                MergeMode.DEFAULT,
+                ApiKeys.PUT_KV.highestSupportedVersion,
+                putResponse::complete);
+        assertThat(putResponse.get(10, TimeUnit.SECONDS))
+                .singleElement()
+                .satisfies(result -> assertThat(result.failed()).isFalse());
+
+        FetchLogResultForBucket fetchResult =
+                followerFetch.get(10, TimeUnit.SECONDS).get(TABLE_BUCKET);
+        assertThat(fetchResult.succeeded()).isTrue();
+        assertThat(fetchResult.records().sizeInBytes()).isPositive();
+    }
+
+    @Test
     void testHistoricalInsertUpdateAndDelete() throws Exception {
         TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(true);
         Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
@@ -1182,6 +1228,13 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
     private TableInfo registerHistoricalTableAndBecomeLeader(
             ChangelogImage changelogImage, boolean rowTtlEnabled) throws Exception {
+        return registerHistoricalTableAndBecomeLeader(
+                changelogImage, rowTtlEnabled, Collections.singletonList(TABLET_SERVER_ID));
+    }
+
+    private TableInfo registerHistoricalTableAndBecomeLeader(
+            ChangelogImage changelogImage, boolean rowTtlEnabled, List<Integer> replicas)
+            throws Exception {
         replicaManager.getDiskUsageMonitor().update(0.10);
         Schema schema =
                 Schema.newBuilder()
@@ -1235,10 +1288,7 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
 
         BucketMetadata bucketMetadata =
                 new BucketMetadata(
-                        TABLE_BUCKET.getBucket(),
-                        TABLET_SERVER_ID,
-                        INITIAL_LEADER_EPOCH,
-                        Collections.singletonList(TABLET_SERVER_ID));
+                        TABLE_BUCKET.getBucket(), TABLET_SERVER_ID, INITIAL_LEADER_EPOCH, replicas);
         ServerInfo tabletServer =
                 new ServerInfo(
                         TABLET_SERVER_ID,
@@ -1267,11 +1317,11 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
                         new NotifyLeaderAndIsrData(
                                 PhysicalTablePath.of(TABLE_PATH, HISTORICAL_PARTITION),
                                 TABLE_BUCKET,
-                                Collections.singletonList(TABLET_SERVER_ID),
+                                replicas,
                                 new LeaderAndIsr(
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        replicas,
                                         Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
