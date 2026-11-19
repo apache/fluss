@@ -279,7 +279,7 @@ ALTER TABLE MyTable ADD (
 ```
 
 :::note
-For tables with `'table.datalake.enabled' = 'true'` on a Paimon or Iceberg lakehouse, Fluss also applies the added columns to the corresponding lake table as part of the `ALTER TABLE` statement, keeping both schemas in sync. Adding columns to datalake-enabled Hudi and Lance tables is not yet supported. Never add columns to the lake table directly through an external engine, since a lake table schema that diverges from the Fluss table schema stops the tiering service. See [Schema Evolution](../streaming-lakehouse/datalake-formats/paimon.md#schema-evolution) for details.
+For tables with `'table.datalake.enabled' = 'true'` on a Paimon or Iceberg lakehouse, Fluss also applies the added columns to the corresponding lake table as part of the `ALTER TABLE` statement, keeping both schemas in sync. Adding columns to datalake-enabled Hudi, Lance, and Delta Lake tables is not yet supported. Never add columns to the lake table directly through an external engine, since a lake table schema that diverges from the Fluss table schema stops the tiering service. See [Schema Evolution](../streaming-lakehouse/datalake-formats/paimon.md#schema-evolution) for details.
 :::
 
 ### Add watermark
