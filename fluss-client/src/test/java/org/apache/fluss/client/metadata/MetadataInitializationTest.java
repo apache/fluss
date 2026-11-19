@@ -43,6 +43,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -69,7 +70,7 @@ class MetadataInitializationTest {
         Cluster original = Cluster.empty();
         MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
-        updater.ensureTableMapping(tableInfo());
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.empty());
 
         assertThat(updater.getCluster().getTableId(TABLE_PATH)).hasValue(TABLE_ID);
         assertThat(updater.getCluster().getTablePath(TABLE_ID)).hasValue(TABLE_PATH);
@@ -83,7 +84,7 @@ class MetadataInitializationTest {
         Cluster original = cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID));
         MetadataUpdater updater = new MetadataUpdater(rpcClient, new Configuration(), original);
 
-        updater.ensureTableMapping(tableInfo());
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.empty());
 
         Cluster updated = updater.getCluster();
         assertThat(updated.getTableId(TABLE_PATH)).hasValue(TABLE_ID);
@@ -111,10 +112,36 @@ class MetadataInitializationTest {
         Cluster original = cluster(Collections.singletonMap(TABLE_PATH, TABLE_ID));
         MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
 
-        updater.ensureTableMapping(tableInfo());
-        updater.ensureTableMapping(tableInfo());
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.of(TABLE_ID));
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.of(TABLE_ID));
 
         assertThat(updater.getCluster()).isSameAs(original);
+    }
+
+    @Test
+    void testIgnoresTableInfoResolvedByAnotherThreadInBetween() {
+        long newerTableId = TABLE_ID + 1;
+        Cluster original = tableCluster(newerTableId);
+        MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
+
+        // the Admin request was sent while the path was still unresolved, so its answer loses
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.empty());
+
+        assertThat(updater.getCluster()).isSameAs(original);
+    }
+
+    @Test
+    void testNeverReplacesCachedTableIdWithOlderOne() {
+        long newerTableId = TABLE_ID + 1;
+        Cluster original = tableCluster(newerTableId);
+        MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
+
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.of(newerTableId));
+
+        Cluster updated = updater.getCluster();
+        assertThat(updated).isSameAs(original);
+        assertThat(updated.getTableId(TABLE_PATH)).hasValue(newerTableId);
+        assertThat(updated.getBucketLocation(new TableBucket(newerTableId, null, 0))).isPresent();
     }
 
     @ParameterizedTest
@@ -157,7 +184,7 @@ class MetadataInitializationTest {
                         unrelated.getBucketCountEpochByTableId());
         MetadataUpdater updater = new MetadataUpdater(noRpcClient(), new Configuration(), original);
 
-        updater.ensureTableMapping(tableInfo());
+        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.of(oldTableId));
 
         Cluster updated = updater.getCluster();
         assertThat(updated.getTableId(TABLE_PATH)).hasValue(TABLE_ID);
@@ -198,11 +225,11 @@ class MetadataInitializationTest {
                         cluster(Collections.singletonMap(OTHER_TABLE_PATH, OTHER_TABLE_ID)));
         CountDownLatch started = new CountDownLatch(1);
         CheckedThread mappingThread =
-                new CheckedThread("ensure-table-mapping") {
+                new CheckedThread("reconcile-table-mapping") {
                     @Override
                     public void go() {
                         started.countDown();
-                        updater.ensureTableMapping(tableInfo());
+                        updater.reconcileTableMapping(tableInfo(TABLE_ID), Optional.empty());
                     }
                 };
 
@@ -232,10 +259,10 @@ class MetadataInitializationTest {
                 });
     }
 
-    private static TableInfo tableInfo() {
+    private static TableInfo tableInfo(long tableId) {
         return TableInfo.of(
                 TABLE_PATH,
-                TABLE_ID,
+                tableId,
                 1,
                 TableDescriptor.builder()
                         .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
@@ -244,6 +271,22 @@ class MetadataInitializationTest {
                 null,
                 0,
                 0);
+    }
+
+    private static Cluster tableCluster(long tableId) {
+        PhysicalTablePath tablePath = PhysicalTablePath.of(TABLE_PATH);
+        TableBucket bucket = new TableBucket(tableId, null, 0);
+        return new Cluster(
+                Collections.singletonMap(1, TABLET_SERVER),
+                COORDINATOR,
+                Collections.singletonMap(
+                        tablePath,
+                        Collections.singletonList(
+                                new BucketLocation(tablePath, bucket, 1, new int[] {1}))),
+                Collections.singletonMap(TABLE_PATH, tableId),
+                Collections.emptyMap(),
+                Collections.singletonMap(TableOrPartition.ofTable(tableId), 1),
+                Collections.singletonMap(tableId, 2L));
     }
 
     private static Cluster cluster(Map<TablePath, Long> tableMappings) {

@@ -191,6 +191,45 @@ public final class Cluster {
                 new HashMap<>(bucketCountEpochByTableId));
     }
 
+    /**
+     * Returns a snapshot that registers {@code tableId} for {@code tablePath}. If the path is
+     * already registered with another table, the bucket locations, partition ids and bucket counts
+     * cached for that table are dropped in the very same snapshot, so no lookup can combine the new
+     * table identity with the layout of the table it replaced.
+     */
+    public Cluster withTableMapping(TablePath tablePath, long tableId) {
+        Optional<Long> cachedTableId = getTableId(tablePath);
+        if (cachedTableId.filter(id -> id == tableId).isPresent()) {
+            return this;
+        }
+        Cluster updated = this;
+        if (cachedTableId.isPresent()) {
+            Set<PhysicalTablePath> physicalTablesToInvalid = new HashSet<>();
+            for (PhysicalTablePath physicalTablePath : availableLocationsByPath.keySet()) {
+                if (physicalTablePath.getTablePath().equals(tablePath)) {
+                    physicalTablesToInvalid.add(physicalTablePath);
+                }
+            }
+            for (PhysicalTablePath physicalTablePath : partitionsIdByPath.keySet()) {
+                if (physicalTablePath.getTablePath().equals(tablePath)) {
+                    physicalTablesToInvalid.add(physicalTablePath);
+                }
+            }
+            physicalTablesToInvalid.add(PhysicalTablePath.of(tablePath));
+            updated = invalidPhysicalTableBucketAndPartitionMeta(physicalTablesToInvalid);
+        }
+        Map<TablePath, Long> newTableIdByPath = new HashMap<>(updated.tableIdByPath);
+        newTableIdByPath.put(tablePath, tableId);
+        return new Cluster(
+                new HashMap<>(updated.aliveTabletServersById),
+                updated.coordinatorServer,
+                new HashMap<>(updated.availableLocationsByPath),
+                newTableIdByPath,
+                new HashMap<>(updated.partitionsIdByPath),
+                new HashMap<>(updated.bucketCountByTableOrPartition),
+                new HashMap<>(updated.bucketCountEpochByTableId));
+    }
+
     @Nullable
     public ServerNode getCoordinatorServer() {
         return coordinatorServer;
