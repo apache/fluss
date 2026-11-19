@@ -111,4 +111,17 @@ class GetClusterConfigsProcedureTest extends FlussSparkTestBase {
 
     assert(result.length > 0)
   }
+
+  test("get_cluster_configs: rejects wrong argument type for config_keys") {
+    val testKey = ConfigOptions.KV_SNAPSHOT_INTERVAL.key()
+
+    // A scalar STRING is not assignable to ARRAY<STRING>. The procedure resolver rejects
+    // the call during analysis with a RuntimeException, before the procedure runs.
+    val thrown = intercept[RuntimeException] {
+      sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => '$testKey')").collect()
+    }
+    assert(thrown.getMessage.contains("config_keys"))
+    assert(thrown.getMessage.contains("Cannot cast"))
+    assert(thrown.getMessage.contains("ArrayType"))
+  }
 }
