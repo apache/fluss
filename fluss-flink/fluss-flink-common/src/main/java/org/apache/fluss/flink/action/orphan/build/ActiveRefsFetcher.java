@@ -29,6 +29,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.RetryUtils;
@@ -170,8 +171,11 @@ public final class ActiveRefsFetcher {
                                     RpcErrorClassifier.classify(e)
                                             != RpcErrorClassifier.Category.NOT_FOUND);
         } catch (IOException e) {
+            Throwable cause = rpcFailureCause(e);
             return LogActiveRefsFetchResult.listFailed(
-                    formatRpcFailureReason(tableId, partitionId, e.getCause()));
+                    formatRpcFailureReason(tableId, partitionId, cause),
+                    RpcErrorClassifier.classify(cause),
+                    cause);
         }
 
         Map<Integer, List<RemoteLogManifestInfo>> entriesByBucket = new HashMap<>();
@@ -238,8 +242,11 @@ public final class ActiveRefsFetcher {
                                     RpcErrorClassifier.classify(e)
                                             != RpcErrorClassifier.Category.NOT_FOUND);
         } catch (IOException e) {
+            Throwable cause = rpcFailureCause(e);
             return KvActiveRefsFetchResult.listFailed(
-                    formatRpcFailureReason(tableId, partitionId, e.getCause()));
+                    formatRpcFailureReason(tableId, partitionId, cause),
+                    RpcErrorClassifier.classify(cause),
+                    cause);
         }
         Map<Integer, Set<String>> dirsByBucket = new HashMap<>();
         for (Map.Entry<Integer, Set<Long>> entry :
@@ -254,6 +261,119 @@ public final class ActiveRefsFetcher {
         return KvActiveRefsFetchResult.ok(dirsByBucket);
     }
 
+    /**
+     * Fetches the set of active shared SST file names for a single bucket by second-reading the
+     * {@code _METADATA} files of its active snapshots.
+     *
+     * <p>For each active snapshot directory, the method constructs the metadata path ({@code
+     * {kvTabletDir}/{snapDir}/_METADATA}), reads the file, and extracts the basename of each remote
+     * {@code kv_file_handle.path} via {@link KvSnapshotMetadataReader}. Every path must be a direct
+     * child of this bucket's {@code shared/} directory. The union across all active snapshots forms
+     * the complete active set.
+     *
+     * <p>Failure handling:
+     *
+     * <ul>
+     *   <li>{@link java.io.FileNotFoundException} on a single metadata file (concurrent snapshot
+     *       removal) — reported as failure so the caller skips shared SST cleanup for this bucket.
+     *   <li>Other {@link IOException} — reported as {@link KvSharedSstFetchResult#failed(String)};
+     *       the caller must skip shared SST cleanup for this bucket.
+     * </ul>
+     */
+    public KvSharedSstFetchResult fetchKvSharedSstFileNames(
+            FsPath kvTabletDir, Set<String> activeSnapDirs) {
+        Set<String> sharedSstFileNames = new HashSet<>();
+        for (String snapDir : activeSnapDirs) {
+            FsPath metadataPath = new FsPath(new FsPath(kvTabletDir, snapDir), "_METADATA");
+            byte[] metadataBytes;
+            try {
+                remoteFsOpRateLimiter.acquire();
+                metadataBytes = metadataReader.read(metadataPath);
+            } catch (FileNotFoundException e) {
+                return KvSharedSstFetchResult.notFound(
+                        String.format(
+                                "Snapshot metadata not found %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            } catch (IOException e) {
+                return KvSharedSstFetchResult.failed(
+                        String.format(
+                                "IO error reading snapshot metadata %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            }
+            try {
+                FsPath expectedSharedDir = FlussPaths.remoteKvSharedDir(kvTabletDir);
+                for (String remotePathString :
+                        KvSnapshotMetadataReader.parseSharedSstRemotePaths(metadataBytes)) {
+                    FsPath remotePath;
+                    try {
+                        remotePath = new FsPath(remotePathString);
+                    } catch (RuntimeException e) {
+                        throw new IOException("Invalid shared SST remote path", e);
+                    }
+                    if (!expectedSharedDir.equals(remotePath.getParent())
+                            || remotePath.getName().isEmpty()) {
+                        throw new IOException(
+                                "Shared SST remote path is outside the expected bucket directory");
+                    }
+                    sharedSstFileNames.add(remotePath.getName());
+                }
+            } catch (IOException e) {
+                return KvSharedSstFetchResult.failed(
+                        String.format(
+                                "Failed to parse snapshot metadata %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            }
+        }
+        return KvSharedSstFetchResult.ok(sharedSstFileNames);
+    }
+
+    /**
+     * Fetches active shared SST names and refreshes the target's snapshot view once when snapshot
+     * metadata has concurrently disappeared.
+     *
+     * <p>A successful refresh replaces {@code activeSnapDirsByBucket} for subsequent buckets. A
+     * second metadata miss, a generic metadata failure, or a failed refresh is returned without
+     * further retry.
+     */
+    public KvSharedSstFetchResult fetchKvSharedSstFileNamesWithRefresh(
+            long tableId,
+            @Nullable Long partitionId,
+            int bucketId,
+            FsPath kvTabletDir,
+            Map<Integer, Set<String>> activeSnapDirsByBucket) {
+        Set<String> activeSnapDirs =
+                activeSnapDirsByBucket.getOrDefault(bucketId, Collections.emptySet());
+        if (activeSnapDirs.isEmpty()) {
+            return KvSharedSstFetchResult.ok(Collections.emptySet());
+        }
+
+        KvSharedSstFetchResult result = fetchKvSharedSstFileNames(kvTabletDir, activeSnapDirs);
+        if (result.allMetadataReadOk() || !result.metadataNotFound()) {
+            return result;
+        }
+
+        KvActiveRefsFetchResult refreshed = fetchKvActiveSnapDirs(tableId, partitionId);
+        if (!refreshed.listOk()) {
+            if (refreshed.listFailureCategory() == RpcErrorClassifier.Category.NOT_FOUND) {
+                return KvSharedSstFetchResult.targetDisappeared(refreshed.listFailureReason());
+            }
+            return KvSharedSstFetchResult.failed(
+                    "Failed to refresh active KV snapshots: " + refreshed.listFailureReason());
+        }
+
+        activeSnapDirsByBucket.clear();
+        activeSnapDirsByBucket.putAll(refreshed.activeSnapDirsByBucket());
+        Set<String> refreshedSnapDirs =
+                activeSnapDirsByBucket.getOrDefault(bucketId, Collections.emptySet());
+        if (refreshedSnapDirs.isEmpty()) {
+            return KvSharedSstFetchResult.ok(Collections.emptySet());
+        }
+        return fetchKvSharedSstFileNames(kvTabletDir, refreshedSnapDirs);
+    }
+
     private static String formatRpcFailureReason(
             long tableId, @Nullable Long partitionId, @Nullable Throwable cause) {
         String reason =
@@ -262,6 +382,11 @@ public final class ActiveRefsFetcher {
             reason = reason + ": " + cause.getMessage();
         }
         return reason;
+    }
+
+    private static Throwable rpcFailureCause(IOException failure) {
+        Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+        return ExceptionUtils.stripExecutionException(cause);
     }
 
     private static String formatBucketReadFailureReason(

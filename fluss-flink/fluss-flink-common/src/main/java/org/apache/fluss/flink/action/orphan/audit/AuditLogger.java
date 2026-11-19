@@ -60,6 +60,15 @@ public final class AuditLogger {
                 Instant.now());
     }
 
+    /** Records a table or partition that disappeared while enumerating its references. */
+    public void logScopeTargetDisappeared(long tableId, Long partitionId) {
+        AUDIT.info(
+                "action=scope_target_disappeared table_id={} partition_id={} ts={}",
+                tableId,
+                partitionId,
+                Instant.now());
+    }
+
     public void logDeleted(FsPath path, RuleId ruleId, boolean ok) {
         AUDIT.info("action=deleted rule={} path={} ok={} ts={}", ruleId, path, ok, Instant.now());
     }
@@ -137,6 +146,33 @@ public final class AuditLogger {
     public void logSkipKvBucket(long tableId, Long partitionId, int bucketId, String reason) {
         AUDIT.warn(
                 "action=skip_kv_bucket reason={} table_id={} partition_id={} bucket_id={} ts={}",
+                reason,
+                tableId,
+                partitionId,
+                bucketId,
+                Instant.now());
+    }
+
+    /** Scan a KV bucket after metadata authoritatively reports no active snapshots. */
+    public void logScanKvBucketWithoutActiveSnapshots(
+            long tableId, Long partitionId, int bucketId) {
+        AUDIT.info(
+                "action=scan_kv_bucket_without_active_snapshots reason=no_active_snapshots"
+                        + " table_id={} partition_id={} bucket_id={} ts={}",
+                tableId,
+                partitionId,
+                bucketId,
+                Instant.now());
+    }
+
+    /**
+     * Skip shared SST cleanup for a single bucket because the active set could not be determined
+     * (metadata read failure). The bucket's snap-private and log cleanup proceed normally.
+     */
+    public void logSkipKvSharedSst(long tableId, Long partitionId, int bucketId, String reason) {
+        AUDIT.warn(
+                "action=skip_kv_shared_sst reason={} table_id={} partition_id={}"
+                        + " bucket_id={} ts={}",
                 reason,
                 tableId,
                 partitionId,
@@ -231,6 +267,17 @@ public final class AuditLogger {
                 deleteFailures,
                 bytesReclaimed,
                 dryRun,
+                Instant.now());
+    }
+
+    /** Scan a log bucket for which metadata reports no committed remote manifest. */
+    public void logScanLogBucketWithoutManifest(long tableId, Long partitionId, int bucketId) {
+        AUDIT.info(
+                "action=scan_log_bucket_without_manifest reason=no_remote_manifest"
+                        + " table_id={} partition_id={} bucket_id={} ts={}",
+                tableId,
+                partitionId,
+                bucketId,
                 Instant.now());
     }
 }
