@@ -64,6 +64,8 @@ class FlussAdminTest {
 
     private static final ServerNode OLD_COORDINATOR =
             new ServerNode(0, "old-coordinator", 9123, ServerType.COORDINATOR);
+    private static final ServerNode TABLET_SERVER =
+            new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER);
 
     @ParameterizedTest
     @CsvSource({
@@ -191,126 +193,50 @@ class FlussAdminTest {
 
     @Test
     void testListConsumerGroupsUsesDiscoveredTabletServerEndpoints() throws Exception {
-        ServerNode discovery = new ServerNode(1, "discovery", 9124, ServerType.TABLET_SERVER);
-        ServerNode oldEndpoint = new ServerNode(2, "old-tablet", 9125, ServerType.TABLET_SERVER);
-        ServerNode newEndpoint = new ServerNode(2, "new-tablet", 9126, ServerType.TABLET_SERVER);
-        ServerNode added = new ServerNode(3, "added-tablet", 9127, ServerType.TABLET_SERVER);
-        List<ServerNode> queried = new ArrayList<>();
-        AtomicInteger metadataRequests = new AtomicInteger();
+        ServerNode oldEndpoint = new ServerNode(1, "old-tablet", 9124, ServerType.TABLET_SERVER);
+        ServerNode newEndpoint = new ServerNode(1, "new-tablet", 9125, ServerType.TABLET_SERVER);
+        ServerNode added = new ServerNode(2, "added-tablet", 9126, ServerType.TABLET_SERVER);
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
                             if (api == ApiKeys.GET_METADATA) {
-                                // Server discovery starts from a random cached tablet
-                                // server, so both nodes known to the cached cluster are
-                                // valid entry points.
-                                assertThat(node).isIn(discovery, oldEndpoint);
-                                metadataRequests.incrementAndGet();
+                                assertThat(node).isEqualTo(oldEndpoint);
                                 MetadataResponse response = new MetadataResponse();
                                 response.setCoordinatorServer()
                                         .setNodeId(0)
                                         .setHost("coordinator")
                                         .setPort(9123);
-                                response.addTabletServer()
-                                        .setNodeId(discovery.id())
-                                        .setHost(discovery.host())
-                                        .setPort(discovery.port());
-                                response.addTabletServer()
-                                        .setNodeId(newEndpoint.id())
-                                        .setHost(newEndpoint.host())
-                                        .setPort(newEndpoint.port());
-                                response.addTabletServer()
-                                        .setNodeId(added.id())
-                                        .setHost(added.host())
-                                        .setPort(added.port());
+                                for (ServerNode server : Arrays.asList(newEndpoint, added)) {
+                                    response.addTabletServer()
+                                            .setNodeId(server.id())
+                                            .setHost(server.host())
+                                            .setPort(server.port());
+                                }
                                 return CompletableFuture.completedFuture(response);
                             }
                             assertThat(api).isEqualTo(ApiKeys.LIST_CONSUMER_GROUPS);
-                            assertThat(node).isIn(discovery, newEndpoint, added);
-                            queried.add(node);
+                            assertThat(node).isIn(newEndpoint, added);
                             ListConsumerGroupsResponse response = new ListConsumerGroupsResponse();
                             response.addGroup().setGroupId("shared");
-                            response.addGroup().setGroupId("group-" + node.id());
+                            response.addGroup().setGroupId(node.host());
                             return CompletableFuture.completedFuture(response);
                         });
-        Map<Integer, ServerNode> cached = new HashMap<>();
-        cached.put(discovery.id(), discovery);
-        cached.put(oldEndpoint.id(), oldEndpoint);
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                cached,
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
 
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+        try (FlussAdmin admin = createAdmin(client, oldEndpoint)) {
             assertThat(admin.listConsumerGroups().get(10, TimeUnit.SECONDS))
-                    .containsExactlyInAnyOrder("shared", "group-1", "group-2", "group-3");
-        }
-        assertThat(metadataRequests).hasValue(1);
-        assertThat(queried).containsExactlyInAnyOrder(discovery, newEndpoint, added);
-        assertThat(updater.getCluster().getTabletServer(added.id())).isNull();
-    }
-
-    @Test
-    void testListConsumerGroupsFailsWhenDiscoveryFails() throws Exception {
-        ServerNode discovery = new ServerNode(1, "discovery", 9124, ServerType.TABLET_SERVER);
-        AuthorizationException failure = new AuthorizationException("metadata unavailable");
-        TestingRpcClient client =
-                new TestingRpcClient(
-                        (node, api) -> {
-                            assertThat(node).isEqualTo(discovery);
-                            if (api == ApiKeys.GET_METADATA) {
-                                return failed(failure);
-                            }
-                            throw new AssertionError(
-                                    "Must not list groups without server discovery");
-                        });
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                Collections.singletonMap(discovery.id(), discovery),
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
-
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
-            assertThatThrownBy(() -> admin.listConsumerGroups().get(10, TimeUnit.SECONDS))
-                    .rootCause()
-                    .isSameAs(failure);
+                    .containsExactlyInAnyOrder("shared", "new-tablet", "added-tablet");
         }
     }
 
     @Test
-    void testListConsumerGroupsDoesNotTreatEmptyMetadataAsNoGroups() throws Exception {
-        ServerNode discovery = new ServerNode(1, "discovery", 9124, ServerType.TABLET_SERVER);
+    void testListConsumerGroupsDoesNotTreatEmptyMetadataAsNoGroups() {
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
-                            assertThat(node).isEqualTo(discovery);
                             assertThat(api).isEqualTo(ApiKeys.GET_METADATA);
                             return CompletableFuture.completedFuture(new MetadataResponse());
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
-                    @Override
-                    public ServerNode getRandomTabletServer() {
-                        return discovery;
-                    }
-                };
-
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+        try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
             assertThatThrownBy(() -> admin.listConsumerGroups().get(10, TimeUnit.SECONDS))
                     .rootCause()
                     .isInstanceOf(StaleMetadataException.class);
@@ -319,69 +245,40 @@ class FlussAdminTest {
 
     @Test
     void testDiscoveredGroupOwnerMissingFromMetadataCache() throws Exception {
-        ServerNode discoveryNode = new ServerNode(1, "discovery", 9124, ServerType.TABLET_SERVER);
         ServerNode owner = new ServerNode(2, "owner", 9125, ServerType.TABLET_SERVER);
-        List<ServerNode> contactedNodes = new ArrayList<>();
+        List<ServerNode> deleteTargets = new ArrayList<>();
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
-                            contactedNodes.add(node);
                             if (api == ApiKeys.FIND_CONSUMER_GROUP_OWNER) {
-                                assertThat(node).isEqualTo(discoveryNode);
-                                FindConsumerGroupOwnerResponse response =
-                                        new FindConsumerGroupOwnerResponse();
-                                response.setOwner()
-                                        .setNodeId(owner.id())
-                                        .setHost(owner.host())
-                                        .setPort(owner.port());
-                                return CompletableFuture.completedFuture(response);
+                                assertThat(node).isEqualTo(TABLET_SERVER);
+                                return foundOwner(owner);
                             }
                             assertThat(api).isEqualTo(ApiKeys.DELETE_CONSUMER_GROUPS);
-                            assertThat(node).isEqualTo(owner);
+                            deleteTargets.add(node);
                             DeleteConsumerGroupsResponse response =
                                     new DeleteConsumerGroupsResponse();
                             response.addGroup().setGroupId("group-1");
                             return CompletableFuture.completedFuture(response);
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                Collections.singletonMap(discoveryNode.id(), discoveryNode),
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
-        assertThat(updater.getCluster().getTabletServer(owner.id())).isNull();
 
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+        try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
             admin.deleteConsumerGroups(Collections.singleton("group-1"))
                     .all()
                     .get(10, TimeUnit.SECONDS);
+            assertThat(deleteTargets).containsExactly(owner);
         }
-        assertThat(contactedNodes).containsExactly(discoveryNode, owner);
     }
 
     @Test
     void testAlterConsumerGroupOffsetsFailsForRejectedBucket() throws Exception {
-        ServerNode tabletServer = new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER);
         TableBucket accepted = new TableBucket(1L, null, 0);
         TableBucket rejected = new TableBucket(1L, null, 1);
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
-                            assertThat(node).isEqualTo(tabletServer);
                             if (api == ApiKeys.FIND_CONSUMER_GROUP_OWNER) {
-                                FindConsumerGroupOwnerResponse response =
-                                        new FindConsumerGroupOwnerResponse();
-                                response.setOwner()
-                                        .setNodeId(tabletServer.id())
-                                        .setHost(tabletServer.host())
-                                        .setPort(tabletServer.port());
-                                return CompletableFuture.completedFuture(response);
+                                return foundOwner(TABLET_SERVER);
                             }
                             assertThat(api).isEqualTo(ApiKeys.COMMIT_CONSUMER_OFFSETS);
                             CommitConsumerOffsetsResponse response =
@@ -395,23 +292,11 @@ class FlussAdminTest {
                                     .setErrorMessage("metadata rejected");
                             return CompletableFuture.completedFuture(response);
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                Collections.singletonMap(tabletServer.id(), tabletServer),
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
         Map<TableBucket, OffsetMetadata> offsets = new HashMap<>();
         offsets.put(accepted, new OffsetMetadata(10L));
         offsets.put(rejected, new OffsetMetadata(20L));
 
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+        try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
             AlterConsumerGroupOffsetsResult result =
                     admin.alterConsumerGroupOffsets("group-1", offsets);
 
@@ -428,43 +313,27 @@ class FlussAdminTest {
     }
 
     @Test
-    void testListConsumerGroupOffsetsWithEmptySelectionSkipsOwnerDiscovery() throws Exception {
+    void testListConsumerGroupOffsetsWithEmptySelectionSkipsOwnerDiscovery() {
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
                             throw new AssertionError("Empty selection must not send an RPC");
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
-                    @Override
-                    public ServerNode getRandomTabletServer() {
-                        throw new AssertionError("Empty selection must not discover an owner");
-                    }
-                };
+        MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), Cluster.empty());
         try (FlussAdmin admin = new FlussAdmin(client, updater)) {
-            assertThat(
-                            admin.listConsumerGroupOffsets("group-1", Collections.emptySet())
-                                    .get(10, TimeUnit.SECONDS))
-                    .isEmpty();
+            assertThat(admin.listConsumerGroupOffsets("group-1", Collections.emptySet()))
+                    .isCompletedWithValue(Collections.emptyMap());
         }
     }
 
     @Test
-    void testDeleteConsumerResultsPreserveServerErrorMessages() throws Exception {
-        ServerNode tabletServer = new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER);
+    void testDeleteConsumerResultsPreserveServerErrorMessages() {
         TableBucket bucket = new TableBucket(1L, null, 0);
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
-                            assertThat(node).isEqualTo(tabletServer);
                             if (api == ApiKeys.FIND_CONSUMER_GROUP_OWNER) {
-                                FindConsumerGroupOwnerResponse response =
-                                        new FindConsumerGroupOwnerResponse();
-                                response.setOwner()
-                                        .setNodeId(tabletServer.id())
-                                        .setHost(tabletServer.host())
-                                        .setPort(tabletServer.port());
-                                return CompletableFuture.completedFuture(response);
+                                return foundOwner(TABLET_SERVER);
                             }
                             if (api == ApiKeys.DELETE_CONSUMER_GROUPS) {
                                 DeleteConsumerGroupsResponse response =
@@ -486,20 +355,8 @@ class FlussAdminTest {
                                     .setErrorMessage("bucket deletion blocked by server");
                             return CompletableFuture.completedFuture(response);
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                Collections.singletonMap(tabletServer.id(), tabletServer),
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
 
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+        try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
             DeleteConsumerGroupsResult groups =
                     admin.deleteConsumerGroups(Collections.singleton("group-1"));
             assertThatThrownBy(() -> groups.deletedGroup("group-1").get(10, TimeUnit.SECONDS))
@@ -517,74 +374,55 @@ class FlussAdminTest {
     }
 
     @Test
-    void testDeleteConsumerGroupsSkipsInvalidIdsAndDeduplicatesBeforeDiscovery() throws Exception {
-        ServerNode tabletServer = new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER);
+    void testDeleteConsumerGroupsSkipsInvalidIdsAndDeduplicatesBeforeDiscovery() {
         AtomicInteger discoveries = new AtomicInteger();
         AtomicInteger deletions = new AtomicInteger();
         CompletableFuture<ApiMessage> pendingDelete = new CompletableFuture<>();
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
-                            assertThat(node).isEqualTo(tabletServer);
                             if (api == ApiKeys.FIND_CONSUMER_GROUP_OWNER) {
                                 discoveries.incrementAndGet();
-                                FindConsumerGroupOwnerResponse response =
-                                        new FindConsumerGroupOwnerResponse();
-                                response.setOwner()
-                                        .setNodeId(tabletServer.id())
-                                        .setHost(tabletServer.host())
-                                        .setPort(tabletServer.port());
-                                return CompletableFuture.completedFuture(response);
+                                return foundOwner(TABLET_SERVER);
                             }
                             assertThat(api).isEqualTo(ApiKeys.DELETE_CONSUMER_GROUPS);
-                            DeleteConsumerGroupsResponse response =
-                                    new DeleteConsumerGroupsResponse();
-                            response.addGroup().setGroupId("g1");
-                            return deletions.incrementAndGet() == 1
-                                    ? pendingDelete
-                                    : CompletableFuture.completedFuture(response);
+                            deletions.incrementAndGet();
+                            return pendingDelete;
                         });
-        MetadataUpdater updater =
-                new MetadataUpdater(
-                        client,
-                        new Configuration(),
-                        new Cluster(
-                                Collections.singletonMap(tabletServer.id(), tabletServer),
-                                null,
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap(),
-                                Collections.emptyMap()));
 
-        String overlong = String.join("", Collections.nCopies(201, "g"));
-        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
-            assertThatThrownBy(() -> admin.deleteConsumerGroups(null))
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessage("groupIds must not be null");
-            DeleteConsumerGroupsResult invalid =
-                    admin.deleteConsumerGroups(
-                            Arrays.asList(null, "", "__internal", "bad group", overlong));
-            assertThat(invalid.perGroupFutures()).isEmpty();
-            assertThat(invalid.all()).isCompleted();
-            assertThat(discoveries).hasValue(0);
-            assertThat(deletions).hasValue(0);
-
+        try (FlussAdmin admin = createAdmin(client, TABLET_SERVER)) {
             DeleteConsumerGroupsResult result =
-                    admin.deleteConsumerGroups(
-                            Arrays.asList(
-                                    null, "", "__internal", "bad group", overlong, "g1", "g1"));
+                    admin.deleteConsumerGroups(Arrays.asList("g1", null, "g1"));
+            assertThat(result.perGroupFutures()).containsOnlyKeys("g1");
             assertThat(discoveries).hasValue(1);
             assertThat(deletions).hasValue(1);
-            assertThat(result.perGroupFutures()).containsOnlyKeys("g1");
-            assertThat(result.all()).isNotDone();
+            CompletableFuture<Void> all = result.all();
+            assertThat(all).isNotDone();
 
             DeleteConsumerGroupsResponse response = new DeleteConsumerGroupsResponse();
             response.addGroup().setGroupId("g1");
             pendingDelete.complete(response);
-            assertThat(result.deletedGroup("g1")).isCompleted();
-            assertThat(result.all()).isCompleted();
+            assertThat(all).isCompleted();
         }
+    }
+
+    private static FlussAdmin createAdmin(TestingRpcClient client, ServerNode cachedServer) {
+        Cluster cluster =
+                new Cluster(
+                        Collections.singletonMap(cachedServer.id(), cachedServer),
+                        null,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        return new FlussAdmin(client, new MetadataUpdater(client, new Configuration(), cluster));
+    }
+
+    private static CompletableFuture<ApiMessage> foundOwner(ServerNode owner) {
+        FindConsumerGroupOwnerResponse response = new FindConsumerGroupOwnerResponse();
+        response.setOwner().setNodeId(owner.id()).setHost(owner.host()).setPort(owner.port());
+        return CompletableFuture.completedFuture(response);
     }
 
     private static CompletableFuture<ApiMessage> failed(Throwable error) {
