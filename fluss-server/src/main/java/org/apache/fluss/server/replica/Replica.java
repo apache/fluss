@@ -235,7 +235,8 @@ public final class Replica {
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
     private @Nullable PeriodicSnapshotManager kvSnapshotManager;
     private volatile @Nullable KvTabletSnapshotTarget kvSnapshotTarget;
-    private final AtomicBoolean bulkLoadRecoveryInProgress = new AtomicBoolean();
+    private final AtomicReference<BulkLoadRecoveryState> bulkLoadRecoveryState =
+            new AtomicReference<>(BulkLoadRecoveryState.IDLE);
 
     private volatile boolean deleted;
     private volatile @Nullable CloseableRegistry snapshotDownload;
@@ -496,9 +497,14 @@ public final class Replica {
         return remoteDataDir;
     }
 
-    /** True until the recovery worker has released the bucket's resources and lock. */
+    /** Returns whether the recovery worker has entered the rebuild phase. */
     boolean hasKvRecoveryInProgress() {
-        return bulkLoadRecoveryInProgress.get();
+        return bulkLoadRecoveryState.get() == BulkLoadRecoveryState.REBUILDING;
+    }
+
+    /** Marks the rebuild phase under the ReplicaManager's role change lock. */
+    void markBulkLoadRebuildStarted() {
+        bulkLoadRecoveryState.set(BulkLoadRecoveryState.REBUILDING);
     }
 
     /** Checks the persistent selection on a worker without waiting for a bucket download. */
@@ -506,9 +512,10 @@ public final class Replica {
             long recoverySnapshotId,
             int requestLeaderEpoch,
             int requestCoordinatorEpoch,
-            Runnable ensureWritable,
+            Runnable beginRebuild,
             Executor executor) {
-        if (!bulkLoadRecoveryInProgress.compareAndSet(false, true)) {
+        if (!bulkLoadRecoveryState.compareAndSet(
+                BulkLoadRecoveryState.IDLE, BulkLoadRecoveryState.PENDING)) {
             return CompletableFuture.completedFuture(null);
         }
         CompletableFuture<Long> response = new CompletableFuture<>();
@@ -535,7 +542,7 @@ public final class Replica {
                                 response.complete(recoverySnapshotId);
                                 return;
                             }
-                            ensureWritable.run();
+                            beginRebuild.run();
                             response.complete(null);
                             inWriteLock(
                                     leaderIsrUpdateLock,
@@ -569,11 +576,11 @@ public final class Replica {
                                     tableBucket,
                                     e);
                         } finally {
-                            bulkLoadRecoveryInProgress.set(false);
+                            bulkLoadRecoveryState.set(BulkLoadRecoveryState.IDLE);
                         }
                     });
         } catch (Exception e) {
-            bulkLoadRecoveryInProgress.set(false);
+            bulkLoadRecoveryState.set(BulkLoadRecoveryState.IDLE);
             response.completeExceptionally(e);
         }
         return response;
@@ -1239,6 +1246,12 @@ public final class Replica {
             }
         }
         return new KvRecovery(snapshot, initializeLocalLog, recoverySnapshotId);
+    }
+
+    private enum BulkLoadRecoveryState {
+        IDLE,
+        PENDING,
+        REBUILDING
     }
 
     /** Snapshot selection and log initialization required for one KV recovery attempt. */

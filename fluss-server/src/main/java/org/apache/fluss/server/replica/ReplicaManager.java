@@ -689,7 +689,13 @@ public class ReplicaManager implements ServerReconfigurable {
                         data.getRecoverySnapshotId(),
                         data.getLeaderEpoch(),
                         requestCoordinatorEpoch,
-                        localDiskManager::ensureWritable,
+                        () ->
+                                inLock(
+                                        replicaStateChangeLock,
+                                        () -> {
+                                            localDiskManager.ensureWritable();
+                                            replica.markBulkLoadRebuildStarted();
+                                        }),
                         bulkLoadRecoveryExecutor)
                 .handle(
                         (restored, error) -> {

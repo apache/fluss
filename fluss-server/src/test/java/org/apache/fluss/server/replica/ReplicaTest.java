@@ -87,6 +87,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -134,6 +135,29 @@ final class ReplicaTest extends ReplicaTestBase {
     // TODO add more tests to cover partition table
 
     private TestingHoldableKvFlushScheduler holdableKvFlushScheduler;
+
+    @Test
+    void testQueuedBulkLoadRecoveryDoesNotBlockLeaderActivation() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, false);
+        Replica replica = replicaManager.getReplicaOrException(bucket);
+
+        List<Runnable> queuedRecoveries = new ArrayList<>();
+        CompletableFuture<Long> recovery =
+                replica.requestBulkLoadRestore(
+                        42L,
+                        INITIAL_LEADER_EPOCH,
+                        INITIAL_COORDINATOR_EPOCH,
+                        () -> {},
+                        queuedRecoveries::add);
+
+        int nextLeaderEpoch = INITIAL_LEADER_EPOCH + 1;
+        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, nextLeaderEpoch, false);
+        assertThat(replica.getLeaderEpoch()).isEqualTo(nextLeaderEpoch);
+
+        queuedRecoveries.get(0).run();
+        assertThat(recovery.get(5, TimeUnit.SECONDS)).isNull();
+    }
 
     @ParameterizedTest
     @CsvSource({"false, 1", "false, 2", "true, 1", "true, 2"})
