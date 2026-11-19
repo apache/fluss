@@ -21,22 +21,146 @@ import org.apache.datasketches.hll.HllSketch;
 import org.apache.datasketches.hll.Union;
 import org.apache.datasketches.kll.KllDoublesSketch;
 import org.apache.datasketches.memory.Memory;
+import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.TableEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.Test;
 
+import javax.management.JMException;
+import javax.management.ObjectName;
+
+import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Sketch SQL execution, partial aggregation and persisted accumulator coverage. */
 class SketchFunctionsTest {
+    /** Opt-in SQL benchmark; iteration 0 and 1 warm up the engine. */
+    @Test
+    void benchmarkSql() throws Exception {
+        assumeTrue(Boolean.parseBoolean(System.getenv("FLUSS_SKETCH_BENCHMARK")));
+        int events = 1_000_000;
+        StreamExecutionEnvironment execution = StreamExecutionEnvironment.getExecutionEnvironment();
+        execution.setRuntimeMode(RuntimeExecutionMode.BATCH);
+        execution.setParallelism(2);
+        StreamTableEnvironment env = StreamTableEnvironment.create(execution);
+        env.getConfig()
+                .getConfiguration()
+                .setString("table.optimizer.agg-phase-strategy", "TWO_PHASE");
+        env.createTemporaryView(
+                "benchmark_input",
+                env.fromDataStream(execution.fromSequence(0, events - 1)).as("id"));
+        env.createTemporarySystemFunction("fluss_hll_build_agg", HllBuildAggFunction.class);
+        env.createTemporarySystemFunction("fluss_hll_merge_agg", HllMergeAggFunction.class);
+        env.createTemporarySystemFunction("fluss_hll_estimate", HllEstimateFunction.class);
+        env.createTemporarySystemFunction(
+                "fluss_kll_double_build_agg", KllDoubleBuildAggFunction.class);
+        env.createTemporarySystemFunction(
+                "fluss_kll_double_merge_agg", KllDoubleMergeAggFunction.class);
+        env.createTemporarySystemFunction(
+                "fluss_kll_double_quantile", KllDoubleQuantileFunction.class);
+        for (String workload : Arrays.asList("global", "grouped", "merge")) {
+            int groups = workload.equals("global") ? 1 : 10_000;
+            int outputGroups = workload.equals("grouped") ? groups : 1;
+            String query =
+                    "SELECT MOD(id, "
+                            + groups
+                            + ") AS g, fluss_hll_build_agg(id) AS h, "
+                            + "fluss_kll_double_build_agg(CAST(id AS DOUBLE)) AS q FROM benchmark_input GROUP BY MOD(id, "
+                            + groups
+                            + ")";
+            if (workload.equals("merge")) {
+                query =
+                        "SELECT CAST(0 AS BIGINT) AS g, fluss_hll_merge_agg(h) AS h, fluss_kll_double_merge_agg(q) AS q FROM ("
+                                + query
+                                + ")";
+            }
+            query =
+                    "SELECT g, h, q, fluss_hll_estimate(h), fluss_kll_double_quantile(q, 0.5) FROM ("
+                            + query
+                            + ")";
+            System.out.println(env.explainSql(query));
+            for (int iteration = 0; iteration < 7; iteration++) {
+                long allocatedBefore = allocatedBytes();
+                long start = System.nanoTime();
+                List<Row> result = new ArrayList<>();
+                try (CloseableIterator<Row> rows = env.executeSql(query).collect()) {
+                    rows.forEachRemaining(result::add);
+                }
+                long elapsed = System.nanoTime() - start;
+                long allocatedAfter = allocatedBytes();
+                long allocated =
+                        allocatedBefore < 0 || allocatedAfter < allocatedBefore
+                                ? -1
+                                : allocatedAfter - allocatedBefore;
+                assertThat(result).hasSize(outputGroups);
+                long bytes = 0;
+                double hllError = 0;
+                double rankError = 0;
+                for (Row row : result) {
+                    long key = ((Number) row.getField(0)).longValue();
+                    byte[] h = (byte[]) row.getField(1);
+                    byte[] q = (byte[]) row.getField(2);
+                    bytes += h.length + q.length;
+                    KllDoublesSketch kll = KllDoublesSketch.heapify(Memory.wrap(q));
+                    long count = events / outputGroups;
+                    assertThat(kll.getN()).isEqualTo(count);
+                    assertThat(kll.getMinItem()).isEqualTo((double) key);
+                    assertThat(kll.getMaxItem()).isEqualTo((double) (events - outputGroups + key));
+                    hllError = Math.max(hllError, Math.abs((Double) row.getField(3) / count - 1));
+                    rankError =
+                            Math.max(
+                                    rankError,
+                                    Math.abs(
+                                            ((Double) row.getField(4) - key) / outputGroups / count
+                                                    - 0.5));
+                }
+                assertThat(hllError).isLessThan(0.08);
+                assertThat(rankError).isLessThan(0.04);
+                // Timing includes planning, source generation, exchange and result collection, not
+                // validation.
+                System.out.printf(
+                        Locale.ROOT,
+                        "SKETCH_SQL_BENCH engine=flink workload=%s iteration=%d events=%d output_groups=%d elapsed_ms=%.3f allocated_bytes=%d sketch_bytes=%d hll_error=%.6f kll_rank_error=%.6f%n",
+                        workload,
+                        iteration,
+                        events,
+                        outputGroups,
+                        elapsed / 1_000_000.0,
+                        allocated,
+                        bytes,
+                        hllError,
+                        rankError);
+            }
+        }
+    }
+
+    private static long allocatedBytes() {
+        try {
+            return (Long)
+                    ManagementFactory.getPlatformMBeanServer()
+                            .getAttribute(
+                                    new ObjectName("java.lang:type=Threading"),
+                                    "TotalThreadAllocatedBytes");
+        } catch (JMException e) {
+            // Older JVMs do not expose the all-thread allocation counter.
+            return -1;
+        }
+    }
+
     @Test
     void testSqlBuildAndEstimate() throws Exception {
         TableEnvironment env = TableEnvironment.create(EnvironmentSettings.inBatchMode());
