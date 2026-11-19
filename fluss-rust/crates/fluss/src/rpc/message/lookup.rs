@@ -55,6 +55,7 @@ impl LookupRequest {
             insert_if_not_exists: None,
             acks: None,
             timeout_ms: None,
+            next_offset: None,
         };
 
         Self {

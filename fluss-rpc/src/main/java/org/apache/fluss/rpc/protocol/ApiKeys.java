@@ -59,7 +59,8 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
     //            primary key, enabling prefix lookup support.
-    LOOKUP(1017, 0, 1, PUBLIC),
+    // Version 2: Supports positioned bucket history lookups.
+    LOOKUP(1017, 0, 2, PUBLIC),
 
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
@@ -82,7 +83,8 @@ public enum ApiKeys {
     // Version 0: Uses lake's encoder for prefix key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for prefix key encoding when bucket key differs from
     //            primary key, ensuring encoded bucket key bytes are a prefix of primary key bytes.
-    PREFIX_LOOKUP(1034, 0, 1, PUBLIC),
+    // Version 2: Supports positioned bucket history lookups.
+    PREFIX_LOOKUP(1034, 0, 2, PUBLIC),
 
     GET_DATABASE_INFO(1035, 0, 0, PUBLIC),
     CREATE_PARTITION(1036, 0, 0, PUBLIC),
@@ -131,7 +133,8 @@ public enum ApiKeys {
     LIST_CONSUMER_GROUPS(1072, 0, 0, PUBLIC),
     DELETE_CONSUMER_GROUPS(1073, 0, 0, PUBLIC),
     CREATE_TABLE_FROM_LAKE(1074, 0, 0, PUBLIC),
-    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC);
+    DESCRIBE_CLUSTER(1075, 0, 0, PUBLIC),
+    GET_BUCKET_READ_RANGE(1076, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

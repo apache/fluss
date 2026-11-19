@@ -406,6 +406,70 @@ LookupResult prefixLookup = table.newLookup()
         .get();
 ```
 
+#### Lookup at a bucket log position
+
+Create a primary key table with `table.kv.mvcc.enabled = true` to read historical values.
+A lookup without a position reads the latest state visible when the request executes. Periodic
+KV snapshots are used for recovery. Ordinary lookup can see changes written since the last
+snapshot.
+
+Pass a `BucketReadPosition` on each historical lookup. Its identity includes the table ID,
+partition ID for a partitioned table, and bucket number. The lookup key must route to that
+bucket. At position `p`, the result reflects committed changes with log offsets strictly
+less than `p`.
+
+If the application checkpoints data from a log scanner, save the position after processing the
+corresponding records. Use `consumedUpToOffset` to account for poll rounds where a bucket advances
+without returning rows.
+
+```java
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.metadata.TableBucket;
+
+import java.time.Duration;
+
+ScanRecords polled = scanner.poll(Duration.ofSeconds(1));
+for (TableBucket bucket : polled.buckets()) {
+    process(polled.records(bucket)); // application code
+    Long nextOffset = polled.consumedUpToOffset(bucket);
+    if (nextOffset != null) {
+        checkpoint.save(bucket, nextOffset); // application checkpoint
+    }
+}
+```
+
+Restore the saved bucket and next offset together. The point and prefix queries below use
+keys that route to that bucket.
+
+```java
+import org.apache.fluss.metadata.BucketReadPosition;
+
+BucketReadPosition position = BucketReadPosition.of(savedBucket, savedNextOffset);
+Lookuper byKey = table.newLookup().createLookuper();
+LookupResult rowAtPosition = byKey.lookup(rowKey, position).get();
+
+Lookuper byPrefix = table.newLookup().lookupBy(prefixKeys).createLookuper();
+LookupResult rowsAtPosition = byPrefix.lookup(prefixRow, position).get();
+```
+
+Prefix lookup returns the matching rows in that bucket at the same position. Typed lookup
+supports the same overload. A position defines the state of a single bucket.
+
+To inspect the current window, call `admin.getBucketReadRange(bucket)`. Its
+`getEarliestPosition()` and `getLatestPosition()` endpoints can be passed directly to a lookup.
+For replay, use the saved position. A range is an observation and can change before the
+lookup starts. Query the range of a newly created bucket after it appears in the coordinator's
+serving metadata.
+
+An absent key or prefix match at a valid position returns an empty result.
+`LookupPositionExpiredException.getEarliestPosition()` reports the observed floor.
+`LookupPositionNotYetReadableException.getLatestPosition()` reports the observed committed and
+applied end. The caller decides if and when to retry. A table created without MVCC rejects
+positioned reads with `TableNotVersionedException`. After partition deletion takes effect on
+the serving replica, the old position is unavailable, including when a partition with the
+same name is created. See [KV history retention](../../table-design/data-distribution/ttl.md#kv-history-retention)
+for retention and upgrade rules.
+
 ### Multi-Table Scanner and Writer
 `MultiTable`, obtained from `connection.getMultiTable()`, lets a single scanner or writer work across many tables without creating a `Table` instance for each one.
 Like `Table`, a `MultiTable` instance is lightweight but not thread-safe.

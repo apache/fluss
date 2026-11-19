@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.metadata.BucketReadPosition;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -117,6 +118,21 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow lookupKey) {
+        return lookupKey(lookupKey, null);
+    }
+
+    @Override
+    public CompletableFuture<LookupResult> lookup(
+            InternalRow lookupKey, BucketReadPosition position) {
+        if (insertIfNotExists) {
+            return completedExceptionally(
+                    new IllegalArgumentException("Positioned lookups cannot insert missing keys."));
+        }
+        return lookupKey(lookupKey, java.util.Objects.requireNonNull(position));
+    }
+
+    private CompletableFuture<LookupResult> lookupKey(
+            InternalRow lookupKey, @Nullable BucketReadPosition position) {
         // encoding the key row using a compacted way consisted with how the key is encoded when put
         // a row
         byte[] pkBytes = primaryKeyEncoder.encodeKey(lookupKey);
@@ -129,7 +145,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         int bucketCount = numBuckets;
         if (partitionGetter != null) {
             originalPartitionName = partitionGetter.getPartition(lookupKey);
-            if (confirmedHistoricalPartitions.contains(originalPartitionName)) {
+            if (position == null && confirmedHistoricalPartitions.contains(originalPartitionName)) {
                 return historicalLookup(bkBytes, pkBytes, originalPartitionName);
             }
             try {
@@ -137,6 +153,9 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                 partitionId = routing.getPartitionId();
                 bucketCount = routing.getBucketCount();
             } catch (PartitionNotExistException e) {
+                if (position != null) {
+                    return completedExceptionally(e);
+                }
                 return mayFallbackToHistoricalLookup(bkBytes, pkBytes, originalPartitionName);
             } catch (InvalidBucketRoutingException e) {
                 return completedExceptionally(e);
@@ -145,6 +164,32 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
         int bucketId = bucketingFunction.bucketing(bkBytes, bucketCount);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+        if (position != null) {
+            if (!position.getTableBucket().equals(tableBucket)) {
+                return completedExceptionally(
+                        new IllegalArgumentException("The position belongs to another bucket."));
+            }
+            CompletableFuture<LookupResult> result = new CompletableFuture<>();
+            lookupClient
+                    .lookup(
+                            tableInfo.getTablePath(),
+                            tableBucket,
+                            pkBytes,
+                            false,
+                            null,
+                            bucketCount,
+                            position.getNextOffset())
+                    .whenComplete(
+                            (value, error) -> {
+                                if (error != null) {
+                                    result.completeExceptionally(error);
+                                } else {
+                                    handleLookupResponse(
+                                            java.util.Collections.singletonList(value), result);
+                                }
+                            });
+            return result;
+        }
         return lookupBucket(
                 tableBucket,
                 bkBytes,

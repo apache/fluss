@@ -2125,6 +2125,22 @@ public class ConfigOptions {
                                     + "Disabled if not configured, including for tables created before this option was introduced. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
 
+    /** Selects a versioned KV storage format when a primary-key table is created. */
+    public static final ConfigOption<Boolean> TABLE_KV_MVCC_ENABLED =
+            key("table.kv.mvcc.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to retain bucket-offset history for this primary-key table.");
+
+    /** Retention of historical bucket positions, measured from WAL append time. */
+    public static final ConfigOption<Duration> TABLE_KV_MVCC_TTL =
+            key("table.kv.mvcc.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The retention window for bucket-offset history on MVCC tables.");
+
     public static final ConfigOption<Duration> TABLE_KV_TTL =
             key("table.kv.ttl")
                     .durationType()

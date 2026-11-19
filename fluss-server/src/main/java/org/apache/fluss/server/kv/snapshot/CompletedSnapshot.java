@@ -73,6 +73,8 @@ public class CompletedSnapshot {
     /** The next log offset when the snapshot is triggered. */
     private final long logOffset;
 
+    private final long historyFloor;
+
     /**
      * The row count of the snapshot, null for legacy tables that doesn't support row count
      * statistics.
@@ -101,6 +103,28 @@ public class CompletedSnapshot {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                kvSnapshotHandle,
+                logOffset,
+                rowCount,
+                autoIncIDRanges,
+                0);
+    }
+
+    /** Constructs a completed snapshot with the published history floor. */
+    public CompletedSnapshot(
+            TableBucket tableBucket,
+            long snapshotID,
+            FsPath snapshotLocation,
+            KvSnapshotHandle kvSnapshotHandle,
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges,
+            long historyFloor) {
+        this.historyFloor = historyFloor;
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
         this.snapshotLocation = snapshotLocation;
@@ -133,6 +157,11 @@ public class CompletedSnapshot {
 
     public long getLogOffset() {
         return logOffset;
+    }
+
+    /** Returns the history floor selected when this snapshot was published. */
+    public long getHistoryFloor() {
+        return historyFloor;
     }
 
     @Nullable

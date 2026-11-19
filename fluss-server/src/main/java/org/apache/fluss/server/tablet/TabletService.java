@@ -28,7 +28,9 @@ import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -55,6 +57,8 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -83,6 +87,7 @@ import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -488,6 +493,14 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+        if (request.hasNextOffset()) {
+            validatePositionedLookup(request.getNextOffset());
+            if ((request.hasInsertIfNotExists() && request.isInsertIfNotExists())
+                    || hasHistoricalLookup(request)) {
+                throw new InvalidRequestException(
+                        "A positioned lookup must be a read of an active bucket.");
+            }
+        }
         long tableId = request.getTableId();
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
@@ -552,6 +565,7 @@ public final class TabletService extends RpcServiceBase
                 replicaManager.lookups(
                         interesting,
                         currentSession().getApiVersion(),
+                        request.hasNextOffset() ? request.getNextOffset() : null,
                         value -> response.complete(makeLookupResponse(value, errorResponseMap)));
             }
         }
@@ -560,6 +574,9 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        if (request.hasNextOffset()) {
+            validatePositionedLookup(request.getNextOffset());
+        }
         long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
@@ -583,10 +600,43 @@ public final class TabletService extends RpcServiceBase
 
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
-                prefixLookupData,
+                interesting,
                 currentSession().getApiVersion(),
+                request.hasNextOffset() ? request.getNextOffset() : null,
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
+            GetBucketReadRangeRequest request) {
+        PbTableBucket pb = request.getBucket();
+        authorizeTable(READ, pb.getTableId());
+        TableBucket bucket =
+                new TableBucket(
+                        pb.getTableId(),
+                        pb.hasPartitionId() ? pb.getPartitionId() : null,
+                        pb.getBucketId());
+        try {
+            BucketReadRange range =
+                    replicaManager.getReplicaOrException(bucket).getBucketReadRange();
+            return CompletableFuture.completedFuture(
+                    new GetBucketReadRangeResponse()
+                            .setEarliestNextOffset(range.getEarliestPosition().getNextOffset())
+                            .setLatestNextOffset(range.getLatestPosition().getNextOffset()));
+        } catch (java.io.IOException e) {
+            throw new org.apache.fluss.exception.KvStorageException(
+                    "Unable to read history bounds.", e);
+        }
+    }
+
+    private void validatePositionedLookup(long nextOffset) {
+        if (currentSession().getApiVersion() < 2) {
+            throw new UnsupportedVersionException("Positioned lookups require API version 2.");
+        }
+        if (nextOffset < 0) {
+            throw new InvalidRequestException("A bucket next offset cannot be negative.");
+        }
     }
 
     @Override

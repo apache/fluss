@@ -32,6 +32,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -394,6 +396,14 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (version < 2
+                && ((apiKey == ApiKeys.LOOKUP && ((LookupRequest) rawRequest).hasNextOffset())
+                        || (apiKey == ApiKeys.PREFIX_LOOKUP
+                                && ((PrefixLookupRequest) rawRequest).hasNextOffset()))) {
+            throw new UnsupportedVersionException(
+                    "Positioned lookups require version 2 of " + apiKey + '.');
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

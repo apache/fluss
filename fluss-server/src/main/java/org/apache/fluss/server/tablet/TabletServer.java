@@ -411,7 +411,8 @@ public class TabletServer extends ServerBase {
                         Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
                         startTime,
                         tabletServerResource,
-                        resolveSoftwareVersion());
+                        resolveSoftwareVersion(),
+                        conf.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis() > 0);
 
         while (true) {
             try {

@@ -31,9 +31,11 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -316,6 +318,40 @@ class CoordinatorContextTest {
                 new LeaderAndIsr(
                         99, 1, Collections.singletonList(99), Collections.emptyList(), 0, 1));
         assertThat(context.isLeaderActive(tb)).isFalse();
+    }
+
+    @Test
+    void testOnlyCapableReplicasCanServeVersionedKv() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TablePath path = TablePath.of("db", "versioned");
+        TableDescriptor versioned =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_KV_MVCC_ENABLED, true)
+                        .build();
+        context.putTableInfo(TableInfo.of(path, 1L, 1, versioned, DEFAULT_REMOTE_DATA_DIR, 0L, 0L));
+        context.addLiveTabletServer(createTabletServer(0));
+        context.addLiveTabletServer(
+                new TabletServerRegistration(
+                                null,
+                                Endpoint.fromListenersString("CLIENT://host1:9124"),
+                                0L,
+                                TabletServerResource.unknown(),
+                                null,
+                                true)
+                        .toServerInfo(1));
+
+        TableBucket bucket = new TableBucket(1L, 0);
+        assertThat(context.supportsReplicaStorage(2, bucket)).isFalse();
+        assertThat(context.supportsReplicaStorage(2, new TableBucket(2L, 0))).isTrue();
+        assertThat(context.isReplicaOnline(0, bucket)).isFalse();
+        assertThat(context.isReplicaOnline(1, bucket)).isTrue();
+        assertThat(context.isReplicaOnline(0, new TableBucket(2L, 0))).isTrue();
     }
 
     private PartitionInfo createPartitionInfo(long partitionId, String partitionName) {

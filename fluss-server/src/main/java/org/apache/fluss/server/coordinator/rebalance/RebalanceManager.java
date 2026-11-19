@@ -69,7 +69,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
-import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ScheduledFuture;
@@ -1014,7 +1013,10 @@ public class RebalanceManager implements ServerReconfigurable {
                         replica, id -> new ServerModel(id, RackModel.DEFAULT_RACK, true));
             }
         }
-        ClusterModel clusterModel = initialClusterModel(serverModelMap);
+        ClusterModel clusterModel =
+                new ClusterModel(
+                        new TreeSet<>(serverModelMap.values()),
+                        coordinatorContext::supportsReplicaStorage);
 
         // Try to update the cluster model with the latest bucket states.
         for (TableBucket tableBucket : allBuckets) {
@@ -1089,11 +1091,6 @@ public class RebalanceManager implements ServerReconfigurable {
 
     private boolean isOfflineTagged(ServerTag serverTag) {
         return serverTag == ServerTag.PERMANENT_OFFLINE || serverTag == ServerTag.TEMPORARY_OFFLINE;
-    }
-
-    private ClusterModel initialClusterModel(Map<Integer, ServerModel> serverModelMap) {
-        SortedSet<ServerModel> servers = new TreeSet<>(serverModelMap.values());
-        return new ClusterModel(servers);
     }
 
     private void enqueueTimeoutCheckSafely() {

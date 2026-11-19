@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
@@ -173,6 +175,12 @@ class RpcServiceBaseTest {
         @Override
         public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
             return CompletableFuture.completedFuture(new MetadataResponse());
+        }
+
+        @Override
+        public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
+                GetBucketReadRangeRequest request) {
+            throw new UnsupportedOperationException();
         }
 
         @Override

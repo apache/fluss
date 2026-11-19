@@ -34,8 +34,10 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
@@ -112,6 +114,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
@@ -610,18 +614,26 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
         long newKvLeaderReplicaCount = getNewKvLeaderReplicaCount(tableDescriptor);
 
+        boolean versionedKv =
+                Configuration.fromMap(tableDescriptor.getProperties())
+                        .get(ConfigOptions.TABLE_KV_MVCC_ENABLED);
+
         // first, generate the assignment
         TableAssignment tableAssignment = null;
         // only when it's no partitioned table do we generate the assignment for it
         if (!tableDescriptor.isPartitioned()) {
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
-            TabletServerInfo[] servers = metadataCache.getLiveServers();
+            TabletServerInfo[] servers = metadataCache.getLiveServers(versionedKv);
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
         if (ignoreIfExists && metadataManager.tableExists(tablePath)) {
             return;
+        }
+
+        if (versionedKv) {
+            ensureVersionedKvSupported();
         }
 
         replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
@@ -1099,6 +1111,24 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return newDescriptor;
     }
 
+    private void ensureVersionedKvSupported() {
+        try {
+            int[] servers = zkClient.getSortedTabletServerList();
+            Map<Integer, org.apache.fluss.server.zk.data.TabletServerRegistration> registrations =
+                    zkClient.getTabletServers(servers);
+            if (servers.length == 0
+                    || registrations.size() != servers.length
+                    || registrations.values().stream().anyMatch(r -> !r.supportsVersionedKv())) {
+                throw new InvalidTableException(
+                        "All TabletServers must support versioned KV and enable periodic snapshots.");
+            }
+        } catch (InvalidTableException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new InvalidTableException("Unable to verify versioned KV support.", e);
+        }
+    }
+
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
         String dataLakeEnabledValue =
                 tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
@@ -1156,7 +1186,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // third, generate the PartitionAssignment.
         int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
-        TabletServerInfo[] servers = metadataCache.getLiveServers();
+        TabletServerInfo[] servers =
+                metadataCache.getLiveServers(tableInfo.getTableConfig().isMvccEnabled());
         Map<Integer, BucketAssignment> bucketAssignments =
                 generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
                         .getBucketAssignments();
@@ -1953,6 +1984,58 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
                                 response));
         return response;
+    }
+
+    @Override
+    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
+            GetBucketReadRangeRequest request) {
+        PbTableBucket pb = request.getBucket();
+        authorizeTable(OperationType.READ, pb.getTableId());
+        TableBucket bucket =
+                new TableBucket(
+                        pb.getTableId(),
+                        pb.hasPartitionId() ? pb.getPartitionId() : null,
+                        pb.getBucketId());
+        AccessContextEvent<GetBucketReadRangeResponse> event =
+                new AccessContextEvent<>(ctx -> getBucketReadRangeLeader(ctx, bucket));
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture();
+    }
+
+    private static GetBucketReadRangeResponse getBucketReadRangeLeader(
+            CoordinatorContext ctx, TableBucket bucket) {
+        long tableId = bucket.getTableId();
+        TableInfo table = ctx.getTableInfoById(tableId);
+        if (table == null || ctx.isTableQueuedForDeletion(tableId)) {
+            throw new TableNotExistException("Table " + tableId + " is unavailable.");
+        }
+        Long partitionId = bucket.getPartitionId();
+        if (table.isPartitioned() != (partitionId != null)) {
+            throw new InvalidRequestException("Invalid partition identity for " + bucket + '.');
+        }
+
+        int bucketCount = table.getNumBuckets();
+        if (partitionId != null) {
+            TablePartition partition = new TablePartition(tableId, partitionId);
+            Integer registeredBucketCount = ctx.getPartitionBucketCount(partition);
+            if (registeredBucketCount == null || ctx.isPartitionQueuedForDeletion(partition)) {
+                throw new PartitionNotExistException(
+                        "Partition is unavailable for " + bucket + '.');
+            }
+            bucketCount = registeredBucketCount;
+        }
+        int bucketId = bucket.getBucket();
+        if (bucketId < 0 || bucketId >= bucketCount) {
+            throw new InvalidRequestException("Invalid bucket number for " + bucket + '.');
+        }
+
+        return ctx.getBucketLeaderAndIsr(bucket)
+                .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
+                .map(current -> new GetBucketReadRangeResponse().setLeaderId(current.leader()))
+                .orElseThrow(
+                        () ->
+                                new LeaderNotAvailableException(
+                                        "No active leader for " + bucket + '.'));
     }
 
     @Override

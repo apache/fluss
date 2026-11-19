@@ -34,6 +34,7 @@ import java.util.List;
 public class LookupResultForBucket extends ResultForBucket {
 
     private final List<ByteArraySlice> values;
+    private final @Nullable Long positionBound;
 
     /** Identifies the original partition for historical lookup; null for normal lookup. */
     private final @Nullable String originalPartitionName;
@@ -45,7 +46,13 @@ public class LookupResultForBucket extends ResultForBucket {
 
     /** Creates a failed lookup result. */
     public LookupResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, error);
+        this(tableBucket, error, null);
+    }
+
+    /** Creates a failed lookup result with the readable bound, if applicable. */
+    public LookupResultForBucket(
+            TableBucket tableBucket, ApiError error, @Nullable Long positionBound) {
+        this(tableBucket, null, null, error, positionBound);
     }
 
     /** Creates a successful historical lookup result. */
@@ -65,9 +72,24 @@ public class LookupResultForBucket extends ResultForBucket {
             List<ByteArraySlice> values,
             @Nullable String originalPartitionName,
             ApiError error) {
+        this(tableBucket, values, originalPartitionName, error, null);
+    }
+
+    private LookupResultForBucket(
+            TableBucket tableBucket,
+            List<ByteArraySlice> values,
+            @Nullable String originalPartitionName,
+            ApiError error,
+            @Nullable Long positionBound) {
         super(tableBucket, error);
         this.values = values;
+        this.positionBound = positionBound;
         this.originalPartitionName = originalPartitionName;
+    }
+
+    /** Returns the numeric bound for a rejected read position. */
+    public @Nullable Long positionBound() {
+        return positionBound;
     }
 
     /** Returns the RPC-ready lookup values. */

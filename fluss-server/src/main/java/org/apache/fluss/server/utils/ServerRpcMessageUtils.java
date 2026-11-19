@@ -1724,6 +1724,9 @@ public class ServerRpcMessageUtils {
             if (bucketResult.failed()) {
                 lookupRespForBucket.setError(
                         bucketResult.getErrorCode(), bucketResult.getErrorMessage());
+                if (bucketResult.positionBound() != null) {
+                    lookupRespForBucket.setPositionBound(bucketResult.positionBound());
+                }
             } else {
                 List<ByteArraySlice> values = bucketResult.lookupValues();
                 for (ByteArraySlice value : values) {
@@ -1759,6 +1762,9 @@ public class ServerRpcMessageUtils {
             PrefixLookupResultForBucket bucketResult = entry.getValue();
             if (bucketResult.failed()) {
                 respForBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
+                if (bucketResult.positionBound() != null) {
+                    respForBucket.setPositionBound(bucketResult.positionBound());
+                }
             } else {
                 List<PbValueList> keyResultList = new ArrayList<>();
                 for (List<ByteArraySlice> res : bucketResult.prefixLookupValues()) {

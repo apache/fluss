@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.rocksdb.RocksDBHandle;
+import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.FileUtils;
@@ -28,6 +29,7 @@ import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.DBOptions;
 import io.github.fluss_contrib.rocksdb.NativeLibraryLoader;
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.slf4j.Logger;
@@ -35,6 +37,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -60,6 +64,8 @@ public class RocksDBKvBuilder {
 
     /** Path where this configured instance stores its RocksDB database. */
     private final File instanceRocksDBPath;
+
+    private boolean versionHistory;
 
     /**
      * L0 file count at which Fluss starts emitting proactive piggyback backpressure. Default {@link
@@ -116,8 +122,15 @@ public class RocksDBKvBuilder {
         return this;
     }
 
+    /** Opens the row column family with persisted unsigned timestamps and a metadata family. */
+    public RocksDBKvBuilder enableVersionHistory() {
+        this.versionHistory = true;
+        return this;
+    }
+
     public RocksDBKv build() throws KvBuildingException {
         ColumnFamilyHandle defaultColumnFamilyHandle = null;
+        List<ColumnFamilyHandle> versionedHandles = new ArrayList<>();
         RocksDB db = null;
         ResourceGuard rocksDBResourceGuard = new ResourceGuard();
         RocksDBHandle rocksDBHandle = null;
@@ -125,16 +138,40 @@ public class RocksDBKvBuilder {
         try {
             ensureRocksDBIsLoaded(System.getProperty("java.io.tmpdir"));
             prepareDirectories();
-            rocksDBHandle =
-                    new RocksDBHandle(
-                            instanceRocksDBPath,
-                            optionsContainer.getDbOptions(),
-                            columnFamilyOptions);
-            rocksDBHandle.openDB();
-            db = rocksDBHandle.getDb();
-            defaultColumnFamilyHandle = rocksDBHandle.getDefaultColumnFamilyHandle();
+            if (versionHistory) {
+                // Share the configured table factory and cache. Only the row comparator changes.
+                ColumnFamilyOptions metadataOptions = new ColumnFamilyOptions(columnFamilyOptions);
+                optionsContainer.registerCloseableResource(metadataOptions);
+                DBOptions dbOptions =
+                        optionsContainer
+                                .getDbOptions()
+                                .setCreateMissingColumnFamilies(true)
+                                .setAtomicFlush(true);
+                db =
+                        RocksDBOperationUtils.openDB(
+                                instanceRocksDBPath.getAbsolutePath(),
+                                RocksDBOperationUtils.versionedColumnFamilies(
+                                        columnFamilyOptions, metadataOptions),
+                                versionedHandles,
+                                dbOptions,
+                                false);
+                defaultColumnFamilyHandle = versionedHandles.get(0);
+            } else {
+                rocksDBHandle =
+                        new RocksDBHandle(
+                                instanceRocksDBPath,
+                                optionsContainer.getDbOptions(),
+                                columnFamilyOptions);
+                rocksDBHandle.openDB();
+                db = rocksDBHandle.getDb();
+                defaultColumnFamilyHandle = rocksDBHandle.getDefaultColumnFamilyHandle();
+            }
         } catch (Throwable t) {
-            IOUtils.closeQuietly(defaultColumnFamilyHandle);
+            if (versionHistory) {
+                versionedHandles.forEach(IOUtils::closeQuietly);
+            } else {
+                IOUtils.closeQuietly(defaultColumnFamilyHandle);
+            }
             IOUtils.closeQuietly(db);
             IOUtils.closeQuietly(rocksDBHandle);
             IOUtils.closeQuietly(columnFamilyOptions);
@@ -152,6 +189,7 @@ public class RocksDBKvBuilder {
                 db,
                 rocksDBResourceGuard,
                 defaultColumnFamilyHandle,
+                versionHistory ? versionedHandles.get(1) : null,
                 optionsContainer.getStatistics(),
                 columnFamilyOptions.level0SlowdownWritesTrigger(),
                 columnFamilyOptions.level0StopWritesTrigger(),

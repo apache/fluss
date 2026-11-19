@@ -22,10 +22,16 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.LookupPositionExpiredException;
+import org.apache.fluss.exception.LookupPositionNotYetReadableException;
 import org.apache.fluss.exception.StorageBackpressureException;
+import org.apache.fluss.exception.TableNotVersionedException;
 import org.apache.fluss.memory.MemorySegmentPool;
+import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -52,6 +58,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
+import org.apache.fluss.server.kv.rocksdb.RocksDBWriteBatchWrapper;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -95,13 +102,17 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -181,6 +192,20 @@ public final class KvTablet {
     private volatile long flushedLogOffset = 0;
 
     @GuardedBy("kvLock")
+    private long publishedHistoryFloor;
+
+    @GuardedBy("kvLock")
+    private long stagedHistoryFloor;
+
+    @GuardedBy("kvLock")
+    private long cleanedHistoryFloor;
+
+    // Tracks WAL batches even when they contribute no row mutations.
+    @GuardedBy("kvLock")
+    @Nullable
+    private final NavigableMap<Long, Long> pendingVersionedBatchTimestamps;
+
+    @GuardedBy("kvLock")
     private FlushState flushState = FlushState.IDLE;
 
     @GuardedBy("kvLock")
@@ -239,6 +264,8 @@ public final class KvTablet {
         this.logTablet = logTablet;
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
+        this.pendingVersionedBatchTimestamps =
+                rocksDBKv.hasVersionHistory() ? new TreeMap<>() : null;
         this.writeBatchSize = writeBatchSize;
         this.serverMetricGroup = serverMetricGroup;
         this.kvFlushScheduler = kvFlushScheduler;
@@ -499,7 +526,8 @@ public final class KvTablet {
                         sharedWriteBufferManager,
                         statisticsRegistry,
                         tableBucket.getTableId(),
-                        compactionFilterFactory);
+                        compactionFilterFactory,
+                        tableConfig.isMvccEnabled() && !historicalPartition);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
         // Pass ResourceGuard to ensure thread-safe access during concurrent close operations
@@ -598,7 +626,8 @@ public final class KvTablet {
             long tableId,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
-                            compactionFilterFactory)
+                            compactionFilterFactory,
+            boolean versionHistory)
             throws IOException {
         @Nullable RocksDBResourceContainer rocksDBResourceContainer = null;
         boolean resourcesOwnedByBuilder = false;
@@ -622,7 +651,12 @@ public final class KvTablet {
                             .setFlussL0SlowdownTrigger(
                                     configuration.get(
                                             ConfigOptions.KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER));
-            if (compactionFilterFactory != null) {
+            if (versionHistory) {
+                checkArgument(
+                        compactionFilterFactory == null,
+                        "Versioned KV cannot use row compaction filters.");
+                rocksDBKvBuilder.enableVersionHistory();
+            } else if (compactionFilterFactory != null) {
                 rocksDBKvBuilder.setCompactionFilterFactory(compactionFilterFactory);
             }
             resourcesOwnedByBuilder = true;
@@ -733,6 +767,77 @@ public final class KvTablet {
                 flushedLogOffset,
                 rowCount == ROW_COUNT_DISABLED ? null : rowCount,
                 autoIncrementManager.getCurrentIDRanges());
+    }
+
+    /** Scans retained batch timestamps, then captures the candidate under the checkpoint lock. */
+    public Supplier<TabletState> prepareVersionedSnapshot(LongSupplier expirationCutoff) {
+        long cutoff = expirationCutoff.getAsLong();
+        long floor = getPublishedHistoryFloor();
+        long readableEnd = Math.min(logTablet.getHighWatermark(), flushedLogOffset);
+        final long candidate;
+        // The iterator pins the native view. A lease protects it if leadership changes mid-scan.
+        try (ResourceGuard.Lease ignored = rocksDBKv.getResourceGuard().acquireResource()) {
+            candidate = rocksDBKv.selectHistoryFloor(floor, readableEnd, cutoff);
+        } catch (IOException e) {
+            throw new FlussRuntimeException("Unable to scan the retained KV history.", e);
+        }
+        return () -> {
+            long currentEnd = Math.min(logTablet.getHighWatermark(), flushedLogOffset);
+            long eligibleFloor =
+                    expirationCutoff.getAsLong() >= cutoff && candidate <= currentEnd
+                            ? Math.max(candidate, publishedHistoryFloor)
+                            : publishedHistoryFloor;
+            return captureVersionedSnapshot(eligibleFloor);
+        };
+    }
+
+    @GuardedBy("kvLock")
+    private TabletState captureVersionedSnapshot(long candidate) {
+        reclaimExpiredHistory();
+        try {
+            if (candidate != stagedHistoryFloor) {
+                rocksDBKv.stageCheckpointHistoryFloor(candidate);
+                stagedHistoryFloor = candidate;
+            }
+            return new TabletState(
+                    flushedLogOffset,
+                    rowCount == ROW_COUNT_DISABLED ? null : rowCount,
+                    autoIncrementManager.getCurrentIDRanges(),
+                    candidate);
+        } catch (IOException e) {
+            throw new FlussRuntimeException("Unable to prepare a versioned KV checkpoint.", e);
+        }
+    }
+
+    /** Returns the floor currently enforced by this tablet. */
+    public long getPublishedHistoryFloor() {
+        return inReadLock(kvLock, () -> publishedHistoryFloor);
+    }
+
+    /** Makes the checkpoint's floor visible after the snapshot has been published. */
+    public void publishHistoryFloor(long floor) {
+        inWriteLock(
+                kvLock,
+                () -> {
+                    if (isClosed || floor <= publishedHistoryFloor) {
+                        return;
+                    }
+                    publishedHistoryFloor = floor;
+                    reclaimExpiredHistory();
+                });
+    }
+
+    @GuardedBy("kvLock")
+    private void reclaimExpiredHistory() {
+        if (cleanedHistoryFloor >= publishedHistoryFloor) {
+            return;
+        }
+        try {
+            rocksDBKv.applyPublishedHistoryFloor(publishedHistoryFloor);
+            cleanedHistoryFloor = publishedHistoryFloor;
+        } catch (IOException e) {
+            LOG.warn("Unable to reclaim expired history for bucket {}", tableBucket, e);
+        }
     }
 
     /**
@@ -869,7 +974,7 @@ public final class KvTablet {
                                     historicalValueLookup);
                     if (!appendInfo.duplicated()) {
                         // KvWriteProcessor appends one WAL batch for each accepted KV batch.
-                        kvPreWriteBuffer.markWalBatchEnd(appendInfo.lastOffset() + 1);
+                        markWalBatchEnd(appendInfo.lastOffset() + 1, appendInfo.maxTimestamp());
                     }
                     return appendInfo;
                 });
@@ -986,8 +1091,8 @@ public final class KvTablet {
         if (preparedFlush == null) {
             return;
         }
-        if (!preparedFlush.isEmpty()) {
-            writePreparedFlush(preparedFlush);
+        if (!preparedFlush.isEmpty() || rocksDBKv.hasVersionHistory()) {
+            writePreparedFlush(preparedFlush, true);
         } else {
             // The empty flush already advanced flushedLogOffset in prepare; completing it here
             // only resets the retry backoff.
@@ -1032,7 +1137,7 @@ public final class KvTablet {
             kvFlushScheduler.retryLater(this);
             return null;
         }
-        if (preparedFlush.isEmpty()) {
+        if (preparedFlush.isEmpty() && !rocksDBKv.hasVersionHistory()) {
             flushedLogOffset = targetOffset;
         }
         return preparedFlush;
@@ -1047,14 +1152,34 @@ public final class KvTablet {
      * segment is rejected by the no-slowdown gate.
      */
     @GuardedBy("kvLock")
-    private void writePreparedFlush(PreparedFlush preparedFlush) throws Exception {
+    private void writePreparedFlush(PreparedFlush preparedFlush, boolean noSlowdown)
+            throws Exception {
         List<PreparedFlush> segments =
                 preparedFlush.split(writeBatchSize, TARGET_ENTRIES_PER_NATIVE_WRITE);
         int nextSegment = 0;
         try (ResourceGuard.Lease lease = rocksDBKv.getResourceGuard().acquireResource();
-                KvBatchWriter kvBatchWriter = createNoSlowdownKvBatchWriter()) {
+                RocksDBWriteBatchWrapper kvBatchWriter =
+                        rocksDBKv.newAtomicWriteBatch(
+                                writeBatchSize,
+                                serverMetricGroup.kvFlushCount(),
+                                serverMetricGroup.kvFlushLatencyHistogram(),
+                                noSlowdown)) {
             while (nextSegment < segments.size()) {
                 PreparedFlush segment = segments.get(nextSegment);
+                if (rocksDBKv.hasVersionHistory()) {
+                    if (beforeNativeWrite != null) {
+                        beforeNativeWrite.run();
+                    }
+                    NavigableMap<Long, Long> batchTimestamps =
+                            checkNotNull(pendingVersionedBatchTimestamps)
+                                    .headMap(segment.exclusiveUpToLogSequenceNumber(), true);
+                    rocksDBKv.writeVersionedSegment(
+                            kvBatchWriter, flushedLogOffset, segment, batchTimestamps);
+                    batchTimestamps.clear();
+                    completeFlushedSegment(segment);
+                    nextSegment++;
+                    continue;
+                }
                 for (KvPreWriteBuffer.KvEntry entry : segment.entries()) {
                     KvPreWriteBuffer.Value value = entry.getValue();
                     if (value.get() == null) {
@@ -1202,6 +1327,42 @@ public final class KvTablet {
         }
     }
 
+    /** Reports whether this tablet uses timestamped row storage. */
+    boolean hasVersionHistory() {
+        return rocksDBKv.hasVersionHistory();
+    }
+
+    // The recovered tablet has not started serving when these methods are called.
+    void initializeVersionedReplay(long recoveryOffset) throws IOException {
+        if (rocksDBKv.readVersionedAppliedEnd() != recoveryOffset) {
+            throw new IOException(
+                    "Versioned KV checkpoint progress does not match its WAL offset.");
+        }
+        long recoveredFloor = rocksDBKv.readCheckpointHistoryFloor();
+        if (recoveredFloor < 0
+                || recoveredFloor > recoveryOffset
+                || rocksDBKv.readHistoryFloor() > recoveredFloor) {
+            throw new IOException("Invalid history floor in the recovery checkpoint.");
+        }
+        publishedHistoryFloor = recoveredFloor;
+        stagedHistoryFloor = recoveredFloor;
+        reclaimExpiredHistory();
+        setFlushedLogOffset(recoveryOffset);
+    }
+
+    @GuardedBy("kvLock")
+    void markWalBatchEnd(long exclusiveEnd, long appendTimestamp) {
+        kvPreWriteBuffer.markWalBatchEnd(exclusiveEnd);
+        if (pendingVersionedBatchTimestamps != null) {
+            pendingVersionedBatchTimestamps.put(exclusiveEnd, appendTimestamp);
+        }
+    }
+
+    void flushRecoveredVersionedBatch(long exclusiveEnd) throws Exception {
+        // Recovery has no online retry scheduler. Wait for RocksDB to make space.
+        writePreparedFlush(kvPreWriteBuffer.prepareFlush(exclusiveEnd), false);
+    }
+
     /** put key,value,logOffset into pre-write buffer directly. */
     void putToPreWriteBuffer(
             ChangeType changeType, byte[] key, @Nullable byte[] value, long logOffset) {
@@ -1304,6 +1465,73 @@ public final class KvTablet {
                 });
     }
 
+    /** Reads all supplied keys at the same exclusive bucket log position. */
+    public List<ByteArraySlice> multiGetAt(List<byte[]> keys, long nextOffset) throws IOException {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    validateVersionedPosition(nextOffset);
+                    return toValueBodySlices(rocksDBKv.multiGetAt(keys, nextOffset));
+                });
+    }
+
+    /** Returns the entire prefix match at one exclusive bucket log position. */
+    public List<ByteArraySlice> prefixLookupAt(byte[] prefixKey, long nextOffset)
+            throws IOException {
+        try (RocksDBKv.PrefixLookup lookup =
+                inReadLock(
+                        kvLock,
+                        () -> {
+                            validateVersionedPosition(nextOffset);
+                            return rocksDBKv.openPrefixLookupAt(prefixKey, nextOffset);
+                        })) {
+            return toValueBodySlices(lookup.readAll());
+        }
+    }
+
+    @GuardedBy("kvLock")
+    private void validateVersionedPosition(long nextOffset) throws IOException {
+        if (nextOffset < 0) {
+            throw new IllegalArgumentException("A bucket next offset cannot be negative.");
+        }
+        long readableEnd = requireReadableEnd();
+        if (nextOffset < publishedHistoryFloor) {
+            throw new LookupPositionExpiredException(
+                    BucketReadPosition.of(tableBucket, publishedHistoryFloor));
+        }
+        if (nextOffset > readableEnd) {
+            throw new LookupPositionNotYetReadableException(
+                    BucketReadPosition.of(tableBucket, readableEnd));
+        }
+    }
+
+    /** Observes the current history interval without pinning retained versions. */
+    public BucketReadRange getBucketReadRange() throws IOException {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    long readableEnd = requireReadableEnd();
+                    return new BucketReadRange(tableBucket, publishedHistoryFloor, readableEnd);
+                });
+    }
+
+    @GuardedBy("kvLock")
+    private long requireReadableEnd() throws IOException {
+        if (isClosed) {
+            throw new IOException("KV tablet is closing: " + tableBucket);
+        }
+        if (!rocksDBKv.hasVersionHistory()) {
+            throw new TableNotVersionedException(
+                    "Table was created without version history: " + getTablePath());
+        }
+        long readableEnd = Math.min(logTablet.getHighWatermark(), flushedLogOffset);
+        if (readableEnd < publishedHistoryFloor) {
+            throw new org.apache.fluss.exception.NotLeaderOrFollowerException(
+                    "The KV tablet is still recovering its retained history.");
+        }
+        return readableEnd;
+    }
+
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
         try (RocksDBKv.PrefixLookup lookup =
                 inReadLock(
@@ -1360,7 +1588,7 @@ public final class KvTablet {
                         // Capture under kvLock so the offset matches the data visible through
                         // the snapshot.
                         long capturedLogOffset = flushedLogOffset;
-                        readOptions = new ReadOptions().setSnapshot(snapshot);
+                        readOptions = rocksDBKv.newLatestReadOptions().setSnapshot(snapshot);
                         iterator =
                                 rocksDBKv
                                         .getDb()
@@ -1406,13 +1634,6 @@ public final class KvTablet {
 
     public KvBatchWriter createKvBatchWriter() {
         return rocksDBKv.newWriteBatch(
-                writeBatchSize,
-                serverMetricGroup.kvFlushCount(),
-                serverMetricGroup.kvFlushLatencyHistogram());
-    }
-
-    private KvBatchWriter createNoSlowdownKvBatchWriter() {
-        return rocksDBKv.newNoSlowdownWriteBatch(
                 writeBatchSize,
                 serverMetricGroup.kvFlushCount(),
                 serverMetricGroup.kvFlushLatencyHistogram());

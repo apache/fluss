@@ -138,6 +138,19 @@ public class TableDescriptorValidation {
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
+        if (tableConf.get(ConfigOptions.TABLE_KV_MVCC_ENABLED)) {
+            if (!hasPrimaryKey) {
+                throw new InvalidTableException("Version history requires a primary-key table.");
+            }
+            if (tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent()) {
+                throw new InvalidTableException("Version history cannot be combined with row TTL.");
+            }
+            Duration historyTtl = tableConf.get(ConfigOptions.TABLE_KV_MVCC_TTL);
+            if (historyTtl.toMillis() <= 0) {
+                throw new InvalidTableException(
+                        "The KV MVCC TTL must be at least one millisecond.");
+            }
+        }
         checkKvTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(tableConf);
         checkKvValueLayout(tableConf, hasPrimaryKey);

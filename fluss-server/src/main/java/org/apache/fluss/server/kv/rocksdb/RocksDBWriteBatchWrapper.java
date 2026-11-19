@@ -24,6 +24,7 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.utils.IOUtils;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.Status;
@@ -149,6 +150,33 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
             // aborted write attempt behind the caller's back.
             flushFailed = true;
             throw new IOException("Failed to remove key from RocksDB.", e);
+        }
+    }
+
+    /** Adds one versioned row mutation at the supplied RocksDB timestamp. */
+    void addVersion(ColumnFamilyHandle rows, byte[] key, byte[] timestamp, byte[] value)
+            throws IOException {
+        checkArgument(!autoFlush, "Versioned writes require explicit batch boundaries.");
+        try {
+            if (value == null) {
+                batch.delete(rows, key, timestamp);
+            } else {
+                batch.put(rows, key, timestamp, value);
+            }
+        } catch (RocksDBException e) {
+            flushFailed = true;
+            throw new IOException("Failed to stage a versioned KV mutation.", e);
+        }
+    }
+
+    /** Stages an unversioned metadata update in the same native batch as the row versions. */
+    void putMetadata(ColumnFamilyHandle metadata, byte[] key, byte[] value) throws IOException {
+        checkArgument(!autoFlush, "Versioned writes require explicit batch boundaries.");
+        try {
+            batch.put(metadata, key, value);
+        } catch (RocksDBException e) {
+            flushFailed = true;
+            throw new IOException("Failed to stage versioned KV progress.", e);
         }
     }
 

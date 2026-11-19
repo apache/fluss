@@ -40,6 +40,7 @@ import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -82,6 +83,7 @@ import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
@@ -108,6 +110,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
+import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
@@ -393,6 +396,51 @@ public class FlussAdmin implements Admin {
         AlterDatabaseRequest request =
                 makeAlterDatabaseRequest(databaseName, databaseChanges, ignoreIfNotExists);
         return gateway.alterDatabase(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<BucketReadRange> getBucketReadRange(TableBucket bucket) {
+        GetBucketReadRangeRequest request = new GetBucketReadRangeRequest();
+        PbTableBucket target = request.setBucket();
+        target.setTableId(bucket.getTableId()).setBucketId(bucket.getBucket());
+        if (bucket.getPartitionId() != null) {
+            target.setPartitionId(bucket.getPartitionId());
+        }
+        return gateway.getBucketReadRange(request)
+                .thenComposeAsync(
+                        location -> {
+                            if (!location.hasLeaderId()) {
+                                throw new LeaderNotAvailableException(
+                                        "The coordinator did not return a leader for " + bucket);
+                            }
+                            int leaderId = location.getLeaderId();
+                            TabletServerGateway leader =
+                                    metadataUpdater.newTabletServerClientForNode(leaderId);
+                            if (leader == null) {
+                                metadataUpdater.updateMetadata(null, null, null);
+                                leader = metadataUpdater.newTabletServerClientForNode(leaderId);
+                            }
+                            if (leader == null) {
+                                throw new LeaderNotAvailableException(
+                                        "The leader of "
+                                                + bucket
+                                                + " is not in the cluster metadata.");
+                            }
+                            return leader.getBucketReadRange(request);
+                        },
+                        refreshExecutor)
+                .thenApply(
+                        response -> {
+                            if (!response.hasEarliestNextOffset()
+                                    || !response.hasLatestNextOffset()) {
+                                throw new FlussRuntimeException(
+                                        "The leader did not return a bucket read range.");
+                            }
+                            return new BucketReadRange(
+                                    bucket,
+                                    response.getEarliestNextOffset(),
+                                    response.getLatestNextOffset());
+                        });
     }
 
     @Override

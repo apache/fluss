@@ -28,7 +28,6 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -139,22 +138,22 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
      */
     @Override
     public TabletServerInfo[] getLiveServers() {
-        Set<TabletServerInfo> aliveTabletServerInfosWithoutOfflineServerTag =
-                getAliveTabletServerInfos().stream()
+        return getLiveServers(false);
+    }
+
+    @Override
+    public TabletServerInfo[] getLiveServers(boolean versionedKv) {
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Set<TabletServerInfo> eligible =
+                snapshot.aliveTabletServers.values().stream()
                         .filter(
-                                info -> {
-                                    ServerTag tag = metadataSnapshot.serverTags.get(info.getId());
-                                    return tag != ServerTag.PERMANENT_OFFLINE;
-                                })
+                                info ->
+                                        snapshot.serverTags.get(info.id())
+                                                != ServerTag.PERMANENT_OFFLINE)
+                        .filter(info -> !versionedKv || info.supportsVersionedKv())
+                        .map(info -> new TabletServerInfo(info.id(), info.rack()))
                         .collect(Collectors.toSet());
-        TabletServerInfo[] server =
-                new TabletServerInfo[aliveTabletServerInfosWithoutOfflineServerTag.size()];
-        Iterator<TabletServerInfo> iterator =
-                aliveTabletServerInfosWithoutOfflineServerTag.iterator();
-        for (int i = 0; i < aliveTabletServerInfosWithoutOfflineServerTag.size(); i++) {
-            server[i] = iterator.next();
-        }
-        return server;
+        return eligible.toArray(new TabletServerInfo[0]);
     }
 
     public void updateMetadata(

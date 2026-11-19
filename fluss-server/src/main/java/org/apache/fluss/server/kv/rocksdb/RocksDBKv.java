@@ -24,6 +24,8 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.PreparedFlush;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
 
@@ -45,9 +47,12 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -86,6 +91,13 @@ public class RocksDBKv implements AutoCloseable {
      * RocksDB#getDefaultColumnFamily()}, probably it's a bug of RocksDB java API.
      */
     private final ColumnFamilyHandle defaultColumnFamilyHandle;
+
+    @Nullable private final ColumnFamilyHandle historyMetadata;
+    @Nullable private final Slice latestTimestamp;
+
+    private static final byte[] APPLIED_END_KEY = {0};
+    private static final byte[] CHECKPOINT_HISTORY_FLOOR_KEY = {2};
+    private static final byte BATCH_TIMING_PREFIX = 1;
 
     /** Our RocksDB database. Currently, one kv tablet, one RocksDB instance. */
     protected final RocksDB db;
@@ -134,6 +146,7 @@ public class RocksDBKv implements AutoCloseable {
             RocksDB db,
             ResourceGuard rocksDBResourceGuard,
             ColumnFamilyHandle defaultColumnFamilyHandle,
+            @Nullable ColumnFamilyHandle historyMetadata,
             @Nullable Statistics statistics,
             int level0SlowdownWritesTrigger,
             int level0StopWritesTrigger,
@@ -145,6 +158,8 @@ public class RocksDBKv implements AutoCloseable {
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.writeOptions = optionsContainer.getWriteOptions();
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
+        this.historyMetadata = historyMetadata;
+        this.latestTimestamp = historyMetadata == null ? null : new Slice(encodeTimestamp(-1));
         this.statistics = statistics;
         this.level0SlowdownWritesTrigger = level0SlowdownWritesTrigger;
         this.level0StopWritesTrigger = level0StopWritesTrigger;
@@ -186,18 +201,232 @@ public class RocksDBKv implements AutoCloseable {
      */
     public RocksDBWriteBatchWrapper newNoSlowdownWriteBatch(
             long writeBatchSize, Counter flushCount, Histogram flushLatencyHistogram) {
+        return newAtomicWriteBatch(writeBatchSize, flushCount, flushLatencyHistogram, true);
+    }
+
+    /** Creates an explicitly flushed writer for online flush or blocking offline recovery. */
+    public RocksDBWriteBatchWrapper newAtomicWriteBatch(
+            long writeBatchSize,
+            Counter flushCount,
+            Histogram flushLatencyHistogram,
+            boolean noSlowdown) {
         return new RocksDBWriteBatchWrapper(
                 db,
                 writeBatchSize,
                 flushCount,
                 flushLatencyHistogram,
-                true,
+                noSlowdown,
                 false,
                 this::recordWriteRejected);
     }
 
+    /** Returns whether this KV stores row versions. */
+    public boolean hasVersionHistory() {
+        return historyMetadata != null;
+    }
+
+    /** Creates options for the latest rows. Callers own the returned options. */
+    public ReadOptions newLatestReadOptions() {
+        ReadOptions options = new ReadOptions();
+        if (latestTimestamp != null) {
+            options.setTimestamp(latestTimestamp);
+        }
+        return options;
+    }
+
+    /**
+     * Writes a complete prepared segment and its exclusive applied end in one native batch. The
+     * caller serializes segment application and supplies the preceding exclusive offset.
+     */
+    public void writeVersionedSegment(
+            RocksDBWriteBatchWrapper writer,
+            long start,
+            PreparedFlush segment,
+            Map<Long, Long> batchAppendTimestamps)
+            throws IOException {
+        if (historyMetadata == null) {
+            throw new IllegalStateException("Version history is required.");
+        }
+        long end = segment.exclusiveUpToLogSequenceNumber();
+        if (start < 0 || end <= start || !batchAppendTimestamps.containsKey(end)) {
+            throw new IllegalArgumentException("Versioned flush must end at a complete WAL batch.");
+        }
+        for (KvEntry entry : segment.entries()) {
+            long offset = entry.getLogSequenceNumber();
+            if (offset < start || offset >= end) {
+                throw new IllegalArgumentException("A KV mutation is outside its flush interval.");
+            }
+            writer.addVersion(
+                    defaultColumnFamilyHandle,
+                    entry.getKey().get(),
+                    encodeTimestamp(offset + 1),
+                    entry.getValue().get());
+        }
+        for (Map.Entry<Long, Long> batch : batchAppendTimestamps.entrySet()) {
+            if (batch.getKey() <= start || batch.getKey() > end || batch.getValue() < 0) {
+                throw new IllegalArgumentException("Invalid WAL batch timing in versioned flush.");
+            }
+            writer.putMetadata(
+                    historyMetadata,
+                    batchTimingKey(batch.getKey()),
+                    encodeTimestamp(batch.getValue()));
+        }
+        writer.putMetadata(historyMetadata, APPLIED_END_KEY, encodeTimestamp(end));
+        writer.flush();
+    }
+
+    /** Reads the exclusive applied end stored with the row versions, or zero for an empty DB. */
+    public long readVersionedAppliedEnd() throws IOException {
+        if (historyMetadata == null) {
+            throw new IllegalStateException("Version history is required.");
+        }
+        try {
+            byte[] value = db.get(historyMetadata, APPLIED_END_KEY);
+            if (value == null) {
+                return 0;
+            }
+            if (value.length != Long.BYTES) {
+                throw new IOException("Invalid versioned KV applied end.");
+            }
+            long end = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).getLong();
+            if (end < 0) {
+                throw new IOException("Invalid versioned KV applied end.");
+            }
+            return end;
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to read versioned KV progress.", e);
+        }
+    }
+
+    /** Selects the last contiguous expired batch from the checkpointed append times. */
+    public long selectHistoryFloor(long publishedFloor, long readableEnd, long cutoff)
+            throws IOException {
+        if (publishedFloor >= readableEnd) {
+            return publishedFloor;
+        }
+        long candidate = publishedFloor;
+        try (ReadOptions scanOptions = new ReadOptions().setFillCache(false);
+                RocksIterator iterator = db.newIterator(historyMetadata, scanOptions)) {
+            iterator.seek(batchTimingKey(publishedFloor + 1));
+            while (iterator.isValid()) {
+                byte[] key = iterator.key();
+                if (key[0] != BATCH_TIMING_PREFIX) {
+                    break;
+                }
+                long batchEnd = ByteBuffer.wrap(key, 1, Long.BYTES).getLong();
+                long appendTime =
+                        ByteBuffer.wrap(iterator.value()).order(ByteOrder.LITTLE_ENDIAN).getLong();
+                if (batchEnd > readableEnd || appendTime > cutoff) {
+                    break;
+                }
+                candidate = batchEnd;
+                iterator.next();
+            }
+            iterator.status();
+            return candidate;
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to determine the expired KV history.", e);
+        }
+    }
+
+    /** Includes the selected history floor in the next native checkpoint. */
+    public void stageCheckpointHistoryFloor(long floor) throws IOException {
+        try (WriteOptions metadataWrite =
+                new WriteOptions().setDisableWAL(true).setNoSlowdown(true)) {
+            db.put(
+                    historyMetadata,
+                    metadataWrite,
+                    CHECKPOINT_HISTORY_FLOOR_KEY,
+                    encodeTimestamp(floor));
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to stage the checkpoint history floor.", e);
+        }
+    }
+
+    /** Reads the history floor carried by a restored checkpoint. */
+    public long readCheckpointHistoryFloor() throws IOException {
+        try {
+            byte[] value = db.get(historyMetadata, CHECKPOINT_HISTORY_FLOOR_KEY);
+            if (value == null) {
+                return 0;
+            }
+            if (value.length != Long.BYTES) {
+                throw new IOException("Invalid versioned KV checkpoint history floor.");
+            }
+            return ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).getLong();
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to restore the checkpoint history floor.", e);
+        }
+    }
+
+    /** Enables RocksDB to reclaim history and timing records strictly below a published floor. */
+    public void applyPublishedHistoryFloor(long floor) throws IOException {
+        try (WriteOptions metadataWrite =
+                new WriteOptions().setDisableWAL(true).setNoSlowdown(true)) {
+            if (readHistoryFloor() < floor) {
+                db.increaseFullHistoryTsLow(defaultColumnFamilyHandle, encodeTimestamp(floor));
+            }
+            db.deleteRange(
+                    historyMetadata, metadataWrite, batchTimingKey(0), batchTimingKey(floor));
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to advance the RocksDB history floor.", e);
+        }
+    }
+
+    private static byte[] batchTimingKey(long exclusiveEnd) {
+        return ByteBuffer.allocate(1 + Long.BYTES)
+                .put(BATCH_TIMING_PREFIX)
+                .putLong(exclusiveEnd)
+                .array();
+    }
+
+    /** Reads the earliest historical position the RocksDB version store can serve. */
+    public long readHistoryFloor() throws IOException {
+        try {
+            byte[] value = db.getFullHistoryTsLow(defaultColumnFamilyHandle);
+            if (value.length == 0) {
+                return 0;
+            }
+            if (value.length != Long.BYTES) {
+                throw new IOException("Invalid versioned KV history floor.");
+            }
+            long floor = ByteBuffer.wrap(value).order(ByteOrder.LITTLE_ENDIAN).getLong();
+            if (floor < 0) {
+                throw new IOException("Invalid versioned KV history floor.");
+            }
+            return floor;
+        } catch (RocksDBException e) {
+            throw new IOException("Unable to read the versioned KV history floor.", e);
+        }
+    }
+
+    /** Reads the supplied keys at an already validated exclusive WAL position. */
+    public List<byte[]> multiGetAt(List<byte[]> keys, long nextOffset) throws IOException {
+        if (historyMetadata == null || nextOffset < 0) {
+            throw new IllegalArgumentException("Invalid versioned read.");
+        }
+        try (Slice timestamp = new Slice(encodeTimestamp(nextOffset));
+                ReadOptions options = new ReadOptions().setTimestamp(timestamp)) {
+            return db.multiGetAsList(options, keys);
+        } catch (RocksDBException e) {
+            throw new IOException("Failed to read historical KV values.", e);
+        }
+    }
+
+    private static byte[] encodeTimestamp(long value) {
+        return ByteBuffer.allocate(Long.BYTES)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(value)
+                .array();
+    }
+
     public @Nullable byte[] get(byte[] key) throws IOException {
         try {
+            if (latestTimestamp != null) {
+                try (ReadOptions options = newLatestReadOptions()) {
+                    return db.get(options, key);
+                }
+            }
             return db.get(key);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get key.", e);
@@ -206,6 +435,11 @@ public class RocksDBKv implements AutoCloseable {
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
         try {
+            if (latestTimestamp != null) {
+                try (ReadOptions options = newLatestReadOptions()) {
+                    return db.multiGetAsList(options, keys);
+                }
+            }
             return db.multiGetAsList(keys);
         } catch (RocksDBException e) {
             throw new IOException("Fail to get keys.", e);
@@ -222,8 +456,7 @@ public class RocksDBKv implements AutoCloseable {
         ReadOptions readOptions = null;
         try {
             snapshot = db.getSnapshot();
-            readOptions = new ReadOptions();
-            readOptions.setSnapshot(snapshot);
+            readOptions = newLatestReadOptions().setSnapshot(snapshot);
             return new MultiGetLookup(db, snapshot, readOptions, lease);
         } catch (Throwable t) {
             try {
@@ -296,8 +529,22 @@ public class RocksDBKv implements AutoCloseable {
      * tablet mutations and close, and must close the returned lookup after use.
      */
     public PrefixLookup openPrefixLookup(byte[] prefixKey) throws IOException {
+        return openPrefixLookup(prefixKey, null);
+    }
+
+    /** Opens a prefix view at an already validated exclusive WAL position. */
+    public PrefixLookup openPrefixLookupAt(byte[] prefixKey, long nextOffset) throws IOException {
+        if (historyMetadata == null || nextOffset < 0) {
+            throw new IllegalArgumentException("Invalid versioned read.");
+        }
+        return openPrefixLookup(prefixKey, nextOffset);
+    }
+
+    private PrefixLookup openPrefixLookup(byte[] prefixKey, @Nullable Long nextOffset)
+            throws IOException {
         ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
         Slice upperBoundSlice = null;
+        Slice readTimestamp = null;
         ReadOptions readOptions = null;
         RocksIterator iterator = null;
         try {
@@ -305,17 +552,29 @@ public class RocksDBKv implements AutoCloseable {
             if (upperBound != null) {
                 upperBoundSlice = new Slice(upperBound);
             }
-            readOptions = new ReadOptions().setTotalOrderSeek(true);
+            if (nextOffset == null) {
+                readOptions = newLatestReadOptions();
+            } else {
+                readTimestamp = new Slice(encodeTimestamp(nextOffset));
+                readOptions = new ReadOptions().setTimestamp(readTimestamp);
+            }
+            readOptions.setTotalOrderSeek(true);
             if (upperBoundSlice != null) {
                 readOptions.setIterateUpperBound(upperBoundSlice);
             }
             iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
             return new PrefixLookup(
-                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
+                    prefixKey.clone(),
+                    iterator,
+                    readOptions,
+                    upperBoundSlice,
+                    readTimestamp,
+                    lease);
         } catch (Throwable t) {
             IOUtils.closeQuietly(iterator);
             IOUtils.closeQuietly(readOptions);
             IOUtils.closeQuietly(upperBoundSlice);
+            IOUtils.closeQuietly(readTimestamp);
             lease.close();
             throw t;
         }
@@ -330,6 +589,7 @@ public class RocksDBKv implements AutoCloseable {
         private final ReadOptions readOptions;
         // The upper bound must outlive the iterator and read options that reference it.
         @Nullable private final Slice upperBoundSlice;
+        @Nullable private final Slice readTimestamp;
         private final ResourceGuard.Lease lease;
         private boolean closed;
 
@@ -338,11 +598,13 @@ public class RocksDBKv implements AutoCloseable {
                 RocksIterator iterator,
                 ReadOptions readOptions,
                 @Nullable Slice upperBoundSlice,
+                @Nullable Slice readTimestamp,
                 ResourceGuard.Lease lease) {
             this.prefixKey = prefixKey;
             this.iterator = new RocksIteratorWrapper(iterator);
             this.readOptions = readOptions;
             this.upperBoundSlice = upperBoundSlice;
+            this.readTimestamp = readTimestamp;
             this.lease = lease;
         }
 
@@ -374,6 +636,7 @@ public class RocksDBKv implements AutoCloseable {
                 IOUtils.closeQuietly(iterator);
                 IOUtils.closeQuietly(readOptions);
                 IOUtils.closeQuietly(upperBoundSlice);
+                IOUtils.closeQuietly(readTimestamp);
                 lease.close();
             }
         }
@@ -381,7 +644,7 @@ public class RocksDBKv implements AutoCloseable {
 
     public List<byte[]> limitScan(Integer limit) {
         List<byte[]> pkList = new ArrayList<>();
-        ReadOptions readOptions = new ReadOptions();
+        ReadOptions readOptions = newLatestReadOptions();
         RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
 
         int count = 0;
@@ -393,8 +656,8 @@ public class RocksDBKv implements AutoCloseable {
                 count++;
             }
         } finally {
-            readOptions.close();
             iterator.close();
+            readOptions.close();
         }
 
         return pkList;
@@ -474,6 +737,8 @@ public class RocksDBKv implements AutoCloseable {
                 RocksDBOperationUtils.addColumnFamilyOptionsToCloseLater(
                         columnFamilyOptions, defaultColumnFamilyHandle);
                 IOUtils.closeQuietly(defaultColumnFamilyHandle);
+                IOUtils.closeQuietly(historyMetadata);
+                IOUtils.closeQuietly(latestTimestamp);
 
                 // ... and finally close the DB instance ...
                 IOUtils.closeQuietly(db);

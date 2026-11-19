@@ -222,6 +222,7 @@ public class CoordinatorRequestBatch {
 
         tabletServers.stream()
                 .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
+                .filter(s -> coordinatorContext.canHostReplica(s, tableBucket))
                 .forEach(
                         id -> {
                             Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>

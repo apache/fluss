@@ -53,6 +53,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.List;
 
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
@@ -140,25 +141,10 @@ public class KvRecoverHelper {
 
         long localLogStartOffset = logTablet.localLogStartOffset();
 
-        // Read to high watermark. If the recover point offset is before localLogStartOffset,
-        // remote log records are fetched first, then local log records are read — both share
-        // the same KvBatchWriter and LogRecordReadContext.
-        try (KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
-            ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
-                    (resumeRecord) -> {
-                        if (resumeRecord.value == null) {
-                            if (historicalPartition) {
-                                kvBatchWriter.put(
-                                        resumeRecord.key,
-                                        HistoricalKvTombstone.encode(resumeRecord.logOffset));
-                            } else {
-                                kvBatchWriter.delete(resumeRecord.key);
-                            }
-                        } else {
-                            kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
-                        }
-                    };
-
+        // A versioned checkpoint contains the applied end. Replay complete committed batches
+        // through the same staging and atomic write path as the leader.
+        if (kvTablet.hasVersionHistory()) {
+            kvTablet.initializeVersionedReplay(nextLogOffset);
             nextLogOffset =
                     readLogRecordsAndApply(
                             nextLogOffset,
@@ -166,7 +152,33 @@ public class KvRecoverHelper {
                             rowCountUpdater,
                             autoIncIdRangeUpdater,
                             FetchIsolation.HIGH_WATERMARK,
-                            resumeRecordApplier);
+                            this::stageRecoveredRecord);
+        } else {
+            try (KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
+                ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
+                        (resumeRecord) -> {
+                            if (resumeRecord.value == null) {
+                                if (historicalPartition) {
+                                    kvBatchWriter.put(
+                                            resumeRecord.key,
+                                            HistoricalKvTombstone.encode(resumeRecord.logOffset));
+                                } else {
+                                    kvBatchWriter.delete(resumeRecord.key);
+                                }
+                            } else {
+                                kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
+                            }
+                        };
+
+                nextLogOffset =
+                        readLogRecordsAndApply(
+                                nextLogOffset,
+                                localLogStartOffset,
+                                rowCountUpdater,
+                                autoIncIdRangeUpdater,
+                                FetchIsolation.HIGH_WATERMARK,
+                                resumeRecordApplier);
+            }
         }
 
         // the all data up to nextLogOffset has been flush into kv
@@ -186,13 +198,6 @@ public class KvRecoverHelper {
         }
 
         // read to log end offset
-        ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
-                (resumeRecord) ->
-                        kvTablet.putToPreWriteBuffer(
-                                resumeRecord.changeType,
-                                resumeRecord.key,
-                                resumeRecord.value,
-                                resumeRecord.logOffset);
         readLogRecordsAndApply(
                 nextLogOffset,
                 localLogStartOffset,
@@ -202,7 +207,7 @@ public class KvRecoverHelper {
                 // we should update auto-inc-id for pre-write-buffer, because id has been used.
                 autoIncIdRangeUpdater,
                 FetchIsolation.LOG_END,
-                resumeRecordApplier);
+                this::stageRecoveredRecord);
 
         if (autoIncRange != null) {
             AutoIncIDRange newRange = autoIncIdRangeUpdater.getNewRange();
@@ -215,6 +220,10 @@ public class KvRecoverHelper {
         }
     }
 
+    private void stageRecoveredRecord(KeyValueAndLogOffset record) {
+        kvTablet.putToPreWriteBuffer(record.changeType, record.key, record.value, record.logOffset);
+    }
+
     private long readLogRecordsAndApply(
             long startFetchOffset,
             long localLogStartOffset,
@@ -223,6 +232,7 @@ public class KvRecoverHelper {
             FetchIsolation fetchIsolation,
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
             throws Exception {
+        boolean versioned = kvTablet.hasVersionHistory();
         try (LogRecordReadContext readContext = createLogRecordReadContext()) {
             long nextFetchOffset = startFetchOffset;
             while (true) {
@@ -246,7 +256,13 @@ public class KvRecoverHelper {
                     batches = logRecords.batches();
                 }
 
+                long fetchedFrom = nextFetchOffset;
                 for (LogRecordBatch logRecordBatch : batches) {
+                    if (versioned && logRecordBatch.baseLogOffset() != nextFetchOffset) {
+                        throw new IOException(
+                                "Cannot restore version history across a gap in the WAL at "
+                                        + nextFetchOffset);
+                    }
                     nextFetchOffset =
                             applyLogRecordBatch(
                                     logRecordBatch,
@@ -254,9 +270,15 @@ public class KvRecoverHelper {
                                     rowCountUpdater,
                                     autoIncIdRangeUpdater,
                                     resumeRecordConsumer);
-                    if (fetchIsolation == FetchIsolation.LOG_END) {
-                        kvTablet.getKvPreWriteBuffer().markWalBatchEnd(nextFetchOffset);
+                    if (fetchIsolation == FetchIsolation.LOG_END || versioned) {
+                        kvTablet.markWalBatchEnd(nextFetchOffset, logRecordBatch.commitTimestamp());
                     }
+                    if (fetchIsolation == FetchIsolation.HIGH_WATERMARK && versioned) {
+                        kvTablet.flushRecoveredVersionedBatch(nextFetchOffset);
+                    }
+                }
+                if (versioned && nextFetchOffset == fetchedFrom) {
+                    throw new IOException("Missing WAL records at offset " + fetchedFrom);
                 }
             }
             return nextFetchOffset;

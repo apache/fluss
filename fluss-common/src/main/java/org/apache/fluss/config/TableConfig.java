@@ -108,6 +108,16 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
     }
 
+    /** Returns whether the table was created with versioned KV storage. */
+    public boolean isMvccEnabled() {
+        return config.get(ConfigOptions.TABLE_KV_MVCC_ENABLED);
+    }
+
+    /** Returns the history retention time for a versioned table. */
+    public Duration getMvccTtl() {
+        return config.get(ConfigOptions.TABLE_KV_MVCC_TTL);
+    }
+
     /** Gets the row-level TTL of the table. */
     public Optional<Duration> getKvTTL() {
         return config.getOptional(ConfigOptions.TABLE_KV_TTL);

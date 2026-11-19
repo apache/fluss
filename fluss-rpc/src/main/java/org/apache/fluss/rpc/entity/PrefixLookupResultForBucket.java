@@ -22,6 +22,8 @@ import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.ByteArraySlice;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /**
@@ -32,21 +34,37 @@ import java.util.List;
 public class PrefixLookupResultForBucket extends ResultForBucket {
 
     private final List<List<ByteArraySlice>> values;
+    private final @Nullable Long positionBound;
 
     /** Creates a successful prefix lookup result with RPC-ready values. */
     public PrefixLookupResultForBucket(TableBucket tableBucket, List<List<ByteArraySlice>> values) {
-        this(tableBucket, values, ApiError.NONE);
+        this(tableBucket, values, ApiError.NONE, null);
     }
 
     /** Creates a failed prefix lookup result. */
     public PrefixLookupResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, error);
+        this(tableBucket, error, null);
+    }
+
+    /** Creates a failed lookup result with the readable bound, if applicable. */
+    public PrefixLookupResultForBucket(
+            TableBucket tableBucket, ApiError error, @Nullable Long positionBound) {
+        this(tableBucket, null, error, positionBound);
     }
 
     private PrefixLookupResultForBucket(
-            TableBucket tableBucket, List<List<ByteArraySlice>> values, ApiError error) {
+            TableBucket tableBucket,
+            List<List<ByteArraySlice>> values,
+            ApiError error,
+            @Nullable Long positionBound) {
         super(tableBucket, error);
         this.values = values;
+        this.positionBound = positionBound;
+    }
+
+    /** Returns the numeric bound for a rejected read position. */
+    public @Nullable Long positionBound() {
+        return positionBound;
     }
 
     /** Returns the RPC-ready values for each prefix key. */

@@ -232,6 +232,7 @@ public class TableScan implements Scan {
                 scannerTmpDir,
                 kvValueLayout,
                 tableInfo.getTableConfig().getKvFormat(),
+                tableInfo.getTableConfig().isMvccEnabled(),
                 conn.getOrCreateRemoteFileDownloader());
     }
 

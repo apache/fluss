@@ -231,10 +231,27 @@ public class CoordinatorContext {
     }
 
     public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
-        return liveTabletServerSet().contains(serverId)
+        return !shuttingDownTabletServers.contains(serverId)
+                && canHostReplica(serverId, tableBucket)
                 && !replicasOnOffline
                         .getOrDefault(serverId, Collections.emptySet())
                         .contains(tableBucket);
+    }
+
+    /** Checks whether a registered server can open this bucket's storage format. */
+    public boolean canHostReplica(int serverId, TableBucket tableBucket) {
+        return liveTabletServers.containsKey(serverId)
+                && supportsReplicaStorage(serverId, tableBucket);
+    }
+
+    /** Requires a known storage capability for a versioned bucket. */
+    public boolean supportsReplicaStorage(int serverId, TableBucket tableBucket) {
+        TableInfo table = tableInfoById.get(tableBucket.getTableId());
+        if (table == null || !table.getTableConfig().isMvccEnabled()) {
+            return true;
+        }
+        ServerInfo server = liveTabletServers.get(serverId);
+        return server != null && server.supportsVersionedKv();
     }
 
     public int getOfflineBucketCount() {

@@ -18,6 +18,7 @@ package org.apache.fluss.client.lookup;
  */
 
 import org.apache.fluss.client.converter.PojoToRowConverter;
+import org.apache.fluss.metadata.BucketReadPosition;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
@@ -63,6 +64,15 @@ final class TypedLookuperImpl<K> implements TypedLookuper<K> {
 
         InternalRow keyRow = keyConv.toRow(key);
         return delegate.lookup(keyRow);
+    }
+
+    @Override
+    public CompletableFuture<LookupResult> lookup(K key, BucketReadPosition position) {
+        if (key == null) {
+            throw new IllegalArgumentException("key must not be null");
+        }
+        InternalRow row = key instanceof InternalRow ? (InternalRow) key : keyConv.toRow(key);
+        return delegate.lookup(row, position);
     }
 
     private PojoToRowConverter<K> createPojoToRowConverter(Class<K> keyClass) {

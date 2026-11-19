@@ -53,10 +53,12 @@ import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.TableNotVersionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -984,4 +986,29 @@ public interface Admin extends AutoCloseable {
      * @return per-bucket active snapshot ids grouped by bucket
      */
     CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
+
+    /**
+     * Observes the earliest and latest readable positions for a physical bucket of a versioned
+     * table.
+     *
+     * <p>Both endpoints are included. The latest readable position is bounded by both log
+     * commitment and the application of committed changes to the KV state. The retained floor can
+     * advance after the range is returned. Each positioned lookup validates the supplied position
+     * when it executes.
+     *
+     * <p>The future fails with {@link TableNotVersionedException} when the serving bucket has no
+     * version history. After read authorization, a table or partition identity absent from the
+     * coordinator's serving metadata fails with {@link TableNotExistException} or {@link
+     * PartitionNotExistException}, respectively. Wait for a newly created bucket to appear in the
+     * serving metadata before querying its range.
+     *
+     * @param bucket the physical bucket to query, including its partition ID when applicable
+     * @return the future containing the observed range
+     */
+    default CompletableFuture<BucketReadRange> getBucketReadRange(TableBucket bucket) {
+        CompletableFuture<BucketReadRange> failed = new CompletableFuture<>();
+        failed.completeExceptionally(
+                new UnsupportedOperationException("Bucket history is unavailable."));
+        return failed;
+    }
 }

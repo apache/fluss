@@ -40,6 +40,7 @@ public final class KvSnapshotFileMetadata {
     private final List<FileHandle> privateFiles;
     private final long incrementalSize;
     private final long logOffset;
+    private final long historyFloor;
     private final @Nullable Long rowCount;
     private final @Nullable List<AutoIncrementRange> autoIncrementRanges;
 
@@ -54,6 +55,32 @@ public final class KvSnapshotFileMetadata {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncrementRange> autoIncrementRanges) {
+        this(
+                tableBucket,
+                snapshotId,
+                snapshotLocation,
+                sharedFiles,
+                privateFiles,
+                incrementalSize,
+                logOffset,
+                rowCount,
+                autoIncrementRanges,
+                0);
+    }
+
+    /** Constructs snapshot metadata including the persisted version-history floor. */
+    public KvSnapshotFileMetadata(
+            TableBucket tableBucket,
+            long snapshotId,
+            String snapshotLocation,
+            List<FileHandle> sharedFiles,
+            List<FileHandle> privateFiles,
+            long incrementalSize,
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable List<AutoIncrementRange> autoIncrementRanges,
+            long historyFloor) {
+        this.historyFloor = historyFloor;
         this.tableBucket = checkNotNull(tableBucket, "Table bucket must not be null.");
         this.snapshotId = snapshotId;
         this.snapshotLocation =
@@ -112,6 +139,11 @@ public final class KvSnapshotFileMetadata {
         return rowCount;
     }
 
+    /** Returns the version-history floor published by this snapshot. */
+    public long getHistoryFloor() {
+        return historyFloor;
+    }
+
     /** Returns the auto-increment ranges when present. */
     @Nullable
     public List<AutoIncrementRange> getAutoIncrementRanges() {
@@ -130,6 +162,7 @@ public final class KvSnapshotFileMetadata {
         return snapshotId == that.snapshotId
                 && incrementalSize == that.incrementalSize
                 && logOffset == that.logOffset
+                && historyFloor == that.historyFloor
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(snapshotLocation, that.snapshotLocation)
                 && Objects.equals(sharedFiles, that.sharedFiles)
@@ -148,6 +181,7 @@ public final class KvSnapshotFileMetadata {
                 privateFiles,
                 incrementalSize,
                 logOffset,
+                historyFloor,
                 rowCount,
                 autoIncrementRanges);
     }
