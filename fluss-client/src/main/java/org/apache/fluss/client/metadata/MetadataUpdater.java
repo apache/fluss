@@ -49,7 +49,6 @@ import javax.annotation.Nullable;
 import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -185,38 +184,39 @@ public class MetadataUpdater {
     }
 
     /**
-     * Merges the table mapping from an Admin response without requesting metadata again,
-     * invalidating cached routing if the table has been replaced.
+     * Reconciles the table mapping of an Admin response without sending another metadata request,
+     * invalidating the cached routing when the table has been replaced.
+     *
+     * <p>The response only takes effect while the cached mapping is still the one the caller
+     * observed before requesting the table info: a metadata refresh or a concurrent {@code
+     * getTable} that resolved the path in the meantime has already seen a newer state of the
+     * server. The mapping also never moves back to a lower table id, because the coordinator
+     * allocates table ids from a counter that only increases.
+     *
+     * @param tableInfo the table info obtained from the Admin API
+     * @param expectedCachedTableId the table id cached for the path before that request was sent
      */
-    public void ensureTableMapping(TableInfo tableInfo) {
+    public void reconcileTableMapping(TableInfo tableInfo, Optional<Long> expectedCachedTableId) {
         synchronized (this) {
             Cluster currentCluster = cluster;
             TablePath tablePath = tableInfo.getTablePath();
             Optional<Long> currentTableId = currentCluster.getTableId(tablePath);
-            if (currentTableId.filter(id -> id == tableInfo.getTableId()).isPresent()) {
+            if (!currentTableId.equals(expectedCachedTableId)) {
+                LOG.debug(
+                        "Ignored table id {} for {} returned by the Admin API, because metadata for table id {} was resolved in the meantime.",
+                        tableInfo.getTableId(),
+                        tablePath,
+                        currentTableId.orElse(null));
                 return;
             }
-            if (currentTableId.isPresent()) {
-                Set<PhysicalTablePath> pathsToInvalidate =
-                        new HashSet<>(currentCluster.getBucketLocationsByPath().keySet());
-                pathsToInvalidate.addAll(currentCluster.getPartitionIdByPath().keySet());
-                pathsToInvalidate.removeIf(path -> !path.getTablePath().equals(tablePath));
-                pathsToInvalidate.add(PhysicalTablePath.of(tablePath));
-                currentCluster =
-                        currentCluster.invalidPhysicalTableBucketAndPartitionMeta(
-                                pathsToInvalidate);
+            if (currentTableId.filter(id -> id >= tableInfo.getTableId()).isPresent()) {
+                LOG.debug(
+                        "Ignored table id {} for {} returned by the Admin API, because a newer table id is already cached.",
+                        tableInfo.getTableId(),
+                        tablePath);
+                return;
             }
-            Map<TablePath, Long> tableIds = new HashMap<>(currentCluster.getTableIdByPath());
-            tableIds.put(tablePath, tableInfo.getTableId());
-            cluster =
-                    new Cluster(
-                            new HashMap<>(currentCluster.getAliveTabletServers()),
-                            currentCluster.getCoordinatorServer(),
-                            new HashMap<>(currentCluster.getBucketLocationsByPath()),
-                            tableIds,
-                            new HashMap<>(currentCluster.getPartitionIdByPath()),
-                            new HashMap<>(currentCluster.getBucketCountByTableOrPartition()),
-                            new HashMap<>(currentCluster.getBucketCountEpochByTableId()));
+            cluster = currentCluster.withTableMapping(tablePath, tableInfo.getTableId());
         }
     }
 

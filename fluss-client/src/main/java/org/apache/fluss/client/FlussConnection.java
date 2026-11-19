@@ -49,6 +49,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
@@ -106,10 +107,13 @@ public final class FlussConnection implements Connection {
     @Override
     public Table getTable(TablePath tablePath) {
         Admin admin = getOrCreateAdmin();
+        // Captured before the requests below so a response that raced a newer metadata refresh can
+        // be recognized as stale instead of overwriting the routing it installed.
+        Optional<Long> cachedTableId = metadataUpdater.getCluster().getTableId(tablePath);
         // Check access first because metadata responses omit unauthorized tables.
         TableInfo tableInfo = admin.getTableInfo(tablePath).join();
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
-        metadataUpdater.ensureTableMapping(tableInfo);
+        metadataUpdater.reconcileTableMapping(tableInfo, cachedTableId);
         return new FlussTable(this, tablePath, tableInfo);
     }
 
