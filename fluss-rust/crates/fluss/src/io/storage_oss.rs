@@ -18,14 +18,16 @@
 use crate::error::Result;
 use opendal::Configurator;
 use opendal::Operator;
-use opendal::layers::TimeoutLayer;
+use opendal::layers::{HttpClientLayer, TimeoutLayer};
 use opendal::services::OssConfig;
 use std::collections::HashMap;
 use std::time::Duration;
 
 pub(crate) fn oss_config_build(props: &HashMap<String, String>) -> Result<Operator> {
     let config = OssConfig::from_iter(props.clone())?;
-    let op = Operator::from_config(config)?.finish();
+    let op = Operator::from_config(config)?
+        .layer(HttpClientLayer::new(super::storage_http_client()?))
+        .finish();
 
     // Add timeout layer to prevent hanging on OSS operations
     let timeout_layer = TimeoutLayer::new()

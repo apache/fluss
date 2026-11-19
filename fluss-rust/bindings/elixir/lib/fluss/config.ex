@@ -46,6 +46,7 @@ defmodule Fluss.Config do
             lookup_retry_max_backoff_ms: nil,
             remote_file_download_thread_num: nil,
             scanner_io_tmp_dir: nil,
+            scanner_log_check_crc: nil,
             scanner_log_fetch_max_bytes: nil,
             scanner_log_fetch_max_bytes_for_bucket: nil,
             scanner_log_fetch_min_bytes: nil,
@@ -87,6 +88,7 @@ defmodule Fluss.Config do
           lookup_retry_max_backoff_ms: non_neg_integer() | nil,
           remote_file_download_thread_num: non_neg_integer() | nil,
           scanner_io_tmp_dir: String.t() | nil,
+          scanner_log_check_crc: boolean() | nil,
           scanner_log_fetch_max_bytes: non_neg_integer() | nil,
           scanner_log_fetch_max_bytes_for_bucket: non_neg_integer() | nil,
           scanner_log_fetch_min_bytes: non_neg_integer() | nil,
@@ -206,6 +208,11 @@ defmodule Fluss.Config do
   @spec set_scanner_io_tmp_dir(t(), String.t()) :: t()
   def set_scanner_io_tmp_dir(%__MODULE__{} = config, path) when is_binary(path),
     do: %{config | scanner_io_tmp_dir: path}
+
+  @spec set_scanner_log_check_crc(t(), boolean()) :: t()
+  def set_scanner_log_check_crc(%__MODULE__{} = config, enabled)
+      when is_boolean(enabled),
+      do: %{config | scanner_log_check_crc: enabled}
 
   @spec set_scanner_log_fetch_max_bytes(t(), non_neg_integer()) :: t()
   def set_scanner_log_fetch_max_bytes(%__MODULE__{} = config, max_bytes)

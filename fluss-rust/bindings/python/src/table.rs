@@ -1094,7 +1094,10 @@ pub struct AppendWriter {
 
 #[pymethods]
 impl AppendWriter {
-    /// Write Arrow table data (fire-and-forget, use flush() to ensure delivery).
+    /// Write Arrow table data (fire-and-forget).
+    ///
+    /// No write handles are returned and flush() doesn't raise write errors, so use
+    /// write_arrow_batch() and wait on its handle when a failed write must be noticed.
     ///
     /// Rows are routed to their respective partitions within each batch.
     pub fn write_arrow(&self, py: Python, table: Py<PyAny>) -> PyResult<()> {
@@ -1175,7 +1178,9 @@ impl AppendWriter {
         self.write_arrow(py, pa_table.into())
     }
 
-    /// Flush any pending data
+    /// Flush any pending data.
+    ///
+    /// Doesn't raise the error of a failed write, wait on its handle for that.
     pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {

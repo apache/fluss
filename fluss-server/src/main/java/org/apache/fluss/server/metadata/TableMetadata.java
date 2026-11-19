@@ -19,6 +19,7 @@ package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat;
 
 import java.util.List;
 import java.util.Objects;
@@ -31,14 +32,15 @@ public class TableMetadata {
      * identify this tablePath already deleted, but there is an tableId residual in zookeeper. In
      * this case, tabletServers need to clear the metadata of this tableId.
      */
-    public static final TablePath DELETED_TABLE_PATH = TablePath.of("__UNKNOWN__", "__delete__");
+    public static final TablePath DELETED_TABLE_PATH =
+            UpdateMetadataRequestCompat.DELETED_TABLE_PATH;
 
     /**
      * The already deleted table id. This table id will be used in UpdateMetadata request to
      * identify this table already deleted, and tabletServers need to clear the metadata of this
      * table.
      */
-    public static final Long DELETED_TABLE_ID = -2L;
+    public static final Long DELETED_TABLE_ID = UpdateMetadataRequestCompat.DELETED_TABLE_ID;
 
     private final TableInfo tableInfo;
 
@@ -52,9 +54,21 @@ public class TableMetadata {
      */
     private final List<BucketMetadata> bucketMetadataList;
 
+    private final boolean deleted;
+
     public TableMetadata(TableInfo tableInfo, List<BucketMetadata> bucketMetadataList) {
+        this(tableInfo, bucketMetadataList, false);
+    }
+
+    /** Creates table metadata for a coordinator update, retaining the table ID on deletion. */
+    public TableMetadata(
+            TableInfo tableInfo, List<BucketMetadata> bucketMetadataList, boolean deleted) {
         this.tableInfo = tableInfo;
         this.bucketMetadataList = bucketMetadataList;
+        this.deleted =
+                deleted
+                        || tableInfo.getTableId() == DELETED_TABLE_ID
+                        || DELETED_TABLE_PATH.equals(tableInfo.getTablePath());
     }
 
     public TableInfo getTableInfo() {
@@ -65,6 +79,11 @@ public class TableMetadata {
         return bucketMetadataList;
     }
 
+    /** Returns whether this is an explicit deletion or a legacy deletion marker. */
+    public boolean isDeleted() {
+        return deleted;
+    }
+
     @Override
     public String toString() {
         return "TableMetadata{"
@@ -72,6 +91,8 @@ public class TableMetadata {
                 + tableInfo
                 + ", bucketMetadataList="
                 + bucketMetadataList
+                + ", deleted="
+                + deleted
                 + '}';
     }
 
@@ -87,11 +108,11 @@ public class TableMetadata {
         if (!tableInfo.equals(that.tableInfo)) {
             return false;
         }
-        return bucketMetadataList.equals(that.bucketMetadataList);
+        return bucketMetadataList.equals(that.bucketMetadataList) && deleted == that.deleted;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableInfo, bucketMetadataList);
+        return Objects.hash(tableInfo, bucketMetadataList, deleted);
     }
 }

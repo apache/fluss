@@ -24,7 +24,7 @@ await admin.create_table(table_path, fluss.TableDescriptor(schema), ignore_if_ex
 
 Rows can be appended as dicts, lists, or tuples. For bulk writes, use `write_arrow()`, `write_arrow_batch()`, or `write_pandas()`.
 
-Write methods like `append()` and `write_arrow_batch()` return a `WriteResultHandle`. You can ignore it for fire-and-forget semantics (flush at the end), or `await handle.wait()` to block until the server acknowledges that specific write.
+Write methods like `append()` and `write_arrow_batch()` return a `WriteResultHandle`. You can ignore it for fire-and-forget semantics (flush at the end), or `await handle.wait()` to block until the server acknowledges that specific write. `flush()` doesn't raise the error of a failed write, so only the handle tells you that a write failed. `write_arrow()` and `write_pandas()` return no handles.
 
 ```python
 table = await conn.get_table(table_path)

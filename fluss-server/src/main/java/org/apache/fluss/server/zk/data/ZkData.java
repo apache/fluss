@@ -584,6 +584,23 @@ public final class ZkData {
         }
     }
 
+    /** The persistent recovery source of a physical bucket. */
+    public static final class RecoverySnapshotZNode {
+        public static String path(TableBucket tableBucket) {
+            return BucketIdZNode.path(tableBucket) + "/recovery_snapshot";
+        }
+
+        /** Encodes the selected snapshot ID in the persistent version 1 format. */
+        public static byte[] encode(long snapshotId) {
+            return JsonSerdeUtils.writeValueAsBytes(snapshotId, RecoverySnapshotJsonSerde.INSTANCE);
+        }
+
+        /** Decodes the selected snapshot ID from a supported record. */
+        public static long decode(byte[] bytes) {
+            return JsonSerdeUtils.readValue(bytes, RecoverySnapshotJsonSerde.INSTANCE);
+        }
+    }
+
     /**
      * The znode for the one snapshot of a bucket of a table or partition.
      *

@@ -38,7 +38,10 @@ public class FieldLastNAggFactory implements FieldAggregatorFactory {
                 fieldType);
         String size = aggFunction.getParameter(AggFunctions.PARAM_SIZE);
         checkArgument(size != null, "Aggregation function last_n requires the 'size' parameter.");
-        return new FieldLastNAgg((ArrayType) fieldType, Integer.parseInt(size));
+        return new FieldLastNAgg(
+                (ArrayType) fieldType,
+                Integer.parseInt(size),
+                Boolean.parseBoolean(aggFunction.getParameter(AggFunctionType.PARAM_DISTINCT)));
     }
 
     @Override

@@ -37,16 +37,20 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.ServerConnection.ConnectionState;
@@ -64,6 +68,8 @@ import org.apache.fluss.utils.NetUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -86,6 +92,7 @@ import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_AVG;
 import static org.apache.fluss.metrics.MetricNames.CLIENT_RESPONSES_RATE_TOTAL;
 import static org.apache.fluss.rpc.netty.NettyUtils.getClientSocketChannelClass;
 import static org.apache.fluss.rpc.netty.NettyUtils.newEventLoopGroup;
+import static org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat.DELETED_TABLE_ID;
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -95,6 +102,26 @@ import static org.mockito.Mockito.when;
 
 /** Test for {@link ServerConnection}. */
 public class ServerConnectionTest {
+
+    @Test
+    void testRecoveryAwareSnapshotSupportsLegacyProtocol() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignored) -> {});
+        try {
+            CommitKvSnapshotRequest request = new CommitKvSnapshotRequest();
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
+            request.setPreviousRecoverySnapshotId(0L);
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 0, request);
+            connection.validateVersionCompatibility(ApiKeys.COMMIT_KV_SNAPSHOT, (short) 1, request);
+        } finally {
+            connection.close().get();
+        }
+    }
 
     private EventLoopGroup eventLoopGroup;
     private Bootstrap bootstrap;
@@ -363,6 +390,64 @@ public class ServerConnectionTest {
                     .isInstanceOf(UnsupportedVersionException.class)
                     .hasMessageContaining("require PRODUCE_LOG version 1 or newer")
                     .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(shorts = {0, 1})
+    void testTableDeletionUsesNegotiatedVersion(short supportedVersion) throws Exception {
+        CompletableFuture<PbTableMetadata> received = new CompletableFuture<>();
+        nettyServer.close();
+        buildNettyServer(
+                new TestingTabletGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return super.apiVersions(request)
+                                .thenApply(
+                                        response -> {
+                                            for (PbApiVersion api : response.getApiVersionsList()) {
+                                                if (api.getApiKey() == ApiKeys.UPDATE_METADATA.id) {
+                                                    api.setMaxVersion(supportedVersion);
+                                                }
+                                            }
+                                            return response;
+                                        });
+                    }
+
+                    @Override
+                    public CompletableFuture<UpdateMetadataResponse> updateMetadata(
+                            UpdateMetadataRequest request) {
+                        received.complete(
+                                new PbTableMetadata().copyFrom(request.getTableMetadataAt(0)));
+                        return CompletableFuture.completedFuture(new UpdateMetadataResponse());
+                    }
+                });
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            UpdateMetadataRequest request = new UpdateMetadataRequest();
+            PbTableMetadata deletion =
+                    request.addTableMetadata()
+                            .setTableId(10L)
+                            .setDeleted(true)
+                            .setSchemaId(0)
+                            .setTableJson(new byte[0])
+                            .setCreatedTime(-1L)
+                            .setModifiedTime(-1L);
+            deletion.setTablePath().setDatabaseName("db").setTableName("orders");
+            connection.send(ApiKeys.UPDATE_METADATA, request).get();
+            PbTableMetadata table = received.get();
+            assertThat(table.getTableId())
+                    .isEqualTo(supportedVersion == 0 ? DELETED_TABLE_ID : 10L);
+            assertThat(table.hasDeleted()).isEqualTo(supportedVersion == 1);
         } finally {
             connection.close().get();
         }

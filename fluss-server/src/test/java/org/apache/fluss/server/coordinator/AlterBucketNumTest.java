@@ -37,6 +37,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -117,7 +118,9 @@ class AlterBucketNumTest {
                             "rack" + i,
                             Collections.singletonList(
                                     new Endpoint("host" + i, 1000, DEFAULT_LISTENER_NAME)),
-                            System.currentTimeMillis()));
+                            System.currentTimeMillis(),
+                            TabletServerResource.unknown(),
+                            null));
         }
 
         // create database

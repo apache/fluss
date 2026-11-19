@@ -38,8 +38,8 @@ storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-oss"]
 
 storage-memory = ["opendal/services-memory"]
 storage-fs = ["opendal/services-fs"]
-storage-s3 = ["opendal/services-s3"]
-storage-oss = ["opendal/services-oss"]
+storage-s3 = ["opendal/services-s3", "dep:reqwest"]
+storage-oss = ["opendal/services-oss", "dep:reqwest"]
 integration_tests = []
 kv-snapshot = ["dep:rocksdb"]
 
@@ -69,6 +69,7 @@ ordered-float = { version = "5", features = ["serde"] }
 parse-display = "0.10"
 jiff = { workspace = true }
 opendal = "0.55.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 url = "2.5.7"
 uuid = { version = "1.10", features = ["v4"] }
 tempfile = "3.23.0"

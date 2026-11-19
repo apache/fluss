@@ -62,6 +62,14 @@ TEST(FfiConverterTest, KvBackpressureConfiguration) {
     EXPECT_TRUE(fluss::ErrorCode::IsRetriable(72));
 }
 
+TEST(FfiConverterTest, ScannerLogCheckCrcConfiguration) {
+    fluss::Configuration config;
+    EXPECT_TRUE(config.scanner_log_check_crc);
+    EXPECT_TRUE(fluss::utils::to_ffi_config(config).scanner_log_check_crc);
+    config.scanner_log_check_crc = false;
+    EXPECT_FALSE(fluss::utils::to_ffi_config(config).scanner_log_check_crc);
+}
+
 TEST(FfiConverterTest, RemoteLogDirectoryConfiguration) {
     fluss::Configuration config;
     EXPECT_TRUE(config.scanner_io_tmp_dir.empty());
@@ -104,6 +112,13 @@ TEST(FfiConverterTest, LookupRetryBackoffConfiguration) {
     auto ffi_config = fluss::utils::to_ffi_config(config);
     EXPECT_EQ(ffi_config.lookup_retry_backoff_ms, 250u);
     EXPECT_EQ(ffi_config.lookup_retry_max_backoff_ms, 5000u);
+}
+
+TEST(FfiConverterTest, LookupPendingOperationsConfiguration) {
+    fluss::Configuration config;
+    EXPECT_EQ(config.lookup_max_pending_operations, 25600u);
+    config.lookup_max_pending_operations = 64;
+    EXPECT_EQ(fluss::utils::to_ffi_config(config).lookup_max_pending_operations, 64u);
 }
 
 TEST(FfiConverterTest, WriterDynamicCreatePartitionConfiguration) {

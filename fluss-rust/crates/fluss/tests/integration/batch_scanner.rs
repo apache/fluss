@@ -64,8 +64,9 @@ mod batch_scanner_test {
             ("c2", Utf8, ["a", "b", "c", "d", "e"])
         )
         .unwrap();
-        writer.append_arrow_batch(batch).expect("append batch");
+        let ack = writer.append_arrow_batch(batch).expect("append batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let table_info = table.get_table_info();
         let bucket = TableBucket::new(table_info.table_id, 0);
@@ -130,7 +131,7 @@ mod batch_scanner_test {
             .expect("append")
             .create_writer()
             .expect("writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(
                     ("c1", Int32, [1, 2, 3, 4, 5]),
@@ -140,6 +141,7 @@ mod batch_scanner_test {
             )
             .expect("append batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let table_info = table.get_table_info();
         let bucket = TableBucket::new(table_info.table_id, 0);
@@ -202,8 +204,9 @@ mod batch_scanner_test {
             ("c3", Int64, [100, 200, 300])
         )
         .unwrap();
-        writer.append_arrow_batch(batch).expect("append batch");
+        let ack = writer.append_arrow_batch(batch).expect("append batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let table_info = table.get_table_info();
         let bucket = TableBucket::new(table_info.table_id, 0);
@@ -278,13 +281,14 @@ mod batch_scanner_test {
             .expect("append")
             .create_writer()
             .expect("writer");
-        writer
+        let ack = writer
             .append_arrow_batch(
                 record_batch!(("id", Int32, [1, 2]), ("name", Utf8, ["alice", "bob"]))
                     .expect("old-schema batch"),
             )
             .expect("append old-schema batch");
         writer.flush().await.expect("flush");
+        ack.await.expect("append ack");
 
         let age_type_json = serde_json::to_vec(
             &DataTypes::int()
@@ -388,13 +392,17 @@ mod batch_scanner_test {
             .expect("upsert")
             .create_writer()
             .expect("writer");
+        let mut acks = Vec::new();
         for (id, name) in [(1, "alice"), (2, "bob")] {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, name);
-            writer.upsert(&row).expect("upsert old-schema row");
+            acks.push(writer.upsert(&row).expect("upsert old-schema row"));
         }
         writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let age_type_json = serde_json::to_vec(
             &DataTypes::int()
@@ -440,8 +448,9 @@ mod batch_scanner_test {
         row.set_field(0, 3);
         row.set_field(1, "carol");
         row.set_field(2, 30);
-        writer.upsert(&row).expect("upsert new-schema row");
+        let ack = writer.upsert(&row).expect("upsert new-schema row");
         writer.flush().await.expect("flush");
+        ack.await.expect("upsert ack");
 
         let lookuper = table
             .new_lookup()
@@ -548,13 +557,17 @@ mod batch_scanner_test {
 
         let expected: HashMap<i32, &str> =
             [(1, "a"), (2, "b"), (3, "c"), (4, "d"), (5, "e")].into();
+        let mut acks = Vec::new();
         for (id, name) in &expected {
             let mut row = GenericRow::new(2);
             row.set_field(0, *id);
             row.set_field(1, *name);
-            writer.upsert(&row).expect("upsert row");
+            acks.push(writer.upsert(&row).expect("upsert row"));
         }
         writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let table_info = table.get_table_info();
         let bucket = TableBucket::new(table_info.table_id, 0);

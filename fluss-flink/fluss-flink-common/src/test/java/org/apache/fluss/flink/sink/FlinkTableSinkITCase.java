@@ -1654,6 +1654,30 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testDistinctLastNAggregation() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE distinct_last_n (id INT PRIMARY KEY NOT ENFORCED, events ARRAY<STRING>) WITH ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.events.agg' = 'last_n', "
+                        + "'fields.events.last_n.size' = '3', "
+                        + "'fields.events.last_n.distinct' = 'true')");
+        tEnv.executeSql("INSERT INTO distinct_last_n VALUES (1, ARRAY['a', 'b', 'c', 'c'])")
+                .await();
+        tEnv.executeSql("INSERT INTO distinct_last_n VALUES (1, ARRAY['b'])").await();
+        tEnv.executeSql("INSERT INTO distinct_last_n VALUES (1, ARRAY['d', 'd'])").await();
+        CloseableIterator<Row> rows = tEnv.executeSql("SELECT * FROM distinct_last_n").collect();
+        assertResultsIgnoreOrder(
+                rows,
+                Arrays.asList(
+                        "+I[1, [a, b, c]]",
+                        "-U[1, [a, b, c]]",
+                        "+U[1, [a, c, b]]",
+                        "-U[1, [a, c, b]]",
+                        "+U[1, [c, b, d]]"),
+                true);
+    }
+
+    @Test
     void testLastNAggregation() throws Exception {
         tEnv.executeSql(
                 "create table last_n_agg ("

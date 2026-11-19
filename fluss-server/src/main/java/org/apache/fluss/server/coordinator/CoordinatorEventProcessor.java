@@ -27,7 +27,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
@@ -304,9 +303,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         }
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(
-                        zooKeeperClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
+        this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -419,13 +416,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 zooKeeperClient.getTabletServers(currentServers);
         for (int server : currentServers) {
             TabletServerRegistration registration = tabletServerRegistrations.get(server);
-            ServerInfo serverInfo =
-                    new ServerInfo(
-                            server,
-                            registration.getRack(),
-                            registration.getEndpoints(),
-                            ServerType.TABLET_SERVER,
-                            registration.getResource());
+            ServerInfo serverInfo = registration.toServerInfo(server);
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
@@ -2514,7 +2505,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                                         tablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
-                        completedSnapshotStore.add(completedSnapshot);
+                        Long previousRecoverySnapshotId =
+                                event.getAddCompletedSnapshotData().getPreviousRecoverySnapshotId();
+                        completedSnapshotStore.add(
+                                completedSnapshot,
+                                previousRecoverySnapshotId,
+                                event.getBucketLeaderEpoch());
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
                                         tb, completedSnapshot.getLogOffset()));
