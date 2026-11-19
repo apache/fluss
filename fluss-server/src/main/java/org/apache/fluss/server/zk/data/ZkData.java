@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -917,6 +918,48 @@ public final class ZkData {
 
         public static RebalanceTask decode(byte[] json) {
             return JsonSerdeUtils.readValue(json, RebalanceTaskJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for the bounded history of completed rebalance tasks.
+     *
+     * <p>This is the root node for the individual {@link RebalanceHistoryTaskZNode}s. Kept as a
+     * sibling of, rather than a child of, {@link RebalanceZNode} because that znode already stores
+     * the current task as its own data -- nesting history under it would prevent deleting the
+     * current task once any history exists (a znode with children cannot be deleted). The znode
+     * path is:
+     *
+     * <p>/cluster/rebalance_history
+     */
+    public static final class RebalanceHistoryZNode {
+        /** Returns the path of the parent znode of all history entries. */
+        public static String path() {
+            return "/cluster/rebalance_history";
+        }
+    }
+
+    /**
+     * The znode for the summary of a single finished rebalance task, keyed by rebalance id. It
+     * holds no per-bucket plan, so its size does not grow with the size of the rebalance. The znode
+     * path is:
+     *
+     * <p>/cluster/rebalance_history/[rebalanceId]
+     */
+    public static final class RebalanceHistoryTaskZNode {
+        /** Returns the path of the history entry of the given rebalance id. */
+        public static String path(String rebalanceId) {
+            return RebalanceHistoryZNode.path() + "/" + rebalanceId;
+        }
+
+        /** Encodes a history entry. */
+        public static byte[] encode(RebalanceInfo rebalanceInfo) {
+            return JsonSerdeUtils.writeValueAsBytes(rebalanceInfo, RebalanceInfoJsonSerde.INSTANCE);
+        }
+
+        /** Decodes a history entry written by {@link #encode}. */
+        public static RebalanceInfo decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceInfoJsonSerde.INSTANCE);
         }
     }
 

@@ -23,17 +23,27 @@ import javax.annotation.Nullable;
 
 import java.util.concurrent.CompletableFuture;
 
-/** The event for listing rebalance progress. */
+/**
+ * The event for listing the progress of one rebalance, or with {@code includeHistory} the summaries
+ * of the current rebalance and the retained history.
+ */
 public class ListRebalanceProgressEvent implements CoordinatorEvent {
 
     private final @Nullable String rebalanceId;
+    private final boolean includeHistory;
     private final CompletableFuture<ListRebalanceProgressResponse> respCallback;
 
     public ListRebalanceProgressEvent(
             @Nullable String rebalanceId,
+            boolean includeHistory,
             CompletableFuture<ListRebalanceProgressResponse> respCallback) {
         this.rebalanceId = rebalanceId;
+        this.includeHistory = includeHistory;
         this.respCallback = respCallback;
+    }
+
+    public boolean isIncludeHistory() {
+        return includeHistory;
     }
 
     public @Nullable String getRabalanceId() {

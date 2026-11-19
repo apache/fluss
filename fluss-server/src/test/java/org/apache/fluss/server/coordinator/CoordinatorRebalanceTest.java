@@ -27,12 +27,14 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.TestingControlledNotifyGateway.PendingNotify;
+import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
@@ -70,10 +72,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for rebalance execution and recovery through the coordinator event loop. */
 class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
@@ -530,10 +535,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 () -> {
                     drainPendingNotifyTriggers(recoveredResponses);
                     assertThat(hasInProgressRebalance()).isFalse();
-                    assertThat(zookeeperClient.getRebalanceTask())
-                            .hasValue(
-                                    new RebalanceTask(
-                                            rebalanceId, RebalanceStatus.COMPLETED, plan));
+                    RebalanceTask finalTask = zookeeperClient.getRebalanceTask().get();
+                    assertThat(finalTask.getRebalanceStatus()).isEqualTo(RebalanceStatus.COMPLETED);
+                    assertThat(finalTask.getExecutePlan()).isEqualTo(plan);
                 });
         assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.COMPLETED);
         List<Integer> assignment = fromCtx(ctx -> ctx.getAssignment(tableBucket));
@@ -1364,5 +1368,21 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         eventProcessor = buildCoordinatorEventProcessor(testClock);
         eventProcessor.startup();
         fromCtx(ctx -> null);
+    }
+
+    @Test
+    void testListAllRebalancesCompletesCallbackWhenRebalanceManagerClosed() {
+        // Once the manager is closed, the snapshot taken on the event thread throws; the handler
+        // must still complete the callback rather than leave the client to hit the RPC timeout.
+        eventProcessor.getRebalanceManager().close();
+
+        CompletableFuture<ListRebalanceProgressResponse> callback = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new ListRebalanceProgressEvent(null, true, callback));
+
+        assertThatThrownBy(() -> callback.get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasMessageContaining("RebalanceManager is already closed");
     }
 }

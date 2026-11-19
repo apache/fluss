@@ -19,6 +19,7 @@ package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
@@ -79,6 +80,8 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducersZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryTaskZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceHistoryZNode;
 import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
@@ -116,6 +119,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -123,6 +127,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -1988,17 +1993,26 @@ public class ZooKeeperClient implements AutoCloseable {
         deletePath(ServerTagsZNode.path());
     }
 
+    /** Writes the current rebalance task without the coordinator epoch check. */
+    @VisibleForTesting
     public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
-        String path = RebalanceZNode.path();
-        Stat stat = zkClient.checkExists().forPath(path);
-        if (stat == null) {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(path, RebalanceZNode.encode(rebalanceTask));
-        } else {
-            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalanceTask));
-        }
+        registerRebalanceTask(rebalanceTask, ZkVersion.MATCH_ANY_VERSION.getVersion());
+    }
+
+    /**
+     * Writes the current rebalance task. The write fails if the coordinator epoch znode no longer
+     * has {@code expectedZkVersion}, so a coordinator that lost leadership cannot overwrite it.
+     */
+    public void registerRebalanceTask(RebalanceTask rebalanceTask, int expectedZkVersion)
+            throws Exception {
+        createParentIfNeeded(RebalanceZNode.path());
+        zkClient.transaction()
+                .forOperations(
+                        wrapRequestWithEpochCheck(
+                                createOrUpdateOp(
+                                        RebalanceZNode.path(),
+                                        RebalanceZNode.encode(rebalanceTask)),
+                                expectedZkVersion));
     }
 
     public Optional<RebalanceTask> getRebalanceTask() throws Exception {
@@ -2010,6 +2024,124 @@ public class ZooKeeperClient implements AutoCloseable {
     @VisibleForTesting
     public void deleteRebalanceTask() throws Exception {
         deletePath(RebalanceZNode.path());
+    }
+
+    /** Writes a final rebalance task without the coordinator epoch check. */
+    @VisibleForTesting
+    public void registerFinalRebalanceTask(RebalanceTask finalTask, int retentionCount)
+            throws Exception {
+        registerFinalRebalanceTask(
+                finalTask, retentionCount, ZkVersion.MATCH_ANY_VERSION.getVersion());
+    }
+
+    /**
+     * Adds the summary of a finished rebalance task to the bounded history, then writes the task as
+     * the current task.
+     *
+     * <p>The two writes are separate requests. The history is written first: if the current znode
+     * holds a final task, the history holds its summary too. If the second write fails, the current
+     * znode keeps the unfinished task and the next coordinator resumes it, as before the history
+     * existed.
+     *
+     * <p>Both writes fail if the coordinator epoch znode no longer has {@code expectedZkVersion}.
+     */
+    public void registerFinalRebalanceTask(
+            RebalanceTask finalTask, int retentionCount, int expectedZkVersion) throws Exception {
+        registerRebalanceHistoryTask(finalTask, retentionCount, expectedZkVersion);
+        registerRebalanceTask(finalTask, expectedZkVersion);
+    }
+
+    /**
+     * Adds the summary of a finished rebalance task to the bounded history, then trims the oldest
+     * entries beyond {@code retentionCount}. The entry does not store the plan, so its size does
+     * not grow with the size of the rebalance.
+     *
+     * <p>The trim orders entries by creation (czxid) without reading their payload, so an entry
+     * this version cannot decode (for example one written by a newer coordinator) is kept until it
+     * ages out like any other. The trim is best effort: a failure is logged and only leaves extra
+     * entries until the next write. See {@link #getRebalanceHistory()} for the order.
+     */
+    public void registerRebalanceHistoryTask(
+            RebalanceTask finalTask, int retentionCount, int expectedZkVersion) throws Exception {
+        String historyPath = RebalanceHistoryTaskZNode.path(finalTask.getRebalanceId());
+        createParentIfNeeded(historyPath);
+        zkClient.transaction()
+                .forOperations(
+                        wrapRequestWithEpochCheck(
+                                createOrUpdateOp(
+                                        historyPath,
+                                        RebalanceHistoryTaskZNode.encode(
+                                                finalTask.toRebalanceInfo())),
+                                expectedZkVersion));
+
+        try {
+            TreeMap<Long, String> newestFirst = new TreeMap<>(Comparator.reverseOrder());
+            for (ZkCheckExistsResponse response : getStatInBackground(rebalanceHistoryPaths())) {
+                if (response.getResultCode() == KeeperException.Code.OK) {
+                    newestFirst.put(response.getStat().getCzxid(), response.getPath());
+                }
+            }
+            List<String> paths = new ArrayList<>(newestFirst.values());
+            for (String expired :
+                    paths.subList(Math.min(retentionCount, paths.size()), paths.size())) {
+                deletePath(expired);
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to trim the rebalance history to {} entries.", retentionCount, e);
+        }
+    }
+
+    /**
+     * Returns the bounded rebalance history, newest first by the order in which ZooKeeper created
+     * the entries (the znode's czxid). The order does not depend on the coordinators' clocks, so
+     * clock differences after a failover cannot reorder or wrongly trim entries.
+     *
+     * <p>A child znode that fails to decode, or has an unknown status code, is logged and skipped
+     * rather than failing the whole listing; it stays in ZooKeeper until the retention trim of
+     * {@link #registerFinalRebalanceTask} ages it out.
+     */
+    public List<RebalanceInfo> getRebalanceHistory() throws Exception {
+        TreeMap<Long, RebalanceInfo> newestFirst = new TreeMap<>(Comparator.reverseOrder());
+        for (ZkGetDataResponse response : getDataInBackground(rebalanceHistoryPaths())) {
+            if (response.getResultCode() != KeeperException.Code.OK) {
+                continue;
+            }
+            try {
+                newestFirst.put(
+                        response.getStat().getCzxid(),
+                        RebalanceHistoryTaskZNode.decode(response.getData()));
+            } catch (Exception e) {
+                LOG.warn("Failed to decode rebalance history entry {}.", response.getPath(), e);
+            }
+        }
+        return new ArrayList<>(newestFirst.values());
+    }
+
+    private List<String> rebalanceHistoryPaths() throws Exception {
+        return getChildren(RebalanceHistoryZNode.path()).stream()
+                .map(RebalanceHistoryTaskZNode::path)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Creates the parent of {@code path} without the coordinator epoch check: an empty parent znode
+     * is harmless even when written by a coordinator that lost leadership.
+     */
+    private void createParentIfNeeded(String path) throws Exception {
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path.substring(0, path.lastIndexOf('/')));
+        } catch (KeeperException.NodeExistsException e) {
+            // already created by an earlier write.
+        }
+    }
+
+    private CuratorOp createOrUpdateOp(String path, byte[] data) throws Exception {
+        return zkClient.checkExists().forPath(path) == null
+                ? zkOp.createOp(path, data, CreateMode.PERSISTENT)
+                : zkOp.updateOp(path, data);
     }
 
     // --------------------------------------------------------------------------------------------

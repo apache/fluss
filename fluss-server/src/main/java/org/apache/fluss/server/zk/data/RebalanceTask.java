@@ -17,11 +17,14 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
+
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -61,6 +64,18 @@ public class RebalanceTask {
     private final Map<TablePartition, List<RebalancePlanForBucket>>
             planForBucketsOfPartitionedTable;
 
+    /** Per-bucket final status. A bucket without an entry has the {@link #rebalanceStatus}. */
+    private final Map<TableBucket, RebalanceStatus> bucketStatuses;
+
+    /** The time when this rebalance task was started, or {@code -1} if unset. */
+    private final long startedAtMs;
+
+    /** The time when this rebalance task reached a final status, or {@code -1} if unset. */
+    private final long completedAtMs;
+
+    /** Why the first failed bucket was given up on; null unless the task failed. */
+    private final @Nullable String failureReason;
+
     public RebalanceTask(
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
@@ -82,10 +97,48 @@ public class RebalanceTask {
             Map<TableBucket, RebalancePlanForBucket> bucketPlan,
             boolean cancelRequested,
             Set<TableBucket> canceledBuckets) {
+        this(
+                rebalanceId,
+                rebalanceStatus,
+                bucketPlan,
+                cancelRequested,
+                canceledBuckets,
+                Collections.emptyMap(),
+                -1,
+                -1,
+                null);
+    }
+
+    /**
+     * Creates a task with per-bucket final statuses, timestamps and the failure reason. A bucket
+     * missing from {@code bucketStatuses} has the task status.
+     */
+    public RebalanceTask(
+            String rebalanceId,
+            RebalanceStatus rebalanceStatus,
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan,
+            boolean cancelRequested,
+            Set<TableBucket> canceledBuckets,
+            Map<TableBucket, RebalanceStatus> bucketStatuses,
+            long startedAtMs,
+            long completedAtMs,
+            @Nullable String failureReason) {
         this.rebalanceId = rebalanceId;
+        this.failureReason = failureReason;
         this.rebalanceStatus = rebalanceStatus;
         this.cancelRequested = cancelRequested;
         this.canceledBuckets = new HashSet<>(canceledBuckets);
+        // Only keep a bucket's own status when it differs from the task status: a bucket without
+        // one already resolves to the task status, so this keeps equals() and the JSON form the
+        // same for tasks with identical effective statuses.
+        this.bucketStatuses = new HashMap<>();
+        for (Map.Entry<TableBucket, RebalanceStatus> entry : bucketStatuses.entrySet()) {
+            if (entry.getValue() != rebalanceStatus) {
+                this.bucketStatuses.put(entry.getKey(), entry.getValue());
+            }
+        }
+        this.startedAtMs = startedAtMs;
+        this.completedAtMs = completedAtMs;
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
 
@@ -120,6 +173,40 @@ public class RebalanceTask {
 
     public Set<TableBucket> getCanceledBuckets() {
         return Collections.unmodifiableSet(canceledBuckets);
+    }
+
+    /** Returns the final status of the bucket, or the task status if the bucket has none. */
+    public RebalanceStatus getBucketStatus(TableBucket tableBucket) {
+        return bucketStatuses.getOrDefault(tableBucket, rebalanceStatus);
+    }
+
+    /** Returns the status recorded for the bucket itself, or null if it has none. */
+    @Nullable
+    RebalanceStatus getOwnBucketStatus(TableBucket tableBucket) {
+        return bucketStatuses.get(tableBucket);
+    }
+
+    /** The time when this rebalance task was started, in epoch milliseconds. -1 if unset. */
+    public long getStartedAtMs() {
+        return startedAtMs;
+    }
+
+    /**
+     * The time when this rebalance task reached a final status, in epoch milliseconds. -1 if unset.
+     */
+    public long getCompletedAtMs() {
+        return completedAtMs;
+    }
+
+    /** Why the first failed bucket was given up on, or null if the task did not fail. */
+    public @Nullable String getFailureReason() {
+        return failureReason;
+    }
+
+    /** Returns the summary of this task: everything except the per-bucket plan and statuses. */
+    public RebalanceInfo toRebalanceInfo() {
+        return new RebalanceInfo(
+                rebalanceId, rebalanceStatus, startedAtMs, completedAtMs, failureReason);
     }
 
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
@@ -165,6 +252,15 @@ public class RebalanceTask {
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
                 + planForBucketsOfPartitionedTable
+                + ", bucketStatuses="
+                + bucketStatuses
+                + ", startedAtMs="
+                + startedAtMs
+                + ", completedAtMs="
+                + completedAtMs
+                + ", failureReason='"
+                + failureReason
+                + '\''
                 + '}';
     }
 
@@ -179,6 +275,10 @@ public class RebalanceTask {
 
         RebalanceTask that = (RebalanceTask) o;
         return cancelRequested == that.cancelRequested
+                && startedAtMs == that.startedAtMs
+                && completedAtMs == that.completedAtMs
+                && Objects.equals(failureReason, that.failureReason)
+                && Objects.equals(bucketStatuses, that.bucketStatuses)
                 && rebalanceStatus == that.rebalanceStatus
                 && Objects.equals(rebalanceId, that.rebalanceId)
                 && Objects.equals(canceledBuckets, that.canceledBuckets)
@@ -195,6 +295,10 @@ public class RebalanceTask {
                 cancelRequested,
                 canceledBuckets,
                 planForBuckets,
-                planForBucketsOfPartitionedTable);
+                planForBucketsOfPartitionedTable,
+                bucketStatuses,
+                startedAtMs,
+                completedAtMs,
+                failureReason);
     }
 }

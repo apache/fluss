@@ -20,17 +20,20 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -42,6 +45,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -322,19 +326,90 @@ public class RebalanceITCase {
         RebalanceProgress progress = progressOpt.get();
         assertThat(progress.progress()).isEqualTo(1d);
         assertThat(progress.status()).isEqualTo(RebalanceStatus.COMPLETED);
+        assertThat(progress.startedAtMs()).isGreaterThanOrEqualTo(0);
+        assertThat(progress.completedAtMs()).isGreaterThanOrEqualTo(progress.startedAtMs());
 
         // test list and cancel an un-existed rebalance id.
         assertThatThrownBy(() -> admin.listRebalanceProgress("unexisted-rebalance-id").get())
                 .rootCause()
                 .isInstanceOf(NoRebalanceInProgressException.class)
                 .hasMessageContaining(
-                        "Rebalance task id unexisted-rebalance-id to list is not the current rebalance task id");
+                        "Rebalance task id unexisted-rebalance-id is not the most recent rebalance"
+                                + " task. Detailed progress is kept only for the most recent one;"
+                                + " Admin#listAllRebalances() lists the summaries of older ones.");
 
         assertThatThrownBy(() -> admin.cancelRebalance("unexisted-rebalance-id2").get())
                 .rootCause()
                 .isInstanceOf(NoRebalanceInProgressException.class)
                 .hasMessageContaining(
                         "Rebalance task id unexisted-rebalance-id2 to cancel is not the current rebalance task id");
+    }
+
+    @Test
+    void testIncludeHistoryWithRebalanceIdIsRejected() {
+        ListRebalanceProgressRequest request =
+                new ListRebalanceProgressRequest().setRebalanceId("id").setIncludeHistory(true);
+        assertThatThrownBy(
+                        () ->
+                                FLUSS_CLUSTER_EXTENSION
+                                        .newCoordinatorClient()
+                                        .listRebalanceProgress(request)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("cannot be combined with rebalance_id");
+    }
+
+    @Test
+    void testListAllRebalances() throws Exception {
+        String dbName = "db-rebalance-list-summary";
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+
+        // add server tag PERMANENT_OFFLINE for server 3, this will avoid to generate bucket
+        // assignment on server 3 when create table.
+        admin.addServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+
+        // create some none partitioned log table.
+        for (int i = 0; i < 6; i++) {
+            long tableId =
+                    createTable(
+                            new TablePath(dbName, "test-rebalance_table-" + i),
+                            DATA1_TABLE_DESCRIPTOR);
+            FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        }
+
+        // remove tag after crated table.
+        admin.removeServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
+
+        // no rebalance has happened yet for this admin session; the summary list may still
+        // contain entries left over by other test methods sharing this cluster, so just make
+        // sure the call succeeds without asserting emptiness here.
+        admin.listAllRebalances().get();
+
+        // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
+        String rebalanceId =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.REPLICA_DISTRIBUTION,
+                                        GoalType.LEADER_DISTRIBUTION))
+                        .get();
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Optional<RebalanceProgress> progressOpt =
+                            admin.listRebalanceProgress(rebalanceId).get();
+                    assertThat(progressOpt).isPresent();
+                    assertThat(progressOpt.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
+                });
+
+        List<RebalanceInfo> rebalanceInfos = admin.listAllRebalances().get();
+        // the just-completed rebalance is still the "current" one, so it must be first.
+        assertThat(rebalanceInfos).isNotEmpty();
+        RebalanceInfo info = rebalanceInfos.get(0);
+        assertThat(info.rebalanceId()).isEqualTo(rebalanceId);
+        assertThat(info.status()).isEqualTo(RebalanceStatus.COMPLETED);
+        assertThat(info.startedAtMs()).isGreaterThanOrEqualTo(0);
+        assertThat(info.completedAtMs()).isGreaterThanOrEqualTo(info.startedAtMs());
     }
 
     @Test

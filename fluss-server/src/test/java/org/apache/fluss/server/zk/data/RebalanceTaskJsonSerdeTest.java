@@ -31,6 +31,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -86,20 +88,53 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                         3,
                         Arrays.asList(0, 1, 2),
                         Arrays.asList(3, 4, 5)));
+        TableBucket failedBucket = new TableBucket(2L, 0);
+        Map<TableBucket, RebalancePlanForBucket> failedBucketPlan =
+                Collections.singletonMap(
+                        failedBucket,
+                        new RebalancePlanForBucket(
+                                failedBucket, 0, 1, Arrays.asList(0, 1), Arrays.asList(1, 0)));
         return new RebalanceTask[] {
             new RebalanceTask(
                     "rebalance-task-21jd",
                     NOT_STARTED,
                     bucketPlan,
                     true,
-                    Collections.singleton(new TableBucket(0L, 0)))
+                    Collections.singleton(new TableBucket(0L, 0)),
+                    Collections.emptyMap(),
+                    1000L,
+                    -1L,
+                    null),
+            // A finished task whose bucket ended with a status other than the task status.
+            new RebalanceTask(
+                    "rebalance-task-bucket-status",
+                    COMPLETED,
+                    failedBucketPlan,
+                    false,
+                    Collections.emptySet(),
+                    Collections.singletonMap(failedBucket, FAILED),
+                    1000L,
+                    2000L,
+                    null),
+            // A failed task keeps why its bucket was given up on.
+            new RebalanceTask(
+                    "rebalance-task-failed",
+                    FAILED,
+                    failedBucketPlan,
+                    false,
+                    Collections.emptySet(),
+                    Collections.emptyMap(),
+                    1000L,
+                    2000L,
+                    "no progress")
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":2,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"cancel_requested\":true,\"rebalance_plan\":"
+            "{\"version\":3,\"rebalance_id\":\"rebalance-task-21jd\",\"rebalance_status\":0,\"cancel_requested\":true,"
+                    + "\"started_at_ms\":1000,\"completed_at_ms\":-1,\"rebalance_plan\":"
                     + "[{\"table_id\":0,\"buckets\":"
                     + "[{\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]},"
                     + "{\"bucket_id\":0,\"canceled\":true,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]},"
@@ -107,7 +142,15 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                     + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]},"
                     + "{\"bucket_id\":1,\"original_leader\":1,\"new_leader\":1,\"origin_replicas\":[0,1,2],\"new_replicas\":[1,2,3]}]},"
                     + "{\"table_id\":1,\"partition_id\":1,\"buckets\":["
-                    + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]}]}"
+                    + "{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":3,\"origin_replicas\":[0,1,2],\"new_replicas\":[3,4,5]}]}]}",
+            "{\"version\":3,\"rebalance_id\":\"rebalance-task-bucket-status\",\"rebalance_status\":3,\"cancel_requested\":false,"
+                    + "\"started_at_ms\":1000,\"completed_at_ms\":2000,\"rebalance_plan\":"
+                    + "[{\"table_id\":2,\"buckets\":"
+                    + "[{\"bucket_id\":0,\"bucket_status\":2,\"original_leader\":0,\"new_leader\":1,\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}",
+            "{\"version\":3,\"rebalance_id\":\"rebalance-task-failed\",\"rebalance_status\":2,\"cancel_requested\":false,"
+                    + "\"started_at_ms\":1000,\"completed_at_ms\":2000,\"failure_reason\":\"no progress\",\"rebalance_plan\":"
+                    + "[{\"table_id\":2,\"buckets\":"
+                    + "[{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":1,\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}"
         };
     }
 
@@ -115,8 +158,9 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
     void testDeserializeLegacyTaskWithoutCancelRequested() throws IOException {
         String legacyJson =
                 expectedJsons()[0]
-                        .replace("\"version\":2", "\"version\":1")
+                        .replace("\"version\":3", "\"version\":1")
                         .replace(",\"cancel_requested\":true", "")
+                        .replace(",\"started_at_ms\":1000,\"completed_at_ms\":-1", "")
                         .replace(",\"canceled\":true", "");
 
         RebalanceTask rebalanceTask =
@@ -127,5 +171,47 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
         assertThat(rebalanceTask.isCancelRequested()).isFalse();
         assertThat(rebalanceTask.getCanceledBuckets()).isEmpty();
         assertThat(rebalanceTask.getExecutePlan()).hasSize(5);
+        assertThat(rebalanceTask.getStartedAtMs()).isEqualTo(-1L);
+        assertThat(rebalanceTask.getCompletedAtMs()).isEqualTo(-1L);
+        assertThat(rebalanceTask.getFailureReason()).isNull();
+    }
+
+    @Test
+    void testUnknownBucketStatusFallsBackToTaskStatus() throws IOException {
+        String json =
+                "{\"version\":3,\"rebalance_id\":\"r\",\"rebalance_status\":3,"
+                        + "\"rebalance_plan\":[{\"table_id\":2,\"buckets\":[{\"bucket_id\":0,"
+                        + "\"bucket_status\":99,\"original_leader\":0,\"new_leader\":1,"
+                        + "\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}";
+        RebalanceTask actual =
+                JsonSerdeUtils.readValue(
+                        json.getBytes(StandardCharsets.UTF_8), RebalanceTaskJsonSerde.INSTANCE);
+
+        assertThat(actual.getBucketStatus(new TableBucket(2L, 0))).isEqualTo(COMPLETED);
+    }
+
+    @Test
+    void testBucketStatusEqualToTaskStatusIsDropped() {
+        TableBucket tb = new TableBucket(2L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan =
+                Collections.singletonMap(
+                        tb,
+                        new RebalancePlanForBucket(tb, 0, 1, Arrays.asList(0), Arrays.asList(1)));
+        RebalanceTask withOwnStatus =
+                new RebalanceTask(
+                        "r",
+                        COMPLETED,
+                        plan,
+                        false,
+                        Collections.emptySet(),
+                        Collections.singletonMap(tb, COMPLETED),
+                        -1L,
+                        -1L,
+                        null);
+        RebalanceTask withoutOwnStatus = new RebalanceTask("r", COMPLETED, plan);
+
+        assertThat(withOwnStatus).isEqualTo(withoutOwnStatus);
+        assertThat(withOwnStatus.hashCode()).isEqualTo(withoutOwnStatus.hashCode());
+        assertThat(withOwnStatus.getBucketStatus(tb)).isEqualTo(COMPLETED);
     }
 }

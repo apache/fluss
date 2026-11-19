@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -79,6 +80,7 @@ final class ServerConnection {
     private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
     private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
     private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
+    private static final short REBALANCE_HISTORY_MIN_VERSION = 1;
 
     private final ServerNode node;
 
@@ -394,6 +396,22 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        // An older server ignores include_history and answers with the current rebalance only,
+        // which the client could not tell apart from an empty history.
+        if (apiKey == ApiKeys.LIST_REBALANCE_PROGRESS
+                && version < REBALANCE_HISTORY_MIN_VERSION
+                && ((ListRebalanceProgressRequest) rawRequest).hasIncludeHistory()
+                && ((ListRebalanceProgressRequest) rawRequest).isIncludeHistory()) {
+            throw new UnsupportedVersionException(
+                    "Listing the rebalance history requires LIST_REBALANCE_PROGRESS version "
+                            + REBALANCE_HISTORY_MIN_VERSION
+                            + " or newer, but server "
+                            + node
+                            + " negotiated version "
+                            + version
+                            + '.');
+        }
+
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

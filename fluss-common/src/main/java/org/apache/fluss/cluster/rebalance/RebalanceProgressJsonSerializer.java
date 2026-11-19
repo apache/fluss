@@ -32,6 +32,8 @@ public class RebalanceProgressJsonSerializer implements JsonSerializer<Rebalance
 
     private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
+    private static final String STARTED_AT_MS = "started_at_ms";
+    private static final String COMPLETED_AT_MS = "completed_at_ms";
     private static final String PROGRESS = "progress";
     private static final String PROGRESS_FOR_BUCKETS = "progress_for_buckets";
 
@@ -50,6 +52,12 @@ public class RebalanceProgressJsonSerializer implements JsonSerializer<Rebalance
 
         generator.writeStringField(REBALANCE_ID, rebalanceProgress.rebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalanceProgress.status().getCode());
+        if (rebalanceProgress.startedAtMs() >= 0) {
+            generator.writeNumberField(STARTED_AT_MS, rebalanceProgress.startedAtMs());
+        }
+        if (rebalanceProgress.completedAtMs() >= 0) {
+            generator.writeNumberField(COMPLETED_AT_MS, rebalanceProgress.completedAtMs());
+        }
         generator.writeStringField(PROGRESS, rebalanceProgress.formatAsPercentage());
 
         Map<TableBucket, RebalanceResultForBucket> resultForBucketMap =

@@ -107,6 +107,7 @@ or four leaders per rack in this example.
 Track the rebalance operation using the returned rebalance ID:
 
 ```java
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 
@@ -122,11 +123,17 @@ if (progress.isPresent()) {
     // Check if rebalance is complete
     if (p.status() == RebalanceStatus.COMPLETED) {
         System.out.println("Rebalance completed successfully!");
+        System.out.println("Took " + (p.completedAtMs() - p.startedAtMs())
+                + " ms (approximate; timestamps are wall-clock and may span a coordinator failover)");
     }
 }
 
 // Query the most recent rebalance progress (if rebalanceId is not provided)
 Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).get();
+
+// List the current rebalance plus a bounded history (last 10) of finished rebalances,
+// newest first, as summaries (id, status, started/completed timestamps)
+List<RebalanceInfo> rebalances = admin.listAllRebalances().get();
 ```
 
 Rebalance statuses:
@@ -272,7 +279,8 @@ For rebalancing operations, Fluss provides convenient Flink stored procedures th
 - **add_server_tag**: Tag servers before rebalancing
 - **remove_server_tag**: Remove tags after rebalancing
 - **rebalance**: Trigger rebalance operation
-- **list_rebalance**: Monitor rebalance progress
+- **list_rebalance**: Monitor the detailed progress of the most recent rebalance
+- **list_all_rebalances**: List summaries of the current rebalance and the retained history of finished rebalances
 - **cancel_rebalance**: Cancel ongoing rebalance
 
 Example using Flink SQL:
@@ -286,6 +294,9 @@ CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,T
 
 -- Monitor progress
 CALL sys.list_rebalance();
+
+-- List the current and past rebalances
+CALL sys.list_all_rebalances();
 
 -- Cancel if needed
 CALL sys.cancel_rebalance();

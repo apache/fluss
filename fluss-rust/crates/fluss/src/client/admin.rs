@@ -23,8 +23,9 @@ use crate::metadata::{
     DatabaseInfo, DatabaseSummary, DescribeConfig, DropAclsFilterResult, GoalType, JsonSerde,
     KvSnapshotLeaseForTable, KvSnapshotMetadata, LakeSnapshot, LakeSnapshotInfo, LatestKvSnapshots,
     PartitionInfo, PartitionSpec, PhysicalTablePath, ProducerOffsets, ProducerTableOffsets,
-    RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema, SchemaInfo,
-    ServerTag, TableBucket, TableDescriptor, TableInfo, TableOrPartition, TablePath, TableStats,
+    RebalanceInfo, RebalanceProgress, RegisterProducerResult, RemoteLogManifestEntry, Schema,
+    SchemaInfo, ServerTag, TableBucket, TableDescriptor, TableInfo, TableOrPartition, TablePath,
+    TableStats,
 };
 use crate::rpc::message::{
     AcquireKvSnapshotLeaseRequest, AddServerTagRequest, AlterClusterConfigsRequest,
@@ -828,6 +829,22 @@ impl FlussAdmin {
             .request(ListRebalanceProgressRequest::new(rebalance_id))
             .await?;
         RebalanceProgress::from_pb(&response)
+    }
+
+    /// List a summary of the known rebalances: the latest one first, then older finished ones,
+    /// newest first, limited to the server's bounded history. Fails with `UnsupportedVersion`
+    /// on a server that does not keep a rebalance history.
+    pub async fn list_all_rebalances(&self) -> Result<Vec<RebalanceInfo>> {
+        let response = self
+            .admin_gateway()
+            .await?
+            .request(ListRebalanceProgressRequest::with_history())
+            .await?;
+        response
+            .rebalance_infos
+            .iter()
+            .map(RebalanceInfo::from_pb)
+            .collect()
     }
 
     /// Cancel a rebalance.

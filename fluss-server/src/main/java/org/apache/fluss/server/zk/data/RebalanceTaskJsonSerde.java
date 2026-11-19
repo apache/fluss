@@ -26,6 +26,8 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
 import org.apache.fluss.utils.json.JsonSerializer;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -46,6 +48,9 @@ public class RebalanceTaskJsonSerde
     private static final String REBALANCE_STATUS = "rebalance_status";
     private static final String CANCEL_REQUESTED = "cancel_requested";
     private static final String REBALANCE_PLAN = "rebalance_plan";
+    private static final String STARTED_AT_MS = "started_at_ms";
+    private static final String COMPLETED_AT_MS = "completed_at_ms";
+    private static final String FAILURE_REASON = "failure_reason";
 
     private static final String TABLE_ID = "table_id";
     private static final String PARTITION_ID = "partition_id";
@@ -57,8 +62,9 @@ public class RebalanceTaskJsonSerde
     private static final String NEW_LEADER = "new_leader";
     private static final String ORIGIN_REPLICAS = "origin_replicas";
     private static final String NEW_REPLICAS = "new_replicas";
+    private static final String BUCKET_STATUS = "bucket_status";
 
-    private static final int VERSION = 2;
+    private static final int VERSION = 3;
 
     @Override
     public void serialize(RebalanceTask rebalanceTask, JsonGenerator generator) throws IOException {
@@ -67,6 +73,11 @@ public class RebalanceTaskJsonSerde
         generator.writeStringField(REBALANCE_ID, rebalanceTask.getRebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalanceTask.getRebalanceStatus().getCode());
         generator.writeBooleanField(CANCEL_REQUESTED, rebalanceTask.isCancelRequested());
+        generator.writeNumberField(STARTED_AT_MS, rebalanceTask.getStartedAtMs());
+        generator.writeNumberField(COMPLETED_AT_MS, rebalanceTask.getCompletedAtMs());
+        if (rebalanceTask.getFailureReason() != null) {
+            generator.writeStringField(FAILURE_REASON, rebalanceTask.getFailureReason());
+        }
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -79,7 +90,8 @@ public class RebalanceTaskJsonSerde
                 serializeRebalancePlanForBucket(
                         generator,
                         bucketPlan,
-                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()));
+                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()),
+                        rebalanceTask.getOwnBucketStatus(bucketPlan.getTableBucket()));
             }
             generator.writeEndArray();
             generator.writeEndObject();
@@ -96,7 +108,8 @@ public class RebalanceTaskJsonSerde
                 serializeRebalancePlanForBucket(
                         generator,
                         bucketPlan,
-                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()));
+                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()),
+                        rebalanceTask.getOwnBucketStatus(bucketPlan.getTableBucket()));
             }
             generator.writeEndArray();
             generator.writeEndObject();
@@ -117,7 +130,10 @@ public class RebalanceTaskJsonSerde
                 node.has(CANCEL_REQUESTED) && node.get(CANCEL_REQUESTED).asBoolean();
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
+        long startedAtMs = node.has(STARTED_AT_MS) ? node.get(STARTED_AT_MS).asLong() : -1L;
+        long completedAtMs = node.has(COMPLETED_AT_MS) ? node.get(COMPLETED_AT_MS).asLong() : -1L;
         Set<TableBucket> canceledBuckets = new HashSet<>();
+        Map<TableBucket, RebalanceStatus> bucketStatuses = new HashMap<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
             long tableId = tablePartitionPlanNode.get(TABLE_ID).asLong();
 
@@ -132,6 +148,15 @@ public class RebalanceTaskJsonSerde
                 TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
                 if (bucketPlanNode.has(CANCELED) && bucketPlanNode.get(CANCELED).asBoolean()) {
                     canceledBuckets.add(tableBucket);
+                }
+                // Optional: absent when the bucket ended with the task status. An unknown code
+                // (written by a newer version) also falls back to the task status.
+                if (bucketPlanNode.has(BUCKET_STATUS)) {
+                    RebalanceStatus bucketStatus =
+                            RebalanceStatus.of(bucketPlanNode.get(BUCKET_STATUS).asInt());
+                    if (bucketStatus != null) {
+                        bucketStatuses.put(tableBucket, bucketStatus);
+                    }
                 }
 
                 int originLeader = bucketPlanNode.get(ORIGINAL_LEADER).asInt();
@@ -158,16 +183,30 @@ public class RebalanceTaskJsonSerde
         }
 
         return new RebalanceTask(
-                rebalanceId, rebalanceStatus, planForBuckets, cancelRequested, canceledBuckets);
+                rebalanceId,
+                rebalanceStatus,
+                planForBuckets,
+                cancelRequested,
+                canceledBuckets,
+                bucketStatuses,
+                startedAtMs,
+                completedAtMs,
+                node.has(FAILURE_REASON) ? node.get(FAILURE_REASON).asText() : null);
     }
 
     private void serializeRebalancePlanForBucket(
-            JsonGenerator generator, RebalancePlanForBucket bucketPlan, boolean canceled)
+            JsonGenerator generator,
+            RebalancePlanForBucket bucketPlan,
+            boolean canceled,
+            @Nullable RebalanceStatus bucketStatus)
             throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(BUCKET_ID, bucketPlan.getBucketId());
         if (canceled) {
             generator.writeBooleanField(CANCELED, true);
+        }
+        if (bucketStatus != null) {
+            generator.writeNumberField(BUCKET_STATUS, bucketStatus.getCode());
         }
         generator.writeNumberField(ORIGINAL_LEADER, bucketPlan.getOriginalLeader());
         generator.writeNumberField(NEW_LEADER, bucketPlan.getNewLeader());

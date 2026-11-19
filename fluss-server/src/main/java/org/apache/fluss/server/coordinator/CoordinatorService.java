@@ -34,6 +34,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -1928,12 +1929,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
         }
 
+        boolean includeHistory = request.hasIncludeHistory() && request.isIncludeHistory();
+        if (includeHistory && request.hasRebalanceId()) {
+            throw new InvalidRequestException(
+                    "include_history lists all known rebalances and cannot be combined with"
+                            + " rebalance_id.");
+        }
+
         CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
                 .put(
                         new ListRebalanceProgressEvent(
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                includeHistory,
                                 response));
         return response;
     }

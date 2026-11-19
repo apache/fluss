@@ -112,7 +112,6 @@ impl ApiKey {
             | ApiKey::AddServerTag
             | ApiKey::RemoveServerTag
             | ApiKey::Rebalance
-            | ApiKey::ListRebalanceProgress
             | ApiKey::CancelRebalance
             | ApiKey::RegisterProducerOffsets
             | ApiKey::GetProducerOffsets
@@ -131,6 +130,10 @@ impl ApiKey {
                 ApiVersion(0),
                 ApiVersion(if cfg!(feature = "kv-snapshot") { 1 } else { 0 }),
             )),
+            // ListRebalanceProgress v1 adds include_history.
+            ApiKey::ListRebalanceProgress => {
+                Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1)))
+            }
             // AlterTable v1 adds modify_bucket_count.
             ApiKey::AlterTable => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
             // ProduceLog v1 adds historical partition context to requests and responses.

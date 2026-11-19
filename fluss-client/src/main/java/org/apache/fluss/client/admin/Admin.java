@@ -25,6 +25,7 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
@@ -811,13 +812,15 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<String> rebalance(List<GoalType> priorityGoals);
 
     /**
-     * List the rebalance progress.
+     * List the rebalance progress of the most recent rebalance task, running or finished. The
+     * per-bucket plan and progress are kept only for that task. Older finished tasks are known only
+     * by their summary (see {@link #listAllRebalances()}).
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress for
-     *       the input rebalanceId.
+     *   <li>{@link NoRebalanceInProgressException} If the input rebalanceId is not the id of the
+     *       most recent rebalance task.
      * </ul>
      *
      * @param rebalanceId the rebalance id to list progress, if it is null means list the in
@@ -828,20 +831,35 @@ public interface Admin extends AutoCloseable {
             @Nullable String rebalanceId);
 
     /**
-     * Cannel the rebalance task.
+     * Cancel the rebalance task.
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress or
-     *       the rebalance id is not exists.
+     *   <li>{@link NoRebalanceInProgressException} If a rebalance task is current and the given
+     *       rebalance id is not its id.
      * </ul>
      *
-     * @param rebalanceId the rebalance id to cancel, if it is null means cancel the exists
-     *     rebalance task. If rebalanceId is not exists in server, {@link
-     *     NoRebalanceInProgressException} will be thrown.
+     * @param rebalanceId the rebalance id to cancel. If it is null, the current rebalance task is
+     *     canceled, and the call succeeds without effect when there is none.
      */
     CompletableFuture<Void> cancelRebalance(@Nullable String rebalanceId);
+
+    /**
+     * List a summary of the known rebalance tasks. The latest rebalance, running or finished, is
+     * listed first. Older finished tasks follow, newest first, limited to a bounded history
+     * (currently the 10 most recent). The history keeps the summary only: {@link
+     * #listRebalanceProgress(String)} serves the per-bucket detail of the latest rebalance alone.
+     *
+     * <ul>
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
+     *   <li>{@link UnsupportedVersionException} If the server does not keep a rebalance history.
+     * </ul>
+     *
+     * @return the rebalance summaries.
+     */
+    CompletableFuture<List<RebalanceInfo>> listAllRebalances();
 
     // ==================================================================================
     // Producer Offset Management APIs (for Exactly-Once Semantics)
