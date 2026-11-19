@@ -409,67 +409,31 @@ fn reconciled_stream(
     baseline_stream: RecordBatchStream,
     batch_size: usize,
 ) -> RecordBatchStream {
-    enum Phase {
-        Baseline {
-            current_view: Box<DeduplicateCurrentView>,
-            stream: RecordBatchStream,
-        },
-        Survivors(RecordBatchStream),
+    enum Phase<I> {
+        Baseline(Box<DeduplicateCurrentView>, RecordBatchStream),
+        Survivors(I),
     }
 
     Box::pin(futures::stream::try_unfold(
-        Phase::Baseline {
-            current_view: Box::new(current_view),
-            stream: baseline_stream,
-        },
+        Phase::Baseline(Box::new(current_view), baseline_stream),
         move |phase| async move {
-            let mut phase = phase;
-            loop {
-                match phase {
-                    Phase::Baseline {
-                        current_view,
-                        mut stream,
-                    } => match stream.next().await {
-                        Some(Ok(batch)) => {
-                            match current_view
-                                .reconcile_baseline_batch(&batch)
-                                .map_err(reconciliation_error)?
-                            {
-                                Some(batch) => {
-                                    return Ok(Some((
-                                        batch,
-                                        Phase::Baseline {
-                                            current_view,
-                                            stream,
-                                        },
-                                    )));
-                                }
-                                None => {
-                                    phase = Phase::Baseline {
-                                        current_view,
-                                        stream,
-                                    };
-                                }
-                            }
+            let mut survivors = match phase {
+                Phase::Baseline(view, mut stream) => {
+                    while let Some(batch) = stream.try_next().await? {
+                        if let Some(batch) = view
+                            .reconcile_baseline_batch(&batch)
+                            .map_err(reconciliation_error)?
+                        {
+                            return Ok(Some((batch, Phase::Baseline(view, stream))));
                         }
-                        Some(Err(error)) => return Err(error),
-                        None => {
-                            let batches = current_view
-                                .finish_batches(batch_size)
-                                .map_err(reconciliation_error)?;
-                            phase = Phase::Survivors(Box::pin(futures::stream::iter(
-                                batches.map(|batch| batch.map_err(reconciliation_error)),
-                            )));
-                        }
-                    },
-                    Phase::Survivors(mut stream) => {
-                        return match stream.next().await {
-                            Some(batch) => Ok(Some((batch?, Phase::Survivors(stream)))),
-                            None => Ok(None),
-                        };
                     }
+                    view.finish_batches(batch_size)
+                        .map_err(reconciliation_error)?
                 }
-            }
+                Phase::Survivors(batches) => batches,
+            };
+            let batch = survivors.next().transpose().map_err(reconciliation_error)?;
+            Ok(batch.map(|batch| (batch, Phase::Survivors(survivors))))
         },
     ))
 }
@@ -914,27 +878,12 @@ mod tests {
 
     #[test]
     fn changelog_offset_gap_invalidates_the_frozen_plan() {
-        use arrow::array::{ArrayRef, Int32Array, StringArray};
-        use arrow::datatypes::{DataType, Field, Schema};
         use fluss::record::{ArrowReader, ChangeType, ScanRecord};
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("region", DataType::Utf8, false),
-            Field::new("amount", DataType::Int64, false),
-        ]));
-        let batch = Arc::new(
-            RecordBatch::try_new(
-                schema.clone(),
-                vec![
-                    Arc::new(Int32Array::from(vec![1])) as ArrayRef,
-                    Arc::new(StringArray::from(vec!["US"])) as ArrayRef,
-                    Arc::new(arrow::array::Int64Array::from(vec![10])) as ArrayRef,
-                ],
-            )
-            .unwrap(),
-        );
-        let reader = ArrowReader::new(batch, Arc::new(pk_row_type())).unwrap();
+        let batch = Arc::new(id_batch(vec![1]));
+        let schema = batch.schema();
+        let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
+        let reader = ArrowReader::new(batch, Arc::new(row_type)).unwrap();
         let records = vec![ScanRecord::new(
             reader.read(0),
             6,
