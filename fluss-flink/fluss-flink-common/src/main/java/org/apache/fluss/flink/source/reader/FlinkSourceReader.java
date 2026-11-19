@@ -17,9 +17,11 @@
 
 package org.apache.fluss.flink.source.reader;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
@@ -48,7 +50,10 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -60,6 +65,16 @@ public class FlinkSourceReader<OUT>
                 RecordAndPos, OUT, SourceSplitBase, SourceSplitState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceReader.class);
+
+    /**
+     * Orders lake snapshot splits in the order they were planned. The split index is assigned per
+     * partition in planning order, which is write order within a bucket.
+     */
+    private static final Comparator<LakeSnapshotSplit> LAKE_SNAPSHOT_SPLIT_ORDER =
+            Comparator.comparing(
+                            (LakeSnapshotSplit split) -> split.getTableBucket().getPartitionId(),
+                            Comparator.nullsFirst(Comparator.<Long>naturalOrder()))
+                    .thenComparingInt(LakeSnapshotSplit::getSplitIndex);
 
     /** the tableBuckets ignore to send FinishedKvSnapshotConsumeEvent as it already sending. */
     private final Set<TableBucket> finishedKvSnapshotConsumeBuckets;
@@ -93,6 +108,14 @@ public class FlinkSourceReader<OUT>
                 context.getConfiguration(),
                 context);
         this.finishedKvSnapshotConsumeBuckets = new HashSet<>();
+    }
+
+    @Override
+    public void addSplits(List<SourceSplitBase> splits) {
+        // Restored splits come from the reader's checkpointed state, which Flink keeps in no
+        // particular order. A bucket's lake snapshot splits are read one after another, so put
+        // them back in planning order before handing them to the split reader.
+        super.addSplits(sortLakeSnapshotSplits(splits));
     }
 
     @Override
@@ -139,6 +162,31 @@ public class FlinkSourceReader<OUT>
         }
 
         return sourceSplitBases;
+    }
+
+    /**
+     * Returns the splits with the lake snapshot splits in planning order. Other splits keep their
+     * positions.
+     */
+    @VisibleForTesting
+    static List<SourceSplitBase> sortLakeSnapshotSplits(List<SourceSplitBase> splits) {
+        List<LakeSnapshotSplit> lakeSnapshotSplits = new ArrayList<>();
+        for (SourceSplitBase split : splits) {
+            if (split instanceof LakeSnapshotSplit) {
+                lakeSnapshotSplits.add((LakeSnapshotSplit) split);
+            }
+        }
+        if (lakeSnapshotSplits.size() < 2) {
+            return splits;
+        }
+        lakeSnapshotSplits.sort(LAKE_SNAPSHOT_SPLIT_ORDER);
+        Iterator<LakeSnapshotSplit> sortedLakeSnapshotSplits = lakeSnapshotSplits.iterator();
+        List<SourceSplitBase> result = new ArrayList<>(splits.size());
+        for (SourceSplitBase split : splits) {
+            result.add(
+                    split instanceof LakeSnapshotSplit ? sortedLakeSnapshotSplits.next() : split);
+        }
+        return result;
     }
 
     @Override

@@ -41,6 +41,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -52,6 +53,15 @@ import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
 /** Iceberg split planner. */
 public class IcebergSplitPlanner implements Planner<IcebergSplit> {
+
+    /**
+     * Orders splits by the data sequence number of their file. Files without a data sequence number
+     * are ordered first.
+     */
+    private static final Comparator<IcebergSplit> SPLIT_WRITE_ORDER =
+            Comparator.comparing(
+                    split -> split.fileScanTask().file().dataSequenceNumber(),
+                    Comparator.nullsFirst(Comparator.<Long>naturalOrder()));
 
     private final Configuration icebergConfig;
     private final TablePath tablePath;
@@ -90,6 +100,15 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                                             bucketExtractor.apply(task),
                                             partitionExtract.apply(task))));
         }
+        // Iceberg plans files in no particular order: manifests are kept in a hash set and,
+        // with more than one manifest, planned concurrently on a worker pool. The Flink source
+        // reads a bucket's lake splits one after another, so put them back in write order. Each
+        // tiering round is one Iceberg commit, so the data sequence number follows write order.
+        // The sort is stable, which keeps the files of one commit in the order Iceberg appended
+        // them, since a commit's new files are listed in one manifest and read sequentially.
+        // Compaction gives the rewritten files a newer sequence number, so rows of compacted
+        // files can still be out of order within the data a single compaction rewrote.
+        splits.sort(SPLIT_WRITE_ORDER);
         return splits;
     }
 
