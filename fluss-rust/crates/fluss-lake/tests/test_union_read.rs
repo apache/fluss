@@ -28,8 +28,8 @@ use fluss::metadata::{
 use fluss::predicate::col;
 use fluss_lake::{
     FlussLakeError, FlussLakeLogPartition, FlussLakeLogRange, FlussLakePartitionIdentity,
-    FlussLakeReadContext, FlussLakeTable, LakePlannerContext,
-    LakeReaderContext, LakeSource, LakeSplit, RecordBatchStream,
+    FlussLakeReadContext, FlussLakeTable, LakePlannerContext, LakeReaderContext, LakeSource,
+    LakeSplit, RecordBatchStream,
 };
 use futures::TryStreamExt;
 use futures::future::BoxFuture;
