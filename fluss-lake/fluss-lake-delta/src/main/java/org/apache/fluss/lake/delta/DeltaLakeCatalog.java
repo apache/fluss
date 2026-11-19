@@ -23,6 +23,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.delta.tiering.DeltaLakeCommitter;
 import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
 import org.apache.fluss.lake.delta.utils.FlussDataTypeToDeltaDataType;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
@@ -37,13 +38,18 @@ import io.delta.kernel.Operation;
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.TableManager;
 import io.delta.kernel.Transaction;
+import io.delta.kernel.data.FilteredColumnarBatch;
+import io.delta.kernel.data.Row;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.exceptions.TableNotFoundException;
 import io.delta.kernel.expressions.Column;
 import io.delta.kernel.transaction.DataLayoutSpec;
 import io.delta.kernel.types.StructType;
 import io.delta.kernel.utils.CloseableIterable;
+import io.delta.kernel.utils.CloseableIterator;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -146,6 +152,13 @@ public class DeltaLakeCatalog implements LakeCatalog {
                                 "Delta table %s already exists without the %s table feature, "
                                         + "which tiering the Fluss table %s requires.",
                                 path, DOMAIN_METADATA_FEATURE, tablePath));
+            }
+
+            if (context.isCreatingFlussTable() && !isEmpty(existing, engine)) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "Delta table %s already exists and is not empty. Drop the Delta table or use another name for the Fluss table %s.",
+                                path, tablePath));
             }
             return;
         } catch (TableNotFoundException e) {
@@ -281,6 +294,34 @@ public class DeltaLakeCatalog implements LakeCatalog {
             throw new InvalidAlterTableException(
                     String.format(
                             "Altering the Delta table property '%s' is not supported yet.", key));
+        }
+    }
+
+    /**
+     * Returns whether the Delta table holds no data of a Fluss table: no data files and no {@code
+     * fluss.tiering} domain metadata. A table left by an earlier attempt to create the same Fluss
+     * table is empty.
+     */
+    private static boolean isEmpty(Snapshot snapshot, Engine engine) {
+        if (snapshot.getDomainMetadata(DeltaLakeCommitter.FLUSS_DOMAIN).isPresent()) {
+            return false;
+        }
+        try (CloseableIterator<FilteredColumnarBatch> scanFiles =
+                snapshot.getScanBuilder().build().getScanFiles(engine)) {
+            while (scanFiles.hasNext()) {
+                // getRows() applies the selection vector, so files removed later aren't counted
+                try (CloseableIterator<Row> rows = scanFiles.next().getRows()) {
+                    if (rows.hasNext()) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        } catch (IOException e) {
+            throw new UncheckedIOException(
+                    String.format(
+                            "Failed to list the data files of Delta table %s.", snapshot.getPath()),
+                    e);
         }
     }
 

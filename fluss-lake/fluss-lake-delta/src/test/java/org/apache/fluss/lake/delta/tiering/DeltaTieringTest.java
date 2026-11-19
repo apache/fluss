@@ -56,6 +56,7 @@ import org.apache.fluss.utils.PartitionUtils;
 import io.delta.kernel.Operation;
 import io.delta.kernel.Snapshot;
 import io.delta.kernel.TableManager;
+import io.delta.kernel.Transaction;
 import io.delta.kernel.engine.Engine;
 import io.delta.kernel.utils.CloseableIterable;
 import org.junit.jupiter.api.BeforeEach;
@@ -545,6 +546,74 @@ class DeltaTieringTest {
                 .hasMessageContaining("domainMetadata");
     }
 
+    @Test
+    void testCreateFlussTableReusesEmptyTable() throws Exception {
+        DeltaLakeCatalog catalog = new DeltaLakeCatalog(configuration);
+        TablePath tablePath = TablePath.of("fluss", "create_retry");
+        TableDescriptor descriptor = logTableDescriptor(false);
+
+        catalog.createTable(tablePath, descriptor, creatingFlussTable());
+        // a retry finds the empty table left by the first attempt
+        catalog.createTable(tablePath, descriptor, creatingFlussTable());
+        assertThat(
+                        TableManager.loadSnapshot(DeltaConfig.tablePath(configuration, tablePath))
+                                .build(engine)
+                                .getVersion())
+                .isEqualTo(0L);
+    }
+
+    @Test
+    void testCreateFlussTableRejectsTieredTable() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "create_retry");
+        TableInfo tableInfo = createTable(tablePath, false);
+        commit(
+                tablePath,
+                tableInfo,
+                Collections.singletonList(writeOneRow(tablePath, tableInfo)),
+                "offsets-1");
+
+        assertCreateFlussTableRejected(tablePath);
+        new DeltaLakeCatalog(configuration)
+                .createTable(tablePath, logTableDescriptor(false), new TestingLakeCatalogContext());
+    }
+
+    @Test
+    void testCreateFlussTableRejectsTableWithOnlyFlussOffsets() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "only_offsets");
+        TableInfo tableInfo = createTable(tablePath, false);
+        // an empty round has no data files but still sets the fluss.tiering domain metadata
+        commit(tablePath, tableInfo, Collections.emptyList(), "offsets-1");
+
+        assertCreateFlussTableRejected(tablePath);
+    }
+
+    @Test
+    void testCreateFlussTableRejectsTableWithOnlyDataFiles() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "only_data_files");
+        String deltaPath = DeltaConfig.tablePath(configuration, tablePath);
+        TableInfo tableInfo = createTable(tablePath, false);
+        commit(
+                tablePath,
+                tableInfo,
+                Collections.singletonList(writeOneRow(tablePath, tableInfo)),
+                "offsets-1");
+        // like a table that another engine filled, without the fluss.tiering domain metadata
+        Transaction transaction =
+                TableManager.loadSnapshot(deltaPath)
+                        .build(engine)
+                        .buildUpdateTableTransaction("other-engine", Operation.WRITE)
+                        .build(engine);
+        transaction.removeDomainMetadata(DeltaLakeCommitter.FLUSS_DOMAIN);
+        transaction.commit(engine, CloseableIterable.emptyIterable());
+        assertThat(
+                        TableManager.loadSnapshot(deltaPath)
+                                .build(engine)
+                                .getDomainMetadata(DeltaLakeCommitter.FLUSS_DOMAIN))
+                .isEmpty();
+
+        assertCreateFlussTableRejected(tablePath);
+    }
+
     @ParameterizedTest
     @CsvSource({
         "delta.columnMapping.mode, name",
@@ -782,6 +851,37 @@ class DeltaTieringTest {
                 logDir.resolve(String.format("%020d.json", version + 1)),
                 Collections.singletonList(action.toString()),
                 StandardOpenOption.CREATE_NEW);
+    }
+
+    private void assertCreateFlussTableRejected(TablePath tablePath) {
+        assertThatThrownBy(
+                        () ->
+                                new DeltaLakeCatalog(configuration)
+                                        .createTable(
+                                                tablePath,
+                                                logTableDescriptor(false),
+                                                creatingFlussTable()))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("not empty");
+    }
+
+    private DeltaWriteResult writeOneRow(TablePath tablePath, TableInfo tableInfo)
+            throws IOException {
+        try (LakeWriter<DeltaWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, tableInfo)) {
+            writer.write(new GenericRecord(0, 0, ChangeType.APPEND_ONLY, genRow(0, null, 0)));
+            return writer.complete();
+        }
+    }
+
+    /** The context of CREATE TABLE. The default one is turning on tiering for an existing table. */
+    private static TestingLakeCatalogContext creatingFlussTable() {
+        return new TestingLakeCatalogContext() {
+            @Override
+            public boolean isCreatingFlussTable() {
+                return true;
+            }
+        };
     }
 
     private static JsonNode readTree(String json) {
