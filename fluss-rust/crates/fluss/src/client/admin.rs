@@ -37,10 +37,9 @@ use crate::rpc::message::{
     GetLakeSnapshotRequest, GetLatestKvSnapshotsRequest, GetLatestLakeSnapshotRequest,
     GetProducerOffsetsRequest, GetTableRequest, GetTableSchemaRequestMsg, GetTableStatsRequest,
     ListAclsRequest, ListDatabaseSummariesRequest, ListDatabasesRequest, ListKvSnapshotsRequest,
-    ListPartitionInfosRequest, ListRebalanceProgressRequest, ListRebalancesRequest,
-    ListRemoteLogManifestsRequest, ListTablesRequest, RebalanceRequest,
-    RegisterProducerOffsetsRequest, ReleaseKvSnapshotLeaseRequest, RemoveServerTagRequest,
-    TableExistsRequest,
+    ListPartitionInfosRequest, ListRebalanceProgressRequest, ListRemoteLogManifestsRequest,
+    ListTablesRequest, RebalanceRequest, RegisterProducerOffsetsRequest,
+    ReleaseKvSnapshotLeaseRequest, RemoveServerTagRequest, TableExistsRequest,
 };
 use crate::rpc::message::{ListOffsetsRequest, OffsetSpec};
 use crate::rpc::{RpcClient, ServerConnection};
@@ -833,12 +832,13 @@ impl FlussAdmin {
     }
 
     /// List a summary of the known rebalances: the latest one first, then older finished ones,
-    /// newest first, limited to the server's bounded history.
-    pub async fn list_rebalances(&self) -> Result<Vec<RebalanceInfo>> {
+    /// newest first, limited to the server's bounded history. Fails with `UnsupportedVersion`
+    /// on a server that does not keep a rebalance history.
+    pub async fn list_all_rebalances(&self) -> Result<Vec<RebalanceInfo>> {
         let response = self
             .admin_gateway()
             .await?
-            .request(ListRebalancesRequest::new())
+            .request(ListRebalanceProgressRequest::with_history())
             .await?;
         response
             .rebalance_infos

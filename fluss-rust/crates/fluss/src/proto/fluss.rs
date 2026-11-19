@@ -1193,6 +1193,10 @@ pub struct RebalanceResponse {
 pub struct ListRebalanceProgressRequest {
     #[prost(string, optional, tag = "1")]
     pub rebalance_id: ::core::option::Option<::prost::alloc::string::String>,
+    /// Since version 1. When true, the response carries only rebalance_infos: the current
+    /// rebalance and the retained history as summaries. Must not be combined with rebalance_id.
+    #[prost(bool, optional, tag = "2")]
+    pub include_history: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListRebalanceProgressResponse {
@@ -1206,6 +1210,9 @@ pub struct ListRebalanceProgressResponse {
     pub started_at_ms: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "5")]
     pub completed_at_ms: ::core::option::Option<i64>,
+    /// Since version 1. Only set for a request with include_history.
+    #[prost(message, repeated, tag = "6")]
+    pub rebalance_infos: ::prost::alloc::vec::Vec<PbRebalanceInfo>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelRebalanceRequest {
@@ -1214,13 +1221,6 @@ pub struct CancelRebalanceRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CancelRebalanceResponse {}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ListRebalancesRequest {}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListRebalancesResponse {
-    #[prost(message, repeated, tag = "1")]
-    pub rebalance_infos: ::prost::alloc::vec::Vec<PbRebalanceInfo>,
-}
 /// Register producer offsets request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RegisterProducerOffsetsRequest {
@@ -2029,6 +2029,9 @@ pub struct PbRebalanceInfo {
     pub started_at_ms: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "4")]
     pub completed_at_ms: ::core::option::Option<i64>,
+    /// Set only for a FAILED rebalance: why the first failed bucket was given up on.
+    #[prost(string, optional, tag = "5")]
+    pub failure_reason: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbRebalancePlanForBucket {

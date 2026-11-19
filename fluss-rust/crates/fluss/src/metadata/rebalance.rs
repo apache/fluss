@@ -152,13 +152,15 @@ impl RebalanceProgress {
     }
 }
 
-/// One entry of `list_rebalances`. Mirrors Java `org.apache.fluss.cluster.rebalance.RebalanceInfo`.
+/// One entry of `list_all_rebalances`. Mirrors Java `org.apache.fluss.cluster.rebalance.RebalanceInfo`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RebalanceInfo {
     pub rebalance_id: String,
     pub rebalance_status: RebalanceStatus,
     pub started_at_ms: Option<i64>,
     pub completed_at_ms: Option<i64>,
+    /// For a failed rebalance, why the first failed bucket was given up on.
+    pub failure_reason: Option<String>,
 }
 
 impl RebalanceInfo {
@@ -168,6 +170,7 @@ impl RebalanceInfo {
             rebalance_status: RebalanceStatus::try_from_i32(pb.rebalance_status)?,
             started_at_ms: pb.started_at_ms,
             completed_at_ms: pb.completed_at_ms,
+            failure_reason: pb.failure_reason.clone(),
         })
     }
 }
@@ -219,6 +222,7 @@ mod tests {
             table_progress: vec![],
             started_at_ms: Some(5),
             completed_at_ms: None,
+            rebalance_infos: vec![],
         };
         let p = RebalanceProgress::from_pb(&pb).unwrap();
         assert_eq!(p.started_at_ms, Some(5));
@@ -229,18 +233,20 @@ mod tests {
     fn test_rebalance_info_from_pb() {
         let pb = PbRebalanceInfo {
             rebalance_id: "r1".to_string(),
-            rebalance_status: RebalanceStatus::Completed.to_i32(),
+            rebalance_status: RebalanceStatus::Failed.to_i32(),
             started_at_ms: Some(1),
             completed_at_ms: Some(2),
+            failure_reason: Some("no progress".to_string()),
         };
         let info = RebalanceInfo::from_pb(&pb).unwrap();
         assert_eq!(
             info,
             RebalanceInfo {
                 rebalance_id: "r1".to_string(),
-                rebalance_status: RebalanceStatus::Completed,
+                rebalance_status: RebalanceStatus::Failed,
                 started_at_ms: Some(1),
                 completed_at_ms: Some(2),
+                failure_reason: Some("no progress".to_string()),
             }
         );
         assert!(
