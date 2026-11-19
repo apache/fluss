@@ -25,15 +25,12 @@ import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.PartitionWrite
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.RecordHeader;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.TimestampType;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.TopicWrite;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.PartitionResult;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.TopicResult;
 import org.apache.fluss.kafka.dispatcher.KafkaApiHandler;
 import org.apache.fluss.kafka.dispatcher.KafkaApiSpec;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.apache.kafka.common.InvalidRecordException;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.ApiException;
 import org.apache.kafka.common.errors.InvalidRequestException;
 import org.apache.kafka.common.errors.InvalidRequiredAcksException;
@@ -43,6 +40,9 @@ import org.apache.kafka.common.internals.Topic;
 import org.apache.kafka.common.message.ProduceRequestData.PartitionProduceData;
 import org.apache.kafka.common.message.ProduceRequestData.TopicProduceData;
 import org.apache.kafka.common.message.ProduceResponseData;
+import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponseCollection;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.BaseRecords;
@@ -61,8 +61,8 @@ import java.net.SocketAddress;
 import java.nio.BufferUnderflowException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -74,7 +74,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * Implements non-idempotent Kafka Produce versions 3 through 11.
  *
  * <p>Topic names cross the backend boundary unchanged. The backend resolves bare and qualified
- * names and returns results keyed by the original request names.
+ * names and returns partition responses under the original request names.
  */
 @Internal
 public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
@@ -100,7 +100,9 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
             KafkaRequestContext context, ProduceRequest request) {
         validateRequest(request);
         List<TopicWrite> topics = new ArrayList<>();
-        Map<TopicPartition, PartitionResult> failures = new HashMap<>();
+        // Conversion failures keyed by request topic name in first-failure order; they are merged
+        // back after the written partitions of their topic.
+        Map<String, List<PartitionProduceResponse>> failedByTopic = new LinkedHashMap<>();
         for (TopicProduceData topic : request.data().topicData()) {
             List<PartitionWrite> partitions = new ArrayList<>();
             for (PartitionProduceData partition : topic.partitionData()) {
@@ -116,9 +118,9 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
                                     partition.index(),
                                     readRecords(request.version(), partition.records())));
                 } catch (RuntimeException failure) {
-                    failures.put(
-                            new TopicPartition(topic.name(), partition.index()),
-                            failedPartition(partition.index(), failure));
+                    failedByTopic
+                            .computeIfAbsent(topic.name(), name -> new ArrayList<>())
+                            .add(failedPartition(partition.index(), failure));
                 }
             }
             if (!partitions.isEmpty()) {
@@ -133,60 +135,86 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
                         context.listenerName(),
                         clientAddress(context.remoteAddress()),
                         context.principal());
-        CompletableFuture<KafkaProduceResult> result;
+        CompletableFuture<List<TopicProduceResponse>> result;
         try {
             // The backend consumes borrowed payloads before returning. Only the write result may
             // outlive request processing and the request buffer's release.
             result =
                     topics.isEmpty()
-                            ? CompletableFuture.completedFuture(
-                                    new KafkaProduceResult(Collections.emptyList()))
+                            ? CompletableFuture.completedFuture(Collections.emptyList())
                             : checkNotNull(backend.write(command));
         } catch (RuntimeException failure) {
-            result = new CompletableFuture<>();
-            result.completeExceptionally(failure);
+            result = FutureUtils.completedExceptionally(failure);
         }
         return result.handle(
-                (written, failure) -> {
-                    Map<TopicPartition, PartitionResult> results = new HashMap<>(failures);
-                    if (failure == null && written != null) {
-                        for (TopicResult topic : written.topics()) {
-                            for (PartitionResult partition : topic.partitions()) {
-                                results.putIfAbsent(
-                                        new TopicPartition(
-                                                topic.topicName(), partition.partitionId()),
-                                        partition);
-                            }
-                        }
-                    }
-                    List<TopicResult> ordered = new ArrayList<>();
-                    for (TopicProduceData topic : request.data().topicData()) {
-                        List<PartitionResult> partitions = new ArrayList<>();
-                        for (PartitionProduceData partition : topic.partitionData()) {
-                            TopicPartition key =
-                                    new TopicPartition(topic.name(), partition.index());
-                            PartitionResult value = results.get(key);
-                            if (value == null) {
-                                value =
-                                        failedPartition(
-                                                partition.index(),
-                                                failure == null
-                                                        ? new IllegalStateException(
-                                                                "Produce backend omitted this partition.")
-                                                        : failure);
-                            }
-                            partitions.add(value);
-                        }
-                        ordered.add(new TopicResult(topic.name(), partitions));
-                    }
-                    return toResponse(new KafkaProduceResult(ordered));
-                });
+                (written, failure) ->
+                        new ProduceResponse(
+                                new ProduceResponseData()
+                                        .setThrottleTimeMs(0)
+                                        .setResponses(
+                                                mergeResponses(
+                                                        command,
+                                                        failedByTopic,
+                                                        written,
+                                                        failure))));
     }
 
-    private static PartitionResult failedPartition(int partitionId, Throwable failure) {
-        failure = ExceptionUtils.stripCompletionException(failure);
-        return new PartitionResult(
-                partitionId, Errors.forException(failure), -1L, failure.getMessage());
+    /**
+     * Merges synchronous conversion failures into the backend's topic responses under one entry per
+     * topic name. Written partitions keep the backend's entries (one each, per its contract);
+     * conversion failures follow their topic's written partitions, and topics whose every partition
+     * failed conversion come last. A backend failure overrides every command partition.
+     */
+    private static TopicProduceResponseCollection mergeResponses(
+            KafkaProduceCommand command,
+            Map<String, List<PartitionProduceResponse>> failedByTopic,
+            List<TopicProduceResponse> written,
+            Throwable failure) {
+        List<TopicProduceResponse> topics = new ArrayList<>();
+        if (failure == null) {
+            for (TopicProduceResponse topic : written) {
+                List<PartitionProduceResponse> failed = failedByTopic.remove(topic.name());
+                topics.add(failed == null ? topic : appendFailures(topic, failed));
+            }
+        } else {
+            for (TopicWrite topic : command.topics()) {
+                List<PartitionProduceResponse> partitions = new ArrayList<>();
+                for (PartitionWrite partition : topic.partitions()) {
+                    partitions.add(failedPartition(partition.partitionId(), failure));
+                }
+                List<PartitionProduceResponse> failed = failedByTopic.remove(topic.topicName());
+                if (failed != null) {
+                    partitions.addAll(failed);
+                }
+                topics.add(
+                        new TopicProduceResponse()
+                                .setName(topic.topicName())
+                                .setPartitionResponses(partitions));
+            }
+        }
+        for (Map.Entry<String, List<PartitionProduceResponse>> entry : failedByTopic.entrySet()) {
+            topics.add(
+                    new TopicProduceResponse()
+                            .setName(entry.getKey())
+                            .setPartitionResponses(entry.getValue()));
+        }
+        return new TopicProduceResponseCollection(topics.iterator());
+    }
+
+    private static TopicProduceResponse appendFailures(
+            TopicProduceResponse topic, List<PartitionProduceResponse> failed) {
+        List<PartitionProduceResponse> partitions = new ArrayList<>(topic.partitionResponses());
+        partitions.addAll(failed);
+        return topic.setPartitionResponses(partitions);
+    }
+
+    private static PartitionProduceResponse failedPartition(int partitionId, Throwable failure) {
+        Throwable cause = ExceptionUtils.stripCompletionException(failure);
+        return new PartitionProduceResponse()
+                .setIndex(partitionId)
+                .setErrorCode(Errors.forException(cause).code())
+                .setBaseOffset(-1L)
+                .setErrorMessage(cause.getMessage());
     }
 
     private static void validateRequest(ProduceRequest request) {
@@ -307,28 +335,6 @@ public final class ProduceHandler implements KafkaApiHandler<ProduceRequest> {
                 ? new InvalidRecordException(
                         "Failed to decompress Kafka record batch: " + streamFailure, failure)
                 : failure;
-    }
-
-    private static ProduceResponse toResponse(KafkaProduceResult result) {
-        ProduceResponseData data = new ProduceResponseData().setThrottleTimeMs(0);
-        for (TopicResult topic : result.topics()) {
-            ProduceResponseData.TopicProduceResponse topicResponse =
-                    new ProduceResponseData.TopicProduceResponse().setName(topic.topicName());
-            for (PartitionResult partition : topic.partitions()) {
-                topicResponse
-                        .partitionResponses()
-                        .add(
-                                new ProduceResponseData.PartitionProduceResponse()
-                                        .setIndex(partition.partitionId())
-                                        .setErrorCode(partition.error().code())
-                                        .setBaseOffset(partition.baseOffset())
-                                        .setLogAppendTimeMs(-1L)
-                                        .setLogStartOffset(-1L)
-                                        .setErrorMessage(partition.errorMessage()));
-            }
-            data.responses().add(topicResponse);
-        }
-        return new ProduceResponse(data);
     }
 
     private static List<RecordHeader> readHeaders(Header[] headers) {

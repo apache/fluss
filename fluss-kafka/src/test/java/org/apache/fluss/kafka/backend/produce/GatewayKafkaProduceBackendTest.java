@@ -25,7 +25,6 @@ import org.apache.fluss.kafka.KafkaServerTestBase;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.PartitionWrite;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.Record;
 import org.apache.fluss.kafka.backend.produce.KafkaProduceCommand.TopicWrite;
-import org.apache.fluss.kafka.backend.produce.KafkaProduceResult.PartitionResult;
 import org.apache.fluss.kafka.mapping.KafkaTopicMapper;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -48,6 +47,8 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.kafka.common.message.ProduceResponseData.PartitionProduceResponse;
+import org.apache.kafka.common.message.ProduceResponseData.TopicProduceResponse;
 import org.apache.kafka.common.protocol.Errors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -93,7 +94,7 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
     void testMultiTableAppendIsolatesUnknownTopicsAndBuckets() throws Exception {
         createTable("topic", 42L, Collections.singletonList(TABLET_SERVER_ID));
         createTable("other", 43L, Collections.singletonList(TABLET_SERVER_ID));
-        KafkaProduceResult result =
+        List<TopicProduceResponse> result =
                 backend()
                         .write(
                                 command(
@@ -103,13 +104,23 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
                                         topic("other", good(0)),
                                         topic("kafka.topic", good(2))))
                         .get(10, TimeUnit.SECONDS);
+        // The write contract promises command order for topics and partitions.
+        assertThat(result)
+                .extracting(TopicProduceResponse::name)
+                .containsExactly("topic", "missing", "other", "kafka.topic");
+        assertThat(result.get(0).partitionResponses())
+                .extracting(PartitionProduceResponse::index)
+                .containsExactly(0, 8, 1);
         assertErrors(result, Errors.NONE, Errors.UNKNOWN_TOPIC_OR_PARTITION, Errors.NONE);
-        assertThat(result.topics())
-                .extracting(t -> t.partitions().get(0).error())
+        assertThat(result)
+                .extracting(t -> t.partitionResponses().get(0).errorCode())
                 .containsExactly(
-                        Errors.NONE, Errors.UNKNOWN_TOPIC_OR_PARTITION, Errors.NONE, Errors.NONE);
-        assertThat(result.topics())
-                .extracting(t -> t.partitions().get(0).baseOffset())
+                        Errors.NONE.code(),
+                        Errors.UNKNOWN_TOPIC_OR_PARTITION.code(),
+                        Errors.NONE.code(),
+                        Errors.NONE.code());
+        assertThat(result)
+                .extracting(t -> t.partitionResponses().get(0).baseOffset())
                 .containsExactly(0L, -1L, 0L, 0L);
         assertThat(
                         replicaManager
@@ -184,7 +195,7 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
         createTable("topic", 42L, Arrays.asList(TABLET_SERVER_ID, 2));
         createTable("other", 43L, Arrays.asList(TABLET_SERVER_ID, 2));
         GatewayKafkaProduceBackend backend = backend();
-        CompletableFuture<KafkaProduceResult> result =
+        CompletableFuture<List<TopicProduceResponse>> result =
                 backend.write(
                         command(
                                 (short) -1,
@@ -204,15 +215,15 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
         acknowledge(new TableBucket(42L, 1));
         acknowledge(new TableBucket(43L, 0));
         assertErrors(result.get(10, TimeUnit.SECONDS), Errors.NONE, Errors.NONE);
-        assertThat(result.join().topics().get(1).partitions().get(0).error())
-                .isEqualTo(Errors.NONE);
+        assertThat(result.join().get(1).partitionResponses().get(0).errorCode())
+                .isEqualTo(Errors.NONE.code());
     }
 
     @Test
     void testInsufficientReplicasReleasesAllConvertedRecords() throws Exception {
         createTable("topic", 42L, Collections.singletonList(TABLET_SERVER_ID));
         createTable("other", 43L, Collections.singletonList(TABLET_SERVER_ID));
-        KafkaProduceResult result =
+        List<TopicProduceResponse> result =
                 backend()
                         .write(
                                 command(
@@ -221,8 +232,8 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
                                         topic("other", good(0))))
                         .join();
         assertErrors(result, Errors.NOT_ENOUGH_REPLICAS, Errors.NOT_ENOUGH_REPLICAS);
-        assertThat(result.topics().get(1).partitions().get(0).error())
-                .isEqualTo(Errors.NOT_ENOUGH_REPLICAS);
+        assertThat(result.get(1).partitionResponses().get(0).errorCode())
+                .isEqualTo(Errors.NOT_ENOUGH_REPLICAS.code());
         assertThat(replicaManager.getMemorySegmentPool().usedPages()).isZero();
     }
 
@@ -310,20 +321,18 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
                                 Collections.emptyList())));
     }
 
-    private static void assertErrors(KafkaProduceResult result, Errors... errors) {
-        assertThat(result.topics().get(0).partitions())
-                .extracting(PartitionResult::error)
-                .containsExactly(errors);
-        result.topics()
-                .forEach(
-                        topic ->
-                                topic.partitions()
-                                        .forEach(
-                                                partition -> {
-                                                    if (partition.error() != Errors.NONE) {
-                                                        assertThat(partition.baseOffset())
-                                                                .isEqualTo(-1L);
-                                                    }
-                                                }));
+    private static void assertErrors(List<TopicProduceResponse> result, Errors... errors) {
+        assertThat(result.get(0).partitionResponses())
+                .extracting(PartitionProduceResponse::errorCode)
+                .containsExactly(Arrays.stream(errors).map(Errors::code).toArray(Short[]::new));
+        result.forEach(
+                topic ->
+                        topic.partitionResponses()
+                                .forEach(
+                                        partition -> {
+                                            if (partition.errorCode() != Errors.NONE.code()) {
+                                                assertThat(partition.baseOffset()).isEqualTo(-1L);
+                                            }
+                                        }));
     }
 }
