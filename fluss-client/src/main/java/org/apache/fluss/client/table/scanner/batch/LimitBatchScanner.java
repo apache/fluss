@@ -17,9 +17,14 @@
 
 package org.apache.fluss.client.table.scanner.batch;
 
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -39,10 +44,13 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.SchemaUtil;
 
 import javax.annotation.Nullable;
@@ -50,14 +58,17 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 /** A {@link BatchScanner} implementation that scans a limited number of records from a table. */
 public class LimitBatchScanner implements BatchScanner {
@@ -80,6 +91,15 @@ public class LimitBatchScanner implements BatchScanner {
     private final Map<Short, int[]> schemaProjectionCache = new HashMap<>();
 
     private boolean endOfInput;
+    private final TableBucket tableBucket;
+    @Nullable private final Supplier<LogScanner> logScannerFactory;
+    private final TabletServerGateway gateway;
+    private final Cluster cluster;
+    @Nullable private CompletableFuture<Long> endOffset;
+    @Nullable private CompletableFuture<Long> startOffset;
+    @Nullable private LogScanner fallbackScanner;
+    private final Deque<InternalRow> tail = new ArrayDeque<>();
+    private long nextOffset;
 
     public LimitBatchScanner(
             TableInfo tableInfo,
@@ -87,7 +107,10 @@ public class LimitBatchScanner implements BatchScanner {
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
             @Nullable int[] projectedFields,
-            int limit) {
+            int limit,
+            @Nullable Supplier<LogScanner> logScannerFactory) {
+        this.tableBucket = tableBucket;
+        this.logScannerFactory = logScannerFactory;
         this.tableInfo = tableInfo;
         this.projectedFields = projectedFields;
         this.limit = limit;
@@ -108,7 +131,7 @@ public class LimitBatchScanner implements BatchScanner {
                         .setLimit(limit);
 
         metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
-        Cluster cluster = metadataUpdater.getCluster();
+        cluster = metadataUpdater.getCluster();
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
         }
@@ -118,7 +141,7 @@ public class LimitBatchScanner implements BatchScanner {
 
         // because that rocksdb is not suitable to projection, thus do it in client.
         int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);
-        TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
+        gateway = metadataUpdater.newTabletServerClientForNode(leader);
         if (gateway == null) {
             // TODO handle this exception, like retry.
             throw new LeaderNotAvailableException(
@@ -137,27 +160,118 @@ public class LimitBatchScanner implements BatchScanner {
         if (endOfInput) {
             return null;
         }
+        if (endOffset != null) {
+            return pollRetainedTail(timeout);
+        }
         LimitScanResponse response;
         try {
             response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // poll next time
             return CloseableIterator.emptyIterator();
-        } catch (Exception e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new IOException(e);
+        } catch (Exception e) {
+            return handleLimitScanFailure(ExceptionUtils.stripExecutionException(e));
         }
 
         ByteBuf parsedByteBuf = response.getParsedByteBuf();
         try {
+            if (response.hasErrorCode()) {
+                return handleLimitScanFailure(ApiError.fromErrorMessage(response).exception());
+            }
             List<InternalRow> scanRows = parseLimitScanResponse(response);
             endOfInput = true;
             return CloseableIterator.wrap(scanRows.iterator());
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
             throw new IOException(e);
         } finally {
             if (parsedByteBuf != null) {
                 parsedByteBuf.release();
             }
+        }
+    }
+
+    private CloseableIterator<InternalRow> handleLimitScanFailure(Throwable failure)
+            throws IOException {
+        if (logScannerFactory == null || !(failure instanceof LogOffsetOutOfRangeException)) {
+            throw new IOException(failure);
+        }
+        endOffset = requestOffset(new OffsetSpec.LatestSpec());
+        startOffset = requestOffset(new OffsetSpec.EarliestSpec());
+        return CloseableIterator.emptyIterator();
+    }
+
+    private CompletableFuture<Long> requestOffset(OffsetSpec spec) {
+        return gateway.listOffsets(
+                        ClientRpcMessageUtils.makeListOffsetsRequest(
+                                tableBucket.getTableId(),
+                                tableBucket.getPartitionId(),
+                                Collections.singletonList(tableBucket.getBucket()),
+                                spec,
+                                cluster))
+                .thenApply(
+                        response -> {
+                            PbListOffsetsRespForBucket offset =
+                                    response.getBucketsRespsList().get(0);
+                            if (offset.hasErrorCode()) {
+                                throw ApiError.fromErrorMessage(offset).exception();
+                            }
+                            return offset.getOffset();
+                        });
+    }
+
+    private CloseableIterator<InternalRow> pollRetainedTail(Duration timeout) throws IOException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        try {
+            long end = endOffset.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            if (fallbackScanner == null) {
+                nextOffset =
+                        startOffset.get(
+                                Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+                if (nextOffset < end) {
+                    fallbackScanner = logScannerFactory.get();
+                    if (tableBucket.getPartitionId() == null) {
+                        fallbackScanner.subscribe(tableBucket.getBucket(), nextOffset);
+                    } else {
+                        fallbackScanner.subscribe(
+                                tableBucket.getPartitionId(), tableBucket.getBucket(), nextOffset);
+                    }
+                }
+            }
+            if (nextOffset < end) {
+                ScanRecords records =
+                        fallbackScanner.poll(
+                                Duration.ofNanos(Math.max(0, deadline - System.nanoTime())));
+                for (LogRecord record : records.records(tableBucket)) {
+                    if (record.logOffset() >= end) {
+                        break;
+                    }
+                    if (tail.size() == limit) {
+                        tail.removeFirst();
+                    }
+                    tail.addLast(maybeProject(record.getRow()));
+                }
+                Long consumed = records.consumedUpToOffset(tableBucket);
+                if (consumed != null) {
+                    nextOffset = consumed;
+                }
+            }
+            if (nextOffset >= end) {
+                endOfInput = true;
+                return CloseableIterator.wrap(tail.iterator());
+            }
+            return CloseableIterator.emptyIterator();
+        } catch (TimeoutException e) {
+            return CloseableIterator.emptyIterator();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        } catch (Exception e) {
+            throw new IOException(e);
         }
     }
 
@@ -233,7 +347,14 @@ public class LimitBatchScanner implements BatchScanner {
     @Override
     public void close() throws IOException {
         scanFuture.cancel(true);
-        // Release off-heap memory held by the chunked allocation manager factory.
-        chunkedFactory.close();
+        try {
+            if (fallbackScanner != null) {
+                fallbackScanner.close();
+            }
+        } catch (Exception e) {
+            throw new IOException(e);
+        } finally {
+            chunkedFactory.close();
+        }
     }
 }

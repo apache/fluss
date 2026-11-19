@@ -26,7 +26,6 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
@@ -528,9 +527,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 lakeCatalogDynamicLoader.getLakeCatalogContainer();
 
         if (tableDescriptor.getSchema().getDeduplicationKey().isPresent()) {
-            if (!request.hasDeduplicatingAppend()
-                    || !request.isDeduplicatingAppend()
-                    || currentSession().getApiVersion() < 1) {
+            if (currentSession().getApiVersion() < 1) {
                 throw new org.apache.fluss.exception.UnsupportedVersionException(
                         "Deduplicating tables require CREATE_TABLE version 1.");
             }

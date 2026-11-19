@@ -183,7 +183,10 @@ public class TableScan implements Scan {
                 schemaGetter,
                 conn.getMetadataUpdater(),
                 projectedColumns,
-                limit);
+                limit,
+                tableInfo.hasPrimaryKey()
+                        ? null
+                        : () -> new TableScan(conn, tableInfo, schemaGetter).createLogScanner());
     }
 
     private int kvBatchSizeBytes() {

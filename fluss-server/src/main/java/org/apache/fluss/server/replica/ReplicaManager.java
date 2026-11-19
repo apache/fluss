@@ -811,27 +811,6 @@ public class ReplicaManager implements ServerReconfigurable {
             MergeMode mergeMode,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
-        putRecordsToKv(
-                timeoutMs,
-                requiredAcks,
-                entriesPerBucket,
-                targetColumns,
-                mergeMode,
-                apiVersion,
-                false,
-                responseCallback);
-    }
-
-    /** Writes either primary-key mutations or explicitly requested deduplicating appends. */
-    public void putRecordsToKv(
-            int timeoutMs,
-            int requiredAcks,
-            Map<TableBucket, KvRecordBatch> entriesPerBucket,
-            @Nullable int[] targetColumns,
-            MergeMode mergeMode,
-            short apiVersion,
-            boolean deduplicating,
-            Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
@@ -839,13 +818,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(
-                        entriesPerBucket,
-                        targetColumns,
-                        mergeMode,
-                        requiredAcks,
-                        apiVersion,
-                        deduplicating);
+                putToLocalKv(entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -1717,8 +1690,7 @@ public class ReplicaManager implements ServerReconfigurable {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             int requiredAcks,
-            short apiVersion,
-            boolean deduplicating) {
+            short apiVersion) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -1726,16 +1698,9 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
-                if (deduplicating != replica.getTableInfo().hasDeduplicationKey()) {
+                if (replica.getTableInfo().hasDeduplicationKey()) {
                     throw new org.apache.fluss.exception.InvalidTableException(
-                            "Write operation does not match table deduplication mode.");
-                }
-                if (deduplicating
-                        && (apiVersion < 4
-                                || targetColumns != null
-                                || mergeMode != MergeMode.DEFAULT)) {
-                    throw new org.apache.fluss.exception.InvalidTableException(
-                            "Deduplicating append requires version 4 and full INSERT rows.");
+                            "Deduplicating log tables require ProduceLog.");
                 }
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();

@@ -1472,6 +1472,22 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines how long the writer will block when waiting for segments to become available.");
 
+    /** How a writer identifies exact duplicate keys within one pending batch. */
+    public enum BatchDeduplicationMode {
+        NONE,
+        ADJACENT,
+        BATCH
+    }
+
+    public static final ConfigOption<BatchDeduplicationMode>
+            CLIENT_WRITER_BATCH_DEDUPLICATION_MODE =
+                    key("client.writer.batch-deduplication.mode")
+                            .enumType(BatchDeduplicationMode.class)
+                            .defaultValue(BatchDeduplicationMode.NONE)
+                            .withDescription(
+                                    "Controls client-side filtering of exact duplicate keys within an Arrow "
+                                            + "batch for log tables with a deduplication key and no deduplication TTL.");
+
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BATCH_SIZE =
             key("client.writer.batch-size")
                     .memoryType()

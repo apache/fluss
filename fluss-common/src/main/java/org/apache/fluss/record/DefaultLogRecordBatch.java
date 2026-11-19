@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -290,6 +291,27 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             IOUtils.closeQuietly(batchAccess);
             throw t;
         }
+    }
+
+    /** Wraps a fully retained append-only Arrow payload in the existing INSERT WAL format. */
+    public MemoryLogRecords asArrowInsertBatch() {
+        checkArgument(
+                magic == LogRecordBatchFormat.LOG_MAGIC_VALUE_V0 && isAppendOnly(),
+                "Expected an append-only Arrow batch in the original log format");
+        int headerSize = recordBatchHeaderSize(magic);
+        int count = getRecordCount();
+        byte[] bytes = new byte[Math.addExact(sizeInBytes(), count)];
+        segment.get(position, bytes, 0, headerSize);
+        Arrays.fill(bytes, headerSize, headerSize + count, ChangeType.INSERT.toByteValue());
+        segment.get(position + headerSize, bytes, headerSize + count, sizeInBytes() - headerSize);
+        MemorySegment target = MemorySegment.wrap(bytes);
+        target.put(attributeOffset(magic), (byte) (attributes() & ~APPEND_ONLY_FLAG_MASK));
+        target.putInt(LENGTH_OFFSET, bytes.length - LOG_OVERHEAD);
+        int crcStart = schemaIdOffset(magic);
+        target.putInt(
+                crcOffset(magic),
+                (int) Crc32C.compute(ByteBuffer.wrap(bytes), crcStart, bytes.length - crcStart));
+        return MemoryLogRecords.pointToByteBuffer(ByteBuffer.wrap(bytes));
     }
 
     @Override

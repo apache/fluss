@@ -364,9 +364,10 @@ public class CoordinatorChannelManager {
                                                             api.getApiKey()
                                                                             == org.apache.fluss.rpc
                                                                                     .protocol
-                                                                                    .ApiKeys.PUT_KV
+                                                                                    .ApiKeys
+                                                                                    .PRODUCE_LOG
                                                                                     .id
-                                                                    && api.getMaxVersion() >= 4);
+                                                                    && api.getMaxVersion() >= 2);
                             if (!supported) {
                                 throw new org.apache.fluss.exception.UnsupportedVersionException(
                                         "Tablet server "

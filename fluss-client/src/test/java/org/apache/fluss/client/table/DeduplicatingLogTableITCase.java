@@ -204,6 +204,63 @@ class DeduplicatingLogTableITCase extends ClientToServerITCaseBase {
         }
     }
 
+    @ParameterizedTest
+    @EnumSource(ConfigOptions.BatchDeduplicationMode.class)
+    void testClientBatchDeduplication(ConfigOptions.BatchDeduplicationMode mode) throws Exception {
+        org.apache.fluss.config.Configuration config =
+                new org.apache.fluss.config.Configuration(clientConf);
+        config.set(ConfigOptions.CLIENT_WRITER_BATCH_DEDUPLICATION_MODE, mode);
+        config.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofSeconds(30));
+        TablePath path = TablePath.of("dedup_client_modes", mode.name().toLowerCase(Locale.ROOT));
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .deduplicationKey("id")
+                        .build();
+        long id =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .distributedBy(1)
+                                .logFormat(LogFormat.ARROW)
+                                .build(),
+                        false);
+        TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
+        try (RpcClient rpc = RpcClient.create(config, TestingClientMetricGroup.newInstance());
+                Table table = conn.getTable(path)) {
+            WriterClient writerClient =
+                    new WriterClient(config, new MetadataUpdater(config, rpc), metrics, admin);
+            try {
+                AppendWriter writer =
+                        new TableAppend(path, table.getTableInfo(), writerClient).createWriter();
+                flushRows(
+                        writer,
+                        row(1, "first"),
+                        row(1, "adjacent"),
+                        row(2, "second"),
+                        row(1, "separated"));
+                assertThat(metrics.recordsSendTotal().getCount())
+                        .isEqualTo(
+                                mode == ConfigOptions.BatchDeduplicationMode.NONE
+                                        ? 4
+                                        : mode == ConfigOptions.BatchDeduplicationMode.ADJACENT
+                                                ? 3
+                                                : 2);
+                InternalRowListAssert.assertThatRows(
+                                collectRows(
+                                        table.newScan()
+                                                .limit(2)
+                                                .createBatchScanner(new TableBucket(id, 0))))
+                        .withSchema(schema.getRowType())
+                        .isEqualTo(Arrays.asList(row(1, "first"), row(2, "second")));
+            } finally {
+                writerClient.close(Duration.ZERO);
+            }
+        }
+    }
+
     @Test
     void testResumeFromOffsetInsideMixedBatch() throws Exception {
         clientConf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofSeconds(30));

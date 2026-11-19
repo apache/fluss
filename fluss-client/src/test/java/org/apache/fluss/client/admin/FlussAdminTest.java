@@ -57,7 +57,7 @@ class FlussAdminTest {
             new ServerNode(0, "old-coordinator", 9123, ServerType.COORDINATOR);
 
     @Test
-    void testDeduplicationCreationCarriesRequiredCapability() throws Exception {
+    void testDeduplicationCreationCarriesSchema() throws Exception {
         TestingRpcClient client =
                 new TestingRpcClient(
                         (node, api) -> {
@@ -69,7 +69,6 @@ class FlussAdminTest {
                         assertThat(api).isEqualTo(ApiKeys.CREATE_TABLE);
                         org.apache.fluss.rpc.messages.CreateTableRequest request =
                                 (org.apache.fluss.rpc.messages.CreateTableRequest) raw;
-                        assertThat(request.isDeduplicatingAppend()).isTrue();
                         assertThat(
                                         TableDescriptor.fromJsonBytes(request.getTableJson())
                                                 .getSchema()

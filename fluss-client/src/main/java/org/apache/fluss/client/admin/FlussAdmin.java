@@ -344,8 +344,6 @@ public class FlussAdmin implements Admin {
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
         tablePath.validate();
         CreateTableRequest request = new CreateTableRequest();
-        request.setDeduplicatingAppend(
-                tableDescriptor.getSchema().getDeduplicationKey().isPresent());
         request.setTableJson(tableDescriptor.toJsonBytes())
                 .setIgnoreIfExists(ignoreIfExists)
                 .setTablePath()

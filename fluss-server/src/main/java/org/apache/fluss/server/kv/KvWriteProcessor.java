@@ -36,11 +36,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchFormat;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
@@ -59,7 +61,6 @@ import org.apache.fluss.server.kv.historical.LocalValueLookupResult;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
-import org.apache.fluss.server.kv.rowmerger.FirstRowRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
@@ -80,6 +81,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
@@ -158,7 +160,7 @@ public final class KvWriteProcessor {
         this.kvFormat = kvFormat;
         this.deduplicating =
                 schemaGetter.getLatestSchemaInfo().getSchema().getDeduplicationKey().isPresent();
-        this.rowMerger = deduplicating ? new FirstRowRowMerger(DeleteBehavior.DISABLE) : rowMerger;
+        this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
         this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
@@ -193,40 +195,41 @@ public final class KvWriteProcessor {
                 kvRecords.writerId(),
                 kvRecords.batchSequence(),
                 stateAccessor,
-                (walBuilder, startOffset, marker) ->
-                        processKvRecords(
-                                kvRecords,
-                                kvRecords.schemaId(),
-                                writeContext.rowMerger,
-                                writeContext.autoIncrementUpdater,
-                                walBuilder,
-                                latestSchemaRow,
-                                startOffset,
-                                marker,
-                                stateAccessor,
-                                originalPartitionName,
-                                historicalValueLookup));
+                (walBuilder, startOffset, marker) -> {
+                    processKvRecords(
+                            kvRecords,
+                            kvRecords.schemaId(),
+                            writeContext.rowMerger,
+                            writeContext.autoIncrementUpdater,
+                            walBuilder,
+                            latestSchemaRow,
+                            startOffset,
+                            stateAccessor,
+                            originalPartitionName,
+                            historicalValueLookup);
+                    return null;
+                });
     }
 
-    /** Filters a ProduceLog Arrow batch and appends only its accepted rows. */
-    public LogAppendInfo appendDeduplicatingArrow(
+    /** Filters a ProduceLog batch and appends only its accepted rows. */
+    public LogAppendInfo appendDeduplicatingLog(
             MemoryLogRecords records,
             TableInfo tableInfo,
             int bucketCount,
             String partitionName,
             KvStateAccessor stateAccessor)
             throws Exception {
-        if (!deduplicating || logFormat != LogFormat.ARROW) {
+        if (!deduplicating) {
             throw new InvalidTableException(
-                    "Deduplicating ProduceLog requires an Arrow deduplication table.");
+                    "Deduplicating ProduceLog requires a deduplication table.");
         }
         Iterator<LogRecordBatch> batches = records.batches().iterator();
         if (!batches.hasNext()) {
-            throw new InvalidTableException("ProduceLog requires one complete Arrow batch.");
+            throw new InvalidTableException("ProduceLog requires one complete log batch.");
         }
         LogRecordBatch batch = batches.next();
         if (batch.sizeInBytes() != records.sizeInBytes() || batch.getRecordCount() <= 0) {
-            throw new InvalidTableException("ProduceLog requires one complete Arrow batch.");
+            throw new InvalidTableException("ProduceLog requires one complete log batch.");
         }
         batch.ensureValid();
 
@@ -251,6 +254,10 @@ public final class KvWriteProcessor {
                 tableInfo.getPartitionKeys().isEmpty()
                         ? null
                         : new RowPartitionGetter(inputRowType, tableInfo.getPartitionKeys());
+        boolean reuseArrow =
+                logFormat == LogFormat.ARROW
+                        && batch.schemaId() == latestSchemaId
+                        && batch.magic() == LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
         PaddingRow latestRow = new PaddingRow(latest.getSchema().getRowType().getFieldCount());
         return appendWal(
                 latestSchemaId,
@@ -268,6 +275,7 @@ public final class KvWriteProcessor {
                                     schemaGetter,
                                     null)) {
                         long offset = startOffset;
+                        BitSet retained = reuseArrow ? new BitSet(batch.getRecordCount()) : null;
                         int rowCount = 0;
                         try (CloseableIterator<LogRecord> rows = batch.records(readContext)) {
                             while (rows.hasNext()) {
@@ -275,7 +283,7 @@ public final class KvWriteProcessor {
                                 if (++rowCount > batch.getRecordCount()
                                         || record.getChangeType() != ChangeType.APPEND_ONLY) {
                                     throw new InvalidTableException(
-                                            "ProduceLog requires a complete append-only Arrow batch.");
+                                            "ProduceLog requires a complete append-only log batch.");
                                 }
                                 InternalRow row = record.getRow();
                                 validateDeduplicationRow(input, row);
@@ -292,21 +300,43 @@ public final class KvWriteProcessor {
                                 }
                                 KvPreWriteBuffer.Key key =
                                         stateAccessor.encodeKey(keyEncoder.encodeKey(row), null);
-                                offset =
-                                        appendDeduplicatedRow(
-                                                key,
-                                                row,
-                                                walBuilder,
-                                                latestRow,
-                                                offset,
-                                                marker,
-                                                stateAccessor);
+                                if (retained != null) {
+                                    if (!stateAccessor.lookupLocal(key).isPresent()) {
+                                        stateAccessor.insert(key, marker, offset++);
+                                        retained.set(rowCount - 1);
+                                    }
+                                } else {
+                                    offset =
+                                            appendDeduplicatedRow(
+                                                    key,
+                                                    row,
+                                                    walBuilder,
+                                                    latestRow,
+                                                    offset,
+                                                    marker,
+                                                    stateAccessor);
+                                }
                             }
                         }
                         if (rowCount != batch.getRecordCount()) {
                             throw new InvalidTableException(
-                                    "Arrow row count does not match the batch record count.");
+                                    "Decoded row count does not match the batch record count.");
                         }
+                        if (retained == null || retained.isEmpty()) {
+                            return null;
+                        }
+                        if (offset - startOffset == rowCount) {
+                            return ((DefaultLogRecordBatch) batch).asArrowInsertBatch();
+                        }
+                        try (CloseableIterator<LogRecord> rows = batch.records(readContext)) {
+                            for (int i = 0; rows.hasNext(); i++) {
+                                InternalRow row = rows.next().getRow();
+                                if (retained.get(i)) {
+                                    walBuilder.append(ChangeType.INSERT, latestRow.replaceRow(row));
+                                }
+                            }
+                        }
+                        return null;
                     }
                 });
     }
@@ -336,7 +366,7 @@ public final class KvWriteProcessor {
                             ? KvStateValueEncoder.encodePresenceMarker(
                                     kvValueLayout, commitTimestamp == null ? 0L : commitTimestamp)
                             : null;
-            writer.write(walBuilder, logEndOffsetOfPrevBatch, marker);
+            MemoryLogRecords reused = writer.write(walBuilder, logEndOffsetOfPrevBatch, marker);
 
             // There will be a situation that these batches of kvRecordBatch have not
             // generated any CDC logs, for example, when client attempts to delete
@@ -348,7 +378,7 @@ public final class KvWriteProcessor {
             // put a batch into file with recordCount 0 and offset plus 1L, it will
             // update the batchSequence corresponding to the writerId and also increment
             // the CDC log offset by 1.
-            MemoryLogRecords records = walBuilder.build();
+            MemoryLogRecords records = reused == null ? walBuilder.build() : reused;
             LogAppendInfo logAppendInfo =
                     commitTimestamp == null
                             ? logTablet.appendAsLeader(records)
@@ -429,8 +459,8 @@ public final class KvWriteProcessor {
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
         }
 
-        if (deduplicating && (targetColumns != null || mergeMode != MergeMode.DEFAULT)) {
-            throw new InvalidTableException("Deduplicating log tables require full INSERT rows.");
+        if (deduplicating) {
+            throw new InvalidTableException("Deduplicating log tables require ProduceLog.");
         }
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
@@ -463,7 +493,9 @@ public final class KvWriteProcessor {
 
     @FunctionalInterface
     private interface WalBatchWriter {
-        void write(WalBuilder builder, long startOffset, @Nullable byte[] marker) throws Exception;
+        @Nullable
+        MemoryLogRecords write(WalBuilder builder, long startOffset, @Nullable byte[] marker)
+                throws Exception;
     }
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
@@ -484,7 +516,6 @@ public final class KvWriteProcessor {
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
             long startLogOffset,
-            @Nullable byte[] marker,
             KvStateAccessor stateAccessor,
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
@@ -495,29 +526,11 @@ public final class KvWriteProcessor {
         KvRecordBatch.ReadContext readContext =
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
 
-        Schema inputSchema = deduplicating ? schemaGetter.getSchema(schemaIdOfNewData) : null;
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = stateAccessor.encodeKey(keyBytes, originalPartitionName);
             BinaryRow row = kvRecord.getRow();
 
-            if (deduplicating) {
-                if (row == null) {
-                    throw new InvalidTableException(
-                            "DELETE is not supported for deduplicating log tables.");
-                }
-                validateDeduplicationRow(inputSchema, row);
-                logOffset =
-                        appendDeduplicatedRow(
-                                key,
-                                row,
-                                walBuilder,
-                                latestSchemaRow,
-                                logOffset,
-                                marker,
-                                stateAccessor);
-                continue;
-            }
             if (row == null) {
                 logOffset =
                         processDeletion(

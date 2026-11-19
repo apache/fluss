@@ -23,8 +23,10 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -37,6 +39,10 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.messages.LimitScanRequest;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
@@ -59,6 +65,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Deduplication keys survive remote log expiration and snapshot-based failover. */
 class DeduplicationRemoteRetentionITCase {
@@ -79,6 +86,78 @@ class DeduplicationRemoteRetentionITCase {
         conf.set(ConfigOptions.LOG_RETENTION_CHECK_INTERVAL, Duration.ofHours(1));
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
         return conf;
+    }
+
+    @Test
+    void testLimitFindsRemoteRowBehindEmptyLocalBatch() throws Exception {
+        TablePath path = TablePath.of("dedup_remote_limit", "events");
+        try (Connection connection = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Admin admin = connection.getAdmin()) {
+            admin.createDatabase(path.getDatabaseName(), DatabaseDescriptor.EMPTY, false).get();
+            admin.createTable(
+                            path,
+                            TableDescriptor.builder()
+                                    .schema(
+                                            Schema.newBuilder()
+                                                    .column("id", DataTypes.INT())
+                                                    .deduplicationKey("id")
+                                                    .build())
+                                    .distributedBy(1)
+                                    .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofHours(1))
+                                    .property(
+                                            ConfigOptions.TABLE_LOG_LOCAL_TTL, Duration.ofMillis(1))
+                                    .build(),
+                            false)
+                    .get();
+            TableBucket bucket = new TableBucket(admin.getTableInfo(path).get().getTableId(), 0);
+            CLUSTER.waitUntilAllReplicaReady(bucket);
+            LogTablet log = CLUSTER.waitAndGetLeaderReplica(bucket).getLogTablet();
+            try (Table table = connection.getTable(path)) {
+                AppendWriter writer = table.newAppend().createWriter();
+                writer.append(GenericRow.of(42)).get(30, TimeUnit.SECONDS);
+                log.roll(Optional.empty());
+                writer.append(GenericRow.of(42)).get(30, TimeUnit.SECONDS);
+                CLUSTER.triggerAndWaitSnapshot(bucket);
+                CLOCK.advanceTime(Duration.ofSeconds(1));
+                waitUntil(
+                        () -> {
+                            log.deleteExpiredSegments();
+                            return log.localLogStartOffset() == 1L;
+                        },
+                        Duration.ofSeconds(30),
+                        "The retained row must be available only in remote storage");
+                assertThat(log.getHighWatermark()).isEqualTo(2L);
+                int leaderId = CLUSTER.waitAndGetLeader(bucket);
+                ServerNode leader =
+                        CLUSTER.getTabletServerNodes().stream()
+                                .filter(node -> node.id() == leaderId)
+                                .findFirst()
+                                .get();
+                try (RpcClient rpc =
+                        RpcClient.create(
+                                CLUSTER.getClientConfig(),
+                                TestingClientMetricGroup.newInstance())) {
+                    LimitScanRequest request =
+                            new LimitScanRequest()
+                                    .setTableId(bucket.getTableId())
+                                    .setBucketId(bucket.getBucket())
+                                    .setLimit(1);
+                    assertThatThrownBy(
+                                    () ->
+                                            rpc.sendRequest(leader, ApiKeys.LIMIT_SCAN, request)
+                                                    .get(30, TimeUnit.SECONDS))
+                            .hasCauseInstanceOf(LogOffsetOutOfRangeException.class);
+                }
+                assertThat(
+                                org.apache.fluss.client.table.scanner.batch.BatchScanUtils
+                                        .collectRows(
+                                                table.newScan()
+                                                        .limit(1)
+                                                        .createBatchScanner(bucket)))
+                        .singleElement()
+                        .satisfies(row -> assertThat(row.getInt(0)).isEqualTo(42));
+            }
+        }
     }
 
     @Test

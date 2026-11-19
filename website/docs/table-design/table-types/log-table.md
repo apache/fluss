@@ -79,8 +79,16 @@ The Flink sink accepts insert-only input. Sources read the accepted INSERT
 records through normal log scans. Updates, deletes, keyed lookups, full-row KV
 snapshots, multi-table writes, lake tiering, and historical writes are unsupported.
 Exact row-count metadata is unavailable; count queries scan retained log records.
-The key definition cannot be changed after creation. All servers and clients
-accessing these tables must support deduplication.
+The key definition cannot be changed after creation. Upgrade the Coordinator and
+TabletServers before creating a deduplicating table. Existing append clients can
+send native log batches to a table created by an upgraded client.
+
+For Arrow writes to a deduplicating table without a key TTL, set
+`client.writer.batch-deduplication.mode` on the writer to skip exact duplicates
+before encoding. `none` (the default) sends every row, `adjacent` keeps the first
+row of each consecutive run of equal keys within the batch, and `batch` keeps
+the first row for each key within the batch. TabletServer deduplication applies
+in all three modes.
 
 ## Bucket Assigning
 Bucketing is the fundamental unit of parallelism and scalability in Fluss.  A single table in Fluss is divided into multiple buckets. A bucket is the smallest storage unit for reads and writes. See more details about [Bucketing](table-design/data-distribution/bucketing.md).

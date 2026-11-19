@@ -1063,16 +1063,21 @@ public class FlinkTableSource
         if (flussConfig.toMap().containsKey(FlinkConnectorOptions.DEDUPLICATION_KEY.key())) {
             return false;
         }
-        // Temporary connector tables may omit the key option; authoritative metadata decides.
-        try (org.apache.fluss.client.Connection connection =
-                        org.apache.fluss.client.ConnectionFactory.createConnection(flussConfig);
-                org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
-            if (admin.getTableInfo(tablePath).get().hasDeduplicationKey()) {
+        // A connector table can omit the deduplication key from its declaration.
+        if (!hasPrimaryKey()) {
+            try (org.apache.fluss.client.Connection connection =
+                            org.apache.fluss.client.ConnectionFactory.createConnection(
+                                    flussConfig);
+                    org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
+                if (admin.getTableInfo(tablePath).get().hasDeduplicationKey()) {
+                    return false;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (Exception e) {
                 return false;
             }
-        } catch (Exception e) {
-            throw new org.apache.flink.table.api.TableException(
-                    "Unable to resolve table metadata for aggregate pushdown.", e);
         }
         selectRowCount = true;
         this.producedDataType = dataType.getLogicalType();

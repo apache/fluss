@@ -29,6 +29,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
@@ -1299,7 +1300,7 @@ public final class Replica {
                                                 + tableBucket);
                             }
                             appendInfo =
-                                    kv.appendDeduplicatingArrow(
+                                    kv.appendDeduplicatingLog(
                                             memoryLogRecords,
                                             tableInfo,
                                             bucketCount == null
@@ -1923,7 +1924,7 @@ public final class Replica {
                         long highWatermark = logTablet.getHighWatermark();
                         // client can only read under high watermark.
                         long readOffset =
-                                Math.max(logTablet.logStartOffset(), highWatermark - limit);
+                                Math.max(logTablet.localLogStartOffset(), highWatermark - limit);
                         FetchDataInfo dataInfo =
                                 logTablet.read(
                                         readOffset,
@@ -1959,7 +1960,7 @@ public final class Replica {
                 });
     }
 
-    private LogRecords readLastLogRecords(int limit, long highWatermark) {
+    private LogRecords readLastLogRecords(int limit, long highWatermark) throws IOException {
         List<LogSegment> segments = logTablet.getSegments();
         List<FileChannelChunk> selected = new ArrayList<>();
         long recordCount = 0;
@@ -1967,15 +1968,40 @@ public final class Replica {
         for (int segmentIndex = segments.size() - 1;
                 segmentIndex >= 0 && recordCount < limit;
                 segmentIndex--) {
-            FileLogRecords records = segments.get(segmentIndex).getFileLogRecords();
+            LogSegment segment = segments.get(segmentIndex);
+            FileLogRecords records = segment.getFileLogRecords();
+            long end =
+                    segmentIndex + 1 == segments.size()
+                            ? highWatermark
+                            : Math.min(
+                                    highWatermark, segments.get(segmentIndex + 1).getBaseOffset());
+            long lowerBound = Math.max(logStartOffset, segment.getBaseOffset());
+            long window = limit - recordCount;
             List<LogRecordBatch> batches = new ArrayList<>();
-            for (LogRecordBatch batch : records.batches()) {
-                if (batch.lastLogOffset() >= highWatermark) {
+            while (end > lowerBound) {
+                long start = Math.max(lowerBound, end - window);
+                FileLogRecords.LogOffsetPosition position = segment.translateOffset(start);
+                batches.clear();
+                long rows = 0;
+                if (position != null) {
+                    for (LogRecordBatch batch :
+                            records.slice(position.position, Integer.MAX_VALUE).batches()) {
+                        if (batch.lastLogOffset() >= end) {
+                            break;
+                        }
+                        if (batch.getRecordCount() > 0) {
+                            batches.add(batch);
+                            rows += batch.getRecordCount();
+                        }
+                    }
+                }
+                if (rows >= limit - recordCount || start == lowerBound) {
                     break;
                 }
-                if (batch.lastLogOffset() >= logStartOffset && batch.getRecordCount() > 0) {
-                    batches.add(batch);
-                }
+                window =
+                        Math.min(
+                                end - lowerBound,
+                                window > Long.MAX_VALUE / 2 ? Long.MAX_VALUE : window * 2);
             }
             for (int batchIndex = batches.size() - 1;
                     batchIndex >= 0 && recordCount < limit;
@@ -1989,6 +2015,13 @@ public final class Replica {
                                 batch.sizeInBytes()));
                 recordCount += batch.getRecordCount();
             }
+        }
+        long earliestOffset = logTablet.logStartOffset();
+        if (recordCount < limit && earliestOffset < Math.min(logStartOffset, highWatermark)) {
+            throw new LogOffsetOutOfRangeException(
+                    String.format(
+                            "LIMIT %d for bucket %s requires reading before local offset %d (earliest available offset %d).",
+                            limit, tableBucket, logStartOffset, earliestOffset));
         }
         if (selected.isEmpty()) {
             return MemoryLogRecords.EMPTY;

@@ -860,13 +860,13 @@ public final class KvTablet {
                                 historicalValueLookup));
     }
 
-    /** Appends an Arrow batch through the same KV admission and commit path as PutKv. */
-    public LogAppendInfo appendDeduplicatingArrow(
+    /** Appends a log batch through the same KV admission and commit path as PutKv. */
+    public LogAppendInfo appendDeduplicatingLog(
             MemoryLogRecords records, TableInfo tableInfo, int bucketCount) throws Exception {
         return appendUnderKvLock(
                 records.sizeInBytes(),
                 () ->
-                        kvWriteProcessor.appendDeduplicatingArrow(
+                        kvWriteProcessor.appendDeduplicatingLog(
                                 records,
                                 tableInfo,
                                 bucketCount,

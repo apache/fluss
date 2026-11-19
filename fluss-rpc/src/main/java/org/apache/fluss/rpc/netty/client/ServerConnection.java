@@ -26,12 +26,14 @@ import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -396,19 +398,12 @@ final class ServerConnection {
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
         if (apiKey == ApiKeys.CREATE_TABLE
                 && version < 1
-                && ((org.apache.fluss.rpc.messages.CreateTableRequest) rawRequest)
-                        .hasDeduplicatingAppend()
-                && ((org.apache.fluss.rpc.messages.CreateTableRequest) rawRequest)
-                        .isDeduplicatingAppend()) {
+                && TableDescriptor.fromJsonBytes(((CreateTableRequest) rawRequest).getTableJson())
+                        .getSchema()
+                        .getDeduplicationKey()
+                        .isPresent()) {
             throw new UnsupportedVersionException(
                     "Deduplicating log tables require CREATE_TABLE version 1.");
-        }
-        if (apiKey == ApiKeys.PUT_KV
-                && version < 4
-                && ((PutKvRequest) rawRequest).hasDeduplicatingAppend()
-                && ((PutKvRequest) rawRequest).isDeduplicatingAppend()) {
-            throw new UnsupportedVersionException(
-                    "Deduplicating append requires PUT_KV version 4.");
         }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;

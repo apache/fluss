@@ -44,7 +44,7 @@ public enum ApiKeys {
     // Version 1: table deletions carry the actual table ID and an explicit deletion flag.
     UPDATE_METADATA(1013, 0, 1, PRIVATE),
     // Version 1: Supports original_partition_name in requests and responses for historical writes.
-    PRODUCE_LOG(1014, 0, 1, PUBLIC),
+    PRODUCE_LOG(1014, 0, 2, PUBLIC),
     FETCH_LOG(1015, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
@@ -54,7 +54,7 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    PUT_KV(1016, 0, 4, PUBLIC),
+    PUT_KV(1016, 0, 3, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from
