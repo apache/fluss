@@ -65,6 +65,34 @@ When authorization is enabled, the user must also have the required permissions 
 SASL handshake versions 0–1 and SaslAuthenticate versions 0–2 are supported. Ordinary requests are
 rejected until authentication completes.
 
+## Delivery guarantees
+
+Kafka produce is non-idempotent. Batches carrying a producer ID, transactional markers, or
+control batches are rejected, and `InitProducerId` is not served, so producers must set
+`enable.idempotence=false` (Kafka client libraries 3.0 and newer enable idempotence by
+default). `acks` is honored as in Kafka; `acks=all` waits for the replication of the mapped
+table buckets.
+
+Without idempotence, retries have the same effects as against Kafka with
+`enable.idempotence=false`:
+
+- **Duplicates**: if a response is lost (a timeout or a closed connection), the client
+  retries and the retried records are appended again. The server cannot distinguish a retry
+  from a new produce.
+- **Reordering**: with `retries > 0` and `max.in.flight.requests.per.connection > 1`, a
+  failed batch can be appended after batches that were sent later, swapping the order of
+  records within a partition.
+
+Topic-partition order maps to bucket order in the table's log, and requests on one
+connection are processed in the order the client sends them. Choose producer settings by
+which failure mode is acceptable:
+
+| Requirement | Producer settings | Failure mode |
+|---|---|---|
+| Per-partition order | `max.in.flight.requests.per.connection=1`, `retries > 0`, `acks=all` | duplicates on retry |
+| No duplicates | `retries=0`, `acks=all` | records dropped on transient failure |
+| Both | not available until idempotent produce is supported | — |
+
 ## Topic-to-table mapping
 
 Topic names use `<database>.<table>`. Names without a database prefix use
