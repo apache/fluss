@@ -72,13 +72,35 @@ Set file system options such as credentials here, for example `datalake.delta.fs
 ### Prepare Hadoop Dependencies
 
 Delta Kernel reads and writes files through Hadoop file systems, but the Delta Lake connector doesn't bundle Hadoop.
-Provide the Hadoop client classes in every process that loads the connector:
+Provide Hadoop 3.x in every process that loads the connector. The Fluss servers and the Flink clusters get it in different ways.
 
-- The Fluss servers, which load `${FLUSS_HOME}/plugins/delta/` to create and alter Delta tables.
-- The Flink cluster that runs the tiering service.
-- The Flink clusters that read Delta tiered tables with union read.
+If the warehouse is on an object store, both also need the Hadoop file system for its scheme. For `s3a://`, see [Amazon S3 and S3-Compatible Storage](#amazon-s3-and-s3-compatible-storage).
 
-If the warehouse is on an object store, also provide the Hadoop file system implementation for its scheme, for example `hadoop-aws` and the AWS SDK for `s3a://`.
+#### Fluss Servers
+
+The Fluss servers load `${FLUSS_HOME}/plugins/delta/` in an isolated class loader to create and alter Delta tables.
+Hadoop finds its file system implementations through service files inside its JARs, and this class loader reads such files only from the plugin directory.
+Copy the shaded Hadoop client JARs from a Hadoop 3.x package into the plugin directory:
+
+```bash
+# Download and extract Hadoop
+wget https://archive.apache.org/dist/hadoop/common/hadoop-3.4.3/hadoop-3.4.3.tar.gz
+tar -xzf hadoop-3.4.3.tar.gz
+
+# Copy the Hadoop client JARs into the Delta Lake plugin directory
+cp hadoop-3.4.3/share/hadoop/client/hadoop-client-api-3.4.3.jar \
+   hadoop-3.4.3/share/hadoop/client/hadoop-client-runtime-3.4.3.jar \
+   ${FLUSS_HOME}/plugins/delta/
+```
+
+`HADOOP_CLASSPATH` doesn't replace these JARs, even if it's already set for HDFS remote storage. Without them, creating a table fails with `No FileSystem for scheme "file"`.
+
+Restart the Fluss servers after changing the plugin directory.
+
+#### Flink Clusters
+
+The Flink cluster that runs the tiering service and the Flink clusters that read Delta tiered tables with union read load the connector from `${FLINK_HOME}/lib`.
+Export `HADOOP_CLASSPATH` before starting them. Flink adds it to its classpath at startup.
 
 **Option 1: Use an Existing Hadoop Environment (Recommended)**
 
@@ -86,23 +108,53 @@ If the warehouse is on an object store, also provide the Hadoop file system impl
 export HADOOP_CLASSPATH=`hadoop classpath`
 ```
 
-Export the Hadoop classpath before starting the Fluss servers and the Flink clusters. Both add `HADOOP_CLASSPATH` to their classpath at startup.
-
-**Option 2: Download a Hadoop Package**
+**Option 2: Use a Downloaded Hadoop Package**
 
 ```bash
-# Download and extract Hadoop
-wget https://archive.apache.org/dist/hadoop/common/hadoop-3.4.3/hadoop-3.4.3.tar.gz
-tar -xzf hadoop-3.4.3.tar.gz
-
-# Set HADOOP_HOME to the extracted directory
+# Set HADOOP_HOME to the Hadoop package extracted above
 export HADOOP_HOME=$(pwd)/hadoop-3.4.3
 
 # Set HADOOP_CLASSPATH using the downloaded Hadoop
 export HADOOP_CLASSPATH=`$HADOOP_HOME/bin/hadoop classpath`
 ```
 
-Restart the Fluss servers after changing `HADOOP_CLASSPATH` or the plugin directory.
+#### Amazon S3 and S3-Compatible Storage
+
+An `s3a://` warehouse needs `hadoop-aws`, its dependencies, and the AWS SDK v2 bundle that matches the `hadoop-aws` version.
+The Hadoop package ships `hadoop-aws` and its dependencies in `share/hadoop/common/lib`, but not the AWS SDK bundle.
+For Hadoop 3.4.3, download [bundle-2.35.4.jar](https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.35.4/bundle-2.35.4.jar).
+
+On the Fluss servers, copy these JARs into the plugin directory, next to the Hadoop client JARs.
+`hadoop-aws` uses the unshaded Hadoop dependencies, which the shaded client JARs don't provide, and the Delta log store for S3 uses Guava:
+
+```bash
+HADOOP_LIB=hadoop-3.4.3/share/hadoop/common/lib
+cp ${HADOOP_LIB}/hadoop-aws-3.4.3.jar \
+   ${HADOOP_LIB}/analyticsaccelerator-s3-1.3.1.jar \
+   ${HADOOP_LIB}/commons-lang3-3.18.0.jar \
+   ${HADOOP_LIB}/commons-io-2.16.1.jar \
+   ${HADOOP_LIB}/commons-collections4-4.4.jar \
+   ${HADOOP_LIB}/guava-32.0.1-jre.jar \
+   ${HADOOP_LIB}/failureaccess-1.0.1.jar \
+   bundle-2.35.4.jar \
+   ${FLUSS_HOME}/plugins/delta/
+```
+
+On the Flink clusters, the `hadoop classpath` of the Hadoop 3.4.3 package already includes `hadoop-aws` and its dependencies. Put `bundle-2.35.4.jar` into `${FLINK_HOME}/lib`.
+
+Then configure the file system in `server.yaml`:
+
+```yaml
+datalake.delta.warehouse: s3a://<bucket>/<path>
+datalake.delta.fs.s3a.access.key: <access-key>
+datalake.delta.fs.s3a.secret.key: <secret-key>
+# For S3-compatible storage, also set the endpoint and path-style access
+datalake.delta.fs.s3a.endpoint: <endpoint>
+datalake.delta.fs.s3a.path.style.access: true
+```
+
+Pass the same options to the tiering service as `--datalake.delta.<option> <value>`.
+For union read, the Flink clusters also need the credentials, see [Union Read with Apache Flink](#union-read-with-apache-flink).
 
 ### Start Tiering Service to Delta Lake
 
@@ -113,7 +165,8 @@ For Delta Lake, prepare the following JARs in `${FLINK_HOME}/lib`:
 - Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib`; pick the connector matching your Flink version (see [Dependencies](../../engine-flink/getting-started.md#dependencies)). For Flink 1.20, use [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar).
 - If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss), or [HDFS](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](../../maintenance/tiered-storage/remote-storage.md), download the corresponding Fluss filesystem JAR (see the [Filesystems](../../maintenance/tiered-storage/filesystems/overview.md) section) and put it into `${FLINK_HOME}/lib`.
 - Put [fluss-lake-delta-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-delta/$FLUSS_VERSION$/fluss-lake-delta-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`.
-- Provide Hadoop to the Flink cluster, see [Prepare Hadoop Dependencies](#prepare-hadoop-dependencies).
+- Provide Hadoop to the Flink cluster, see [Flink Clusters](#flink-clusters).
+- For an `s3a://` warehouse, also put the AWS SDK bundle into `${FLINK_HOME}/lib`, see [Amazon S3 and S3-Compatible Storage](#amazon-s3-and-s3-compatible-storage).
 
 Start the Flink tiering job with Delta-specific configurations:
 
@@ -206,7 +259,7 @@ When a table has `'table.datalake.enabled' = 'true'`, its data exists in two lay
 - Historical data is tiered to Delta Lake.
 
 To read the full dataset, query the Fluss table without any suffix. Fluss performs union read across the Delta layer and the Fluss layer.
-The Flink cluster that runs the query needs `fluss-lake-delta-$FLUSS_VERSION$.jar` in `${FLINK_HOME}/lib` and Hadoop, see [Prepare Hadoop Dependencies](#prepare-hadoop-dependencies).
+The Flink cluster that runs the query needs `fluss-lake-delta-$FLUSS_VERSION$.jar` in `${FLINK_HOME}/lib` and Hadoop, see [Flink Clusters](#flink-clusters).
 
 ```sql title="Flink SQL"
 -- Set execution mode to streaming or batch; batch mode is used here as an example.
@@ -214,6 +267,18 @@ SET 'execution.runtime-mode' = 'batch';
 
 -- Query will union data from Fluss and Delta Lake.
 SELECT COUNT(*) FROM access_logs;
+```
+
+Fluss passes the `datalake.delta.*` options of `server.yaml` to the query as table options, except options whose names contain `key`, `secret`, or `password`, such as `fs.s3a.access.key`.
+Set those options on the Fluss catalog with the `delta.` prefix:
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+  'type' = 'fluss',
+  'bootstrap.servers' = 'localhost:9123',
+  'delta.fs.s3a.access.key' = '<access-key>',
+  'delta.fs.s3a.secret.key' = '<secret-key>'
+);
 ```
 
 Fluss reads the Delta version it registered as the latest lake snapshot, so the Delta data lines up with the tiered Fluss offsets.
@@ -282,6 +347,7 @@ A Delta tiered table is a standard Delta table, so other engines can write to it
 - **Not allowed**: data changes (`INSERT`, `DELETE`, `UPDATE`, `MERGE`, overwrite), schema or partition changes, and changes to the `fluss.tiering` domain metadata.
 
 Before each commit, the tiering service checks that the schema and partition columns of the Delta table still match the Fluss table, and fails the commit with a message naming the difference.
+The tiering job then fails over and retries the table until the Delta table matches the Fluss table again.
 Data written by other engines can't be detected reliably, so don't write data to the table outside Fluss.
 
 ### Retention
@@ -296,7 +362,7 @@ If log cleanup has removed the registered version, union read fails with a messa
 Each tiering commit writes the data files and the tiering progress in one Delta commit:
 
 - The `fluss.tiering` domain metadata holds the Fluss snapshot properties as JSON. Its `fluss-offsets` entry is the path of a Fluss-managed file that records the Fluss bucket log end offsets covered by the commit.
-- The `engineInfo` of the commit is `Apache-Fluss`.
+- The `engineInfo` of the commit is `Kernel-<version>/Apache-Fluss`, for example `Kernel-4.4.1/Apache-Fluss`.
 
 Domain metadata survives checkpoints and log cleanup. When Fluss recovers a lake snapshot that was committed to Delta Lake but not yet registered in Fluss, it reads the `fluss.tiering` domain metadata of the latest Delta version and walks back only as far as the oldest retained version.
 
@@ -309,3 +375,4 @@ Domain metadata survives checkpoints and log cleanup. When Fluss recovers a lake
 - Union read doesn't push filters or limits down to Delta Lake yet.
 - Fluss doesn't compact Delta tables. Use Spark `OPTIMIZE` and `VACUUM`.
 - Commits through a catalog, such as Unity Catalog, aren't supported. Fluss commits to the Delta table path directly.
+- Delta Kernel escapes the directory names of `TIMESTAMP` and `TIMESTAMP_LTZ` partitions twice, for example `t=2026-11-19%2010%253A00%253A00.000000`. Delta Lake readers aren't affected, because they take file paths and partition values from the Delta log. Tools that derive partition values from directory names, such as Hive-style partition discovery, read the escaped text instead, for example `2026-11-19 10%3A00%3A00.000000`.

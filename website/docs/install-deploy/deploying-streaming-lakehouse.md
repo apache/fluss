@@ -168,7 +168,7 @@ Lance support is built into the Fluss distribution. Cloud storage credentials ar
 </TabItem>
 <TabItem value="delta" label="Delta Lake">
 
-Delta Lake support is built into the Fluss distribution (`plugins/delta/`), but it doesn't bundle Hadoop. Export `HADOOP_CLASSPATH` before starting the Fluss servers (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#prepare-hadoop-dependencies)).
+Delta Lake support is built into the Fluss distribution (`plugins/delta/`), but it doesn't bundle Hadoop. Copy `hadoop-client-api` and `hadoop-client-runtime` from a Hadoop 3.x package into `plugins/delta/`. `HADOOP_CLASSPATH` isn't enough for the Fluss servers (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#fluss-servers)). For an `s3a://` warehouse, also copy `hadoop-aws`, its dependencies, and the AWS SDK bundle (see [Amazon S3 and S3-Compatible Storage](../streaming-lakehouse/datalake-formats/delta.md#amazon-s3-and-s3-compatible-storage)).
 
 </TabItem>
 </Tabs>
@@ -222,7 +222,8 @@ Add the following to `${FLINK_HOME}/lib`:
 
 - [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 - [fluss-lake-delta-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-delta/$FLUSS_VERSION$/fluss-lake-delta-$FLUSS_VERSION$.jar)
-- Hadoop client JARs — export `HADOOP_CLASSPATH` before starting the Flink cluster (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#prepare-hadoop-dependencies))
+- Hadoop client JARs — export `HADOOP_CLASSPATH` before starting the Flink cluster (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#flink-clusters))
+- For an `s3a://` warehouse, the AWS SDK bundle (see [Amazon S3 and S3-Compatible Storage](../streaming-lakehouse/datalake-formats/delta.md#amazon-s3-and-s3-compatible-storage))
 
 </TabItem>
 </Tabs>
