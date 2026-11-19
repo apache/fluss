@@ -71,8 +71,11 @@ CALL [catalog_name.]sys.get_cluster_configs(config_keys => ARRAY('key1', 'key2')
 **Returns:** A table with columns:
 
 - `config_key`: The configuration key name
-- `config_value`: The current value
+- `config_value`: The current value (nullable)
 - `config_source`: The source of the configuration (e.g., `DEFAULT`, `DYNAMIC`, `STATIC`)
+- `default_value`: The declared default value of the option, or `NULL` if the key is not a known `ConfigOptions` entry (nullable)
+- `is_default`: Whether the current value equals the declared default
+- `description`: The description of the option, or `NULL` if the key is not a known `ConfigOptions` entry (nullable)
 
 **Example:**
 
@@ -85,6 +88,13 @@ CALL sys.get_cluster_configs();
 
 -- Get specific configurations
 CALL sys.get_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec', 'datalake.format'));
+
+-- Inspect whether a configuration has been overridden from its default
+CALL sys.get_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec'))
+SELECT config_key, config_value, default_value, is_default, description
+FROM (
+  CALL sys.get_cluster_configs(config_keys => ARRAY('kv.rocksdb.shared-rate-limiter.bytes-per-sec'))
+);
 ```
 
 ## Error Handling
