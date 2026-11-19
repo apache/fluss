@@ -136,6 +136,8 @@ pub mod error;
 pub mod metrics;
 
 mod bucketing;
+pub use bucketing::BucketingFunction;
+pub use util::partition::{convert_value_of_type, parse_value_of_type};
 mod compression;
 pub mod io;
 mod util;

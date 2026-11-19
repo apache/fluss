@@ -320,7 +320,7 @@ pub struct DescribeClusterRequest {}
 pub struct DescribeClusterResponse {
     #[prost(message, optional, tag = "1")]
     pub coordinator_server: ::core::option::Option<PbServerNode>,
-    /// Live tablet servers with addresses, racks and server tags.
+    /// Live tablet servers with addresses, racks, server tags and software versions.
     #[prost(message, repeated, tag = "2")]
     pub tablet_servers: ::prost::alloc::vec::Vec<PbServerNode>,
     /// Also includes offline servers with assigned replicas. Missing loads are not zero counts.
@@ -650,7 +650,7 @@ pub struct GetConsumerOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbGetConsumerOffsetsResponseTable>,
 }
-/// Delete consumer offsets request and response.
+/// Delete committed offsets for selected buckets. Requires Group WRITE; no source-table permission.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteConsumerOffsetsRequest {
     #[prost(string, required, tag = "1")]
@@ -668,9 +668,10 @@ pub struct DeleteConsumerOffsetsResponse {
     #[prost(message, repeated, tag = "1")]
     pub tables: ::prost::alloc::vec::Vec<PbDeleteConsumerOffsetsResponseTable>,
 }
-/// Lists consumer groups currently owned by the tablet server receiving this request. This is not
-/// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
-/// merge the responses.
+/// Lists consumer groups currently owned by the tablet server receiving this request. Cluster
+/// DESCRIBE grants visibility to all locally owned groups; otherwise only groups with Group
+/// DESCRIBE are returned. This is not a cluster-wide listing; callers that need a cluster-wide
+/// view must query every tablet server and merge the responses.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListConsumerGroupsRequest {}
 /// All failures are returned through the RPC ErrorResponse envelope.
@@ -679,7 +680,8 @@ pub struct ListConsumerGroupsResponse {
     #[prost(message, repeated, tag = "1")]
     pub groups: ::prost::alloc::vec::Vec<PbListedGroup>,
 }
-/// Delete consumer groups request and response.
+/// Deletes consumer-group metadata and all committed offsets. A later offset commit may
+/// recreate a deleted group. No source-table permission is required.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteConsumerGroupsRequest {
     /// An empty list is a valid no-op and produces an empty successful response.
@@ -702,6 +704,9 @@ pub struct CommitKvSnapshotRequest {
     pub coordinator_epoch: i32,
     #[prost(int32, required, tag = "3")]
     pub bucket_leader_epoch: i32,
+    /// The recovery snapshot this commit expects to replace (CAS precondition).
+    #[prost(int64, optional, tag = "4")]
+    pub previous_recovery_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitKvSnapshotResponse {}
@@ -1324,6 +1329,9 @@ pub struct PbServerNode {
     pub rack: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int32, optional, tag = "6")]
     pub server_tag: ::core::option::Option<i32>,
+    /// Reported only for live tablet servers in DescribeClusterResponse.
+    #[prost(string, optional, tag = "7")]
+    pub software_version: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbTableMetadata {
@@ -1353,6 +1361,10 @@ pub struct PbTableMetadata {
     /// When present, bucket_count_epoch is also present, including epoch zero.
     #[prost(int32, optional, tag = "10")]
     pub bucket_count: ::core::option::Option<i32>,
+    /// UPDATE_METADATA v1: a deletion applies only to the table instance identified by table_id.
+    /// Version 0 uses a sentinel table_id or table_path instead.
+    #[prost(bool, optional, tag = "11")]
+    pub deleted: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbPartitionMetadata {
@@ -2384,6 +2396,7 @@ pub struct PbUnionReadContext {
     #[prost(message, repeated, tag = "12")]
     pub log_ranges: ::prost::alloc::vec::Vec<PbUnionReadLogRange>,
     /// 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+    /// 2: lake snapshot only; no Fluss log ranges are captured.
     #[prost(int32, optional, tag = "13")]
     pub coverage: ::core::option::Option<i32>,
 }
@@ -2410,7 +2423,8 @@ pub struct PbUnionReadLogRange {
     pub bucket_id: ::core::option::Option<i32>,
     #[prost(int32, optional, tag = "4")]
     pub bucket_count: ::core::option::Option<i32>,
-    /// 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+    /// 0: no baseline; 1: lake snapshot; 2: persisted KV snapshot.
+    /// For either snapshot kind, start_offset is its matching log seam.
     #[prost(int32, optional, tag = "5")]
     pub baseline: ::core::option::Option<i32>,
     /// Concrete half-open range; no EARLIEST/LATEST sentinels.
@@ -2421,4 +2435,7 @@ pub struct PbUnionReadLogRange {
     /// Observed retention lower bound, not a lease.
     #[prost(int64, optional, tag = "8")]
     pub earliest_offset: ::core::option::Option<i64>,
+    /// Required for baseline kind 2; absent for other kinds. Scoped to this bucket.
+    #[prost(int64, optional, tag = "9")]
+    pub kv_snapshot_id: ::core::option::Option<i64>,
 }

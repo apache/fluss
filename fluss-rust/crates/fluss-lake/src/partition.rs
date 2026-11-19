@@ -20,6 +20,7 @@
 use crate::{FlussLakeError, Result};
 use fluss::metadata::{DataType, PartitionSpec, RowType};
 use fluss::predicate::{BoundPredicate, CompoundFunction, LeafFunction, Literal, Predicate};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub(crate) struct PartitionScope(BoundPredicate);
@@ -50,64 +51,78 @@ impl PartitionScope {
     /// Narrow the Admin listing using equalities it can express, then evaluate
     /// the complete scope locally before issuing any offset queries.
     pub(crate) fn listing_spec(&self) -> PartitionSpec {
-        let mut spec = HashMap::new();
-        let mut pending = vec![&self.0];
-        while let Some(predicate) = pending.pop() {
-            match predicate {
-                BoundPredicate::Compound {
-                    function: CompoundFunction::And,
-                    children,
-                } => pending.extend(children),
-                BoundPredicate::Leaf {
-                    field_name,
-                    data_type: DataType::String(_),
-                    function: LeafFunction::Equal,
-                    literals,
-                    ..
-                } => {
-                    if let [Literal::String(value)] = literals.as_slice() {
-                        spec.insert(field_name.clone(), value.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        PartitionSpec::new(spec)
+        PartitionSpec::new(string_equalities(&self.0))
     }
 
     pub(crate) fn matches(&self, identity: &FlussLakePartitionIdentity) -> Result<bool> {
-        fn evaluate(
-            predicate: &BoundPredicate,
-            identity: &FlussLakePartitionIdentity,
-        ) -> Result<bool> {
-            match predicate {
-                BoundPredicate::AlwaysTrue => Ok(true),
-                BoundPredicate::Leaf { field_name, .. } => {
-                    let FlussLakePartitionIdentity::KeyValues(values) = identity else {
-                        return Err(scope_error(
-                            "partition scope applied to an unpartitioned range",
-                        ));
-                    };
-                    let value = values
-                        .iter()
-                        .find(|(key, _)| key == field_name)
-                        .ok_or_else(|| scope_error("partition scope column is missing"))?;
-                    predicate
-                        .evaluate_partition_value(&value.1)
-                        .map_err(scope_error)
-                }
-                BoundPredicate::Compound { function, children } => {
-                    let and = *function == CompoundFunction::And;
-                    for child in children {
-                        if evaluate(child, identity)? != and {
-                            return Ok(!and);
-                        }
-                    }
-                    Ok(and)
+        evaluate_predicate(&self.0, &mut |leaf| {
+            let BoundPredicate::Leaf { field_name, .. } = leaf else {
+                unreachable!()
+            };
+            let FlussLakePartitionIdentity::KeyValues(values) = identity else {
+                return Err(scope_error(
+                    "partition scope applied to an unpartitioned range",
+                ));
+            };
+            let (_, value) = values
+                .iter()
+                .find(|(key, _)| key == field_name)
+                .ok_or_else(|| scope_error("partition scope column is missing"))?;
+            leaf.evaluate_partition_value(value)
+                .map(Some)
+                .map_err(scope_error)
+        })?
+        .ok_or_else(|| scope_error("partition scope cannot be evaluated"))
+    }
+}
+
+pub(crate) fn string_equalities(predicate: &BoundPredicate) -> HashMap<String, String> {
+    let mut spec = HashMap::new();
+    let mut pending = vec![predicate];
+    while let Some(predicate) = pending.pop() {
+        match predicate {
+            BoundPredicate::Compound {
+                function: CompoundFunction::And,
+                children,
+            } => pending.extend(children),
+            BoundPredicate::Leaf {
+                field_name,
+                data_type: DataType::String(_),
+                function: LeafFunction::Equal,
+                literals,
+                ..
+            } => {
+                if let [Literal::String(value)] = literals.as_slice() {
+                    spec.insert(field_name.clone(), value.clone());
                 }
             }
+            _ => {}
         }
-        evaluate(&self.0, identity)
+    }
+    spec
+}
+
+/// `None` means insufficient partition information, not SQL NULL. Exact scope
+/// evaluation propagates errors; conservative pruning supplies unknown leaves.
+pub(crate) fn evaluate_predicate(
+    predicate: &BoundPredicate,
+    leaf: &mut impl FnMut(&BoundPredicate) -> Result<Option<bool>>,
+) -> Result<Option<bool>> {
+    match predicate {
+        BoundPredicate::AlwaysTrue => Ok(Some(true)),
+        BoundPredicate::Leaf { .. } => leaf(predicate),
+        BoundPredicate::Compound { function, children } => {
+            let and = *function == CompoundFunction::And;
+            let mut result = Some(and);
+            for child in children {
+                match evaluate_predicate(child, leaf)? {
+                    Some(value) if value != and => return Ok(Some(value)),
+                    None => result = None,
+                    _ => {}
+                }
+            }
+            Ok(result)
+        }
     }
 }
 
@@ -128,11 +143,14 @@ pub enum FlussLakeLogPartition {
 }
 
 /// Stable partition identity exposed for scheduling and diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FlussLakePartitionIdentity {
     /// Root identity for an unpartitioned table.
+    #[serde(rename = "unpartitioned")]
     Unpartitioned,
     /// Logical partition-key/value pairs in table partition-key order.
+    /// Values use the core `fluss::convert_value_of_type` encoding.
+    #[serde(rename = "key_values")]
     KeyValues(Vec<(String, String)>),
 }
 

@@ -71,34 +71,42 @@ impl BoundPredicate {
         };
         let datum = parse_value_of_type(value, data_type)?;
         validate_leaf_shape(*function, field_name, literals)?;
-        // Partition strings are core values, not Arrow rows. In particular a
-        // timestamp must not be narrowed to the column's physical unit here.
-        match &datum {
-            Datum::TimestampNtz(value) => {
-                return evaluate_value(*value, *function, literals, |literal| match literal {
-                    Literal::TimestampNtz(value) => Ok(*value),
-                    _ => Err(literal_mismatch()),
+        if let (FlussDataType::Binary(binary), Datum::Blob(bytes)) = (data_type, &datum) {
+            if bytes.len() != binary.length() {
+                return Err(IllegalArgument {
+                    message: format!("partition value {value:?} does not fit {data_type}"),
                 });
             }
-            Datum::TimestampLtz(value) => {
-                return evaluate_value(*value, *function, literals, |literal| match literal {
-                    Literal::TimestampLtz(value) => Ok(*value),
-                    _ => Err(literal_mismatch()),
-                });
-            }
-            Datum::Time(value) => {
-                return evaluate_value(value.get_inner(), *function, literals, |literal| {
-                    match literal {
-                        Literal::Time(value) => Ok(*value),
-                        _ => Err(literal_mismatch()),
-                    }
-                });
-            }
-            _ => {}
         }
-        let array = datum_array(&datum, data_type)?;
-        let batch = RecordBatch::try_from_iter([(field_name.as_str(), array)])?;
-        Ok(self.evaluate_batch(&batch)?.value(0))
+        // Compare core values directly: a scope may have a leaf per live partition and runs
+        // for every lake task. This also keeps timestamp precision that Arrow units could narrow.
+        match function {
+            LeafFunction::IsNull => Ok(false),
+            LeafFunction::IsNotNull => Ok(true),
+            LeafFunction::In | LeafFunction::NotIn => {
+                let negate = *function == LeafFunction::NotIn;
+                if negate && literals.iter().any(Literal::is_null) {
+                    return Ok(false);
+                }
+                let mut found = false;
+                for literal in literals.iter().filter(|literal| !literal.is_null()) {
+                    found |= compare_partition_value(&datum, literal)?.is_eq();
+                }
+                Ok(found != negate)
+            }
+            LeafFunction::StartsWith | LeafFunction::EndsWith | LeafFunction::Contains => {
+                match (&datum, &literals[0]) {
+                    (Datum::String(value), Literal::String(expected)) => {
+                        Ok(matches_string(value, expected, *function))
+                    }
+                    _ => Err(literal_mismatch()),
+                }
+            }
+            _ => Ok(matches_order(
+                compare_partition_value(&datum, &literals[0])?,
+                *function,
+            )),
+        }
     }
 
     /// Evaluates this predicate exactly against an Arrow record batch.
@@ -249,30 +257,26 @@ fn timestamp_mask<T>(
     Ok(mask.finish())
 }
 
-fn evaluate_value<T: Ord + Copy>(
-    value: T,
-    function: LeafFunction,
-    literals: &[Literal],
-    extract: impl Fn(&Literal) -> Result<T>,
-) -> Result<bool> {
-    match function {
-        LeafFunction::IsNull => Ok(false),
-        LeafFunction::IsNotNull => Ok(true),
-        LeafFunction::In | LeafFunction::NotIn => {
-            if function == LeafFunction::NotIn && literals.iter().any(Literal::is_null) {
-                return Ok(false);
-            }
-            let mut found = false;
-            for literal in literals.iter().filter(|literal| !literal.is_null()) {
-                found |= value == extract(literal)?;
-            }
-            Ok(found != (function == LeafFunction::NotIn))
+// Same orderings as the batch comparisons, including signed bytes and NaN handling.
+fn compare_partition_value(value: &Datum, literal: &Literal) -> Result<Ordering> {
+    Ok(match (value, literal) {
+        (Datum::Bool(value), Literal::Bool(bound)) => value.cmp(bound),
+        (Datum::Int8(value), Literal::Int8(bound)) => value.cmp(bound),
+        (Datum::Int16(value), Literal::Int16(bound)) => value.cmp(bound),
+        (Datum::Int32(value), Literal::Int32(bound)) => value.cmp(bound),
+        (Datum::Int64(value), Literal::Int64(bound)) => value.cmp(bound),
+        (Datum::Float32(value), Literal::Float32(bound)) => {
+            compare_floats(f64::from(value.0), f64::from(*bound))
         }
-        LeafFunction::StartsWith | LeafFunction::EndsWith | LeafFunction::Contains => {
-            Err(literal_mismatch())
-        }
-        _ => Ok(matches_order(value.cmp(&extract(&literals[0])?), function)),
-    }
+        (Datum::Float64(value), Literal::Float64(bound)) => compare_floats(value.0, *bound),
+        (Datum::String(value), Literal::String(bound)) => value.as_ref().cmp(bound.as_str()),
+        (Datum::Blob(value), Literal::Bytes(bound)) => compare_binary(value, bound),
+        (Datum::Date(value), Literal::Date(bound)) => value.get_inner().cmp(bound),
+        (Datum::Time(value), Literal::Time(bound)) => value.get_inner().cmp(bound),
+        (Datum::TimestampNtz(value), Literal::TimestampNtz(bound)) => value.cmp(bound),
+        (Datum::TimestampLtz(value), Literal::TimestampLtz(bound)) => value.cmp(bound),
+        _ => return Err(literal_mismatch()),
+    })
 }
 
 fn matches_order(ordering: Ordering, function: LeafFunction) -> bool {
@@ -644,6 +648,7 @@ mod tests {
     use crate::predicate::tests::assert_comparisons;
     use crate::predicate::{Literal, Predicate, col};
     use crate::row::{TimestampLtz, TimestampNtz};
+    use crate::util::partition::convert_value_of_type;
     use arrow::array::{
         ArrayRef, Decimal128Array, FixedSizeBinaryArray, Int32Array, Int64Array, StringArray,
         new_empty_array,
@@ -654,7 +659,6 @@ mod tests {
 
     #[test]
     fn partition_values_use_typed_parsing_and_exact_filters() {
-        use crate::util::partition::convert_value_of_type;
         let cases = [
             (DataTypes::tinyint(), Literal::Int8(-1), "-1"),
             (DataTypes::smallint(), Literal::Int16(256), "256"),
@@ -784,6 +788,102 @@ mod tests {
                             "{bound:?}: {value}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partition_values_match_batch_evaluation() {
+        // Temporal types are left out on purpose, Arrow units narrow their precision.
+        let cases = [
+            (
+                DataTypes::boolean(),
+                [false, true].map(Literal::Bool).to_vec(),
+            ),
+            (
+                DataTypes::tinyint(),
+                [i8::MIN, 7].map(Literal::Int8).to_vec(),
+            ),
+            (
+                DataTypes::smallint(),
+                [-3, 256].map(Literal::Int16).to_vec(),
+            ),
+            (DataTypes::int(), [-1000, 7].map(Literal::Int32).to_vec()),
+            (
+                DataTypes::bigint(),
+                [i64::MIN, 0].map(Literal::Int64).to_vec(),
+            ),
+            (
+                DataTypes::float(),
+                [-0.0, 0.0, 1.25, f32::INFINITY, f32::NAN]
+                    .map(Literal::Float32)
+                    .to_vec(),
+            ),
+            (
+                DataTypes::double(),
+                [f64::NEG_INFINITY, -0.0, 0.0, f64::NAN]
+                    .map(Literal::Float64)
+                    .to_vec(),
+            ),
+            (
+                DataTypes::string(),
+                ["US", "USA", "é"].map(Literal::from).to_vec(),
+            ),
+            (
+                DataTypes::bytes(),
+                [vec![], vec![0x7f], vec![0x80]]
+                    .map(Literal::Bytes)
+                    .to_vec(),
+            ),
+            (
+                DataTypes::binary(2),
+                [vec![0x00, 0xff], vec![0xff, 0x00]]
+                    .map(Literal::Bytes)
+                    .to_vec(),
+            ),
+            (DataTypes::date(), [-1, 0].map(Literal::Date).to_vec()),
+        ];
+        for (data_type, literals) in cases {
+            let row_type = RowType::new(vec![DataField::new("p", data_type.clone(), None)]);
+            let mut predicates = vec![
+                col("p").is_in(literals.clone()),
+                col("p").not_in(literals.clone()),
+                col("p").not_in([literals[0].clone(), Literal::Null]),
+            ];
+            for literal in &literals {
+                predicates.extend([
+                    col("p").eq(literal.clone()),
+                    col("p").ne(literal.clone()),
+                    col("p").lt(literal.clone()),
+                    col("p").le(literal.clone()),
+                    col("p").gt(literal.clone()),
+                    col("p").ge(literal.clone()),
+                ]);
+                if let Literal::String(literal) = literal {
+                    predicates.extend([
+                        col("p").starts_with(literal.as_str()),
+                        col("p").ends_with(literal.as_str()),
+                        col("p").contains(literal.as_str()),
+                    ]);
+                }
+            }
+            let bound: Vec<_> = predicates
+                .iter()
+                .map(|predicate| BoundPredicate::bind(Some(predicate), &row_type).unwrap())
+                .collect();
+            for literal in &literals {
+                let datum = literal.to_datum();
+                let value = convert_value_of_type(&datum, &data_type).unwrap();
+                let batch =
+                    RecordBatch::try_from_iter([("p", datum_array(&datum, &data_type).unwrap())])
+                        .unwrap();
+                for bound in &bound {
+                    assert_eq!(
+                        bound.evaluate_partition_value(&value).unwrap(),
+                        bound.evaluate_batch(&batch).unwrap().value(0),
+                        "{bound:?}: {value}"
+                    );
                 }
             }
         }

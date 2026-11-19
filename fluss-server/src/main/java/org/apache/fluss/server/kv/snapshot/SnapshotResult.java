@@ -36,11 +36,22 @@ public class SnapshotResult implements Serializable {
 
     private final TabletState tabletState;
 
+    private final long previousSnapshotId;
+
     public SnapshotResult(
-            KvSnapshotHandle kvSnapshotHandle, FsPath snapshotPath, TabletState tabletState) {
+            KvSnapshotHandle kvSnapshotHandle,
+            FsPath snapshotPath,
+            TabletState tabletState,
+            long previousSnapshotId) {
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.snapshotPath = snapshotPath;
         this.tabletState = tabletState;
+        this.previousSnapshotId = previousSnapshotId;
+    }
+
+    /** Returns the completed snapshot captured with this result's incremental base. */
+    public long getPreviousSnapshotId() {
+        return previousSnapshotId;
     }
 
     public KvSnapshotHandle getKvSnapshotHandle() {

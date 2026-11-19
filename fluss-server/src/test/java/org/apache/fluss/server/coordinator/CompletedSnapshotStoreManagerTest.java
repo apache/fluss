@@ -30,6 +30,7 @@ import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.AfterAll;
@@ -302,7 +303,7 @@ class CompletedSnapshotStoreManagerTest {
         CompletedSnapshotStore completedSnapshotStore =
                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                         DATA1_TABLE_PATH, tableBucket);
-        completedSnapshotStore.add(completedSnapshot);
+        completedSnapshotStore.add(completedSnapshot, null, 0);
     }
 
     private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId)
@@ -321,11 +322,17 @@ class CompletedSnapshotStoreManagerTest {
                 .orElse(null);
     }
 
-    private Set<TableBucket> createTableBuckets(int tableNum, int bucketNum) {
+    private Set<TableBucket> createTableBuckets(int tableNum, int bucketNum) throws Exception {
         Set<TableBucket> tableBuckets = new HashSet<>();
         for (int tableId = 0; tableId < tableNum; tableId++) {
             for (int bucketId = 0; bucketId < bucketNum; bucketId++) {
-                tableBuckets.add(new TableBucket(tableId, bucketId));
+                TableBucket bucket = new TableBucket(tableId, bucketId);
+                zookeeperClient
+                        .getCuratorClient()
+                        .create()
+                        .creatingParentsIfNeeded()
+                        .forPath(ZkData.BucketIdZNode.path(bucket));
+                tableBuckets.add(bucket);
             }
         }
         return tableBuckets;
@@ -362,6 +369,11 @@ class CompletedSnapshotStoreManagerTest {
                 new HashMap<>();
 
         @Override
+        public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+            return Optional.empty();
+        }
+
+        @Override
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
@@ -371,6 +383,13 @@ class CompletedSnapshotStoreManagerTest {
                     .computeIfAbsent(tableBucket, k -> new HashMap<>())
                     .put(snapshotId, completedSnapshotHandle);
         }
+
+        @Override
+        public void updateRecoverySnapshot(
+                TableBucket bucket,
+                long snapshotId,
+                Long previousSnapshotId,
+                int expectedLeaderEpoch) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) throws Exception {

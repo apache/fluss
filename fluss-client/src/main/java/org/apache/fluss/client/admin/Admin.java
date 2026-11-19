@@ -486,6 +486,9 @@ public interface Admin extends AutoCloseable {
      * a bucket of a primary key table at a certain point in time. Therefore, there are at-most
      * {@code N} snapshots for a primary key table, {@code N} is the number of buckets.
      *
+     * <p>Each bucket uses its designated recovery snapshot when present. Its ID need not be the
+     * largest retained snapshot ID. Buckets without a designation use the largest registered ID.
+     *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
      * <ul>
@@ -506,6 +509,8 @@ public interface Admin extends AutoCloseable {
      * snapshot of a bucket of a primary key table at a certain point in time. Therefore, there are
      * at-most {@code N} snapshots for a partition of a primary key table, {@code N} is the number
      * of buckets.
+     *
+     * <p>Uses the same recovery snapshot selection as {@link #getLatestKvSnapshots(TablePath)}.
      *
      * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
      *
@@ -928,12 +933,12 @@ public interface Admin extends AutoCloseable {
     /**
      * Describe the coordinators, live tablet servers and per-server replica loads asynchronously.
      *
-     * <p>The returned {@link ClusterDescription} provides node addresses, racks and server tags,
-     * together with replica loads keyed by server ID. Besides the active coordinator, it lists the
-     * currently live standby coordinators of a high-availability deployment. Live servers have
-     * explicit loads even when they host no replicas. Loads also include offline servers with
-     * assigned replicas. A missing load means statistics are unavailable and must never be
-     * interpreted as zero replicas.
+     * <p>The returned {@link ClusterDescription} provides node addresses, racks, server tags and
+     * reported software versions, together with replica loads keyed by server ID. Besides the
+     * active coordinator, it lists the currently live standby coordinators of a high-availability
+     * deployment. Live servers have explicit loads even when they host no replicas. Loads also
+     * include offline servers with assigned replicas. A missing load means statistics are
+     * unavailable and must never be interpreted as zero replicas.
      *
      * <p>This API requires DESCRIBE permission on the cluster resource. Retriable failures trigger
      * a metadata refresh and one retry to handle coordinator address changes. Servers that do not

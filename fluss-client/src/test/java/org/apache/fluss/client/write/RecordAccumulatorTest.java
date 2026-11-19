@@ -25,6 +25,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -36,7 +37,10 @@ import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultKvRecord;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
+import org.apache.fluss.record.KvRecord;
+import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -45,6 +49,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
@@ -75,14 +80,21 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.utils.BytesUtils.toArray;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1330,5 +1342,182 @@ class RecordAccumulatorTest {
         return accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
                 .get(node1.id())
                 .get(0);
+    }
+
+    @Test
+    void testAppendDoesNotLoseRecordWhenDynamicBatchSizeShrinks() throws Exception {
+        int pageSize = 512;
+        int batchSize = 4096;
+        // The dynamic estimate starts at batchSize and floors at 2 * pageSize.
+        conf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED, true);
+        RecordAccumulator accum =
+                createTestRecordAccumulator(0, batchSize, pageSize, 10L * batchSize);
+        try {
+            // Drive the per-table dynamic batch-size estimate down to its floor by repeatedly
+            // draining tiny batches.
+            IndexedRow smallRow = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+            for (int i = 0; i < 100; i++) {
+                bucketAssigner.setBucketId(0);
+                accum.append(createRecord(smallRow), writeCallback, cluster);
+                drainAndDeallocate(accum, cluster);
+            }
+
+            // A record that no longer fits the shrunk estimate (floor writeLimit = 2 * pageSize)
+            // but is still within the static batch size: this is the data-loss window.
+            int floorWriteLimit = 2 * pageSize;
+            IndexedRow largeRow =
+                    indexedRow(
+                            DATA1_ROW_TYPE,
+                            new Object[] {1, new String(new char[2000]).replace('\0', 'x')});
+            WriteRecord largeRecord = createRecord(largeRow);
+            assertThat(largeRecord.getEstimatedSizeInBytes())
+                    .isGreaterThan(floorWriteLimit)
+                    .isLessThanOrEqualTo(batchSize);
+
+            bucketAssigner.setBucketId(0);
+            accum.append(largeRecord, writeCallback, cluster);
+
+            // Without the fix the record is silently dropped, leaving only an empty batch.
+            WriteBatch batch = drainSingleNonEmptyBatch(accum, cluster);
+            assertThat(batch).isNotNull();
+            assertThat(batch.getRecordCount()).isEqualTo(1);
+
+            MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(batch.build());
+            try (LogRecordReadContext readContext =
+                            LogRecordReadContext.createIndexedReadContext(
+                                    DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId(), schemaGetter);
+                    CloseableIterator<LogRecord> iter =
+                            memoryLogRecords.batches().iterator().next().records(readContext)) {
+                assertThat(iter.hasNext()).isTrue();
+                LogRecord record = iter.next();
+                assertThat(record.getRow()).isEqualTo(largeRow);
+                assertThat(iter.hasNext()).isFalse();
+            }
+        } finally {
+            accum.abortAllBatches(new RuntimeException("test cleanup"));
+            accum.destroyResources();
+        }
+    }
+
+    @Test
+    void testAppendDoesNotLoseKvRecordWhenDynamicBatchSizeShrinks() throws Exception {
+        int pageSize = 512;
+        int batchSize = 4096;
+        conf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED, true);
+        RecordAccumulator accum =
+                createTestRecordAccumulator(0, batchSize, pageSize, 10L * batchSize);
+        Cluster pkCluster =
+                updateClusterForPk(
+                        Collections.singletonList(
+                                new BucketLocation(
+                                        DATA1_PHYSICAL_TABLE_PATH_PK,
+                                        DATA1_TABLE_ID_PK,
+                                        0,
+                                        node1.id(),
+                                        serverNodes)));
+        CompactedKeyEncoder keyEncoder =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, DATA1_SCHEMA_PK.getPrimaryKeyIndexes());
+        try {
+            // Drive the per-table dynamic batch-size estimate down to its floor.
+            BinaryRow smallRow = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+            byte[] smallKey = keyEncoder.encodeKey(smallRow);
+            for (int i = 0; i < 100; i++) {
+                bucketAssigner.setBucketId(0);
+                accum.append(createKvRecord(smallRow, smallKey), writeCallback, pkCluster);
+                drainAndDeallocate(accum, pkCluster);
+            }
+
+            int floorWriteLimit = 2 * pageSize;
+            BinaryRow largeRow =
+                    compactedRow(
+                            DATA1_ROW_TYPE,
+                            new Object[] {1, new String(new char[2000]).replace('\0', 'x')});
+            byte[] largeKey = keyEncoder.encodeKey(largeRow);
+            WriteRecord largeRecord = createKvRecord(largeRow, largeKey);
+            assertThat(largeRecord.getEstimatedSizeInBytes())
+                    .isGreaterThan(floorWriteLimit)
+                    .isLessThanOrEqualTo(batchSize);
+
+            bucketAssigner.setBucketId(0);
+            accum.append(largeRecord, writeCallback, pkCluster);
+
+            WriteBatch batch = drainSingleNonEmptyBatch(accum, pkCluster);
+            assertThat(batch).isNotNull();
+            assertThat(batch.getRecordCount()).isEqualTo(1);
+
+            DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(batch.build());
+            Iterator<KvRecord> iterator =
+                    kvRecords
+                            .records(
+                                    KvRecordReadContext.createReadContext(
+                                            KvFormat.COMPACTED,
+                                            new TestingSchemaGetter(1, DATA1_SCHEMA)))
+                            .iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            KvRecord kvRecord = iterator.next();
+            assertThat(toArray(kvRecord.getKey())).isEqualTo(largeKey);
+            assertThat(kvRecord.getRow()).isEqualTo(largeRow);
+            assertThat(iterator.hasNext()).isFalse();
+        } finally {
+            accum.abortAllBatches(new RuntimeException("test cleanup"));
+            accum.destroyResources();
+        }
+    }
+
+    private WriteRecord createKvRecord(BinaryRow row, byte[] key) {
+        return WriteRecord.forUpsert(
+                DATA1_TABLE_INFO_PK,
+                DATA1_PHYSICAL_TABLE_PATH_PK,
+                row,
+                key,
+                key,
+                WriteFormat.COMPACTED_KV,
+                null);
+    }
+
+    private void drainAndDeallocate(RecordAccumulator accum, Cluster cluster) throws Exception {
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE);
+        for (List<ReadyWriteBatch> batches : drained.values()) {
+            for (ReadyWriteBatch readyWriteBatch : batches) {
+                accum.deallocate(readyWriteBatch.writeBatch());
+            }
+        }
+    }
+
+    private WriteBatch drainSingleNonEmptyBatch(RecordAccumulator accum, Cluster cluster)
+            throws Exception {
+        List<ReadyWriteBatch> batches =
+                accum.drain(cluster, Collections.singleton(node1.id()), Integer.MAX_VALUE)
+                        .get(node1.id());
+        if (batches == null) {
+            return null;
+        }
+        return batches.stream()
+                .map(ReadyWriteBatch::writeBatch)
+                .filter(batch -> batch.getRecordCount() > 0)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private Cluster updateClusterForPk(List<BucketLocation> bucketLocations) {
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        aliveTabletServersById.put(node1.id(), node1);
+        aliveTabletServersById.put(node2.id(), node2);
+        aliveTabletServersById.put(node3.id(), node3);
+
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
+        bucketsByPath.put(DATA1_PHYSICAL_TABLE_PATH_PK, bucketLocations);
+
+        Map<TablePath, Long> tableIdByPath = new HashMap<>();
+        tableIdByPath.put(DATA1_TABLE_PATH_PK, DATA1_TABLE_ID_PK);
+        return new Cluster(
+                aliveTabletServersById,
+                new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
+                bucketsByPath,
+                tableIdByPath,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                Collections.emptyMap());
     }
 }

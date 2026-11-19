@@ -58,15 +58,19 @@ mod table_remote_scan_test {
 
         // append 20 rows, there must be some tiered to remote
         let record_count = 20;
+        let mut acks = Vec::new();
         for i in 0..record_count {
             let mut row = GenericRow::new(2);
             row.set_field(0, i as i32);
             let v = format!("v{}", i);
             row.set_field(1, v.as_str());
-            append_writer.append(&row).expect("Failed to append row");
+            acks.push(append_writer.append(&row).expect("Failed to append row"));
         }
 
         append_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         // Create a log scanner and subscribe to all buckets to read appended records
         let num_buckets = table.get_table_info().get_num_buckets();

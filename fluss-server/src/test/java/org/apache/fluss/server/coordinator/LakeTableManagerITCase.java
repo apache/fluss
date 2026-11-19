@@ -21,23 +21,34 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
+import org.apache.fluss.rpc.messages.PbTableOffsets;
+import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -52,16 +63,30 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableI
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /** ITCase for creating/dropping table for Fluss with lake storage configured . */
 class LakeTableManagerITCase {
+
+    private static final String TABLE_REMOTE_DIR_NAME = "table-remote-data";
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
                     .setNumOfTabletServers(3)
-                    .setClusterConf(Configuration.fromMap(getDataLakeFormat()))
+                    .setClusterConf(getClusterConfig())
+                    .setRemoteDirNames(Arrays.asList("default-remote-data", TABLE_REMOTE_DIR_NAME))
                     .build();
+
+    private static Configuration getClusterConfig() {
+        Configuration conf = Configuration.fromMap(getDataLakeFormat());
+        conf.set(
+                ConfigOptions.REMOTE_DATA_DIRS_STRATEGY,
+                ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
+        // The first directory is the global default. Allocate new tables to the second one.
+        conf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(0, 1));
+        return conf;
+    }
 
     private static Map<String, String> getDataLakeFormat() {
         Map<String, String> datalakeFormat = new HashMap<>();
@@ -119,6 +144,57 @@ class LakeTableManagerITCase {
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessage("Table %s already exists.", lakeTablePath);
+    }
+
+    @Test
+    void testPrepareLakeTableSnapshotUsesTableRemoteDataDir() throws Exception {
+        CoordinatorGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        TablePath tablePath = TablePath.of("fluss", "test_prepare_lake_snapshot");
+        TableDescriptor tableDescriptor =
+                newPkTable()
+                        .withProperties(
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true"));
+        gateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        long tableId = gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get().getTableId();
+
+        String tableRemoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir(TABLE_REMOTE_DIR_NAME);
+        assertThat(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTable(tablePath))
+                .hasValueSatisfying(
+                        table -> assertThat(table.remoteDataDir).isEqualTo(tableRemoteDataDir));
+
+        PrepareLakeTableSnapshotRequest request = new PrepareLakeTableSnapshotRequest();
+        PbTableOffsets tableOffsets = request.addBucketOffset().setTableId(tableId);
+        tableOffsets
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        tableOffsets.addBucketOffset().setBucketId(0).setLogEndOffset(10L);
+        tableOffsets.addBucketOffset().setBucketId(1).setLogEndOffset(20L);
+
+        List<PbPrepareLakeTableRespForTable> results =
+                gateway.prepareLakeTableSnapshot(request).get().getPrepareLakeTableRespsList();
+        assertThat(results).hasSize(1);
+        PbPrepareLakeTableRespForTable result = results.get(0);
+        assertThat(result.getTableId()).isEqualTo(tableId);
+        assertThat(result.hasErrorCode()).isFalse();
+
+        FsPath offsetsPath = new FsPath(result.getLakeTableOffsetsPath());
+        FsPath expectedMetadataDir =
+                new FsPath(
+                        FlussPaths.remoteLakeTableSnapshotDir(
+                                tableRemoteDataDir, tablePath, tableId),
+                        "metadata");
+        assertThat(offsetsPath.getParent()).isEqualTo(expectedMetadataDir);
+
+        TableBucketOffsets storedOffsets =
+                TableBucketOffsets.fromJsonBytes(
+                        Files.readAllBytes(Paths.get(offsetsPath.toUri())));
+        assertThat(storedOffsets.getTableId()).isEqualTo(tableId);
+        assertThat(storedOffsets.getOffsets())
+                .containsOnly(
+                        entry(new TableBucket(tableId, 0), 10L),
+                        entry(new TableBucket(tableId, 1), 20L));
     }
 
     @Test

@@ -276,7 +276,10 @@ class PeriodicSnapshotManagerTest {
                                     throw new FlussRuntimeException(exceptionMessage);
                                 } else {
                                     return new SnapshotResult(
-                                            null, snapshotPath, new TabletState(0, null, null));
+                                            null,
+                                            snapshotPath,
+                                            new TabletState(0, null, null),
+                                            -1L);
                                 }
                             });
             int snapshotId = 1;

@@ -171,7 +171,7 @@ pub fn convert_value_of_type(value: &Datum, data_type: &DataType) -> Result<Stri
 /// Parses a non-null partition value using the format of [`convert_value_of_type`].
 /// Temporal values retain their full encoded precision; this does not apply
 /// column-precision rounding. Invalid encodings and unsupported types are errors.
-pub(crate) fn parse_value_of_type<'a>(value: &'a str, data_type: &DataType) -> Result<Datum<'a>> {
+pub fn parse_value_of_type<'a>(value: &'a str, data_type: &DataType) -> Result<Datum<'a>> {
     let parsed = (|| -> Option<Datum<'a>> {
         Some(match data_type {
             DataType::Char(_) | DataType::String(_) => Datum::String(value.into()),

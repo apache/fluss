@@ -584,6 +584,18 @@ public class ReplicaTestBase {
             boolean isPkTable,
             @Nullable SnapshotContext snapshotContext)
             throws Exception {
+        return makeReplica(
+                physicalTablePath, tableBucket, isPkTable, snapshotContext, DATA1_TABLE_INFO);
+    }
+
+    /** Creates a replica with the given initial table metadata. */
+    protected Replica makeReplica(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            boolean isPkTable,
+            @Nullable SnapshotContext snapshotContext,
+            TableInfo tableInfo)
+            throws Exception {
         if (snapshotContext == null) {
             snapshotContext =
                     new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR));
@@ -613,7 +625,7 @@ public class ReplicaTestBase {
                 serverMetadataCache,
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
-                DATA1_TABLE_INFO,
+                tableInfo,
                 remoteDataDir,
                 manualClock,
                 remoteLogManager,

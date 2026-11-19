@@ -667,6 +667,9 @@ public class ReplicaManager implements ServerReconfigurable {
     private void updateReplicaTableInfo(ClusterMetadata clusterMetadata) {
         Map<Long, TableInfo> tableInfosById = new HashMap<>();
         for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
+            if (tableMetadata.isDeleted()) {
+                continue;
+            }
             TableInfo tableInfo = tableMetadata.getTableInfo();
             tableInfosById.put(tableInfo.getTableId(), tableInfo);
         }
