@@ -169,6 +169,8 @@ public class CompletedSnapshotStore {
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
         completedSnapshots.addLast(snapshot);
+        boolean requireRecoverySelection =
+                previousRecoverySnapshotId != null || snapshot.getIndexPushedOffset() != null;
         Exception selectionFailure = null;
         try {
             completedSnapshotHandleStore.updateRecoverySnapshot(
@@ -186,13 +188,13 @@ public class CompletedSnapshotStore {
                                 .orElse(null);
             } catch (Exception readFailure) {
                 updateFailure.addSuppressed(readFailure);
-                if (previousRecoverySnapshotId != null) {
+                if (requireRecoverySelection) {
                     throw updateFailure;
                 }
                 LOG.warn("Snapshot registered but recovery selection is unknown.", updateFailure);
                 return;
             }
-            if (previousRecoverySnapshotId != null
+            if (requireRecoverySelection
                     && (recoverySnapshotId == null
                             || recoverySnapshotId != snapshot.getSnapshotID())) {
                 selectionFailure = updateFailure;
@@ -328,7 +330,10 @@ public class CompletedSnapshotStore {
                     fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
                 outStream.write(jsonBytes);
                 return new CompletedSnapshotHandle(
-                        snapshot.getSnapshotID(), filePath, snapshot.getLogOffset());
+                        snapshot.getSnapshotID(),
+                        filePath,
+                        snapshot.getLogOffset(),
+                        snapshot.getSyncIndexPushedOffset());
             } catch (Exception e) {
                 latestException = e;
             }

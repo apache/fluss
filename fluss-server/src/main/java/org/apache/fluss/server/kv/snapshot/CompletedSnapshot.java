@@ -79,6 +79,10 @@ public class CompletedSnapshot {
      */
     @Nullable private final Long rowCount;
 
+    @Nullable private final Long allIndexPushedOffset;
+
+    @Nullable private final Long syncIndexPushedOffset;
+
     /**
      * The auto-increment ID ranges of the snapshot, null for legacy tables that doesn't support or
      * doesn't have auto-increment columns.
@@ -101,12 +105,36 @@ public class CompletedSnapshot {
             long logOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                kvSnapshotHandle,
+                logOffset,
+                rowCount,
+                null,
+                null,
+                autoIncIDRanges);
+    }
+
+    public CompletedSnapshot(
+            TableBucket tableBucket,
+            long snapshotID,
+            FsPath snapshotLocation,
+            KvSnapshotHandle kvSnapshotHandle,
+            long logOffset,
+            @Nullable Long rowCount,
+            @Nullable Long allIndexPushedOffset,
+            @Nullable Long syncIndexPushedOffset,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges) {
         this.tableBucket = tableBucket;
         this.snapshotID = snapshotID;
         this.snapshotLocation = snapshotLocation;
         this.kvSnapshotHandle = kvSnapshotHandle;
         this.logOffset = logOffset;
         this.rowCount = rowCount;
+        this.allIndexPushedOffset = allIndexPushedOffset;
+        this.syncIndexPushedOffset = syncIndexPushedOffset;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
@@ -116,7 +144,16 @@ public class CompletedSnapshot {
             long snapshotID,
             FsPath snapshotLocation,
             KvSnapshotHandle kvSnapshotHandle) {
-        this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
+        this(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                kvSnapshotHandle,
+                0,
+                null,
+                null,
+                null,
+                null);
     }
 
     public long getSnapshotID() {
@@ -135,9 +172,33 @@ public class CompletedSnapshot {
         return logOffset;
     }
 
+    /**
+     * Returns the lowest WAL offset that must be retained to recover all state represented by this
+     * completed snapshot. Data recovery starts from {@link #getLogOffset()}, but secondary index
+     * recovery may need to replay from an earlier index-pushed watermark.
+     */
+    public long getMinRetainLogOffset() {
+        return allIndexPushedOffset == null ? logOffset : Math.min(logOffset, allIndexPushedOffset);
+    }
+
     @Nullable
     public Long getRowCount() {
         return rowCount;
+    }
+
+    /**
+     * Returns the minimum exclusive next WAL offset across all indexes, including ASYNC indexes,
+     * captured for replay and WAL retention. Null when index progress is not applicable.
+     */
+    @Nullable
+    public Long getIndexPushedOffset() {
+        return allIndexPushedOffset;
+    }
+
+    /** Returns the confirmed SYNC index prefix recorded before snapshot commit. */
+    @Nullable
+    public Long getSyncIndexPushedOffset() {
+        return syncIndexPushedOffset;
     }
 
     @Nullable
@@ -272,6 +333,8 @@ public class CompletedSnapshot {
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(kvSnapshotHandle, that.kvSnapshotHandle)
                 && Objects.equals(rowCount, that.rowCount)
+                && Objects.equals(allIndexPushedOffset, that.allIndexPushedOffset)
+                && Objects.equals(syncIndexPushedOffset, that.syncIndexPushedOffset)
                 && Objects.equals(autoIncIDRanges, that.autoIncIDRanges)
                 && Objects.equals(snapshotLocation, that.snapshotLocation);
     }
@@ -284,6 +347,8 @@ public class CompletedSnapshot {
                 kvSnapshotHandle,
                 logOffset,
                 rowCount,
+                allIndexPushedOffset,
+                syncIndexPushedOffset,
                 autoIncIDRanges,
                 snapshotLocation);
     }

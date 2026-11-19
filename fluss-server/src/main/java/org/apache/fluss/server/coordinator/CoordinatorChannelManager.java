@@ -21,11 +21,14 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -210,6 +213,21 @@ public class CoordinatorChannelManager {
         }
     }
 
+    /** Queries API versions using the existing transport retry and timeout policy. */
+    public void sendApiVersionsRequest(
+            int serverId, BiConsumer<ApiVersionsResponse, ? super Throwable> responseConsumer) {
+        enqueueRequest(
+                serverId,
+                ApiKeys.API_VERSIONS,
+                epochSupplier.getAsInt(),
+                gateway ->
+                        gateway.apiVersions(
+                                new ApiVersionsRequest()
+                                        .setClientSoftwareName("fluss")
+                                        .setClientSoftwareVersion("unknown")),
+                responseConsumer);
+    }
+
     /** Send NotifyLeaderAndIsr request to the server and handle the response. */
     public void sendBucketLeaderAndIsrRequest(
             int receiveServerId,
@@ -337,6 +355,10 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
+            responseConsumer.accept(
+                    null,
+                    new UnknownServerException(
+                            "Tablet server " + targetServerId + " is unavailable."));
         } else {
             TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
             requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);

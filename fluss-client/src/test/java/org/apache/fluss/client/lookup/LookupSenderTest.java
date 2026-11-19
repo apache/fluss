@@ -26,6 +26,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LookupLimitExceededException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -1304,6 +1305,70 @@ public class LookupSenderTest {
 
         assertThat(receivedRequests).hasSize(1);
         assertThat(receivedRequests.get(0).getBucketsReqAt(0).hasRoutingBucketCount()).isFalse();
+    }
+
+    @Test
+    void testPrefixLookupBatchesPreserveEachLimitPolicy() throws Exception {
+        List<PrefixLookupRequest> requests = new ArrayList<>();
+        gateway.setPrefixLookupHandler(
+                request -> {
+                    requests.add(request);
+                    return createSuccessPrefixLookupResponse(request);
+                });
+        PrefixLookupQuery unlimited =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("unlimited"));
+        PrefixLookupQuery truncate =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("truncate"), 0, 2, false);
+        PrefixLookupQuery fail =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("fail"), 0, 2, true);
+        PrefixLookupQuery samePolicy =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("same"), 0, 2, true);
+        lookupSender.sendLookups(
+                1, LookupType.PREFIX_LOOKUP, Arrays.asList(unlimited, truncate, fail, samePolicy));
+        assertThat(requests).hasSize(3);
+        assertThat(requests)
+                .anySatisfy(
+                        request -> {
+                            assertThat(request.hasLimit()).isFalse();
+                            assertThat(request.hasFailOnLimitExceeded()).isFalse();
+                            assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(1);
+                        });
+        assertThat(requests)
+                .anySatisfy(
+                        request -> {
+                            assertThat(request.hasLimit()).isTrue();
+                            assertThat(request.getLimit()).isEqualTo(2);
+                            assertThat(request.isFailOnLimitExceeded()).isFalse();
+                            assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(1);
+                        });
+        assertThat(requests)
+                .anySatisfy(
+                        request -> {
+                            assertThat(request.hasLimit()).isTrue();
+                            assertThat(request.getLimit()).isEqualTo(2);
+                            assertThat(request.isFailOnLimitExceeded()).isTrue();
+                            assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
+                        });
+        for (PrefixLookupQuery query : Arrays.asList(unlimited, truncate, fail, samePolicy)) {
+            assertThat(query.future().get(5, TimeUnit.SECONDS)).isEmpty();
+        }
+    }
+
+    @Test
+    void testPrefixCandidateOverflowIsNotRetried() throws Exception {
+        gateway.setPrefixLookupHandler(
+                request ->
+                        createFailedPrefixLookupResponse(
+                                request,
+                                new LookupLimitExceededException("candidate limit exceeded")));
+        PrefixLookupQuery query =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("prefix"), 0, 2, true);
+        lookupSender.sendLookups(1, LookupType.PREFIX_LOOKUP, Collections.singletonList(query));
+        assertThatThrownBy(() -> query.future().get(5, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(LookupLimitExceededException.class);
+        assertThat(query.retries()).isZero();
     }
 
     @Test

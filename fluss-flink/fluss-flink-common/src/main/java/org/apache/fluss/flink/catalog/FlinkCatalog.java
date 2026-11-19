@@ -1122,8 +1122,15 @@ public class FlinkCatalog extends AbstractCatalog {
         if (!indexKeys.isEmpty()) {
             indexes.add(indexKeys);
         }
+
+        for (org.apache.fluss.metadata.Schema.Index index : tableInfo.getSchema().getIndexes()) {
+            indexes.add(index.getColumnNames());
+        }
+
         return CatalogTableAdapter.toCatalogTable(
-                withIndex(table.getUnresolvedSchema(), indexes),
+                withIndex(
+                        table.getUnresolvedSchema(),
+                        indexes.stream().distinct().collect(Collectors.toList())),
                 table.getComment(),
                 table.getPartitionKeys(),
                 table.getOptions());

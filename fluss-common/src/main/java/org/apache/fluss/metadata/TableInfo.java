@@ -24,6 +24,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.IndexTableUtils;
 
 import javax.annotation.Nullable;
 
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Collectors;
 
 /**
@@ -435,6 +437,17 @@ public final class TableInfo {
      */
     public long getModifiedTime() {
         return modifiedTime;
+    }
+
+    /** Returns true if this table carries the main-table link of an internal Index Table. */
+    public boolean isIndexTable() {
+        return properties.containsKey(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID.key());
+    }
+
+    /** Returns the owning main-table id, or empty if this is not an Index Table. */
+    public OptionalLong getMainTableId() {
+        Optional<Long> v = properties.getOptional(IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID);
+        return v.isPresent() ? OptionalLong.of(v.get()) : OptionalLong.empty();
     }
 
     /**

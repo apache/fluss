@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowReader;
 import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
@@ -39,6 +40,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
@@ -62,6 +68,52 @@ class CompactedKeyEncoderTest {
         row = row(2, 5L, 6);
         bytes = encoder.encodeKey(row);
         assertThat(bytes).isEqualTo(new byte[] {2, 5, 6});
+    }
+
+    @Test
+    void testEncodeKeyCanBeCalledConcurrently() throws Exception {
+        CompactedKeyEncoder encoder =
+                new CompactedKeyEncoder(RowType.of(DataTypes.INT(), DataTypes.INT()));
+        CountDownLatch firstEncodeBlocked = new CountDownLatch(1);
+        CountDownLatch secondEncodeDone = new CountDownLatch(1);
+        InternalRow blockedRow =
+                new PaddingRow(2) {
+                    @Override
+                    public int getInt(int position) {
+                        if (position == 0) {
+                            firstEncodeBlocked.countDown();
+                            try {
+                                assertThat(secondEncodeDone.await(10, TimeUnit.SECONDS)).isTrue();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(
+                                        "Interrupted while coordinating encodes", e);
+                            }
+                        }
+                        return super.getInt(position);
+                    }
+                }.replaceRow(row(1, 2));
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<byte[]> first = executor.submit(() -> encoder.encodeKey(blockedRow));
+            assertThat(firstEncodeBlocked.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<byte[]> second =
+                    executor.submit(
+                            () -> {
+                                try {
+                                    return encoder.encodeKey(row(3, 4));
+                                } finally {
+                                    secondEncodeDone.countDown();
+                                }
+                            });
+
+            assertThat(second.get(10, TimeUnit.SECONDS)).isEqualTo(new byte[] {3, 4});
+            assertThat(first.get(10, TimeUnit.SECONDS)).isEqualTo(new byte[] {1, 2});
+        } finally {
+            secondEncodeDone.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test

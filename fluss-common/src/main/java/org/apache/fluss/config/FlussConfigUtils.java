@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.utils.IndexTableUtils;
 
 import java.lang.reflect.Field;
 import java.time.Duration;
@@ -123,6 +124,11 @@ public class FlussConfigUtils {
                 throw new RuntimeException(
                         "Unable to extract ConfigOption fields from ConfigOptions class.", e);
             }
+        }
+        // Internal table metadata is validated alongside user-configurable table options.
+        ConfigOption<Long> mainTableId = IndexTableUtils.TABLE_INDEX_META_MAIN_TABLE_ID;
+        if (mainTableId.key().startsWith(prefix)) {
+            options.put(mainTableId.key(), mainTableId);
         }
         return options;
     }
@@ -273,6 +279,7 @@ public class FlussConfigUtils {
 
     public static void validateClientConfigs(Configuration conf) {
         validMinValue(conf, ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        validMinValue(conf, ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS, 1);
         validMinDuration(conf, ConfigOptions.CLIENT_CONNECT_TIMEOUT, 1);
     }
 

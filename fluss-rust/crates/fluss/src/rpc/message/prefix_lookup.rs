@@ -48,6 +48,8 @@ impl PrefixLookupRequest {
         let request = proto::PrefixLookupRequest {
             table_id,
             buckets_req,
+            limit: None,
+            fail_on_limit_exceeded: None,
         };
 
         Self {

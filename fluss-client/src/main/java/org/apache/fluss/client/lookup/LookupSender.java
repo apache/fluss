@@ -485,6 +485,41 @@ class LookupSender implements Runnable {
 
     private void sendPrefixLookupRequest(
             int destination, List<AbstractLookupQuery<?>> prefixLookups) {
+        if (!prefixLookups.isEmpty()) {
+            PrefixLookupQuery first = (PrefixLookupQuery) prefixLookups.get(0);
+            boolean sameLimit = true;
+            for (AbstractLookupQuery<?> query : prefixLookups) {
+                PrefixLookupQuery prefix = (PrefixLookupQuery) query;
+                if (prefix.limit() != first.limit()
+                        || prefix.failOnLimitExceeded() != first.failOnLimitExceeded()) {
+                    sameLimit = false;
+                    break;
+                }
+            }
+            if (sameLimit) {
+                sendPrefixLookupRequest(
+                        destination, prefixLookups, first.limit(), first.failOnLimitExceeded());
+                return;
+            }
+        }
+        Map<Tuple2<Integer, Boolean>, List<AbstractLookupQuery<?>>> byLimit = new HashMap<>();
+        for (AbstractLookupQuery<?> query : prefixLookups) {
+            PrefixLookupQuery prefix = (PrefixLookupQuery) query;
+            byLimit.computeIfAbsent(
+                            Tuple2.of(prefix.limit(), prefix.failOnLimitExceeded()),
+                            ignored -> new ArrayList<>())
+                    .add(prefix);
+        }
+        byLimit.forEach(
+                (options, queries) ->
+                        sendPrefixLookupRequest(destination, queries, options.f0, options.f1));
+    }
+
+    private void sendPrefixLookupRequest(
+            int destination,
+            List<AbstractLookupQuery<?>> prefixLookups,
+            int limit,
+            boolean failOnLimitExceeded) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, PrefixLookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : prefixLookups) {
@@ -516,7 +551,11 @@ class LookupSender implements Runnable {
                         sendPrefixLookupRequestAndHandleResponse(
                                 destination,
                                 gateway,
-                                makePrefixLookupRequest(tableId, prefixLookupBatch.values()),
+                                makePrefixLookupRequest(
+                                        tableId,
+                                        prefixLookupBatch.values(),
+                                        limit,
+                                        failOnLimitExceeded),
                                 tableId,
                                 prefixLookupBatch));
     }

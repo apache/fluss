@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.tiering
 
-import org.apache.fluss.client.lookup.Lookup
+import org.apache.fluss.client.lookup.{Lookup, Lookuper}
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.{Scan, ScanRecord}
 import org.apache.fluss.client.table.scanner.batch.BatchScanner
@@ -185,6 +185,8 @@ class TieringTaskTest extends AnyFunSuite {
     override def newScan(): Scan = scan
     override def getTableInfo: TableInfo = throw new UnsupportedOperationException
     override def newLookup(): Lookup = throw new UnsupportedOperationException
+    override def getSecondaryIndexLookuper(indexName: String): Lookuper =
+      throw new UnsupportedOperationException
     override def newAppend(): Append = throw new UnsupportedOperationException
     override def newUpsert(): Upsert = throw new UnsupportedOperationException
     override def close(): Unit = {}

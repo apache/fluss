@@ -433,6 +433,17 @@ impl FlussAdmin {
             None
         };
 
+        self.list_offsets_by_id(table_id, partition_id, buckets_id, offset_spec)
+            .await
+    }
+
+    async fn list_offsets_by_id(
+        &self,
+        table_id: TableId,
+        partition_id: Option<PartitionId>,
+        buckets_id: &[BucketId],
+        offset_spec: OffsetSpec,
+    ) -> Result<HashMap<i32, i64>> {
         // Prepare requests
         let requests_by_server =
             self.prepare_list_offsets_requests(table_id, partition_id, buckets_id, offset_spec)?;

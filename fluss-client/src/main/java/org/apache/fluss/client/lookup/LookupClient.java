@@ -60,16 +60,22 @@ public class LookupClient {
     private static final Logger LOG = LoggerFactory.getLogger(LookupClient.class);
 
     public static final String LOOKUP_THREAD_PREFIX = "fluss-lookup-sender";
+    public static final String LOOKUP_CONTINUATION_THREAD_PREFIX = "fluss-lookup-continuation";
 
     private final LookupQueue lookupQueue;
+    private final int secondaryIndexMaxCandidates;
 
     private final ExecutorService lookupSenderThreadPool;
     private final LookupSender lookupSender;
+    private final ExecutorService lookupContinuationExecutor;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
+        this.secondaryIndexMaxCandidates =
+                conf.get(ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES);
         ExponentialBackoff retryBackoff = createRetryBackoff(conf);
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
+        this.lookupContinuationExecutor = createLookupContinuationThreadPool(conf);
         short acks = configureAcks(conf);
         this.lookupSender =
                 new LookupSender(
@@ -115,6 +121,24 @@ public class LookupClient {
         return Executors.newFixedThreadPool(1, new ExecutorThreadFactory(LOOKUP_THREAD_PREFIX));
     }
 
+    private ExecutorService createLookupContinuationThreadPool(Configuration conf) {
+        return Executors.newFixedThreadPool(
+                conf.getInt(ConfigOptions.CLIENT_LOOKUP_CONTINUATION_THREADS),
+                new ExecutorThreadFactory(LOOKUP_CONTINUATION_THREAD_PREFIX));
+    }
+
+    int secondaryIndexMaxCandidates() {
+        checkArgument(
+                secondaryIndexMaxCandidates > 0,
+                "%s must be positive.",
+                ConfigOptions.CLIENT_LOOKUP_SECONDARY_INDEX_MAX_CANDIDATES.key());
+        return secondaryIndexMaxCandidates;
+    }
+
+    public ExecutorService getLookupContinuationExecutor() {
+        return lookupContinuationExecutor;
+    }
+
     /**
      * Looks up a key from the specified table bucket.
      *
@@ -148,8 +172,19 @@ public class LookupClient {
 
     public CompletableFuture<List<byte[]>> prefixLookup(
             TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        return prefixLookup(tablePath, tableBucket, keyBytes, bucketCount, 0, false);
+    }
+
+    CompletableFuture<List<byte[]>> prefixLookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            int bucketCount,
+            int limit,
+            boolean failOnLimitExceeded) {
         PrefixLookupQuery prefixLookup =
-                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
+                new PrefixLookupQuery(
+                        tablePath, tableBucket, keyBytes, bucketCount, limit, failOnLimitExceeded);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }
@@ -177,6 +212,17 @@ public class LookupClient {
                 lookupSenderThreadPool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+        }
+
+        lookupContinuationExecutor.shutdown();
+        try {
+            if (!lookupContinuationExecutor.awaitTermination(
+                    timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                lookupContinuationExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            lookupContinuationExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
 
         if (lookupSender != null) {

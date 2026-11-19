@@ -431,7 +431,9 @@ public final class LocalLog {
             // Limit the number of segments scanned when filtering to prevent a single fetch
             // request from scanning the entire log when the filter rejects all data.
             int filteredSegmentsScanned = 0;
-            while (fetchDataInfo == null && segmentOpt.isPresent()) {
+            while (fetchDataInfo == null
+                    && segmentOpt.isPresent()
+                    && segmentOpt.get().getBaseOffset() < maxOffsetMetadata.getMessageOffset()) {
                 LogSegment segment = segmentOpt.get();
                 long baseOffset = segment.getBaseOffset();
                 long maxPosition =
@@ -487,12 +489,12 @@ public final class LocalLog {
                     // Return a filtered empty response with the final skip offset so the client
                     // advances past all the filtered data.
                     return FetchDataInfo.createFilteredEmptyResponse(
-                            nextOffsetMetadata, lastFilteredEndOffset);
+                            maxOffsetMetadata, lastFilteredEndOffset);
                 } else if (filterContext != null) {
                     return FetchDataInfo.createFilteredEmptyResponse(
-                            nextOffsetMetadata, nextOffsetMetadata.getMessageOffset());
+                            maxOffsetMetadata, maxOffsetMetadata.getMessageOffset());
                 } else {
-                    return new FetchDataInfo(nextOffsetMetadata, MemoryLogRecords.EMPTY);
+                    return new FetchDataInfo(maxOffsetMetadata, MemoryLogRecords.EMPTY);
                 }
             }
         }

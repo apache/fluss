@@ -23,17 +23,25 @@ import org.apache.fluss.row.compacted.CompactedKeyWriter;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.util.List;
 import java.util.stream.IntStream;
 
-/** An encoder to encode {@link InternalRow} using {@link CompactedKeyWriter}. */
+/**
+ * An encoder to encode {@link InternalRow} using {@link CompactedKeyWriter}.
+ *
+ * <p>One instance may be shared by concurrent callers: the mutable writer is borrowed per {@link
+ * #encodeKey(InternalRow)} call from a {@link KeyEncodingRecycler} instead of being held as state.
+ */
+@ThreadSafe
 public class CompactedKeyEncoder implements KeyEncoder {
 
     private final InternalRow.FieldGetter[] fieldGetters;
 
     private final BinaryWriter.ValueWriter[] fieldEncoders;
 
-    private final CompactedKeyWriter compactedEncoder;
+    private final KeyEncodingRecycler<CompactedKeyWriter> keyWriterRecycler;
 
     /**
      * Create a key encoder to encode the key of the input row.
@@ -72,16 +80,26 @@ public class CompactedKeyEncoder implements KeyEncoder {
             fieldGetters[i] = InternalRow.createFieldGetter(fieldDataType, encodeFieldPos[i]);
             fieldEncoders[i] = CompactedKeyWriter.createValueWriter(fieldDataType);
         }
-        compactedEncoder = new CompactedKeyWriter();
+        keyWriterRecycler =
+                new KeyEncodingRecycler<>(
+                        CompactedKeyWriter::new,
+                        CompactedKeyWriter::reset,
+                        CompactedKeyWriter::capacity);
     }
 
     @Override
     public byte[] encodeKey(InternalRow row) {
+        CompactedKeyWriter compactedEncoder = keyWriterRecycler.borrow();
         compactedEncoder.reset();
-        // iterate all the fields of the row, and encode each field
-        for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeValue(compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
+        try {
+            // iterate all the fields of the row, and encode each field
+            for (int i = 0; i < fieldGetters.length; i++) {
+                fieldEncoders[i].writeValue(
+                        compactedEncoder, i, fieldGetters[i].getFieldOrNull(row));
+            }
+            return compactedEncoder.toBytes();
+        } finally {
+            keyWriterRecycler.recycle(compactedEncoder);
         }
-        return compactedEncoder.toBytes();
     }
 }

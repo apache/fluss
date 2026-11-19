@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -50,6 +51,7 @@ public class ServerMetadataSnapshot {
     private final Map<Integer, ServerInfo> aliveTabletServers;
     private final Map<TablePath, Long> tableIdByPath;
     private final Map<Long, TablePath> pathByTableId;
+    private final Map<Long, Long> mainTableIdByIndexTableId;
     // partition table.
     private final Map<PhysicalTablePath, Long> partitionIdByPath;
     private final Map<Long, PhysicalTablePath> physicalPathByPartitionId;
@@ -74,6 +76,7 @@ public class ServerMetadataSnapshot {
             Map<Integer, ServerInfo> aliveTabletServers,
             Map<TablePath, Long> tableIdByPath,
             Map<Long, TablePath> pathByTableId,
+            Map<Long, Long> mainTableIdByIndexTableId,
             Map<PhysicalTablePath, Long> partitionIdByPath,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables,
             Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions,
@@ -84,6 +87,7 @@ public class ServerMetadataSnapshot {
 
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.pathByTableId = Collections.unmodifiableMap(pathByTableId);
+        this.mainTableIdByIndexTableId = Collections.unmodifiableMap(mainTableIdByIndexTableId);
 
         this.partitionIdByPath = Collections.unmodifiableMap(partitionIdByPath);
         Map<Long, PhysicalTablePath> tempPhysicalPathByPartitionId = new HashMap<>();
@@ -103,6 +107,7 @@ public class ServerMetadataSnapshot {
     public static ServerMetadataSnapshot empty() {
         return new ServerMetadataSnapshot(
                 null,
+                Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
                 Collections.emptyMap(),
@@ -152,6 +157,24 @@ public class ServerMetadataSnapshot {
 
     public Optional<TablePath> getTablePath(long tableId) {
         return Optional.ofNullable(pathByTableId.get(tableId));
+    }
+
+    public Map<Long, Long> getMainTableIdByIndexTableId() {
+        return mainTableIdByIndexTableId;
+    }
+
+    public Optional<TablePath> getReadAuthorizationTablePath(long tableId) {
+        Long mainTableId = mainTableIdByIndexTableId.get(tableId);
+        if (mainTableId == null) {
+            return getTablePath(tableId);
+        }
+        return Optional.of(
+                getTablePath(mainTableId)
+                        .orElseThrow(
+                                () ->
+                                        new UnknownTableOrBucketException(
+                                                "Missing main table metadata for index table ID "
+                                                        + tableId)));
     }
 
     public Map<TablePath, Long> getTableIdByPath() {

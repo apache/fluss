@@ -293,7 +293,7 @@ public class TieringSplitGenerator {
                                 tablePath,
                                 tableBucket,
                                 partitionName,
-                                EARLIEST_OFFSET,
+                                latestKvSnapshots.getLogOffset(bucket).orElse(EARLIEST_OFFSET),
                                 latestBucketOffset,
                                 0));
             } else {

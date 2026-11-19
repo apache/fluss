@@ -156,6 +156,20 @@ public class MetricNames {
     public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
             "failedPrefixLookupRequestsPerSecond";
 
+    // for index replication
+    public static final String INDEX_REPLICATION_COMPLETED_BYTES_RATE =
+            "indexReplicationCompletedBytesPerSecond";
+    public static final String INDEX_REPLICATION_BUFFER_USAGE_RATIO =
+            "indexReplicationBufferUsageRatio";
+    public static final String INDEX_REPLICATION_REQUEST_LATENCY_MS =
+            "indexReplicationRequestLatencyMs";
+    public static final String INDEX_REPLICATION_RETRIES_TOTAL = "indexReplicationRetriesTotal";
+    public static final String INDEX_REPLICATION_MAX_LAG_OFFSETS = "indexReplicationMaxLagOffsets";
+    public static final String INDEX_REPLICATION_MAX_SYNC_LAG_OFFSETS =
+            "indexReplicationMaxSyncLagOffsets";
+    public static final String INDEX_REPLICATION_MAX_NO_PROGRESS_TIME_MS =
+            "indexReplicationMaxNoProgressTimeMs";
+
     // for replica
     public static final String UNDER_REPLICATED = "underReplicated";
     public static final String UNDER_MIN_ISR = "underMinIsr";

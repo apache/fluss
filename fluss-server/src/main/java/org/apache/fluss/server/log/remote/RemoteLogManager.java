@@ -25,6 +25,7 @@ import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -299,6 +300,37 @@ public class RemoteLogManager implements Closeable {
     public List<RemoteLogSegment> relevantRemoteLogSegmentsForFetchV0(
             TableBucket tableBucket, long offset) {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegmentsForFetchV0(offset);
+    }
+
+    /** Returns FetchLog v0 metadata for complete remote files below an exclusive offset bound. */
+    public @Nullable RemoteLogFetchInfo fetchLogFromRemote(
+            Replica replica, long fetchOffset, long maxOffset) {
+        if (fetchOffset >= maxOffset) {
+            return null;
+        }
+        List<RemoteLogSegment> segments =
+                relevantRemoteLogSegmentsForFetchV0(replica.getTableBucket(), fetchOffset);
+        // FetchLog v0 clients consume whole files without an exclusive offset bound. Followers
+        // pass Long.MAX_VALUE so replication remains independent of sync index progress.
+        if (!segments.isEmpty()
+                && segments.get(segments.size() - 1).remoteLogEndOffset() > maxOffset) {
+            segments =
+                    segments.stream()
+                            .filter(segment -> segment.remoteLogEndOffset() <= maxOffset)
+                            .collect(Collectors.toList());
+        }
+        if (segments.isEmpty()) {
+            return null;
+        }
+        int firstStartPos = lookupPositionForOffset(segments.get(0), fetchOffset);
+        PhysicalTablePath tablePath = replica.getPhysicalTablePath();
+        FsPath remoteDir = FlussPaths.remoteLogDir(replica.getRemoteDataDir());
+        return new RemoteLogFetchInfo(
+                FlussPaths.remoteLogTabletDir(remoteDir, tablePath, replica.getTableBucket())
+                        .toString(),
+                tablePath.getPartitionName(),
+                segments,
+                firstStartPos);
     }
 
     private boolean remoteDisabled() {

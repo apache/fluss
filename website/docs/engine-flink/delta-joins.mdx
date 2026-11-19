@@ -219,9 +219,51 @@ There is a known issue ([FLINK-38399](https://issues.apache.org/jira/browse/FLIN
 Starting from Flink 2.3, the requirement that "the join key must be part of the primary key" has been relaxed to "the join key must be part of the upsert key". This paves the way for defining table-level **immutable columns** constraints in Fluss, which will allow additional columns to enrich the upsert key in a future release and enable delta join optimization in more scenarios.
 :::
 
+## Foreign-Key Joins with Secondary Indexes
+
+A secondary index supplies the reverse lookup from a referenced row to its referencing rows. It does not make an arbitrary foreign-key join eligible for delta join: for updating inputs, Flink must also be able to discard update-before messages safely. The join columns must be part of the input upsert keys, and the other version-specific restrictions above still apply.
+
+For example, in Flink 2.3, include `customer_id` in the primary key of `orders` and index it for the reverse lookup. The following tables use the Fluss catalog:
+
+```sql title="Flink SQL"
+CREATE TABLE orders (
+    order_id BIGINT,
+    customer_id BIGINT,
+    amount DECIMAL(10, 2),
+    PRIMARY KEY (order_id, customer_id) NOT ENFORCED
+) WITH (
+    'bucket.key' = 'order_id',
+    'table.delete.behavior' = 'IGNORE',
+    'secondary-index.idx_customer.columns' = 'customer_id',
+    'secondary-index.idx_customer.visibility' = 'sync'
+);
+
+CREATE TABLE customers (
+    customer_id BIGINT,
+    customer_name STRING,
+    PRIMARY KEY (customer_id) NOT ENFORCED
+) WITH (
+    'table.delete.behavior' = 'IGNORE'
+);
+
+CREATE TABLE enriched_orders (
+    order_id BIGINT,
+    customer_id BIGINT,
+    amount DECIMAL(10, 2),
+    customer_name STRING,
+    PRIMARY KEY (order_id, customer_id) NOT ENFORCED
+);
+
+EXPLAIN INSERT INTO enriched_orders
+SELECT o.order_id, o.customer_id, o.amount, c.customer_name
+FROM orders o JOIN customers c ON o.customer_id = c.customer_id;
+```
+
+An order event looks up `customers` by primary key; a customer event uses `idx_customer` to find matching orders. Confirm that `EXPLAIN` contains `DeltaJoin`. Deletes are ignored in this example to meet the input restrictions; changing an order's `customer_id` changes its primary key and must not be treated as an update of the existing order.
+
 ## Future Plan
 
 The Fluss and Flink community are actively working together on enhancing delta join. Planned improvements include:
 - Support for additional join types, such as LEFT JOIN and FULL OUTER JOIN.
-- Support for **true multi-way joins** beyond the cascaded delta joins introduced in Flink 2.3. While Flink 2.3 can already optimize the `A JOIN B JOIN C` pattern by sequentially chaining delta joins, true multi-way join optimization (where a single join can be evaluated against multiple secondary indexes at once) still requires Fluss to support defining multiple secondary index keys on a single table.
+- Support for **true multi-way joins** beyond the cascaded delta joins introduced in Flink 2.3, where one join operator evaluates multiple inputs rather than chaining binary joins.
 - Support for more complex query patterns to optimize a wider range of join scenarios.

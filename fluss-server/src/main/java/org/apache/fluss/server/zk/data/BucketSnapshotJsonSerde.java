@@ -34,6 +34,7 @@ public class BucketSnapshotJsonSerde
 
     private static final String SNAPSHOT_ID = "snapshot_id";
     private static final String LOG_OFFSET = "log_offset";
+    private static final String SYNC_INDEX_PUSHED_OFFSET = "sync_index_pushed_offset";
     private static final String METADATA_PATH = "metadata_path";
 
     private static final String VERSION_KEY = "version";
@@ -44,7 +45,13 @@ public class BucketSnapshotJsonSerde
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
         long logOffset = node.get(LOG_OFFSET).asLong();
         String metadataPath = node.get(METADATA_PATH).asText();
-        return new BucketSnapshot(snapshotId, logOffset, metadataPath);
+        return new BucketSnapshot(
+                snapshotId,
+                logOffset,
+                metadataPath,
+                node.has(SYNC_INDEX_PUSHED_OFFSET)
+                        ? node.get(SYNC_INDEX_PUSHED_OFFSET).asLong()
+                        : null);
     }
 
     @Override
@@ -58,6 +65,10 @@ public class BucketSnapshotJsonSerde
         generator.writeNumberField(LOG_OFFSET, bucketSnapshot.getLogOffset());
         generator.writeStringField(METADATA_PATH, bucketSnapshot.getMetadataPath());
 
+        if (bucketSnapshot.getSyncIndexPushedOffset() != null) {
+            generator.writeNumberField(
+                    SYNC_INDEX_PUSHED_OFFSET, bucketSnapshot.getSyncIndexPushedOffset());
+        }
         generator.writeEndObject();
     }
 }

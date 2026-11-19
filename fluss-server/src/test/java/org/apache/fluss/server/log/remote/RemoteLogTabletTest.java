@@ -165,15 +165,23 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
 
         // currentTime = 1 hour. (1h - 0) < 7d, so the segment is NOT expired.
         long oneHourMs = java.time.Duration.ofHours(1).toMillis();
-        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, defaultTtlMs))
+        assertThat(
+                        remoteLogTablet.expiredRemoteLogSegments(
+                                oneHourMs, Long.MAX_VALUE, defaultTtlMs))
                 .isEmpty();
 
         // With a 1 ms TTL, the same segment is expired.
-        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, 1L))
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, Long.MAX_VALUE, 1L))
+                .containsExactly(segment);
+
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, 0L, 1L)).isEmpty();
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, 9L, 1L)).isEmpty();
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, 10L, 1L))
                 .containsExactly(segment);
 
         // A non-positive current TTL disables expiration.
-        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, null, -1L)).isEmpty();
+        assertThat(remoteLogTablet.expiredRemoteLogSegments(oneHourMs, Long.MAX_VALUE, -1L))
+                .isEmpty();
     }
 
     RemoteLogSegment createLogSegmentWithMaxTimestamp(

@@ -34,6 +34,10 @@ retained.
 For [Partitioned Primary Key Table](/table-design/data-distribution/partitioning.md), the primary key must contain the
 partition key.
 
+## Secondary Indexes
+
+Declare [global secondary indexes](../secondary-indexes.md) when creating a primary key table to query current rows by non-primary-key equality predicates. Index lookup works across buckets and partitions, supports single-column and composite indexes, and is available through the Java API and Flink lookup joins.
+
 ## Bucket Assigning
 
 For primary key tables, Fluss always determines which bucket the data belongs to based on the hash value of the bucket
