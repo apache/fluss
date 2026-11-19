@@ -104,11 +104,15 @@ final class BulkLoadSnapshotValidator {
                 "Negative snapshot row count.");
         Set<String> local = new HashSet<>();
         Set<String> remote = new HashSet<>();
-        long privateSize = validateFiles(metadata.getPrivateFiles(), tabletDir, local, remote);
+        long privateSize = validateFiles(metadata.getPrivateFiles(), directory, local, remote);
         long total =
                 Math.addExact(
                         privateSize,
-                        validateFiles(metadata.getSharedFiles(), tabletDir, local, remote));
+                        validateFiles(
+                                metadata.getSharedFiles(),
+                                FlussPaths.remoteKvSharedDir(tabletDir),
+                                local,
+                                remote));
         require(
                 metadata.getIncrementalSize() >= privateSize
                         && metadata.getIncrementalSize() <= total,
@@ -118,7 +122,7 @@ final class BulkLoadSnapshotValidator {
 
     private static long validateFiles(
             List<KvSnapshotFileMetadata.FileHandle> files,
-            FsPath tabletDir,
+            FsPath ownerDirectory,
             Set<String> local,
             Set<String> remote)
             throws Exception {
@@ -138,7 +142,7 @@ final class BulkLoadSnapshotValidator {
             }
             require(local.add(name) && remote.add(file.getPath()), "Duplicate snapshot file.");
             FsPath filePath = new FsPath(file.getPath());
-            requireWithin(filePath, tabletDir);
+            requireWithin(filePath, ownerDirectory);
             FileStatus fileStatus = filePath.getFileSystem().getFileStatus(filePath);
             require(
                     !fileStatus.isDir() && fileStatus.getLen() == file.getSize(),
@@ -156,7 +160,7 @@ final class BulkLoadSnapshotValidator {
                 Objects.equals(child.getScheme(), root.getScheme())
                         && Objects.equals(child.getAuthority(), root.getAuthority())
                         && child.getPath().startsWith(prefix),
-                "Snapshot file escapes the bucket directory.");
+                "Snapshot file escapes its owning directory.");
     }
 
     private static void require(boolean condition, String message) {

@@ -189,7 +189,7 @@ public class CompletedSnapshotStore {
                 () -> {
                     reconcileUnconfirmedImportUnderLock();
                     if (!completedSnapshots.isEmpty()) {
-                        subsumeOldSnapshots(completedSnapshots.getLast());
+                        subsumeOldSnapshots();
                     }
                 });
     }
@@ -266,7 +266,7 @@ public class CompletedSnapshotStore {
                     "Recovery selection update failed after snapshot registration.", updateFailure);
         }
         try {
-            subsumeOldSnapshots(snapshot);
+            subsumeOldSnapshots();
         } catch (Exception cleanupFailure) {
             if (selectionFailure != null) {
                 selectionFailure.addSuppressed(cleanupFailure);
@@ -279,8 +279,7 @@ public class CompletedSnapshotStore {
         }
     }
 
-    private void subsumeOldSnapshots(CompletedSnapshot snapshot) throws Exception {
-
+    private void subsumeOldSnapshots() throws Exception {
         CompletedSnapshot latest = completedSnapshots.peekLast();
         Iterator<CompletedSnapshot> iterator = completedSnapshots.iterator();
         while (completedSnapshots.size() > maxNumberOfSnapshotsToRetain && iterator.hasNext()) {
@@ -310,13 +309,9 @@ public class CompletedSnapshotStore {
         findLowest(completedSnapshots)
                 .ifPresent(id -> sharedKvFileRegistry.unregisterUnusedKvFile(id, stillInUseIds));
 
-        // Snapshot metadata/private files cleanup: use the latest snapshot
-        // ID + 1 so subsumed snapshots can be cleaned even when a lower
-        // snapshot has a lease. This is safe because
-        // KvSnapshotHandle.discard() only deletes private files and
-        // metadata, not shared SST files registered in SharedKvFileRegistry.
-        snapshotsCleaner.cleanSubsumedSnapshots(
-                snapshot.getSnapshotID() + 1, stillInUseIds, () -> {}, ioExecutor);
+        // The subsumed queue contains only snapshots whose durable references were removed.
+        // Shared SST files are managed separately by the registry.
+        snapshotsCleaner.cleanSubsumedSnapshots(stillInUseIds, () -> {}, ioExecutor);
     }
 
     private void removeUnusedSnapshots() throws Exception {

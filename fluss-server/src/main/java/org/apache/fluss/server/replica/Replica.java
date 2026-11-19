@@ -586,6 +586,10 @@ public final class Replica {
                 && coordinatorEpoch == requestCoordinatorEpoch;
     }
 
+    boolean requiresLeaderActivation(int requestLeaderEpoch) {
+        return requestLeaderEpoch > leaderEpoch || !isLeader();
+    }
+
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
         boolean leaderHWIncremented =
                 inWriteLock(
@@ -600,8 +604,7 @@ public final class Replica {
 
                             // Resolve recovery metadata before changing role state or dropping KV.
                             KvRecovery recovery =
-                                    (data.getLeaderEpoch() > leaderEpoch || !isLeader())
-                                                    && isKvTable()
+                                    requiresLeaderActivation(data.getLeaderEpoch()) && isKvTable()
                                             ? prepareKvRecovery()
                                             : null;
 
@@ -618,7 +621,7 @@ public final class Replica {
                                     data.getStandbyReplicas());
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
-                            if (requestLeaderEpoch > leaderEpoch || !isLeader()) {
+                            if (requiresLeaderActivation(requestLeaderEpoch)) {
                                 boolean isNewLeader = !isLeader();
                                 leaderEpoch = requestLeaderEpoch;
                                 leaderReplicaIdOpt.set(null);
@@ -2125,16 +2128,7 @@ public final class Replica {
     public long getRowCount() {
         return inReadLock(
                 leaderIsrUpdateLock,
-                () -> {
-                    KvTablet kv = this.kvTablet;
-                    if (kv != null) {
-                        // return materialized row count for primary key table
-                        return kv.getRowCount();
-                    } else {
-                        // return log row count for non-primary key table
-                        return logTablet.getRowCount();
-                    }
-                });
+                () -> isKvTable() ? getServingKvTablet().getRowCount() : logTablet.getRowCount());
     }
 
     private static boolean supportsExactRowCount(TableConfig tableConfig) {

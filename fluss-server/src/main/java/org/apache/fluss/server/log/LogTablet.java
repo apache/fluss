@@ -1207,8 +1207,7 @@ public final class LogTablet {
             if (getHighWatermark() < localLogStartOffset()) {
                 updateHighWatermark(localLogStartOffset());
             }
-            // A retry at an initialized boundary must finish flush/checkpoint persistence.
-            return localLogStartOffset() == snapshotOffset;
+            return initialized;
         }
     }
 

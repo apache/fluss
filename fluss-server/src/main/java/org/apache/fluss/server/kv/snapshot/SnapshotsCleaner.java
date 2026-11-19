@@ -45,7 +45,7 @@ public class SnapshotsCleaner {
 
     /**
      * Add one subsumed snapshot to SnapshotsCleaner, the subsumed snapshot would be discarded at
-     * {@link #cleanSubsumedSnapshots(long, Set, Runnable, Executor)}.
+     * {@link #cleanSubsumedSnapshots(Set, Runnable, Executor)}.
      *
      * @param completedSnapshot which is subsumed.
      */
@@ -58,19 +58,17 @@ public class SnapshotsCleaner {
     /**
      * Clean Snapshot that is not in the given {@param stillInUse}.
      *
-     * @param upTo lowest SnapshotID which is still valid.
      * @param stillInUse the state of those Snapshots are still referenced.
      * @param postCleanAction post action after cleaning.
      * @param executor is used to perform the cleanup logic.
      */
     public void cleanSubsumedSnapshots(
-            long upTo, Set<Long> stillInUse, Runnable postCleanAction, Executor executor) {
+            Set<Long> stillInUse, Runnable postCleanAction, Executor executor) {
         synchronized (lock) {
             Iterator<CompletedSnapshot> iterator = subsumedSnapshots.iterator();
             while (iterator.hasNext()) {
                 CompletedSnapshot snapshot = iterator.next();
-                if (snapshot.getSnapshotID() < upTo
-                        && !stillInUse.contains(snapshot.getSnapshotID())) {
+                if (!stillInUse.contains(snapshot.getSnapshotID())) {
                     try {
                         LOG.debug("Try to discard snapshot {}.", snapshot.getSnapshotID());
                         cleanSnapshot(snapshot, postCleanAction, executor);

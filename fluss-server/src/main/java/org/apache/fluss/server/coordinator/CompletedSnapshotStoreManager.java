@@ -163,6 +163,11 @@ public class CompletedSnapshotStoreManager {
                 });
     }
 
+    /** Checks the persisted retention window without loading remote snapshot files. */
+    public boolean isSnapshotRetentionExceeded(TableBucket bucket) throws Exception {
+        return zooKeeperClient.listBucketSnapshotIds(bucket).size() > maxNumberOfSnapshotsToRetain;
+    }
+
     /** Reconciles an uncertain local publication without reloading persisted snapshot files. */
     public void reconcileUnconfirmedImport(TableBucket bucket) throws Exception {
         CompletedSnapshotStore cached = bucketCompletedSnapshotStores.get(bucket);

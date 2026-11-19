@@ -253,7 +253,7 @@ public final class BulkLoadRecoveryManager {
             if (!current.isPresent() || current.get().data() != selectedSnapshotId) {
                 return true;
             }
-            if (retainAfterImport) {
+            if (retainAfterImport || snapshots.isSnapshotRetentionExceeded(bucket)) {
                 snapshots
                         .getOrCreateCompletedSnapshotStore(
                                 data.getPhysicalTablePath().getTablePath(), bucket)

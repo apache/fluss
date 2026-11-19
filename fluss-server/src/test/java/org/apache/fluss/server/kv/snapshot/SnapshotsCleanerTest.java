@@ -43,37 +43,12 @@ class SnapshotsCleanerTest {
         SnapshotsCleaner snapshotsCleaner = new SnapshotsCleaner();
         TestCompletedSnapshot cp1 = createSnapshot(tableBucket, 1);
         snapshotsCleaner.addSubsumedSnapshot(cp1);
-        TestCompletedSnapshot cp2 = createSnapshot(tableBucket, 2);
+        TestCompletedSnapshot cp2 = createSnapshot(tableBucket, 10);
         snapshotsCleaner.addSubsumedSnapshot(cp2);
-        TestCompletedSnapshot cp3 = createSnapshot(tableBucket, 2);
-        snapshotsCleaner.addSubsumedSnapshot(cp3);
-
         snapshotsCleaner.cleanSubsumedSnapshots(
-                3, Collections.singleton(1L), () -> {}, Executors.directExecutor());
-        // cp 1 is in use, shouldn't discard.
+                Collections.singleton(1L), () -> {}, Executors.directExecutor());
         assertThat(cp1.isDiscarded()).isFalse();
         assertThat(cp2.isDiscarded()).isTrue();
-    }
-
-    @Test
-    void testNotCleanHigherSnapshot() {
-        TableBucket tableBucket = new TableBucket(1, 1);
-        SnapshotsCleaner snapshotsCleaner = new SnapshotsCleaner();
-
-        TestCompletedSnapshot cp1 = createSnapshot(tableBucket, 1);
-        snapshotsCleaner.addSubsumedSnapshot(cp1);
-        TestCompletedSnapshot cp2 = createSnapshot(tableBucket, 2);
-        snapshotsCleaner.addSubsumedSnapshot(cp2);
-        TestCompletedSnapshot cp3 = createSnapshot(tableBucket, 3);
-        snapshotsCleaner.addSubsumedSnapshot(cp3);
-        snapshotsCleaner.cleanSubsumedSnapshots(
-                2, Collections.emptySet(), () -> {}, Executors.directExecutor());
-
-        assertThat(cp1.isDiscarded()).isTrue();
-        // cp2 is the lowest snapshot that is still valid, shouldn't discard.
-        assertThat(cp2.isDiscarded()).isFalse();
-        // cp3 is higher than cp2, shouldn't discard.
-        assertThat(cp3.isDiscarded()).isFalse();
     }
 
     public static class TestCompletedSnapshot extends CompletedSnapshot {

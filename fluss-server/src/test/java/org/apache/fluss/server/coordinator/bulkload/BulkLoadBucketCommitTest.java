@@ -23,6 +23,8 @@ import org.apache.fluss.exception.BulkLoadConflictException;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.KvSnapshotFileMetadata;
+import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -34,11 +36,14 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
 import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.TestingBulkLoadSnapshot;
@@ -59,9 +64,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.EnumSource;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -132,7 +139,7 @@ class BulkLoadBucketCommitTest {
         store = new BulkLoadMetadataStore(client);
         snapshots =
                 new CompletedSnapshotStoreManager(
-                        2,
+                        1,
                         Runnable::run,
                         client,
                         TestingMetricGroups.COORDINATOR_METRICS,
@@ -143,7 +150,7 @@ class BulkLoadBucketCommitTest {
     void testCommitReplacesExistingRecoverySelection() throws Exception {
         prepareAllocatedBucket();
         CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
-        long previousId = SNAPSHOT_ID - 1;
+        long previousId = SNAPSHOT_ID + 1;
         CompletedSnapshotHandle previous = uploadSnapshot(previousId, WAL_OFFSET);
         client.registerTableBucketSnapshot(
                 bucket,
@@ -165,11 +172,15 @@ class BulkLoadBucketCommitTest {
                                 SNAPSHOT_ID,
                                 WAL_OFFSET,
                                 uploaded.getMetadataFilePath().toString()));
+        CompletedSnapshotStore snapshotStore =
+                snapshots.getOrCreateCompletedSnapshotStore(TABLE, bucket);
+        snapshotStore.retainSnapshotsAfterImport();
+        assertThat(snapshotStore.getActiveSnapshotIds()).containsExactly(SNAPSHOT_ID);
         assertThat(
-                        snapshots
-                                .getOrCreateCompletedSnapshotStore(TABLE, bucket)
-                                .getActiveSnapshotIds())
-                .contains(SNAPSHOT_ID);
+                        previous.getMetadataFilePath()
+                                .getFileSystem()
+                                .exists(previous.getMetadataFilePath()))
+                .isFalse();
     }
 
     @Test
@@ -198,12 +209,41 @@ class BulkLoadBucketCommitTest {
         assertBucketNotCommitted();
     }
 
+    @Test
+    void testCommitRejectsPrivateFileFromPreviousSnapshot() throws Exception {
+        prepareAllocatedBucket();
+        CompletedSnapshotHandle previous = uploadSnapshot(SNAPSHOT_ID - 1, WAL_OFFSET);
+        Path previousMetadata = Paths.get(previous.getMetadataFilePath().toUri());
+        KvSnapshotFileMetadata old =
+                KvSnapshotFileMetadataJsonSerde.fromJson(Files.readAllBytes(previousMetadata));
+        CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
+        Path metadata = Paths.get(uploaded.getMetadataFilePath().toUri());
+        Files.write(
+                metadata,
+                KvSnapshotFileMetadataJsonSerde.toJson(
+                        new KvSnapshotFileMetadata(
+                                bucket,
+                                SNAPSHOT_ID,
+                                uploaded.getMetadataFilePath().getParent().toString(),
+                                old.getSharedFiles(),
+                                old.getPrivateFiles(),
+                                old.getIncrementalSize(),
+                                WAL_OFFSET,
+                                0L,
+                                null)));
+        assertThatThrownBy(() -> commit(WAL_OFFSET))
+                .isInstanceOf(InvalidBulkLoadSnapshotException.class)
+                .hasMessageContaining("Snapshot file escapes");
+        assertBucketNotCommitted();
+    }
+
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testBucketRpcsRecoverSnapshotUnlessWalAdvanced(boolean appendAfterAllocation)
-            throws Exception {
+    @EnumSource(BucketCommitScenario.class)
+    void testBucketRpcs(BucketCommitScenario scenario) throws Exception {
         Configuration clusterConf =
-                new Configuration().set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1));
+                new Configuration()
+                        .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofHours(1))
+                        .set(ConfigOptions.SERVER_IO_POOL_SIZE, 1);
         FlussClusterExtension cluster =
                 FlussClusterExtension.builder()
                         .setNumOfTabletServers(1)
@@ -238,19 +278,20 @@ class BulkLoadBucketCommitTest {
             AllocateBulkLoadBucketSnapshotResponse allocated =
                     coordinator.allocateBulkLoadBucketSnapshot(allocate).get(30, TimeUnit.SECONDS);
             List<KvRecord> rows = genKvRecords(new Object[] {1, "imported"});
-            TestingBulkLoadSnapshot.writeSnapshot(
-                    new FsPath(info.getRemoteDataDir()),
-                    PhysicalTablePath.of(path),
-                    target,
-                    allocated.getSnapshotId(),
-                    allocated.getLogOffset(),
-                    1L,
-                    getKeyValuePairs(rows));
+            CompletedSnapshotHandle uploaded =
+                    TestingBulkLoadSnapshot.writeSnapshot(
+                            new FsPath(info.getRemoteDataDir()),
+                            PhysicalTablePath.of(path),
+                            target,
+                            allocated.getSnapshotId(),
+                            allocated.getLogOffset(),
+                            1L,
+                            getKeyValuePairs(rows));
             CommitBulkLoadBucketSnapshotRequest commit =
                     new CommitBulkLoadBucketSnapshotRequest().setHandle(handle).setBucketId(0);
             TabletServerGateway leader =
                     cluster.newTabletServerClientForNode(cluster.waitAndGetLeader(target));
-            if (appendAfterAllocation) {
+            if (scenario == BucketCommitScenario.WAL_ADVANCED) {
                 assertThat(
                                 leader.putKv(
                                                 newPutKvRequest(
@@ -280,6 +321,25 @@ class BulkLoadBucketCommitTest {
                                         .get(30, TimeUnit.SECONDS)
                                         .getState())
                         .isEqualTo(BulkLoadBucket.ALLOCATED);
+            } else if (scenario == BucketCommitScenario.RECOVERY_FAILS) {
+                // A valid-size CURRENT file passes publication validation but RocksDB cannot open
+                // it.
+                Path current =
+                        Paths.get(uploaded.getMetadataFilePath().getParent().toUri())
+                                .resolve("CURRENT");
+                Files.write(current, new byte[Files.readAllBytes(current).length]);
+                coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
+                GetTableStatsRequest stats = new GetTableStatsRequest().setTableId(tableId);
+                stats.addBucketsReq().setBucketId(0);
+                retry(
+                        Duration.ofSeconds(30),
+                        () ->
+                                assertThat(
+                                                leader.getTableStats(stats)
+                                                        .get(5, TimeUnit.SECONDS)
+                                                        .getBucketsRespAt(0)
+                                                        .getErrorCode())
+                                        .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code()));
             } else {
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
                 assertThat(zk.getRecoverySnapshotSelection(target).get().data())
@@ -406,5 +466,11 @@ class BulkLoadBucketCommitTest {
     private static void createNode(ZooKeeperClient client, String path, byte[] data)
             throws Exception {
         client.getCuratorClient().create().creatingParentsIfNeeded().forPath(path, data);
+    }
+
+    private enum BucketCommitScenario {
+        RECOVERY_SUCCEEDS,
+        WAL_ADVANCED,
+        RECOVERY_FAILS
     }
 }
