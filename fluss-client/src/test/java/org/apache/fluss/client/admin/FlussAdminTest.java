@@ -201,7 +201,10 @@ class FlussAdminTest {
                 new TestingRpcClient(
                         (node, api) -> {
                             if (api == ApiKeys.GET_METADATA) {
-                                assertThat(node).isEqualTo(discovery);
+                                // Server discovery starts from a random cached tablet
+                                // server, so both nodes known to the cached cluster are
+                                // valid entry points.
+                                assertThat(node).isIn(discovery, oldEndpoint);
                                 metadataRequests.incrementAndGet();
                                 MetadataResponse response = new MetadataResponse();
                                 response.setCoordinatorServer()
