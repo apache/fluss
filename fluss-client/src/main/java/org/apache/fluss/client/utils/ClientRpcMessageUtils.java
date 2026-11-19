@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.utils;
 
-import org.apache.fluss.client.admin.AlterConsumerGroupOffsetsResult;
 import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.ClusterHealthStatus;
@@ -138,6 +137,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
@@ -1116,18 +1116,18 @@ public class ClientRpcMessageUtils {
     /**
      * Makes a {@link GetConsumerOffsetsRequest} for the given group and buckets.
      *
-     * <p>If {@code tableBuckets} is {@code null} or empty, the request asks for all committed
-     * offsets of the group.
+     * <p>If {@code tableBuckets} is {@code null}, the request asks for all committed offsets of the
+     * group. An empty set selects no buckets.
      *
      * @param groupId the consumer group id
-     * @param tableBuckets the buckets whose committed offsets are requested; {@code null} or empty
-     *     requests all committed offsets of the group
+     * @param tableBuckets the buckets whose committed offsets are requested; {@code null} requests
+     *     all committed offsets of the group
      * @return the request
      */
     public static GetConsumerOffsetsRequest makeGetConsumerOffsetsRequest(
             String groupId, Set<TableBucket> tableBuckets) {
         GetConsumerOffsetsRequest request = new GetConsumerOffsetsRequest().setGroupId(groupId);
-        if (tableBuckets == null || tableBuckets.isEmpty()) {
+        if (tableBuckets == null) {
             return request.setAllOffsets(true);
         }
         request.setAllOffsets(false);
@@ -1170,7 +1170,7 @@ public class ClientRpcMessageUtils {
                     throw error.exception(
                             bucket.hasErrorMessage() ? bucket.getErrorMessage() : null);
                 }
-                if (bucket.hasOffset() && bucket.getOffset() >= 0) {
+                if (bucket.hasOffset()) {
                     offsets.put(
                             new TableBucket(
                                     table.getTableId(),
@@ -1222,11 +1222,11 @@ public class ClientRpcMessageUtils {
      * Decodes a {@link DeleteConsumerOffsetsResponse} into a map of bucket to error.
      *
      * @param response the response from the tablet server
-     * @return a map of table bucket to error, with {@link Errors#NONE} for successful deletions
+     * @return a map of table bucket to error, with {@link ApiError#NONE} for successful deletions
      */
-    public static Map<TableBucket, Errors> toDeleteConsumerOffsetsErrors(
+    public static Map<TableBucket, ApiError> toDeleteConsumerOffsetsErrors(
             DeleteConsumerOffsetsResponse response) {
-        Map<TableBucket, Errors> errors = new HashMap<>();
+        Map<TableBucket, ApiError> errors = new HashMap<>();
         for (PbDeleteConsumerOffsetsResponseTable table : response.getTablesList()) {
             for (PbDeleteConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
                 errors.put(
@@ -1234,27 +1234,21 @@ public class ClientRpcMessageUtils {
                                 table.getTableId(),
                                 bucket.hasPartitionId() ? bucket.getPartitionId() : null,
                                 bucket.getBucketId()),
-                        bucket.hasErrorCode()
-                                ? Errors.forCode(bucket.getErrorCode())
-                                : Errors.NONE);
+                        ApiError.fromErrorMessage(bucket));
             }
         }
         return errors;
     }
 
     /**
-     * Decodes a {@link CommitConsumerOffsetsResponse} into per-bucket alter outcomes.
+     * Decodes a {@link CommitConsumerOffsetsResponse} into per-bucket errors.
      *
      * @param response the response from the tablet server
-     * @param requestedOffsets the offsets that were requested, used to report the new offset for
-     *     successful buckets
-     * @return a map of table bucket to its alter outcome
+     * @return a map of table bucket to its error, with {@link ApiError#NONE} for successful commits
      */
-    public static Map<TableBucket, AlterConsumerGroupOffsetsResult.BucketOutcome>
-            toAlterConsumerOffsetsOutcomes(
-                    CommitConsumerOffsetsResponse response,
-                    Map<TableBucket, OffsetMetadata> requestedOffsets) {
-        Map<TableBucket, AlterConsumerGroupOffsetsResult.BucketOutcome> outcomes = new HashMap<>();
+    public static Map<TableBucket, ApiError> toCommitConsumerOffsetsErrors(
+            CommitConsumerOffsetsResponse response) {
+        Map<TableBucket, ApiError> errors = new HashMap<>();
         for (PbCommitConsumerOffsetsResponseTable table : response.getTablesList()) {
             for (PbCommitConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
                 TableBucket tableBucket =
@@ -1262,35 +1256,23 @@ public class ClientRpcMessageUtils {
                                 table.getTableId(),
                                 bucket.hasPartitionId() ? bucket.getPartitionId() : null,
                                 bucket.getBucketId());
-                Errors error =
-                        bucket.hasErrorCode() ? Errors.forCode(bucket.getErrorCode()) : Errors.NONE;
-                OffsetMetadata requested = requestedOffsets.get(tableBucket);
-                outcomes.put(
-                        tableBucket,
-                        new AlterConsumerGroupOffsetsResult.BucketOutcome(
-                                error == Errors.NONE && requested != null
-                                        ? requested.getOffset()
-                                        : -1L,
-                                error.name(),
-                                bucket.hasErrorMessage() ? bucket.getErrorMessage() : null));
+                errors.put(tableBucket, ApiError.fromErrorMessage(bucket));
             }
         }
-        return Collections.unmodifiableMap(outcomes);
+        return Collections.unmodifiableMap(errors);
     }
 
     /**
      * Decodes a {@link DeleteConsumerGroupsResponse} into a map of group id to error.
      *
      * @param response the response from the tablet server
-     * @return a map of group id to error, with {@link Errors#NONE} for successful deletions
+     * @return a map of group id to error, with {@link ApiError#NONE} for successful deletions
      */
-    public static Map<String, Errors> toDeleteConsumerGroupsErrors(
+    public static Map<String, ApiError> toDeleteConsumerGroupsErrors(
             DeleteConsumerGroupsResponse response) {
-        Map<String, Errors> errors = new HashMap<>();
+        Map<String, ApiError> errors = new HashMap<>();
         for (PbDeletedGroup group : response.getGroupsList()) {
-            errors.put(
-                    group.getGroupId(),
-                    group.hasErrorCode() ? Errors.forCode(group.getErrorCode()) : Errors.NONE);
+            errors.put(group.getGroupId(), ApiError.fromErrorMessage(group));
         }
         return errors;
     }

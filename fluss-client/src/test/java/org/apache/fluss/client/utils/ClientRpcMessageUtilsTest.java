@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.utils;
 
-import org.apache.fluss.client.admin.AlterConsumerGroupOffsetsResult;
 import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
@@ -52,6 +51,7 @@ import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 
@@ -86,7 +86,7 @@ class ClientRpcMessageUtilsTest {
     private static final int TIMEOUT_MS = 30000;
 
     @Test
-    void testMakeGetConsumerOffsetsRequestWithAllOffsets() {
+    void testMakeGetConsumerOffsetsRequestWithNullAndEmptyBuckets() {
         GetConsumerOffsetsRequest request =
                 ClientRpcMessageUtils.makeGetConsumerOffsetsRequest("group-1", null);
         assertThat(request.getGroupId()).isEqualTo("group-1");
@@ -96,7 +96,8 @@ class ClientRpcMessageUtilsTest {
         request =
                 ClientRpcMessageUtils.makeGetConsumerOffsetsRequest(
                         "group-1", Collections.emptySet());
-        assertThat(request.isAllOffsets()).isTrue();
+        assertThat(request.isAllOffsets()).isFalse();
+        assertThat(request.getTablesCount()).isZero();
     }
 
     @Test
@@ -134,7 +135,7 @@ class ClientRpcMessageUtilsTest {
     void testMakeCommitConsumerOffsetsRequest() {
         Map<TableBucket, OffsetMetadata> offsets = new HashMap<>();
         offsets.put(new TableBucket(1L, null, 0), new OffsetMetadata(10L, "checkpoint"));
-        offsets.put(new TableBucket(2L, 5L, 1), new OffsetMetadata(20L, ""));
+        offsets.put(new TableBucket(2L, 5L, 1), new OffsetMetadata(0L, ""));
 
         CommitConsumerOffsetsRequest request =
                 ClientRpcMessageUtils.makeCommitConsumerOffsetsRequest("group-1", offsets);
@@ -207,6 +208,34 @@ class ClientRpcMessageUtilsTest {
     }
 
     @Test
+    void testToConsumerOffsetsSkipsMissingOffsetAndDecodesZero() {
+        GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
+        response.addTable()
+                .setTableId(3L)
+                .addBucket()
+                .setBucketId(0)
+                .setOffset(0L)
+                .setMetadata("checkpoint");
+        response.getTableAt(0).addBucket().setBucketId(1);
+
+        Map<TableBucket, OffsetMetadata> offsets =
+                ClientRpcMessageUtils.toConsumerOffsets(response);
+        assertThat(offsets).containsOnlyKeys(new TableBucket(3L, null, 0));
+        assertThat(offsets.get(new TableBucket(3L, null, 0)).getOffset()).isZero();
+        assertThat(offsets.get(new TableBucket(3L, null, 0)).getMetadata()).isEqualTo("checkpoint");
+    }
+
+    @Test
+    void testToConsumerOffsetsRejectsUnexpectedNegativeOffset() {
+        GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
+        response.addTable().setTableId(3L).addBucket().setBucketId(0).setOffset(-1L);
+
+        assertThatThrownBy(() -> ClientRpcMessageUtils.toConsumerOffsets(response))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("offset");
+    }
+
+    @Test
     void testToConsumerOffsetsThrowsOnError() {
         GetConsumerOffsetsResponse response = new GetConsumerOffsetsResponse();
         response.addTable()
@@ -230,13 +259,17 @@ class ClientRpcMessageUtilsTest {
                 .addBucket()
                 .setPartitionId(2L)
                 .setBucketId(3)
-                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code())
+                .setErrorMessage("offset deletion rejected for partition 2");
 
-        Map<TableBucket, Errors> errors =
+        Map<TableBucket, ApiError> errors =
                 ClientRpcMessageUtils.toDeleteConsumerOffsetsErrors(response);
-        assertThat(errors)
-                .containsEntry(new TableBucket(1L, null, 0), Errors.NONE)
-                .containsEntry(new TableBucket(1L, 2L, 3), Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+        assertThat(errors.get(new TableBucket(1L, null, 0)).isSuccess()).isTrue();
+        ApiError failure = errors.get(new TableBucket(1L, 2L, 3));
+        assertThat(failure.error()).isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+        assertThat(failure.exception())
+                .isInstanceOf(ConsumerGroupIdNotFoundException.class)
+                .hasMessage("offset deletion rejected for partition 2");
     }
 
     @Test
@@ -245,42 +278,38 @@ class ClientRpcMessageUtilsTest {
         response.addGroup().setGroupId("group-1");
         response.addGroup()
                 .setGroupId("group-2")
-                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code());
+                .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code())
+                .setErrorMessage("group deletion rejected by owner");
 
-        Map<String, Errors> errors = ClientRpcMessageUtils.toDeleteConsumerGroupsErrors(response);
-        assertThat(errors)
-                .containsEntry("group-1", Errors.NONE)
-                .containsEntry("group-2", Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+        Map<String, ApiError> errors = ClientRpcMessageUtils.toDeleteConsumerGroupsErrors(response);
+        assertThat(errors.get("group-1").isSuccess()).isTrue();
+        ApiError failure = errors.get("group-2");
+        assertThat(failure.error()).isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+        assertThat(failure.exception())
+                .isInstanceOf(ConsumerGroupIdNotFoundException.class)
+                .hasMessage("group deletion rejected by owner");
     }
 
     @Test
-    void testToAlterConsumerOffsetsOutcomes() {
-        Map<TableBucket, OffsetMetadata> requested = new HashMap<>();
-        requested.put(new TableBucket(1L, null, 0), new OffsetMetadata(10L, "checkpoint"));
-
+    void testToCommitConsumerOffsetsErrors() {
         CommitConsumerOffsetsResponse response = new CommitConsumerOffsetsResponse();
         response.addTable().setTableId(1L).addBucket().setBucketId(0);
         response.addTable()
                 .setTableId(1L)
                 .addBucket()
+                .setPartitionId(2L)
                 .setBucketId(1)
                 .setErrorCode(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code())
                 .setErrorMessage("group not found");
 
-        Map<TableBucket, AlterConsumerGroupOffsetsResult.BucketOutcome> outcomes =
-                ClientRpcMessageUtils.toAlterConsumerOffsetsOutcomes(response, requested);
-        AlterConsumerGroupOffsetsResult.BucketOutcome success =
-                outcomes.get(new TableBucket(1L, null, 0));
-        assertThat(success.isSuccess()).isTrue();
-        assertThat(success.newOffset()).isEqualTo(10L);
-        assertThat(success.errorCode()).isEqualTo("NONE");
-
-        AlterConsumerGroupOffsetsResult.BucketOutcome failure =
-                outcomes.get(new TableBucket(1L, null, 1));
-        assertThat(failure.isSuccess()).isFalse();
-        assertThat(failure.newOffset()).isEqualTo(-1L);
-        assertThat(failure.errorCode()).isEqualTo("CONSUMER_GROUP_ID_NOT_FOUND");
-        assertThat(failure.errorMessage()).isEqualTo("group not found");
+        Map<TableBucket, ApiError> errors =
+                ClientRpcMessageUtils.toCommitConsumerOffsetsErrors(response);
+        assertThat(errors.get(new TableBucket(1L, null, 0)).isSuccess()).isTrue();
+        ApiError failure = errors.get(new TableBucket(1L, 2L, 1));
+        assertThat(failure.error()).isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND);
+        assertThat(failure.exception())
+                .isInstanceOf(ConsumerGroupIdNotFoundException.class)
+                .hasMessage("group not found");
     }
 
     @Test

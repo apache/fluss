@@ -155,6 +155,27 @@ class ServerRpcMessageUtilsTest {
     }
 
     @Test
+    void testCommitConsumerOffsetsRequestRejectsNegativeOffset() {
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setOffset(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+
+        request.getTableAt(0).addBucket().setBucketId(1).setOffset(0L);
+        assertThat(ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .containsOnly(
+                        entry(new TableBucket(2L, 1), new ConsumerOffsetAndMetadata(0L, null)));
+
+        request.getTableAt(0).getBucketAt(1).setOffset(-2L);
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+    }
+
+    @Test
     void testCommitConsumerOffsetsRequestRejectsReservedPartitionId() {
         CommitConsumerOffsetsRequest request =
                 new CommitConsumerOffsetsRequest().setGroupId("group-1");
@@ -194,6 +215,17 @@ class ServerRpcMessageUtilsTest {
                         .addAllTables(Collections.singletonList(table));
         assertThat(ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(selected))
                 .containsExactly(new TableBucket(3L, 2));
+    }
+
+    @Test
+    void testGetConsumerOffsetsRequestRejectsReservedPartitionId() {
+        GetConsumerOffsetsRequest request = new GetConsumerOffsetsRequest().setGroupId("group-1");
+        request.addTable().setTableId(2L).addBucket().setBucketId(1).setPartitionId(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1")
+                .hasMessageContaining("omit partition_id");
     }
 
     @Test
@@ -278,6 +310,23 @@ class ServerRpcMessageUtilsTest {
         assertThatThrownBy(() -> ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("Duplicate table bucket");
+    }
+
+    @Test
+    void testDeleteConsumerOffsetsRequestRejectsReservedPartitionId() {
+        DeleteConsumerOffsetsRequest request =
+                new DeleteConsumerOffsetsRequest().setGroupId("group-1");
+        PbDeleteConsumerOffsetsRequestBucket bucket =
+                request.addTable().setTableId(2L).addBucket().setBucketId(1);
+        assertThat(ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .containsExactly(new TableBucket(2L, 1));
+
+        bucket.setPartitionId(-1L);
+
+        assertThatThrownBy(() -> ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest(request))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1")
+                .hasMessageContaining("omit partition_id");
     }
 
     @Test

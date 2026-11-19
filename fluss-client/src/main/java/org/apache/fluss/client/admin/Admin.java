@@ -655,11 +655,13 @@ public interface Admin extends AutoCloseable {
     /**
      * Alters the committed offsets of a consumer group for the given table buckets.
      *
-     * <p>This method is useful for resetting offsets, e.g. re-playing or skipping records. If the
-     * group does not exist or is not hosted, the returned future completes exceptionally.
+     * <p>This method is useful for resetting offsets, e.g. re-playing or skipping records. The
+     * first successful offset commit for a new group ID also creates its group metadata. If the
+     * group owner is unavailable, the returned futures can complete exceptionally.
      *
      * @param groupId the consumer group id
-     * @param newOffsets the new offsets (and optional metadata) to commit, keyed by table bucket
+     * @param newOffsets the non-negative offsets (and optional metadata) to commit, keyed by table
+     *     bucket
      * @return a result exposing per-bucket futures and an aggregate future
      */
     AlterConsumerGroupOffsetsResult alterConsumerGroupOffsets(
@@ -675,6 +677,8 @@ public interface Admin extends AutoCloseable {
 
     /**
      * Lists the committed offsets of a consumer group for the given table buckets.
+     *
+     * <p>An empty set selects no buckets and returns a completed future containing an empty map.
      *
      * @param groupId the consumer group id
      * @param buckets the table buckets whose committed offsets are listed
@@ -697,7 +701,8 @@ public interface Admin extends AutoCloseable {
      * Deletes the given consumer groups.
      *
      * <p>Deleting a group removes its committed offsets. The returned result exposes a future per
-     * group, so callers can inspect which deletions succeeded and which failed.
+     * group, so callers can inspect which deletions succeeded and which failed. Invalid group ids,
+     * including null, are ignored; duplicate valid ids are deleted only once.
      *
      * @param groupIds the consumer group ids to delete
      * @return a result exposing per-group futures and an aggregate future

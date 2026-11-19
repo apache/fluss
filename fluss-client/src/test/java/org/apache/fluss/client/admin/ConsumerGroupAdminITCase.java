@@ -17,11 +17,15 @@
 
 package org.apache.fluss.client.admin;
 
-import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
+import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.server.metadata.SystemTables;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,8 +34,13 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * End-to-end tests for the consumer group Admin APIs.
@@ -53,17 +62,45 @@ class ConsumerGroupAdminITCase extends ClientToServerITCaseBase {
 
     @BeforeEach
     void waitForConsumerOffsetsTable() throws Exception {
-        // Keep the tests independent of system-table creation and assignment timing.
-        long tableId =
-                createTable(
-                        TablePath.of("sys", "consumer_offsets"),
-                        TableDescriptor.builder()
-                                .schema(ConsumerOffsetSchema.getTableSchema())
-                                .logFormat(LogFormat.COMPACTED)
-                                .distributedBy(1, ConsumerOffsetSchema.getBucketKeyColumn())
-                                .build(),
-                        true);
-        waitAllReplicasReady(tableId, 1);
+        ServerNode discoveryNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0);
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(discoveryNode.id());
+        FindConsumerGroupOwnerRequest request =
+                new FindConsumerGroupOwnerRequest().setGroupId("consumer-group-admin-setup");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try {
+                        assertThat(
+                                        gateway.findConsumerGroupOwner(request)
+                                                .get(10, TimeUnit.SECONDS)
+                                                .hasOwner())
+                                .isTrue();
+                        assertThat(
+                                        FLUSS_CLUSTER_EXTENSION
+                                                .getZooKeeperClient()
+                                                .getTable(SystemTables.CONSUMER_OFFSETS))
+                                .isPresent();
+                    } catch (ExecutionException e) {
+                        Throwable cause = ExceptionUtils.stripExecutionException(e);
+                        if (cause instanceof ConsumerGroupOwnerNotAvailableException
+                                || cause instanceof ConsumerGroupOwnerLoadingException) {
+                            throw new AssertionError(cause);
+                        }
+                        throw e;
+                    } catch (TimeoutException e) {
+                        throw new AssertionError(e);
+                    }
+                });
+
+        TableRegistration offsetsTable =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTable(SystemTables.CONSUMER_OFFSETS)
+                        .get();
+        assertThat(offsetsTable.bucketCount).isEqualTo(1);
+        waitAllReplicasReady(offsetsTable.tableId, offsetsTable.bucketCount);
     }
 
     @Test
@@ -74,9 +111,8 @@ class ConsumerGroupAdminITCase extends ClientToServerITCaseBase {
         offsets.put(BUCKET_1, new OffsetMetadata(20L, ""));
         AlterConsumerGroupOffsetsResult result = admin.alterConsumerGroupOffsets(groupId, offsets);
         result.all().get();
-        assertThat(result.bucketResult(BUCKET_0).get().isSuccess()).isTrue();
-        assertThat(result.bucketResult(BUCKET_0).get().newOffset()).isEqualTo(10L);
-        assertThat(result.bucketResult(BUCKET_1).get().isSuccess()).isTrue();
+        assertThat(result.bucketResult(BUCKET_0).get()).isNull();
+        assertThat(result.bucketResult(BUCKET_1).get()).isNull();
 
         // List all committed offsets.
         Map<TableBucket, OffsetMetadata> listed = admin.listConsumerGroupOffsets(groupId).get();
@@ -84,11 +120,35 @@ class ConsumerGroupAdminITCase extends ClientToServerITCaseBase {
                 .containsEntry(BUCKET_0, new OffsetMetadata(10L, "checkpoint"))
                 .containsEntry(BUCKET_1, new OffsetMetadata(20L, ""));
 
+        assertThat(admin.listConsumerGroupOffsets(groupId, Collections.emptySet()).get()).isEmpty();
+
         // List only the first bucket.
         Map<TableBucket, OffsetMetadata> selected =
                 admin.listConsumerGroupOffsets(groupId, Collections.singleton(BUCKET_0)).get();
         assertThat(selected).containsOnlyKeys(BUCKET_0);
         assertThat(selected.get(BUCKET_0).getMetadata()).isEqualTo("checkpoint");
+    }
+
+    @Test
+    void testNegativeOffsetResetIsRejectedAndZeroIsAccepted() throws Exception {
+        String groupId = uniqueGroupId("reset-offset");
+        OffsetMetadata committed = new OffsetMetadata(42L, "checkpoint");
+        admin.alterConsumerGroupOffsets(groupId, Collections.singletonMap(BUCKET_0, committed))
+                .all()
+                .get();
+        assertThat(admin.listConsumerGroupOffsets(groupId).get())
+                .containsEntry(BUCKET_0, committed);
+
+        assertThatThrownBy(() -> new OffsetMetadata(-1L, "checkpoint"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(admin.listConsumerGroupOffsets(groupId).get())
+                .containsEntry(BUCKET_0, committed);
+
+        OffsetMetadata zero = new OffsetMetadata(0L);
+        admin.alterConsumerGroupOffsets(groupId, Collections.singletonMap(BUCKET_0, zero))
+                .all()
+                .get();
+        assertThat(admin.listConsumerGroupOffsets(groupId).get()).containsEntry(BUCKET_0, zero);
     }
 
     @Test

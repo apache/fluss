@@ -35,6 +35,7 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
@@ -231,6 +232,63 @@ class TabletServiceTest extends ReplicaTestBase {
         assertThatThrownBy(() -> service.getConsumerOffsets(request))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessageContaining("all_offsets");
+    }
+
+    @Test
+    void testGetAndDeleteConsumerOffsetsRejectReservedPartitionIdWithoutDeletingOffset()
+            throws Exception {
+        registerOffsetsTable();
+        TabletService service = createInitializedService();
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 10L)), Errors.NONE);
+
+        GetConsumerOffsetsRequest getRequest = new GetConsumerOffsetsRequest().setGroupId(GROUP_ID);
+        getRequest
+                .addTable()
+                .setTableId(SOURCE_BUCKET.getTableId())
+                .addBucket()
+                .setBucketId(SOURCE_BUCKET.getBucket());
+        assertThat(service.getConsumerOffsets(getRequest))
+                .succeedsWithin(WAIT_TIMEOUT)
+                .satisfies(
+                        response ->
+                                assertThat(response.getTableAt(0).getBucketAt(0).getOffset())
+                                        .isEqualTo(10L));
+
+        getRequest.getTableAt(0).getBucketAt(0).setPartitionId(-1L);
+        assertThatThrownBy(() -> service.getConsumerOffsets(getRequest))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1");
+
+        DeleteConsumerOffsetsRequest deleteRequest =
+                new DeleteConsumerOffsetsRequest().setGroupId(GROUP_ID);
+        deleteRequest
+                .addTable()
+                .setTableId(SOURCE_BUCKET.getTableId())
+                .addBucket()
+                .setBucketId(SOURCE_BUCKET.getBucket())
+                .setPartitionId(-1L);
+        assertThatThrownBy(() -> service.deleteConsumerOffsets(deleteRequest))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1");
+        assertStoredOffset(GROUP_ID, 10L);
+    }
+
+    @Test
+    void testNegativeCommitDoesNotReplaceStoredOffset() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createInitializedService();
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 42L)), Errors.NONE);
+
+        assertThatThrownBy(() -> service.commitConsumerOffsets(newCommitRequest(GROUP_ID, -1L)))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+        assertStoredOffset(GROUP_ID, 42L);
+
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 0L)), Errors.NONE);
+        assertStoredOffset(GROUP_ID, 0L);
     }
 
     @Test

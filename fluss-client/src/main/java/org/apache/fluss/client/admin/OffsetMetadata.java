@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.PublicEvolving;
 
 import java.util.Objects;
 
-/** A consumer offset and its optional user metadata. */
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
+/** A non-negative committed consumer offset and its optional user metadata. */
 @PublicEvolving
 public final class OffsetMetadata {
 
@@ -33,6 +35,7 @@ public final class OffsetMetadata {
     }
 
     public OffsetMetadata(long offset, String metadata) {
+        checkArgument(offset >= 0, "offset must not be negative: %s", offset);
         this.offset = offset;
         this.metadata = metadata == null ? "" : metadata;
     }

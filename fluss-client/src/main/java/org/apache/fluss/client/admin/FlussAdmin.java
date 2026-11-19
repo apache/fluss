@@ -36,9 +36,9 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
@@ -47,6 +47,7 @@ import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -128,7 +129,6 @@ import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -776,10 +776,12 @@ public class FlussAdmin implements Admin {
             String groupId, Map<TableBucket, OffsetMetadata> newOffsets) {
         checkNotNull(groupId, "groupId must not be null");
         checkNotNull(newOffsets, "newOffsets must not be null");
-        Map<TableBucket, CompletableFuture<AlterConsumerGroupOffsetsResult.BucketOutcome>> futures =
-                new HashMap<>();
+        Map<TableBucket, CompletableFuture<Void>> futures = new HashMap<>();
         for (TableBucket tableBucket : newOffsets.keySet()) {
             futures.put(tableBucket, new CompletableFuture<>());
+        }
+        if (futures.isEmpty()) {
+            return new AlterConsumerGroupOffsetsResult(futures);
         }
         CommitConsumerOffsetsRequest request =
                 ClientRpcMessageUtils.makeCommitConsumerOffsetsRequest(groupId, newOffsets);
@@ -792,22 +794,21 @@ public class FlussAdmin implements Admin {
                                         .forEach(future -> future.completeExceptionally(failure));
                                 return;
                             }
-                            Map<TableBucket, AlterConsumerGroupOffsetsResult.BucketOutcome>
-                                    outcomes =
-                                            ClientRpcMessageUtils.toAlterConsumerOffsetsOutcomes(
-                                                    response, newOffsets);
+                            Map<TableBucket, ApiError> errors =
+                                    ClientRpcMessageUtils.toCommitConsumerOffsetsErrors(response);
                             futures.forEach(
                                     (tableBucket, future) -> {
-                                        AlterConsumerGroupOffsetsResult.BucketOutcome outcome =
-                                                outcomes.get(tableBucket);
-                                        if (outcome != null) {
-                                            future.complete(outcome);
-                                        } else {
+                                        ApiError error = errors.get(tableBucket);
+                                        if (error == null) {
                                             future.completeExceptionally(
                                                     new FlussRuntimeException(
                                                             "AlterConsumerOffsets response is "
                                                                     + "missing bucket "
                                                                     + tableBucket));
+                                        } else if (error.isFailure()) {
+                                            future.completeExceptionally(error.exception());
+                                        } else {
+                                            future.complete(null);
                                         }
                                     });
                         });
@@ -824,6 +825,9 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Map<TableBucket, OffsetMetadata>> listConsumerGroupOffsets(
             String groupId, Set<TableBucket> buckets) {
         checkNotNull(groupId, "groupId must not be null");
+        if (buckets != null && buckets.isEmpty()) {
+            return CompletableFuture.completedFuture(Collections.emptyMap());
+        }
         GetConsumerOffsetsRequest request =
                 ClientRpcMessageUtils.makeGetConsumerOffsetsRequest(groupId, buckets);
         return groupOwnerGateway(groupId)
@@ -833,15 +837,17 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Collection<String>> listConsumerGroups() {
+        return getServerNodes().thenCompose(this::listConsumerGroupsOnServers);
+    }
+
+    private CompletableFuture<Collection<String>> listConsumerGroupsOnServers(
+            List<ServerNode> serverNodes) {
         List<CompletableFuture<List<String>>> requests = new ArrayList<>();
-        for (ServerNode server : metadataUpdater.getCluster().getAliveTabletServerList()) {
-            TabletServerGateway tabletServer =
-                    metadataUpdater.newTabletServerClientForNode(server.id());
-            if (tabletServer == null) {
-                return failedFuture(
-                        new NetworkException(
-                                "No gateway is available for tablet server " + server.id()));
+        for (ServerNode server : serverNodes) {
+            if (server.serverType() != ServerType.TABLET_SERVER) {
+                continue;
             }
+            TabletServerGateway tabletServer = metadataUpdater.newTabletServerClientForNode(server);
             requests.add(
                     tabletServer
                             .listConsumerGroups(new ListConsumerGroupsRequest())
@@ -864,16 +870,23 @@ public class FlussAdmin implements Admin {
                             for (CompletableFuture<List<String>> request : requests) {
                                 groups.addAll(request.join());
                             }
-                            return new ArrayList<>(groups);
+                            return groups;
                         });
     }
 
     @Override
     public DeleteConsumerGroupsResult deleteConsumerGroups(Collection<String> groupIds) {
         checkNotNull(groupIds, "groupIds must not be null");
-        Map<String, CompletableFuture<Void>> results = new HashMap<>();
+        Set<String> uniqueGroupIds = new HashSet<>();
         for (String groupId : groupIds) {
-            checkNotNull(groupId, "groupId must not be null");
+            try {
+                uniqueGroupIds.add(GroupId.of(groupId).getGroupId());
+            } catch (InvalidConsumerGroupIdException ignored) {
+                // An invalid ID must not prevent deletion of other groups in the batch.
+            }
+        }
+        Map<String, CompletableFuture<Void>> results = new HashMap<>();
+        for (String groupId : uniqueGroupIds) {
             DeleteConsumerGroupsRequest request = new DeleteConsumerGroupsRequest();
             request.addGroup(groupId);
             CompletableFuture<Void> result =
@@ -881,17 +894,17 @@ public class FlussAdmin implements Admin {
                             .thenCompose(owner -> owner.deleteConsumerGroups(request))
                             .thenApply(
                                     response -> {
-                                        Map<String, Errors> errors =
+                                        Map<String, ApiError> errors =
                                                 ClientRpcMessageUtils.toDeleteConsumerGroupsErrors(
                                                         response);
-                                        Errors error = errors.get(groupId);
+                                        ApiError error = errors.get(groupId);
                                         if (error == null) {
                                             throw new FlussRuntimeException(
                                                     "DeleteConsumerGroups response is missing "
                                                             + "group "
                                                             + groupId);
                                         }
-                                        if (error != Errors.NONE) {
+                                        if (error.isFailure()) {
                                             throw error.exception();
                                         }
                                         return null;
@@ -925,15 +938,15 @@ public class FlussAdmin implements Admin {
                                         .forEach(future -> future.completeExceptionally(failure));
                                 return;
                             }
-                            Map<TableBucket, Errors> errors =
+                            Map<TableBucket, ApiError> errors =
                                     ClientRpcMessageUtils.toDeleteConsumerOffsetsErrors(response);
                             results.forEach(
                                     (bucket, future) -> {
-                                        Errors error = errors.getOrDefault(bucket, Errors.NONE);
-                                        if (error == Errors.NONE) {
-                                            future.complete(null);
-                                        } else {
+                                        ApiError error = errors.getOrDefault(bucket, ApiError.NONE);
+                                        if (error.isFailure()) {
                                             future.completeExceptionally(error.exception());
+                                        } else {
+                                            future.complete(null);
                                         }
                                     });
                         });
@@ -969,7 +982,7 @@ public class FlussAdmin implements Admin {
                                             response.getOwner().getPort(),
                                             ServerType.TABLET_SERVER);
                             TabletServerGateway gateway =
-                                    metadataUpdater.newTabletServerClientForNode(owner.id());
+                                    metadataUpdater.newTabletServerClientForNode(owner);
                             if (gateway == null) {
                                 throw new ConsumerGroupOwnerNotAvailableException(
                                         "No gateway is available for group owner " + owner.id());

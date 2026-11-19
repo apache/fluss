@@ -37,22 +37,16 @@ class ConsumerGroupAdminResultTest {
 
     @Test
     void testAlterConsumerGroupOffsetsAggregatesFutures() {
-        CompletableFuture<AlterConsumerGroupOffsetsResult.BucketOutcome> first =
-                CompletableFuture.completedFuture(
-                        new AlterConsumerGroupOffsetsResult.BucketOutcome(12L, null, null));
-        CompletableFuture<AlterConsumerGroupOffsetsResult.BucketOutcome> second =
-                new CompletableFuture<>();
-        Map<TableBucket, CompletableFuture<AlterConsumerGroupOffsetsResult.BucketOutcome>> futures =
-                new LinkedHashMap<>();
+        CompletableFuture<Void> first = CompletableFuture.completedFuture(null);
+        CompletableFuture<Void> second = new CompletableFuture<>();
+        Map<TableBucket, CompletableFuture<Void>> futures = new LinkedHashMap<>();
         futures.put(TABLE_BUCKET, first);
         futures.put(new TableBucket(2L, null, 0), second);
         AlterConsumerGroupOffsetsResult result = new AlterConsumerGroupOffsetsResult(futures);
 
-        assertThat(result.bucketResult(TABLE_BUCKET).isDone()).isTrue();
-        assertThat(result.bucketResult(TABLE_BUCKET).join().isSuccess()).isTrue();
-        assertThat(result.bucketResult(TABLE_BUCKET).join().newOffset()).isEqualTo(12L);
+        assertThat(result.bucketResult(TABLE_BUCKET)).isSameAs(first);
         assertThat(result.all()).isNotDone();
-        second.complete(new AlterConsumerGroupOffsetsResult.BucketOutcome(3L, null, null));
+        second.complete(null);
         assertThat(result.all()).isCompleted();
     }
 
@@ -99,21 +93,6 @@ class ConsumerGroupAdminResultTest {
     }
 
     @Test
-    void testBucketOutcomeDefaults() {
-        AlterConsumerGroupOffsetsResult.BucketOutcome success =
-                new AlterConsumerGroupOffsetsResult.BucketOutcome(5L, null, null);
-        assertThat(success.errorCode()).isEqualTo("NONE");
-        assertThat(success.errorMessage()).isEmpty();
-        assertThat(success.isSuccess()).isTrue();
-
-        AlterConsumerGroupOffsetsResult.BucketOutcome failure =
-                new AlterConsumerGroupOffsetsResult.BucketOutcome(
-                        -1L, "CONSUMER_GROUP_ID_NOT_FOUND", null);
-        assertThat(failure.isSuccess()).isFalse();
-        assertThat(failure.errorMessage()).isEmpty();
-    }
-
-    @Test
     void testUnknownKeyReturnsNullFuture() {
         DeleteConsumerGroupsResult groupsResult =
                 new DeleteConsumerGroupsResult(
@@ -124,6 +103,11 @@ class ConsumerGroupAdminResultTest {
                 new DeleteConsumerGroupOffsetsResult(
                         Collections.singletonMap(TABLE_BUCKET, new CompletableFuture<Void>()));
         assertThat(offsetsResult.bucketResult(new TableBucket(9L, null, 9))).isNull();
+
+        AlterConsumerGroupOffsetsResult alterResult =
+                new AlterConsumerGroupOffsetsResult(
+                        Collections.singletonMap(TABLE_BUCKET, new CompletableFuture<Void>()));
+        assertThat(alterResult.bucketResult(new TableBucket(9L, null, 9))).isNull();
     }
 
     @Test
@@ -134,5 +118,17 @@ class ConsumerGroupAdminResultTest {
         assertThat(new OffsetMetadata(42L, "checkpoint"))
                 .isEqualTo(new OffsetMetadata(42L, "checkpoint"));
         assertThat(new OffsetMetadata(42L, "a")).isNotEqualTo(new OffsetMetadata(42L, "b"));
+    }
+
+    @Test
+    void testOffsetMetadataRejectsNegativeOffsetsInBothConstructors() {
+        assertThatThrownBy(() -> new OffsetMetadata(-1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("offset");
+        assertThatThrownBy(() -> new OffsetMetadata(-2L, "checkpoint"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("offset");
+        assertThat(new OffsetMetadata(0L).getOffset()).isZero();
+        assertThat(new OffsetMetadata(0L, "checkpoint").getOffset()).isZero();
     }
 }

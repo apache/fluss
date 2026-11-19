@@ -29,51 +29,22 @@ import java.util.concurrent.CompletableFuture;
 /** Per-bucket result of altering committed consumer offsets. */
 @PublicEvolving
 public final class AlterConsumerGroupOffsetsResult {
-    private final Map<TableBucket, CompletableFuture<BucketOutcome>> futures;
+    private final Map<TableBucket, CompletableFuture<Void>> futures;
 
-    public AlterConsumerGroupOffsetsResult(
-            Map<TableBucket, CompletableFuture<BucketOutcome>> futures) {
+    /** Creates a result from per-bucket futures. */
+    public AlterConsumerGroupOffsetsResult(Map<TableBucket, CompletableFuture<Void>> futures) {
         this.futures =
                 Collections.unmodifiableMap(
                         new HashMap<>(Objects.requireNonNull(futures, "futures")));
     }
 
-    /** Returns the future for the given table bucket, or {@code null} if it was not altered. */
-    public CompletableFuture<BucketOutcome> bucketResult(TableBucket tableBucket) {
+    /** Returns the future for the given bucket, or {@code null} if it was not altered. */
+    public CompletableFuture<Void> bucketResult(TableBucket tableBucket) {
         return futures.get(tableBucket);
     }
 
-    /** Returns a future that completes when all bucket alterations complete. */
+    /** Returns a future that completes when all bucket alterations succeed. */
     public CompletableFuture<Void> all() {
         return CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0]));
-    }
-
-    /** Outcome for one table bucket. */
-    public static final class BucketOutcome {
-        public final long newOffset;
-        public final String errorCode;
-        public final String errorMessage;
-
-        public BucketOutcome(long newOffset, String errorCode, String errorMessage) {
-            this.newOffset = newOffset;
-            this.errorCode = errorCode == null ? "NONE" : errorCode;
-            this.errorMessage = errorMessage == null ? "" : errorMessage;
-        }
-
-        public long newOffset() {
-            return newOffset;
-        }
-
-        public String errorCode() {
-            return errorCode;
-        }
-
-        public String errorMessage() {
-            return errorMessage;
-        }
-
-        public boolean isSuccess() {
-            return "NONE".equals(errorCode);
-        }
     }
 }
