@@ -36,6 +36,81 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
   protected def lakeFormat: Option[DataLakeFormat] = None
 
+  test("Catalog: add columns") {
+    withTable("t") {
+      sql("CREATE TABLE t (id int, name string)")
+
+      // add column without comment, default is nullable and appended at the end
+      sql("ALTER TABLE t ADD COLUMN age bigint")
+      // add column with comment
+      sql("ALTER TABLE t ADD COLUMN addr string COMMENT 'address of the user'")
+      checkAnswer(
+        sql("DESC t"),
+        Row("id", "int", null) ::
+          Row("name", "string", null) ::
+          Row("age", "bigint", null) ::
+          Row("addr", "string", null) :: Nil)
+
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThat(table.getRowType.getFieldCount).isEqualTo(4)
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "name", "age", "addr")
+      // the comment of the added column should be persisted
+      assertThat(table.getSchema.getColumn("addr").getComment.get).isEqualTo("address of the user")
+    }
+  }
+
+  test("Catalog: add column with unsupported feature is rejected") {
+    // Creating a table with a column default value is rejected by Spark, because Fluss does not
+    // implement SupportsColumnDefaultValue.
+    val createException = intercept[AnalysisException] {
+      sql("CREATE TABLE t (id int, name string DEFAULT 'abc')")
+    }
+    assertThat(createException)
+      .hasMessageContaining(
+        "Table `fluss_catalog`.`fluss`.`t` does not support column default value")
+
+    withTable("t") {
+      sql("CREATE TABLE t (id int, s struct<a:int,b:string>)")
+
+      // fluss has no nested column concept, rejected by the conversion layer
+      val nestedException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN s.c bigint")
+      }
+      assertThat(nestedException).hasMessageContaining(
+        "Adding nested columns is not supported: s.c")
+
+      // only the last position is supported, FIRST/AFTER are rejected by the conversion layer
+      val firstException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint FIRST")
+      }
+      assertThat(firstException).hasMessageContaining(
+        "Adding column with position is not supported")
+      val afterException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint AFTER id")
+      }
+      assertThat(afterException).hasMessageContaining(
+        "Adding column with position is not supported")
+
+      // fluss only supports adding nullable columns, rejected by the conversion layer
+      val notNullException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint NOT NULL")
+      }
+      assertThat(notNullException).hasMessageContaining(
+        "Adding non-nullable column is not supported")
+
+      // adding a column with a default value is rejected by the conversion layer
+      val defaultException = intercept[UnsupportedOperationException] {
+        sql("ALTER TABLE t ADD COLUMN age bigint DEFAULT 18")
+      }
+      assertThat(defaultException)
+        .hasMessageContaining("Adding column with default value is not supported")
+
+      // none of the rejected ALTERs should have modified the table
+      val table = admin.getTableInfo(createTablePath("t")).get()
+      assertThatList(table.getRowType.getFieldNames).containsExactly("id", "s")
+    }
+  }
+
   test("Catalog: namespaces") {
     // Always a default database 'fluss'.
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
