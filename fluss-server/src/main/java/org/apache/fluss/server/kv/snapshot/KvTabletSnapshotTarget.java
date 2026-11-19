@@ -29,15 +29,18 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.function.ThrowingSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
@@ -79,6 +82,9 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     private volatile long logOffsetOfLatestSnapshot;
 
     private volatile long snapshotSize;
+    private volatile long historyFloorOfLatestSnapshot;
+    @Nullable private Consumer<Long> publishHistoryFloor;
+    @Nullable private Supplier<Supplier<TabletState>> prepareVersionedState;
 
     @VisibleForTesting
     KvTabletSnapshotTarget(
@@ -151,6 +157,16 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.snapshotRunner = createSnapshotRunner(cancelStreamRegistry);
     }
 
+    /** Binds the floor of the recovery snapshot and its publication callback. */
+    public void configureVersionHistory(
+            long restoredFloor,
+            Consumer<Long> publishHistoryFloor,
+            Supplier<Supplier<TabletState>> prepareVersionedState) {
+        this.historyFloorOfLatestSnapshot = restoredFloor;
+        this.publishHistoryFloor = publishHistoryFloor;
+        this.prepareVersionedState = prepareVersionedState;
+    }
+
     @Override
     public long currentSnapshotId() {
         try {
@@ -163,9 +179,25 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
 
     @Override
     public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() throws Exception {
-        TabletState tabletState = tabletStateSupplier.get();
+        return prepareSnapshot().get();
+    }
+
+    @Override
+    public ThrowingSupplier<Optional<PeriodicSnapshotManager.SnapshotRunnable>, Exception>
+            prepareSnapshot() throws Exception {
+        if (prepareVersionedState == null) {
+            return () -> initSnapshot(tabletStateSupplier.get());
+        }
+        reconcileUnconfirmedSnapshot(null);
+        Supplier<TabletState> capture = prepareVersionedState.get();
+        return () -> initSnapshot(capture.get());
+    }
+
+    private Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot(TabletState tabletState)
+            throws Exception {
         long logOffset = tabletState.getFlushedLogOffset();
-        if (logOffset <= logOffsetOfLatestSnapshot) {
+        if (logOffset <= logOffsetOfLatestSnapshot
+                && tabletState.getHistoryFloor() <= historyFloorOfLatestSnapshot) {
             LOG.debug(
                     "The current offset for the log whose kv data is flushed is {}, "
                             + "which is not greater than the log offset in the latest snapshot {}, "
@@ -188,25 +220,30 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         snapshotLocation));
     }
 
-    private long reconcileUnconfirmedSnapshot(long snapshotId, long previousSnapshotId)
-            throws Exception {
+    private OptionalLong reconcileUnconfirmedSnapshot(@Nullable Long snapshotId) throws Exception {
         Set<Long> unconfirmed = rocksIncrementalSnapshot.getUnconfirmedSnapshotIds();
         unconfirmed.remove(snapshotId);
         if (unconfirmed.isEmpty()) {
-            return previousSnapshotId;
+            return OptionalLong.empty();
         }
-        Optional<BucketSnapshot> selected =
-                zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+        Optional<BucketSnapshot> selected = getSelectedSnapshot();
         if (selected.isPresent() && unconfirmed.contains(selected.get().getSnapshotId())) {
             CompletedSnapshot snapshot =
                     selected.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
             updateStateOnCommitSuccess(
                     snapshot.getSnapshotID(),
                     snapshot.getLogOffset(),
-                    snapshot.getKvSnapshotHandle().getSnapshotSize());
-            return snapshot.getSnapshotID();
+                    snapshot.getKvSnapshotHandle().getSnapshotSize(),
+                    snapshot.getHistoryFloor());
+            return OptionalLong.of(snapshot.getSnapshotID());
         }
-        return previousSnapshotId;
+        return OptionalLong.empty();
+    }
+
+    private Optional<BucketSnapshot> getSelectedSnapshot() throws Exception {
+        return publishHistoryFloor == null
+                ? zooKeeperClient.getTableBucketLatestSnapshot(tableBucket)
+                : zooKeeperClient.getRecoveryBucketSnapshot(tableBucket);
     }
 
     private SnapshotLocation initSnapshotLocation(long snapshotId) {
@@ -236,18 +273,22 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                         snapshotResult.getKvSnapshotHandle(),
                         tabletState.getFlushedLogOffset(),
                         tabletState.getRowCount(),
-                        tabletState.getAutoIncIDRanges());
+                        tabletState.getAutoIncIDRanges(),
+                        tabletState.getHistoryFloor());
         try {
+            long previousSnapshotId =
+                    reconcileUnconfirmedSnapshot(snapshotId)
+                            .orElse(snapshotResult.getPreviousSnapshotId());
+            if (tabletState.getHistoryFloor() < historyFloorOfLatestSnapshot) {
+                throw new IOException("The checkpoint predates the selected KV history floor.");
+            }
             completedKvSnapshotCommitter.commitKvSnapshot(
-                    completedSnapshot,
-                    coordinatorEpoch,
-                    bucketLeaderEpoch,
-                    reconcileUnconfirmedSnapshot(
-                            snapshotId, snapshotResult.getPreviousSnapshotId()));
+                    completedSnapshot, coordinatorEpoch, bucketLeaderEpoch, previousSnapshotId);
             updateStateOnCommitSuccess(
                     snapshotId,
                     tabletState.getFlushedLogOffset(),
-                    snapshotResult.getSnapshotSize());
+                    snapshotResult.getSnapshotSize(),
+                    tabletState.getHistoryFloor());
         } catch (Exception e) {
             Throwable cause = ExceptionUtils.stripExecutionException(e);
             try {
@@ -268,13 +309,13 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
                                         }
                                     });
                 } else {
-                    Optional<BucketSnapshot> selected =
-                            zooKeeperClient.getTableBucketLatestSnapshot(tableBucket);
+                    Optional<BucketSnapshot> selected = getSelectedSnapshot();
                     if (selected.isPresent() && selected.get().getSnapshotId() == snapshotId) {
                         updateStateOnCommitSuccess(
                                 snapshotId,
                                 tabletState.getFlushedLogOffset(),
-                                snapshotResult.getSnapshotSize());
+                                snapshotResult.getSnapshotSize(),
+                                tabletState.getHistoryFloor());
                         return;
                     }
                 }
@@ -319,10 +360,15 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
      * before the outward state catches up — see FLUSS-2624. The {@code finally} block also
      * guarantees the internal SST bookkeeping cleanup runs even if any outward update throws.
      */
-    private void updateStateOnCommitSuccess(long snapshotId, long flushedLogOffset, long size) {
+    private void updateStateOnCommitSuccess(
+            long snapshotId, long flushedLogOffset, long size, long historyFloor) {
         try {
             logOffsetOfLatestSnapshot = flushedLogOffset;
             snapshotSize = size;
+            historyFloorOfLatestSnapshot = Math.max(historyFloor, historyFloorOfLatestSnapshot);
+            if (publishHistoryFloor != null) {
+                publishHistoryFloor.accept(historyFloorOfLatestSnapshot);
+            }
             updateMinRetainOffset.accept(flushedLogOffset);
         } finally {
             rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);

@@ -40,6 +40,7 @@ public abstract class AbstractLookupQuery<T> {
     private final @Nullable String originalPartitionName;
 
     private final int bucketCount;
+    @Nullable private Long nextOffset;
     private int retries;
     private long nextRetryTimeMs;
 
@@ -77,6 +78,15 @@ public abstract class AbstractLookupQuery<T> {
     /** The bucket count used to calculate this lookup's bucketId, or 0 if unknown (legacy). */
     public int bucketCount() {
         return bucketCount;
+    }
+
+    @Nullable
+    Long nextOffset() {
+        return nextOffset;
+    }
+
+    void setNextOffset(@Nullable Long nextOffset) {
+        this.nextOffset = nextOffset;
     }
 
     public int retries() {

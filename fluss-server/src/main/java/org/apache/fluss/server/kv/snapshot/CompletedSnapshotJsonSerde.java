@@ -82,7 +82,8 @@ public class CompletedSnapshotJsonSerde
                 snapshotHandle.getIncrementalSize(),
                 completedSnapshot.getLogOffset(),
                 completedSnapshot.getRowCount(),
-                ranges);
+                ranges,
+                completedSnapshot.getHistoryFloor());
     }
 
     /** Converts already-parsed standard metadata into a completed server snapshot. */
@@ -106,7 +107,8 @@ public class CompletedSnapshotJsonSerde
                         metadata.getIncrementalSize()),
                 metadata.getLogOffset(),
                 metadata.getRowCount(),
-                ranges);
+                ranges,
+                metadata.getHistoryFloor());
     }
 
     private static List<KvSnapshotFileMetadata.FileHandle> toFileHandles(

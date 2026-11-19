@@ -45,6 +45,7 @@ import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -321,6 +322,39 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testPositionedLookupRequiresSupportingPeer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignored) -> {});
+        try {
+            LookupRequest point = new LookupRequest();
+            PrefixLookupRequest prefix = new PrefixLookupRequest();
+            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 1, point);
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 1, prefix);
+            point.setNextOffset(0L);
+            prefix.setNextOffset(0L);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.LOOKUP, (short) 1, point))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.PREFIX_LOOKUP, (short) 1, prefix))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.LOOKUP, (short) 2, point);
+            connection.validateVersionCompatibility(ApiKeys.PREFIX_LOOKUP, (short) 2, prefix);
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

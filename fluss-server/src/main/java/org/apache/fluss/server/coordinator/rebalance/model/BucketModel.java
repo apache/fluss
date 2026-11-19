@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -33,15 +34,18 @@ public class BucketModel {
     private final TableBucket tableBucket;
     private final List<ReplicaModel> replicas;
     private @Nullable ReplicaModel leader;
-    // Set of server which are unable to host replica of this replica (such as: the server are
-    // offline).
-    private final Set<ServerModel> ineligibleServers;
+    private final Predicate<ServerModel> canHostReplica;
 
     public BucketModel(TableBucket tableBucket, Set<ServerModel> ineligibleServers) {
+        this(tableBucket, server -> !ineligibleServers.contains(server));
+    }
+
+    /** Creates a bucket with its replica placement constraint. */
+    BucketModel(TableBucket tableBucket, Predicate<ServerModel> canHostReplica) {
         this.tableBucket = tableBucket;
         this.replicas = new ArrayList<>();
         this.leader = null;
-        this.ineligibleServers = ineligibleServers;
+        this.canHostReplica = canHostReplica;
     }
 
     public TableBucket tableBucket() {
@@ -74,7 +78,7 @@ public class BucketModel {
     }
 
     public boolean canAssignReplicaToServer(ServerModel candidateServer) {
-        return !ineligibleServers.contains(candidateServer);
+        return canHostReplica.test(candidateServer);
     }
 
     public ReplicaModel replica(long serverId) {

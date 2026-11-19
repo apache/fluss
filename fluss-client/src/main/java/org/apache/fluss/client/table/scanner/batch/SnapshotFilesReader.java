@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.rocksdb.RocksDBHandle;
+import org.apache.fluss.rocksdb.RocksDBOperationUtils;
 import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
@@ -39,12 +40,14 @@ import io.github.fluss_contrib.rocksdb.DBOptions;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
 import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Snapshot;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
@@ -82,7 +85,8 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
             int targetSchemaId,
             Schema targetSchema,
             SchemaGetter schemaGetter,
-            KvValueLayout kvValueLayout)
+            KvValueLayout kvValueLayout,
+            boolean versioned)
             throws IOException {
         this.targetSchemaId = targetSchemaId;
         this.targetSchema = targetSchema;
@@ -91,8 +95,8 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         this.projectedFields = projectedFields;
         closeableRegistry = new CloseableRegistry();
         try {
-            initRocksDB(rocksDbPath);
-            initRocksIterator();
+            initRocksDB(rocksDbPath, versioned);
+            initRocksIterator(versioned);
         } catch (Throwable t) {
             releaseSnapshot();
             // If anything goes wrong, clean up our stuff. If things went smoothly the
@@ -102,19 +106,31 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         }
     }
 
-    private void initRocksDB(Path rocksDbPath) throws Exception {
+    private void initRocksDB(Path rocksDbPath, boolean versioned) throws Exception {
         // create rocksdb
         DBOptions dbOptions = new DBOptions();
         closeableRegistry.registerCloseable(dbOptions::close);
         ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
         closeableRegistry.registerCloseable(columnFamilyOptions::close);
 
-        rocksDBHandle =
-                new RocksDBHandle(rocksDbPath.toFile(), dbOptions, columnFamilyOptions, true);
+        if (versioned) {
+            ColumnFamilyOptions metadataOptions = new ColumnFamilyOptions();
+            closeableRegistry.registerCloseable(metadataOptions::close);
+            rocksDBHandle =
+                    new RocksDBHandle(
+                            rocksDbPath.toFile(),
+                            dbOptions,
+                            RocksDBOperationUtils.versionedColumnFamilies(
+                                    columnFamilyOptions, metadataOptions),
+                            true);
+        } else {
+            rocksDBHandle =
+                    new RocksDBHandle(rocksDbPath.toFile(), dbOptions, columnFamilyOptions, true);
+        }
         closeableRegistry.registerCloseable(rocksDBHandle::close);
     }
 
-    private void initRocksIterator() throws IOException {
+    private void initRocksIterator(boolean versioned) throws IOException {
         // open a db
         rocksDBHandle.openDB();
         // get the snapshot
@@ -122,13 +138,21 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         snapshot = db.getSnapshot();
         closeableRegistry.registerCloseable(snapshot::close);
 
-        // use the snapshot to read rocksdb
+        // Maximum unsigned timestamp selects the latest row present in this checkpoint.
+        Slice timestamp =
+                versioned ? new Slice(ByteBuffer.allocate(Long.BYTES).putLong(-1L).array()) : null;
+        if (timestamp != null) {
+            closeableRegistry.registerCloseable(timestamp::close);
+        }
         ReadOptions readOptions = new ReadOptions();
         closeableRegistry.registerCloseable(readOptions::close);
         readOptions.setSnapshot(snapshot);
+        if (timestamp != null) {
+            readOptions.setTimestamp(timestamp);
+        }
 
-        // get the iterator
-        RocksIterator rocksIterator = db.newIterator(db.getDefaultColumnFamily(), readOptions);
+        RocksIterator rocksIterator =
+                db.newIterator(rocksDBHandle.getDefaultColumnFamilyHandle(), readOptions);
         rocksIteratorWrapper = new RocksIteratorWrapper(rocksIterator);
         closeableRegistry.registerCloseable(rocksIteratorWrapper);
 

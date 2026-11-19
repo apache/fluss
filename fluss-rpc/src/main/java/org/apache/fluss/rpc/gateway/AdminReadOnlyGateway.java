@@ -24,6 +24,8 @@ import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -59,6 +61,11 @@ import java.util.concurrent.CompletableFuture;
 
 /** The gateway interface between the client and the server for the read-only metadata access. */
 public interface AdminReadOnlyGateway extends RpcGateway {
+
+    /** Locates a history bucket on the Coordinator or reads its interval on the leader. */
+    @RPC(api = ApiKeys.GET_BUCKET_READ_RANGE)
+    CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
+            GetBucketReadRangeRequest request);
 
     // ------ databases ------
 

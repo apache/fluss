@@ -46,6 +46,7 @@ public class ServerInfo {
     private final ServerType serverType;
     private final TabletServerResource resource;
     private final @Nullable String softwareVersion;
+    private final boolean supportsVersionedKv;
 
     public ServerInfo(
             Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
@@ -69,6 +70,18 @@ public class ServerInfo {
             ServerType serverType,
             TabletServerResource resource,
             @Nullable String softwareVersion) {
+        this(id, rack, endpoints, serverType, resource, softwareVersion, false);
+    }
+
+    /** Creates server metadata with the reported storage capability. */
+    public ServerInfo(
+            Integer id,
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            ServerType serverType,
+            TabletServerResource resource,
+            @Nullable String softwareVersion,
+            boolean supportsVersionedKv) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
@@ -77,6 +90,7 @@ public class ServerInfo {
         this.serverType = serverType;
         this.resource = resource;
         this.softwareVersion = softwareVersion;
+        this.supportsVersionedKv = supportsVersionedKv;
     }
 
     public Integer id() {
@@ -124,6 +138,11 @@ public class ServerInfo {
         return resource;
     }
 
+    /** Returns whether this server can recover versioned KV storage. */
+    public boolean supportsVersionedKv() {
+        return supportsVersionedKv;
+    }
+
     private ServerNode toServerNode(Endpoint endpoint) {
         return new ServerNode(
                 id,
@@ -145,12 +164,13 @@ public class ServerInfo {
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(endpointMap, that.endpointMap)
                 && Objects.equals(resource, that.resource)
-                && Objects.equals(softwareVersion, that.softwareVersion);
+                && Objects.equals(softwareVersion, that.softwareVersion)
+                && supportsVersionedKv == that.supportsVersionedKv;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, rack, endpointMap, resource, softwareVersion);
+        return Objects.hash(id, rack, endpointMap, resource, softwareVersion, supportsVersionedKv);
     }
 
     @Override

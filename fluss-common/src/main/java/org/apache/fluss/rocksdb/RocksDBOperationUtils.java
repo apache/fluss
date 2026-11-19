@@ -20,6 +20,7 @@ package org.apache.fluss.rocksdb;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.OperatingSystem;
 
+import io.github.fluss_contrib.rocksdb.BuiltinComparator;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyDescriptor;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyHandle;
 import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
@@ -30,6 +31,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -57,6 +60,16 @@ public class RocksDBOperationUtils {
         } catch (RocksDBException e) {
             // ignore
         }
+    }
+
+    /** Describes the on-disk column families of a versioned KV database. */
+    public static List<ColumnFamilyDescriptor> versionedColumnFamilies(
+            ColumnFamilyOptions rowOptions, ColumnFamilyOptions metadataOptions) {
+        rowOptions.setComparator(BuiltinComparator.BYTEWISE_COMPARATOR_WITH_U64_TS);
+        return Arrays.asList(
+                new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, rowOptions),
+                new ColumnFamilyDescriptor(
+                        "mvcc_metadata".getBytes(StandardCharsets.US_ASCII), metadataOptions));
     }
 
     public static RocksDB openDB(

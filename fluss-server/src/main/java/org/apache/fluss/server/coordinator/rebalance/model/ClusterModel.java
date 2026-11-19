@@ -32,6 +32,7 @@ import java.util.SortedMap;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
 /**
@@ -52,13 +53,22 @@ public class ClusterModel {
     private final SortedSet<ServerModel> offlineServers;
     private final SortedSet<ServerModel> servers;
     private final Map<TableBucket, BucketModel> bucketsByTableBucket;
+    private final BiPredicate<Integer, TableBucket> supportsReplicaStorage;
 
     // An integer to keep track of the maximum replication factor that a bucket was ever created
     // with.
     private int maxReplicationFactor;
 
     public ClusterModel(SortedSet<ServerModel> servers) {
+        this(servers, (server, bucket) -> true);
+    }
+
+    /** Creates a rebalance model with per-bucket storage eligibility. */
+    public ClusterModel(
+            SortedSet<ServerModel> servers,
+            BiPredicate<Integer, TableBucket> supportsReplicaStorage) {
         this.servers = servers;
+        this.supportsReplicaStorage = supportsReplicaStorage;
         this.bucketsByTableBucket = new HashMap<>();
         this.maxReplicationFactor = 1;
 
@@ -242,6 +252,11 @@ public class ClusterModel {
         return leaderDistribution;
     }
 
+    /** Checks storage-format compatibility independently of the server's balancing tags. */
+    public boolean supportsReplicaStorage(int serverId, TableBucket bucket) {
+        return supportsReplicaStorage.test(serverId, bucket);
+    }
+
     public void createReplica(int serverId, TableBucket tableBucket, int index, boolean isLeader) {
         ServerModel server = server(serverId);
         if (server == null) {
@@ -252,7 +267,14 @@ public class ClusterModel {
         server.putReplica(tableBucket, replica);
 
         if (!bucketsByTableBucket.containsKey(tableBucket)) {
-            bucketsByTableBucket.put(tableBucket, new BucketModel(tableBucket, offlineServers()));
+            bucketsByTableBucket.put(
+                    tableBucket,
+                    new BucketModel(
+                            tableBucket,
+                            candidate ->
+                                    !offlineServers.contains(candidate)
+                                            && supportsReplicaStorage(
+                                                    candidate.id(), tableBucket)));
         }
 
         BucketModel bucket = bucketsByTableBucket.get(tableBucket);

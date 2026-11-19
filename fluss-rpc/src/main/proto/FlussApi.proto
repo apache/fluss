@@ -323,6 +323,7 @@ message LookupRequest {
   optional bool insert_if_not_exists = 3;
   optional int32 acks = 4;
   optional int32 timeout_ms = 5;
+  optional int64 next_offset = 6;
 }
 
 message LookupResponse {
@@ -333,12 +334,24 @@ message LookupResponse {
 message PrefixLookupRequest {
   required int64 table_id = 1;
   repeated PbPrefixLookupReqForBucket buckets_req = 2;
+  optional int64 next_offset = 3;
 }
 
 message PrefixLookupResponse {
   repeated PbPrefixLookupRespForBucket buckets_resp = 1;
 }
 
+
+// A Coordinator resolves the current leader. A TabletServer returns the served interval.
+message GetBucketReadRangeRequest {
+  required PbTableBucket bucket = 1;
+}
+
+message GetBucketReadRangeResponse {
+  optional int32 leader_id = 1;
+  optional int64 earliest_next_offset = 2;
+  optional int64 latest_next_offset = 3;
+}
 
 // limit scan request and response
 message LimitScanRequest {
@@ -1185,6 +1198,7 @@ message PbLookupRespForBucket {
   repeated PbValue values = 5;
   // The original partition name for historical lookup. It is unset for normal lookup.
   optional string original_partition_name = 6;
+  optional int64 position_bound = 7;
 }
 
 message PbValue {
@@ -1209,6 +1223,7 @@ message PbPrefixLookupRespForBucket {
   optional int32 error_code = 3;
   optional string error_message = 4;
   repeated PbValueList value_lists = 5;
+  optional int64 position_bound = 6;
 }
 
 message PbTableBucket {

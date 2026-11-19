@@ -35,6 +35,8 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
+import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -329,6 +331,12 @@ public class TestingTabletGatewayService extends TestingGatewayService
     @Override
     public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
         return null;
+    }
+
+    @Override
+    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
+            GetBucketReadRangeRequest request) {
+        throw new UnsupportedOperationException();
     }
 
     @Override

@@ -41,19 +41,21 @@ public class RocksDBHandle implements AutoCloseable {
 
     private RocksDB db;
 
-    private ColumnFamilyHandle defaultColumnFamilyHandle;
-
-    private final ColumnFamilyOptions defaultColumnFamilyOptions;
+    private final List<ColumnFamilyDescriptor> columnFamilies;
+    private final List<ColumnFamilyHandle> handles = new ArrayList<>();
 
     public RocksDBHandle(
             File instanceRocksDBPath,
             DBOptions dbOptions,
             ColumnFamilyOptions defaultColumnFamilyOptions,
             boolean isReadOnly) {
-        this.dbPath = instanceRocksDBPath.getAbsolutePath();
-        this.dbOptions = dbOptions;
-        this.defaultColumnFamilyOptions = defaultColumnFamilyOptions;
-        this.isReadOnly = isReadOnly;
+        this(
+                instanceRocksDBPath,
+                dbOptions,
+                Collections.singletonList(
+                        new ColumnFamilyDescriptor(
+                                RocksDB.DEFAULT_COLUMN_FAMILY, defaultColumnFamilyOptions)),
+                isReadOnly);
     }
 
     public RocksDBHandle(
@@ -63,22 +65,20 @@ public class RocksDBHandle implements AutoCloseable {
         this(instanceRocksDBPath, dbOptions, defaultColumnFamilyOptions, false);
     }
 
-    public void openDB() throws IOException {
-        loadDb();
+    /** Creates a handle for a database whose first descriptor is the default column family. */
+    public RocksDBHandle(
+            File instanceRocksDBPath,
+            DBOptions dbOptions,
+            List<ColumnFamilyDescriptor> columnFamilies,
+            boolean isReadOnly) {
+        this.dbPath = instanceRocksDBPath.getAbsolutePath();
+        this.dbOptions = dbOptions;
+        this.columnFamilies = columnFamilies;
+        this.isReadOnly = isReadOnly;
     }
 
-    private void loadDb() throws IOException {
-        // we only have one column family, default column family
-        List<ColumnFamilyDescriptor> columnFamilyDescriptors =
-                Collections.singletonList(
-                        new ColumnFamilyDescriptor(
-                                RocksDB.DEFAULT_COLUMN_FAMILY, defaultColumnFamilyOptions));
-        List<ColumnFamilyHandle> defaultCfHandle = new ArrayList<>(1);
-        db =
-                RocksDBOperationUtils.openDB(
-                        dbPath, columnFamilyDescriptors, defaultCfHandle, dbOptions, isReadOnly);
-        // remove the default column family which is located at the first index
-        defaultColumnFamilyHandle = defaultCfHandle.remove(0);
+    public void openDB() throws IOException {
+        db = RocksDBOperationUtils.openDB(dbPath, columnFamilies, handles, dbOptions, isReadOnly);
     }
 
     public RocksDB getDb() {
@@ -86,14 +86,13 @@ public class RocksDBHandle implements AutoCloseable {
     }
 
     public ColumnFamilyHandle getDefaultColumnFamilyHandle() {
-        return defaultColumnFamilyHandle;
+        return handles.get(0);
     }
 
     @Override
     public void close() {
-        IOUtils.closeQuietly(defaultColumnFamilyHandle);
+        handles.forEach(IOUtils::closeQuietly);
         IOUtils.closeQuietly(db);
-        // Making sure the already created column family options will be closed
-        IOUtils.closeQuietly(defaultColumnFamilyOptions);
+        columnFamilies.forEach(descriptor -> IOUtils.closeQuietly(descriptor.getOptions()));
     }
 }

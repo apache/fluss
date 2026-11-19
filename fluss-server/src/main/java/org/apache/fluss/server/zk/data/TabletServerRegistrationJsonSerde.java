@@ -50,6 +50,7 @@ public class TabletServerRegistrationJsonSerde
     private static final String RACK = "rack";
     private static final String CPU_CORES = "cpu_cores";
     private static final String MEMORY_BYTES = "memory_bytes";
+    private static final String VERSIONED_KV = "versioned_kv";
     private static final String SOFTWARE_VERSION = "software_version";
 
     @Override
@@ -75,6 +76,9 @@ public class TabletServerRegistrationJsonSerde
         if (tabletServerRegistration.getSoftwareVersion() != null) {
             generator.writeStringField(
                     SOFTWARE_VERSION, tabletServerRegistration.getSoftwareVersion());
+        }
+        if (tabletServerRegistration.supportsVersionedKv()) {
+            generator.writeBooleanField(VERSIONED_KV, true);
         }
         generator.writeEndObject();
     }
@@ -107,6 +111,11 @@ public class TabletServerRegistrationJsonSerde
         String softwareVersion =
                 node.hasNonNull(SOFTWARE_VERSION) ? node.get(SOFTWARE_VERSION).asText() : null;
         return new TabletServerRegistration(
-                rack, endpoints, registerTimestamp, resource, softwareVersion);
+                rack,
+                endpoints,
+                registerTimestamp,
+                resource,
+                softwareVersion,
+                node.path(VERSIONED_KV).asBoolean(false));
     }
 }

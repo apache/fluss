@@ -38,6 +38,7 @@ public class TabletServerRegistration {
     private final long registerTimestamp;
     private final TabletServerResource resource;
     private final @Nullable String softwareVersion;
+    private final boolean supportsVersionedKv;
 
     /** Creates a registration with the software version of this tablet server process. */
     public TabletServerRegistration(
@@ -46,6 +47,18 @@ public class TabletServerRegistration {
             long registerTimestamp,
             TabletServerResource resource,
             @Nullable String softwareVersion) {
+        this(rack, endpoints, registerTimestamp, resource, softwareVersion, false);
+    }
+
+    /** Creates a registration that declares supported persistent KV formats. */
+    public TabletServerRegistration(
+            @Nullable String rack,
+            List<Endpoint> endpoints,
+            long registerTimestamp,
+            TabletServerResource resource,
+            @Nullable String softwareVersion,
+            boolean supportsVersionedKv) {
+        this.supportsVersionedKv = supportsVersionedKv;
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;
@@ -74,10 +87,21 @@ public class TabletServerRegistration {
         return softwareVersion;
     }
 
+    /** Returns whether this server can open and recover versioned KV storage. */
+    public boolean supportsVersionedKv() {
+        return supportsVersionedKv;
+    }
+
     /** Builds server metadata from this registration and its znode's server ID. */
     public ServerInfo toServerInfo(int serverId) {
         return new ServerInfo(
-                serverId, rack, endpoints, ServerType.TABLET_SERVER, resource, softwareVersion);
+                serverId,
+                rack,
+                endpoints,
+                ServerType.TABLET_SERVER,
+                resource,
+                softwareVersion,
+                supportsVersionedKv);
     }
 
     @Override
@@ -90,6 +114,7 @@ public class TabletServerRegistration {
         }
         TabletServerRegistration that = (TabletServerRegistration) o;
         return registerTimestamp == that.registerTimestamp
+                && supportsVersionedKv == that.supportsVersionedKv
                 && Objects.equals(endpoints, that.endpoints)
                 && Objects.equals(rack, that.rack)
                 && Objects.equals(resource, that.resource)
@@ -98,7 +123,8 @@ public class TabletServerRegistration {
 
     @Override
     public int hashCode() {
-        return Objects.hash(endpoints, registerTimestamp, rack, resource, softwareVersion);
+        return Objects.hash(
+                endpoints, registerTimestamp, rack, resource, softwareVersion, supportsVersionedKv);
     }
 
     @Override

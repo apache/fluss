@@ -26,10 +26,12 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LookupPositionNotYetReadableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
+import org.apache.fluss.metadata.BucketReadPosition;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -1109,6 +1111,45 @@ public class LookupSenderTest {
                 .isInstanceOf(ExecutionException.class)
                 .hasRootCauseInstanceOf(TableNotExistException.class);
         assertThat(query.retries()).isEqualTo(0); // no retries
+    }
+
+    @Test
+    void testPositionedRequestsKeepTheirOwnOffsetAndDoNotRetryFuturePositions() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        gateway.setLookupHandler(
+                request -> {
+                    requests.incrementAndGet();
+                    if (request.hasNextOffset() && request.getNextOffset() == 10L) {
+                        return createSuccessResponse(request, bytes("earlier"));
+                    }
+                    assertThat(request.getNextOffset()).isEqualTo(12L);
+                    return createFailedResponse(
+                                    request,
+                                    new LookupPositionNotYetReadableException(
+                                            BucketReadPosition.of(TABLE_BUCKET, 11L)))
+                            .thenApply(
+                                    response -> {
+                                        response.getBucketsRespAt(0).setPositionBound(11L);
+                                        return response;
+                                    });
+                });
+
+        LookupQuery earlier = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        earlier.setNextOffset(10L);
+        LookupQuery future = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"));
+        future.setNextOffset(12L);
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Arrays.asList(earlier, future));
+
+        assertThat(earlier.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("earlier"));
+        assertThatThrownBy(() -> future.future().get(5, TimeUnit.SECONDS))
+                .cause()
+                .isInstanceOfSatisfying(
+                        LookupPositionNotYetReadableException.class,
+                        error ->
+                                assertThat(error.getLatestPosition())
+                                        .isEqualTo(BucketReadPosition.of(TABLE_BUCKET, 11L)));
+        assertThat(requests).hasValue(2);
+        assertThat(future.retries()).isZero();
     }
 
     @Test

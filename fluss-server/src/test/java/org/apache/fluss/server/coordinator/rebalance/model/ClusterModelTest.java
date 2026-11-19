@@ -52,6 +52,22 @@ public class ClusterModelTest {
     }
 
     @Test
+    void testStorageEligibilityIsSpecificToTheBucket() {
+        TableBucket versioned = new TableBucket(1, 0);
+        TableBucket ordinary = new TableBucket(2, 0);
+        ClusterModel model =
+                new ClusterModel(
+                        servers, (server, bucket) -> server != 2 || !versioned.equals(bucket));
+        model.createReplica(0, versioned, 0, true);
+        model.createReplica(0, ordinary, 0, true);
+
+        assertThat(model.bucket(versioned).canAssignReplicaToServer(server1)).isTrue();
+        assertThat(model.bucket(versioned).canAssignReplicaToServer(server2)).isFalse();
+        assertThat(model.bucket(ordinary).canAssignReplicaToServer(server2)).isTrue();
+        assertThat(model.bucket(ordinary).canAssignReplicaToServer(server3)).isFalse();
+    }
+
+    @Test
     void testClusterModel() {
         ClusterModel clusterModel = new ClusterModel(servers);
         assertThat(clusterModel.aliveServers()).containsOnly(server0, server1, server2);

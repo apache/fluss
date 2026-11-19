@@ -73,4 +73,9 @@ public interface ServerMetadataCache {
         }
         return server;
     }
+
+    /** Gets eligible live servers for the requested KV format. */
+    default TabletServerInfo[] getLiveServers(boolean versionedKv) {
+        return versionedKv ? new TabletServerInfo[0] : getLiveServers();
+    }
 }

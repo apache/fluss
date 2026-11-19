@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.concurrent.Executors;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.function.ThrowingSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -199,8 +200,17 @@ public class PeriodicSnapshotManager implements Closeable {
     }
 
     public void triggerSnapshot() {
-        // todo: consider shrink the scope
-        // of using guardedExecutor
+        if (!started) {
+            return;
+        }
+        ThrowingSupplier<Optional<SnapshotRunnable>, Exception> capture;
+        try {
+            capture = target.prepareSnapshot();
+        } catch (Exception e) {
+            LOG.error("Failed to prepare a snapshot for {}.", tableBucket, e);
+            scheduleNextSnapshot();
+            return;
+        }
         guardedExecutor.execute(
                 () -> {
                     if (started) {
@@ -209,9 +219,10 @@ public class PeriodicSnapshotManager implements Closeable {
 
                         Optional<SnapshotRunnable> snapshotRunnableOptional;
                         try {
-                            snapshotRunnableOptional = target.initSnapshot();
+                            snapshotRunnableOptional = capture.get();
                         } catch (Exception e) {
                             LOG.error("Fail to init snapshot during triggering snapshot.", e);
+                            scheduleNextSnapshot();
                             return;
                         }
                         if (snapshotRunnableOptional.isPresent()) {
@@ -355,6 +366,12 @@ public class PeriodicSnapshotManager implements Closeable {
          * @return a tuple of - future snapshot result from the underlying KV.
          */
         Optional<SnapshotRunnable> initSnapshot() throws Exception;
+
+        /** Performs preparation that can run concurrently with writes, then returns the capture. */
+        default ThrowingSupplier<Optional<SnapshotRunnable>, Exception> prepareSnapshot()
+                throws Exception {
+            return this::initSnapshot;
+        }
 
         /**
          * Implementations should not trigger snapshot until the previous one has been confirmed or

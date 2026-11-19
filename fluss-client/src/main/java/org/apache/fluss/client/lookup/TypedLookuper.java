@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.BucketReadPosition;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -31,10 +32,27 @@ import java.util.concurrent.CompletableFuture;
 public interface TypedLookuper<T> {
 
     /**
-     * Lookups certain row from the given lookup key.
+     * Looks up the latest state visible when the request executes.
      *
      * @param lookupKey the lookup key
      * @return the result of lookup.
      */
     CompletableFuture<LookupResult> lookup(T lookupKey);
+
+    /**
+     * Looks up a typed primary key or prefix in a versioned table at the supplied bucket position.
+     *
+     * <p>Uses the historical read and error semantics of {@link
+     * Lookuper#lookup(org.apache.fluss.row.InternalRow, BucketReadPosition)}.
+     *
+     * @param lookupKey the typed primary key or prefix used by this lookuper
+     * @param position the exclusive log position in the bucket to which the key routes
+     * @return the future containing the lookup result in the lookuper's target schema
+     */
+    default CompletableFuture<LookupResult> lookup(T lookupKey, BucketReadPosition position) {
+        CompletableFuture<LookupResult> failed = new CompletableFuture<>();
+        failed.completeExceptionally(
+                new UnsupportedOperationException("Positioned lookup is unavailable."));
+        return failed;
+    }
 }

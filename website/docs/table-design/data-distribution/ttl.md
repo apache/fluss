@@ -6,12 +6,13 @@ sidebar_position: 3
 
 # Data Retention and TTL
 
-Fluss provides three retention mechanisms, which can be configured together:
+Fluss provides the following retention mechanisms:
 
 | Mechanism | What expires | Main configuration |
 |---|---|---|
 | [Log Retention](#log-retention) | Data logs in log tables; changelogs in primary key tables | `table.log.ttl` |
 | [KV Retention](#kv-retention) | Individual rows in a primary key table's KV store | `table.kv.ttl` |
+| [KV History Retention](#kv-history-retention) | Historical lookup positions in a versioned primary key table | `table.kv.mvcc.ttl` |
 | [Partition Retention](#partition-retention) | Entire time partitions in log tables or primary key tables | `table.auto-partition.*` |
 
 For example, a primary key table can keep its current rows while retaining only one day of changelog.
@@ -121,6 +122,29 @@ Keep these effects and restrictions in mind:
 
 Existing remote snapshot files have separate retention, controlled by
 [`kv.snapshot.num-retained`](../../maintenance/tiered-storage/remote-storage.md#remote-snapshot-of-primary-key-table).
+
+## KV History Retention
+
+Set `table.kv.mvcc.enabled = true` when creating a primary key table to enable
+[lookups at bucket log positions](../../apis/java/index.md#lookup-at-a-bucket-log-position).
+The default is `false`. The storage mode is fixed at creation, and row TTL cannot be used on
+a versioned table.
+
+Set `table.kv.mvcc.ttl` to control how long historical positions are retained. The default is
+`24 h`, and the minimum is one millisecond. Fluss measures age from the append time of each
+committed log batch. The earliest readable position advances when a recovery snapshot publishes
+the new boundary. Disk space is reclaimed asynchronously.
+
+Changing `table.kv.mvcc.ttl` with `ALTER TABLE` affects future retention checks. Shortening it can
+expire existing positions. Extending it preserves still-readable history from subsequent
+expiration checks and cannot restore an expired position. This setting is independent of
+`table.log.ttl`. Expiring a partition also expires its positions, even if KV history would
+otherwise still be retained.
+
+Upgrade the Coordinator and all TabletServers and enable periodic KV snapshots
+(`kv.snapshot.interval` greater than zero) before enabling MVCC. Keep every cluster server
+on a version that supports versioned KV storage while versioned tables exist. Reading RocksDB
+snapshot files for a versioned table requires the updated Java snapshot scanner.
 
 ## Partition Retention
 

@@ -34,6 +34,7 @@ import java.util.List;
 public class TabletState {
 
     private final long flushedLogOffset;
+    private final long historyFloor;
     @Nullable private final Long rowCount;
     @Nullable private final List<AutoIncIDRange> autoIncIDRanges;
 
@@ -41,13 +42,28 @@ public class TabletState {
             long flushedLogOffset,
             @Nullable Long rowCount,
             @Nullable List<AutoIncIDRange> autoIncIDRanges) {
+        this(flushedLogOffset, rowCount, autoIncIDRanges, 0);
+    }
+
+    /** Creates a snapshot state with its proposed version-history floor. */
+    public TabletState(
+            long flushedLogOffset,
+            @Nullable Long rowCount,
+            @Nullable List<AutoIncIDRange> autoIncIDRanges,
+            long historyFloor) {
         this.flushedLogOffset = flushedLogOffset;
+        this.historyFloor = historyFloor;
         this.rowCount = rowCount;
         this.autoIncIDRanges = autoIncIDRanges;
     }
 
     public long getFlushedLogOffset() {
         return flushedLogOffset;
+    }
+
+    /** Returns the history floor included in the native checkpoint. */
+    public long getHistoryFloor() {
+        return historyFloor;
     }
 
     @Nullable

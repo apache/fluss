@@ -68,7 +68,9 @@ public class GoalUtils {
                 return cluster.bucket(replica.tableBucket()).canAssignReplicaToServer(destServer)
                         && destServer.replica(replica.tableBucket()) == null;
             case LEADERSHIP_MOVEMENT:
-                return replica.isLeader() && destServer.replica(replica.tableBucket()) != null;
+                return replica.isLeader()
+                        && cluster.supportsReplicaStorage(destServer.id(), replica.tableBucket())
+                        && destServer.replica(replica.tableBucket()) != null;
             default:
                 return false;
         }

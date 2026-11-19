@@ -17,6 +17,11 @@
 
 package org.apache.fluss.rpc.protocol;
 
+import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.LookupPositionExpiredException;
+import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.TableBucket;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -32,5 +37,17 @@ class ErrorsTest {
         int[] codes = Arrays.stream(Errors.values()).mapToInt(Errors::code).sorted().toArray();
         // Include UNKNOWN_SERVER_ERROR (-1) and NONE (0).
         assertThat(codes).containsExactly(IntStream.range(-1, -1 + codes.length).toArray());
+    }
+
+    @Test
+    void testStructuredPositionErrorWithoutPayloadDecodesAsGenericError() {
+        LookupPositionExpiredException failure =
+                new LookupPositionExpiredException(BucketReadPosition.of(new TableBucket(1, 0), 2));
+        ApiError encoded = ApiError.fromThrowable(failure);
+
+        assertThat(encoded.error()).isEqualTo(Errors.LOOKUP_POSITION_EXPIRED);
+        assertThat(encoded.exception())
+                .isExactlyInstanceOf(ApiException.class)
+                .hasMessage(failure.getMessage());
     }
 }

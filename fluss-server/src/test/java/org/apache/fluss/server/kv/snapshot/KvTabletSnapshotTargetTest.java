@@ -81,6 +81,7 @@ import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnap
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.utils.concurrent.Executors.directExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatObject;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link KvTabletSnapshotTarget}. */
@@ -112,12 +113,12 @@ class KvTabletSnapshotTargetTest {
                                 zooKeeperClient.getCuratorClient(), (message, error) -> {}),
                         configuration) {
                     @Override
-                    public Optional<BucketSnapshot> getTableBucketLatestSnapshot(TableBucket bucket)
+                    public Optional<BucketSnapshot> getRecoveryBucketSnapshot(TableBucket bucket)
                             throws Exception {
                         if (failQuery.getAndSet(false)) {
                             throw new IOException("Snapshot query failed.");
                         }
-                        return super.getTableBucketLatestSnapshot(bucket);
+                        return super.getRecoveryBucketSnapshot(bucket);
                     }
                 };
         KvTabletSnapshotTarget original =
@@ -125,6 +126,15 @@ class KvTabletSnapshotTargetTest {
                         FsPath.fromLocalFile(directory.resolve("original").toFile()),
                         reader,
                         committer);
+        AtomicLong publishedHistoryFloor = new AtomicLong();
+        original.configureVersionHistory(
+                0L,
+                floor -> {
+                    publishedHistoryFloor.set(floor);
+                    historyFloorGenerator.accumulateAndGet(floor, Math::max);
+                },
+                () -> this::getCurrentTabletState);
+        historyFloorGenerator.set(1L);
         original.getRocksIncrementalSnapshot().notifySnapshotComplete(0L);
         rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
         PeriodicSnapshotManager.SnapshotRunnable task = original.initSnapshot().get();
@@ -140,6 +150,19 @@ class KvTabletSnapshotTargetTest {
                                         result))
                 .isInstanceOf(IOException.class);
         assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
+        assertThat(publishedHistoryFloor).hasValue(0L);
+        CompletedSnapshot selected =
+                zooKeeperClient
+                        .getRecoveryBucketSnapshot(tableBucket)
+                        .get()
+                        .toCompletedSnapshotHandle()
+                        .retrieveCompleteSnapshot();
+        assertThat(selected.getHistoryFloor()).isEqualTo(1L);
+
+        // A TTL extension can lower the next candidate until the previous result is reconciled.
+        historyFloorGenerator.set(0L);
+        assertThat(original.initSnapshot()).isEmpty();
+        assertThat(publishedHistoryFloor).hasValue(1L);
         logOffsetGenerator.set(2L);
         PeriodicSnapshotManager.SnapshotRunnable next = original.initSnapshot().get();
         next.getSnapshotRunnable().run();
@@ -153,6 +176,15 @@ class KvTabletSnapshotTargetTest {
         assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket).get().getSnapshotId())
                 .isEqualTo(2L);
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(2L);
+        assertThat(publishedHistoryFloor).hasValue(1L);
+        assertThat(
+                        zooKeeperClient
+                                .getRecoveryBucketSnapshot(tableBucket)
+                                .get()
+                                .toCompletedSnapshotHandle()
+                                .retrieveCompleteSnapshot()
+                                .getHistoryFloor())
+                .isEqualTo(1L);
     }
 
     @RegisterExtension
@@ -170,6 +202,7 @@ class KvTabletSnapshotTargetTest {
 
     private AtomicLong snapshotIdGenerator;
     private AtomicLong logOffsetGenerator;
+    private AtomicLong historyFloorGenerator;
     private AtomicLong updateMinRetainOffsetConsumer;
 
     static ZooKeeperClient zooKeeperClient;
@@ -198,6 +231,7 @@ class KvTabletSnapshotTargetTest {
         // init snapshot id and log offset generator
         snapshotIdGenerator = new AtomicLong(1);
         logOffsetGenerator = new AtomicLong(1);
+        historyFloorGenerator = new AtomicLong();
         updateMinRetainOffsetConsumer = new AtomicLong(Long.MAX_VALUE);
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
     }
@@ -334,9 +368,10 @@ class KvTabletSnapshotTargetTest {
 
         periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
         periodicSnapshotManager.start();
-        periodicSnapshotManager.triggerSnapshot();
+        scheduledExecutorService.triggerNonPeriodicScheduledTask();
 
         if (snapshotFailType == SnapshotFailType.SYNC_PHASE) {
+            assertThatObject(scheduledExecutorService.removeNonPeriodicScheduledTask()).isNotNull();
             // Native preparation failure must not create or delete remote directories.
             assertThat(mkdirsCalls).hasValue(0);
             assertThat(deleteCalls).hasValue(0);
@@ -437,8 +472,6 @@ class KvTabletSnapshotTargetTest {
     @ValueSource(booleans = {false, true})
     void testFailedCommitPreservesReferencedOrUncertainFiles(
             boolean failQuery, @TempDir Path directory) throws Throwable {
-        registerRecoverySnapshot(
-                zooKeeperClient, tableBucket, new BucketSnapshot(0, 0, "file:/initial"));
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, directory.toUri().toString());
         ZooKeeperClient reader =
@@ -468,6 +501,9 @@ class KvTabletSnapshotTargetTest {
                                             snapshot.getMetadataFilePath().toString()));
                             throw new IOException("Commit failed.");
                         });
+        AtomicLong publishedFloor = new AtomicLong();
+        target.configureVersionHistory(0L, publishedFloor::set, () -> this::getCurrentTabletState);
+        historyFloorGenerator.set(1L);
         rocksDBExtension.getRocksDb().put("key".getBytes(), "value".getBytes());
         PeriodicSnapshotManager.SnapshotRunnable task = target.initSnapshot().get();
         task.getSnapshotRunnable().run();
@@ -489,6 +525,8 @@ class KvTabletSnapshotTargetTest {
         assertThat(result.getSnapshotPath().getFileSystem().exists(result.getSnapshotPath()))
                 .isTrue();
         assertThat(updateMinRetainOffsetConsumer).hasValue(Long.MAX_VALUE);
+        assertThat(publishedFloor).hasValue(0L);
+        assertThat(zooKeeperClient.getRecoveryBucketSnapshot(tableBucket)).isEmpty();
     }
 
     private PeriodicSnapshotManager createSnapshotManager(
@@ -580,7 +618,7 @@ class KvTabletSnapshotTargetTest {
     }
 
     private TabletState getCurrentTabletState() {
-        return new TabletState(logOffsetGenerator.get(), null, null);
+        return new TabletState(logOffsetGenerator.get(), null, null, historyFloorGenerator.get());
     }
 
     private RocksIncrementalSnapshot createIncrementalSnapshot(SnapshotFailType snapshotFailType)

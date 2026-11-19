@@ -24,7 +24,10 @@ import org.apache.fluss.server.exception.KvBuildingException;
 import org.apache.fluss.server.kv.RowTtlCompactionFilterFactory;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import io.github.fluss_contrib.rocksdb.Cache;
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
 import io.github.fluss_contrib.rocksdb.FlussTtlCompactionFilter;
+import io.github.fluss_contrib.rocksdb.RocksDB;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,6 +41,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder} . */
 class RocksDBKvBuilderTest {
+
+    @Test
+    void testVersionedColumnFamiliesShareTheTabletCache(@TempDir Path path) throws Exception {
+        RocksDB.loadLibrary();
+        RocksDBResourceContainer resources =
+                new RocksDBResourceContainer(new Configuration(), path.toFile());
+        ColumnFamilyOptions rowOptions = resources.getColumnOptions();
+        Cache rowCache = resources.getBlockCache();
+        assertThat(rowCache).isNotNull();
+
+        try (RocksDBKv kv =
+                new RocksDBKvBuilder(path.toFile(), resources, rowOptions)
+                        .enableVersionHistory()
+                        .build()) {
+            assertThat(kv.getBlockCache()).isSameAs(rowCache);
+        }
+    }
 
     @Test
     void testTempLibFolderDeletedOnFail(@TempDir Path tempDir) {

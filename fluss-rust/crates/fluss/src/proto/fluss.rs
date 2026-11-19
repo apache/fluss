@@ -407,6 +407,8 @@ pub struct LookupRequest {
     pub acks: ::core::option::Option<i32>,
     #[prost(int32, optional, tag = "5")]
     pub timeout_ms: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "6")]
+    pub next_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LookupResponse {
@@ -420,11 +422,28 @@ pub struct PrefixLookupRequest {
     pub table_id: i64,
     #[prost(message, repeated, tag = "2")]
     pub buckets_req: ::prost::alloc::vec::Vec<PbPrefixLookupReqForBucket>,
+    #[prost(int64, optional, tag = "3")]
+    pub next_offset: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrefixLookupResponse {
     #[prost(message, repeated, tag = "1")]
     pub buckets_resp: ::prost::alloc::vec::Vec<PbPrefixLookupRespForBucket>,
+}
+/// A Coordinator resolves the current leader. A TabletServer returns the served interval.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBucketReadRangeRequest {
+    #[prost(message, required, tag = "1")]
+    pub bucket: PbTableBucket,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBucketReadRangeResponse {
+    #[prost(int32, optional, tag = "1")]
+    pub leader_id: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "2")]
+    pub earliest_next_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "3")]
+    pub latest_next_offset: ::core::option::Option<i64>,
 }
 /// limit scan request and response
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1587,6 +1606,8 @@ pub struct PbLookupRespForBucket {
     /// The original partition name for historical lookup. It is unset for normal lookup.
     #[prost(string, optional, tag = "6")]
     pub original_partition_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "7")]
+    pub position_bound: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbValue {
@@ -1622,6 +1643,8 @@ pub struct PbPrefixLookupRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, repeated, tag = "5")]
     pub value_lists: ::prost::alloc::vec::Vec<PbValueList>,
+    #[prost(int64, optional, tag = "6")]
+    pub position_bound: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbTableBucket {

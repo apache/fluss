@@ -33,10 +33,13 @@ import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.LookupPositionExpiredException;
+import org.apache.fluss.exception.LookupPositionNotYetReadableException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
+import org.apache.fluss.exception.TableNotVersionedException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
@@ -1016,6 +1019,15 @@ public class ReplicaManager implements ServerReconfigurable {
         lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
     }
 
+    /** Looks up keys at a committed position, or at the latest state when no offset is supplied. */
+    public void lookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
+            @Nullable Long nextOffset,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        lookups(false, null, null, entriesPerBucket, apiVersion, nextOffset, responseCallback);
+    }
+
     /** Lookup historical lake data for requests that carry original partition names. */
     public void historicalLookups(
             List<LookupDataForBucket> lookupData,
@@ -1092,6 +1104,24 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        lookups(
+                insertIfNotExists,
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket,
+                apiVersion,
+                null,
+                responseCallback);
+    }
+
+    private void lookups(
+            boolean insertIfNotExists,
+            @Nullable Integer timeoutMs,
+            @Nullable Integer requiredAcks,
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
+            @Nullable Long nextOffset,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
         long startTime = System.currentTimeMillis();
         TableMetricGroup tableMetrics = null;
@@ -1102,10 +1132,13 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
-                lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
+                List<ByteArraySlice> values =
+                        nextOffset == null
+                                ? replica.lookups(entry.getValue())
+                                : replica.lookupsAt(entry.getValue(), nextOffset);
+                lookupResultForBucketMap.put(tb, new LookupResultForBucket(tb, values));
             } catch (Exception e) {
-                if (isUnexpectedException(e)) {
+                if (isUnexpectedLookupException(e)) {
                     LOG.error("Error lookup from local kv on replica {}", tb, e);
                     // NOTE: Failed lookup requests metric is not incremented for known exceptions
                     // since it is supposed to indicate un-expected failure of a server in handling
@@ -1115,7 +1148,8 @@ public class ReplicaManager implements ServerReconfigurable {
                     }
                 }
                 lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
+                        tb,
+                        new LookupResultForBucket(tb, ApiError.fromThrowable(e), positionBound(e)));
             }
         }
 
@@ -1222,6 +1256,15 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
+        prefixLookups(entriesPerBucket, apiVersion, null, responseCallback);
+    }
+
+    /** Looks up each prefix at a committed position, or at the latest state if omitted. */
+    public void prefixLookups(
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            short apiVersion,
+            @Nullable Long nextOffset,
+            Consumer<Map<TableBucket, PrefixLookupResultForBucket>> responseCallback) {
         TableMetricGroup tableMetrics = null;
         Map<TableBucket, PrefixLookupResultForBucket> result = new HashMap<>();
         for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
@@ -1232,22 +1275,40 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPrefixLookupRequests().inc();
-                for (byte[] prefixKey : entry.getValue()) {
-                    List<ByteArraySlice> resultForPerKey = replica.prefixLookup(prefixKey);
-                    resultForBucket.add(resultForPerKey);
+                if (nextOffset == null) {
+                    for (byte[] prefixKey : entry.getValue()) {
+                        resultForBucket.add(replica.prefixLookup(prefixKey));
+                    }
+                } else {
+                    resultForBucket = replica.prefixLookupsAt(entry.getValue(), nextOffset);
                 }
                 result.put(tb, new PrefixLookupResultForBucket(tb, resultForBucket));
             } catch (Exception e) {
-                if (isUnexpectedException(e)) {
+                if (isUnexpectedLookupException(e)) {
                     LOG.error("Error processing prefix lookup operation on replica {}", tb, e);
                     if (tableMetrics != null) {
                         tableMetrics.failedPrefixLookupRequests().inc();
                     }
                 }
-                result.put(tb, new PrefixLookupResultForBucket(tb, ApiError.fromThrowable(e)));
+                result.put(
+                        tb,
+                        new PrefixLookupResultForBucket(
+                                tb, ApiError.fromThrowable(e), positionBound(e)));
             }
         }
         responseCallback.accept(result);
+    }
+
+    private static @Nullable Long positionBound(Exception error) {
+        if (error instanceof LookupPositionExpiredException) {
+            return ((LookupPositionExpiredException) error).getEarliestPosition().getNextOffset();
+        }
+        if (error instanceof LookupPositionNotYetReadableException) {
+            return ((LookupPositionNotYetReadableException) error)
+                    .getLatestPosition()
+                    .getNextOffset();
+        }
+        return null;
     }
 
     public void listOffsets(
@@ -2046,6 +2107,13 @@ public class ReplicaManager implements ServerReconfigurable {
                 || e instanceof NotLeaderOrFollowerException
                 || e instanceof LogOffsetOutOfRangeException
                 || e instanceof StorageBackpressureException);
+    }
+
+    private boolean isUnexpectedLookupException(Exception e) {
+        return isUnexpectedException(e)
+                && !(e instanceof TableNotVersionedException
+                        || e instanceof LookupPositionExpiredException
+                        || e instanceof LookupPositionNotYetReadableException);
     }
 
     private boolean isUnexpectedHistoricalException(Exception e) {
