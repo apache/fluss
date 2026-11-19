@@ -91,10 +91,15 @@ public interface ServerAuthenticator extends Closeable {
     boolean isCompleted();
 
     /**
-     * Create principal from authenticated token for later authorization.(this can only invoke if is
-     * complete).
+     * Creates the principals associated with the authenticated token for authorization. This method
+     * may only be invoked after authentication completes.
+     *
+     * <p>The iterable must be non-null and non-empty, with no {@code null} elements. All principals
+     * participate equally in ACL and superuser checks. The first principal identifies the client
+     * for logging, user metrics, and resource ownership; subsequent principals may represent groups
+     * or roles.
      */
-    FlussPrincipal createPrincipal();
+    Iterable<FlussPrincipal> createPrincipals();
 
     /** Close the authenticator. */
     default void close() throws IOException {}

@@ -49,6 +49,7 @@ import org.junit.jupiter.api.Test;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -80,7 +81,7 @@ public class RequestChannelTest {
                             new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                             "FLUSS",
                             true,
-                            null,
+                            Collections.emptyList(),
                             null,
                             new CompletableFuture<>());
             channel.putRequest(rpcRequest);
@@ -103,7 +104,7 @@ public class RequestChannelTest {
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         "FLUSS",
                         true,
-                        null,
+                        Collections.emptyList(),
                         null,
                         new CompletableFuture<>());
         RpcRequest rpcRequest2 =
@@ -116,7 +117,7 @@ public class RequestChannelTest {
                         new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                         "FLUSS",
                         true,
-                        null,
+                        Collections.emptyList(),
                         null,
                         new CompletableFuture<>());
         channel.putRequest(rpcRequest1);
@@ -305,7 +306,7 @@ public class RequestChannelTest {
                 new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
                 "FLUSS",
                 true,
-                null,
+                Collections.emptyList(),
                 null,
                 new CompletableFuture<>());
     }
