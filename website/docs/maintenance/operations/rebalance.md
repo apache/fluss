@@ -133,7 +133,7 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 
 // List the current rebalance plus a bounded history (last 10) of finished rebalances,
 // newest first, as summaries (id, status, started/completed timestamps)
-List<RebalanceInfo> rebalances = admin.listRebalances().get();
+List<RebalanceInfo> rebalances = admin.listAllRebalances().get();
 ```
 
 Rebalance statuses:
@@ -279,8 +279,8 @@ For rebalancing operations, Fluss provides convenient Flink stored procedures th
 - **add_server_tag**: Tag servers before rebalancing
 - **remove_server_tag**: Remove tags after rebalancing
 - **rebalance**: Trigger rebalance operation
-- **list_rebalance**: Monitor the detailed progress of the current rebalance, or of a finished one by ID
-- **list_rebalances**: List the current rebalance and the retained history of finished rebalances
+- **list_rebalance**: Monitor the detailed progress of the most recent rebalance
+- **list_all_rebalances**: List summaries of the current rebalance and the retained history of finished rebalances
 - **cancel_rebalance**: Cancel ongoing rebalance
 
 Example using Flink SQL:
@@ -296,7 +296,7 @@ CALL sys.rebalance('RACK_AWARE,TABLE_REPLICA_DISTRIBUTION,REPLICA_DISTRIBUTION,T
 CALL sys.list_rebalance();
 
 -- List the current and past rebalances
-CALL sys.list_rebalances();
+CALL sys.list_all_rebalances();
 
 -- Cancel if needed
 CALL sys.cancel_rebalance();

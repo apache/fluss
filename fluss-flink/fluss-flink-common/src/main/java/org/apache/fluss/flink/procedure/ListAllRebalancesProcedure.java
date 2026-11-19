@@ -31,25 +31,25 @@ import java.util.List;
  * Procedure to list all known rebalances as summaries.
  *
  * <p>This procedure lists the current rebalance (if any) followed by the retained history of
- * finished rebalances, newest first. See {@link Admin#listRebalances()} for more details. To query
- * the detailed progress of one rebalance, see {@link ListRebalanceProcessProcedure}.
+ * finished rebalances, newest first. See {@link Admin#listAllRebalances()} for more details. To
+ * query the detailed progress of one rebalance, see {@link ListRebalanceProcessProcedure}.
  *
  * <p>Usage examples:
  *
  * <pre>
  * -- List all known rebalances
- * CALL sys.list_rebalances();
+ * CALL sys.list_all_rebalances();
  * </pre>
  */
-public class ListRebalancesProcedure extends ProcedureBase {
+public class ListAllRebalancesProcedure extends ProcedureBase {
 
     /** Returns one row per known rebalance, newest first. */
     @ProcedureHint(
             output =
                     @DataTypeHint(
-                            "ROW<rebalance_id STRING, rebalance_status STRING, started_at TIMESTAMP_LTZ(3), completed_at TIMESTAMP_LTZ(3)>"))
+                            "ROW<rebalance_id STRING, rebalance_status STRING, started_at TIMESTAMP_LTZ(3), completed_at TIMESTAMP_LTZ(3), failure_reason STRING>"))
     public Row[] call(ProcedureContext context) throws Exception {
-        List<RebalanceInfo> rebalanceInfos = admin.listRebalances().get();
+        List<RebalanceInfo> rebalanceInfos = admin.listAllRebalances().get();
         Row[] rows = new Row[rebalanceInfos.size()];
         for (int i = 0; i < rows.length; i++) {
             RebalanceInfo info = rebalanceInfos.get(i);
@@ -58,7 +58,8 @@ public class ListRebalancesProcedure extends ProcedureBase {
                             info.rebalanceId(),
                             info.status().toString(),
                             toInstant(info.startedAtMs()),
-                            toInstant(info.completedAtMs()));
+                            toInstant(info.completedAtMs()),
+                            info.failureReason().orElse(null));
         }
         return rows;
     }

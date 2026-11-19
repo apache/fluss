@@ -327,7 +327,7 @@ public class TestAdminAdapter implements Admin {
     }
 
     @Override
-    public CompletableFuture<List<RebalanceInfo>> listRebalances() {
+    public CompletableFuture<List<RebalanceInfo>> listAllRebalances() {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 

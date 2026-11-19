@@ -164,7 +164,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
-                            "+I[sys.list_rebalances]",
+                            "+I[sys.list_all_rebalances]",
                             "+I[sys.list_partition_infos]",
                             "+I[sys.drop_kv_snapshot_lease]",
                             "+I[sys.enable_fluss_on_lake_table]");
@@ -1159,12 +1159,13 @@ public abstract class FlinkProcedureITCase {
                 });
 
         try (CloseableIterator<Row> rows =
-                tEnv.executeSql(String.format("Call %s.sys.list_rebalances()", CATALOG_NAME))
+                tEnv.executeSql(String.format("Call %s.sys.list_all_rebalances()", CATALOG_NAME))
                         .collect()) {
             List<Row> listResult = CollectionUtil.iteratorToList(rows);
             assertThat(listResult).isNotEmpty();
             Row row = listResult.get(0);
-            assertThat(row.getArity()).isEqualTo(4);
+            assertThat(row.getArity()).isEqualTo(5);
+            assertThat(row.getField(4)).isNull();
             assertThat(row.getField(0)).isEqualTo(progress.rebalanceId());
             assertThat(row.getField(1)).isEqualTo(RebalanceStatus.COMPLETED.toString());
             assertThat(row.getField(2)).isInstanceOf(Instant.class);

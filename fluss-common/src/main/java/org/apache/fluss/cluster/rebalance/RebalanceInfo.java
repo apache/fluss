@@ -19,7 +19,10 @@ package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
+import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -45,6 +48,9 @@ public final class RebalanceInfo {
     /** The time when this rebalance task reached a final status, or {@code -1} if unset. */
     private final long completedAtMs;
 
+    /** Why the first failed bucket was given up on; null unless the rebalance failed. */
+    private final @Nullable String failureReason;
+
     /**
      * Creates a rebalance summary.
      *
@@ -53,13 +59,20 @@ public final class RebalanceInfo {
      * @param startedAtMs the start time in epoch milliseconds, or -1 if unknown
      * @param completedAtMs the time the rebalance reached a final status in epoch milliseconds, or
      *     -1 if it is still in progress or the time is unknown
+     * @param failureReason why the rebalance failed, or null if it did not fail or the reason is
+     *     unknown
      */
     public RebalanceInfo(
-            String rebalanceId, RebalanceStatus status, long startedAtMs, long completedAtMs) {
+            String rebalanceId,
+            RebalanceStatus status,
+            long startedAtMs,
+            long completedAtMs,
+            @Nullable String failureReason) {
         this.rebalanceId = checkNotNull(rebalanceId);
         this.status = checkNotNull(status);
         this.startedAtMs = startedAtMs;
         this.completedAtMs = completedAtMs;
+        this.failureReason = failureReason;
     }
 
     /** The rebalance id. */
@@ -85,6 +98,14 @@ public final class RebalanceInfo {
         return completedAtMs;
     }
 
+    /**
+     * Why a {@link RebalanceStatus#FAILED} rebalance failed: the reason the first failed bucket was
+     * given up on. Empty if the rebalance did not fail or the reason is unknown.
+     */
+    public Optional<String> failureReason() {
+        return Optional.ofNullable(failureReason);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -97,12 +118,13 @@ public final class RebalanceInfo {
         return startedAtMs == that.startedAtMs
                 && completedAtMs == that.completedAtMs
                 && Objects.equals(rebalanceId, that.rebalanceId)
-                && status == that.status;
+                && status == that.status
+                && Objects.equals(failureReason, that.failureReason);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(rebalanceId, status, startedAtMs, completedAtMs);
+        return Objects.hash(rebalanceId, status, startedAtMs, completedAtMs, failureReason);
     }
 
     @Override
@@ -117,6 +139,9 @@ public final class RebalanceInfo {
                 + startedAtMs
                 + ", completedAtMs="
                 + completedAtMs
+                + ", failureReason='"
+                + failureReason
+                + '\''
                 + '}';
     }
 }

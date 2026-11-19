@@ -121,7 +121,6 @@ Below is a summary of the currently public protocols and their relationship with
 | REMOVE_SERVER_TAG_BY_RACK | ALTER | Cluster | If no registered TabletServer matches, authorization is still checked and the request succeeds as a no-op. |
 | REBALANCE | WRITE | Cluster | |
 | LIST_REBALANCE_PROGRESS | DESCRIBE | Cluster | |
-| LIST_REBALANCES | DESCRIBE | Cluster | |
 | CANCEL_REBALANCE | WRITE | Cluster | |
 | GET_CLUSTER_HEALTH | DESCRIBE | Cluster | |
 | FIND_CONSUMER_GROUP_OWNER | DESCRIBE | Group | Authorization is checked before initializing the consumer-offset system table. |

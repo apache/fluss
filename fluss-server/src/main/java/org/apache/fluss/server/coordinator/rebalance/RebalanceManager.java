@@ -126,8 +126,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * {@link #recoveryPending}, which fences new rebalance requests until recovery has finished
  * regardless of when the event loop starts.
  *
- * <p>{@link #historicalRebalanceProgress} and {@link #listRebalances(RebalanceInfo)} read only
- * ZooKeeper and their arguments, so the processor runs them on its IO executor.
+ * <p>{@link #listAllRebalances(RebalanceInfo)} reads only ZooKeeper and its argument, so the
+ * processor runs it on its IO executor.
  */
 @NotThreadSafe
 public class RebalanceManager implements ServerReconfigurable {
@@ -208,6 +208,9 @@ public class RebalanceManager implements ServerReconfigurable {
     private long currentStartedAtMs = -1;
 
     private long currentCompletedAtMs = -1;
+
+    /** Why the first failed bucket of {@link #currentRebalanceId} was given up on, if any. */
+    private @Nullable String failureReason;
 
     /** Pending tasks loaded from ZooKeeper may have started before the coordinator restarted. */
     private boolean recoveredRebalance;
@@ -320,9 +323,10 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     /**
-     * Adds a finished task that the current znode holds but the history does not. A coordinator
-     * from before the history existed wrote such a task, and the next rebalance would otherwise
-     * overwrite it. A no-op rebalance stays out of the history, as in {@link #persistFinalStatus}.
+     * Adds the summary of a finished task that the current znode holds but the history may not. A
+     * coordinator from before the history existed wrote such a task, and the next rebalance would
+     * otherwise overwrite it. Rewriting an entry the history already holds changes nothing. A no-op
+     * rebalance stays out of the history, as in {@link #persistFinalStatus}.
      */
     private void addMissingHistoryEntry(RebalanceTask rebalanceTask) {
         if (!FINAL_STATUSES.contains(rebalanceTask.getRebalanceStatus())
@@ -330,10 +334,8 @@ public class RebalanceManager implements ServerReconfigurable {
             return;
         }
         try {
-            if (!zkClient.getRebalanceHistoryTask(rebalanceTask.getRebalanceId()).isPresent()) {
-                zkClient.registerRebalanceHistoryTask(
-                        rebalanceTask, HISTORY_RETENTION_COUNT, coordinatorZkVersion());
-            }
+            zkClient.registerRebalanceHistoryTask(
+                    rebalanceTask, HISTORY_RETENTION_COUNT, coordinatorZkVersion());
         } catch (Exception e) {
             LOG.warn(
                     "Failed to add rebalance task {} to the rebalance history.",
@@ -396,6 +398,7 @@ public class RebalanceManager implements ServerReconfigurable {
             // Each bucket keeps its own final status (see RebalanceTask#getBucketStatus).
             finishedRebalanceTasks.putAll(toResults(rebalanceTask));
             currentCompletedAtMs = rebalanceTask.getCompletedAtMs();
+            failureReason = rebalanceTask.getFailureReason();
             rebalanceStatus = rebalanceTask.getRebalanceStatus();
             hasActiveRebalance = false;
             recoveryPending = false;
@@ -487,16 +490,22 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     /**
-     * Returns the in-memory progress of the current rebalance, or {@code null} if there is none.
-     * Reads no ZooKeeper, so it is safe on the coordinator event thread; the caller routes a
-     * historical id (see {@link #isHistorical}) to {@link #historicalRebalanceProgress} instead.
+     * Returns the progress of the most recent rebalance, or {@code null} if there is none. The
+     * per-bucket plan and statuses are kept only for that rebalance; older ones are known only by
+     * their summary (see {@link #listAllRebalances(RebalanceInfo)}).
+     *
+     * <p>Throws {@link NoRebalanceInProgressException} for any other id.
      */
     public @Nullable RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
         checkNotClosed();
-        checkArgument(
-                !isHistorical(rebalanceId),
-                "Rebalance task id %s is not the current rebalance task.",
-                rebalanceId);
+        if (rebalanceId != null && !rebalanceId.equals(currentRebalanceId)) {
+            throw new NoRebalanceInProgressException(
+                    String.format(
+                            "Rebalance task id %s is not the most recent rebalance task. Detailed"
+                                    + " progress is kept only for the most recent one;"
+                                    + " Admin#listAllRebalances() lists the summaries of older ones.",
+                            rebalanceId));
+        }
         if (currentRebalanceId == null) {
             return null;
         }
@@ -515,48 +524,6 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     /**
-     * Returns whether the progress of the given id is served from the ZooKeeper history rather than
-     * from memory. Must be called from the coordinator event thread.
-     */
-    public boolean isHistorical(@Nullable String rebalanceId) {
-        return rebalanceId != null && !rebalanceId.equals(currentRebalanceId);
-    }
-
-    /**
-     * Serves a finished rebalance from the ZooKeeper-backed history. Historical entries carry the
-     * full per-bucket plan with each bucket's final status.
-     *
-     * <p>Throws {@link NoRebalanceInProgressException} for an id missing from the history.
-     *
-     * <p>Reads only ZooKeeper, so it may run off the coordinator event thread.
-     */
-    public RebalanceProgress historicalRebalanceProgress(String rebalanceId) {
-        Optional<RebalanceTask> taskOpt;
-        try {
-            taskOpt = zkClient.getRebalanceHistoryTask(rebalanceId);
-        } catch (Exception e) {
-            throw new FlussRuntimeException("Failed to get rebalance history from zookeeper.", e);
-        }
-        if (!taskOpt.isPresent()) {
-            throw new NoRebalanceInProgressException(
-                    String.format(
-                            "Rebalance task id %s is neither the current rebalance task nor in the"
-                                    + " retained history. Known rebalances are listed by"
-                                    + " Admin#listRebalances().",
-                            rebalanceId));
-        }
-        RebalanceTask task = taskOpt.get();
-        // the progress will be set at client.
-        return new RebalanceProgress(
-                task.getRebalanceId(),
-                task.getRebalanceStatus(),
-                0.0,
-                toResults(task),
-                task.getStartedAtMs(),
-                task.getCompletedAtMs());
-    }
-
-    /**
      * Returns a summary of the current rebalance, or {@code null} if there is none.
      *
      * <p>Must be called from the coordinator event thread so the id/status/timestamp fields form a
@@ -568,7 +535,11 @@ public class RebalanceManager implements ServerReconfigurable {
             return null;
         }
         return new RebalanceInfo(
-                currentRebalanceId, rebalanceStatus, currentStartedAtMs, currentCompletedAtMs);
+                currentRebalanceId,
+                rebalanceStatus,
+                currentStartedAtMs,
+                currentCompletedAtMs,
+                failureReason);
     }
 
     /**
@@ -582,8 +553,8 @@ public class RebalanceManager implements ServerReconfigurable {
      * <p>Reads only ZooKeeper and the {@code currentRebalance}, so it may run off the coordinator
      * event thread.
      */
-    public List<RebalanceInfo> listRebalances(@Nullable RebalanceInfo currentRebalance) {
-        List<RebalanceTask> history;
+    public List<RebalanceInfo> listAllRebalances(@Nullable RebalanceInfo currentRebalance) {
+        List<RebalanceInfo> history;
         try {
             history = zkClient.getRebalanceHistory();
         } catch (Exception e) {
@@ -593,26 +564,19 @@ public class RebalanceManager implements ServerReconfigurable {
         if (currentRebalance != null
                 && history.stream()
                         .noneMatch(
-                                task ->
-                                        task.getRebalanceId()
+                                entry ->
+                                        entry.rebalanceId()
                                                 .equals(currentRebalance.rebalanceId()))) {
             rebalanceInfos.add(currentRebalance);
         }
-        for (RebalanceTask historyTask : history) {
-            rebalanceInfos.add(
-                    new RebalanceInfo(
-                            historyTask.getRebalanceId(),
-                            historyTask.getRebalanceStatus(),
-                            historyTask.getStartedAtMs(),
-                            historyTask.getCompletedAtMs()));
-        }
+        rebalanceInfos.addAll(history);
         return rebalanceInfos;
     }
 
-    /** Event-thread convenience overload of {@link #listRebalances(RebalanceInfo)}. */
+    /** Event-thread convenience overload of {@link #listAllRebalances(RebalanceInfo)}. */
     @VisibleForTesting
-    List<RebalanceInfo> listRebalances() {
-        return listRebalances(currentRebalanceInfo());
+    List<RebalanceInfo> listAllRebalances() {
+        return listAllRebalances(currentRebalanceInfo());
     }
 
     public void cancelRebalance(@Nullable String rebalanceId) {
@@ -656,7 +620,8 @@ public class RebalanceManager implements ServerReconfigurable {
                         canceledBuckets,
                         Collections.emptyMap(),
                         currentStartedAtMs,
-                        -1);
+                        -1,
+                        null);
         try {
             zkClient.registerRebalanceTask(cancellationTask, coordinatorZkVersion());
         } catch (Exception e) {
@@ -902,6 +867,12 @@ public class RebalanceManager implements ServerReconfigurable {
                     executionKey,
                     now - attempt.lastProgressMs,
                     targetsLive);
+            if (failureReason == null) {
+                failureReason =
+                        String.format(
+                                "Bucket %s made no progress for %d ms (target replicas live: %s).",
+                                tableBucket, now - attempt.lastProgressMs, targetsLive);
+            }
             finishRebalanceTask(executionKey, FAILED);
             return null;
         }
@@ -986,7 +957,8 @@ public class RebalanceManager implements ServerReconfigurable {
                         canceledBuckets(),
                         finishedBucketStatuses(),
                         currentStartedAtMs,
-                        completedAtMs);
+                        completedAtMs,
+                        finalStatus == FAILED ? failureReason : null);
         try {
             if (finalTask.getExecutePlan().isEmpty()) {
                 // Nothing was moved: keep a no-op rebalance out of the bounded history, so
@@ -1029,6 +1001,7 @@ public class RebalanceManager implements ServerReconfigurable {
         currentRebalanceId = rebalanceId;
         currentStartedAtMs = -1;
         currentCompletedAtMs = -1;
+        failureReason = null;
         recoveredRebalance = false;
         this.cancelRequested = cancelRequested;
         finalizationPending = false;
@@ -1290,7 +1263,8 @@ public class RebalanceManager implements ServerReconfigurable {
                 Collections.emptySet(),
                 Collections.emptyMap(),
                 clock.milliseconds(),
-                -1);
+                -1,
+                null);
     }
 
     private boolean isOfflineTagged(ServerTag serverTag) {

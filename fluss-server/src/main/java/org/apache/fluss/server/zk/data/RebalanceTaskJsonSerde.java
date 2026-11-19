@@ -50,6 +50,7 @@ public class RebalanceTaskJsonSerde
     private static final String REBALANCE_PLAN = "rebalance_plan";
     private static final String STARTED_AT_MS = "started_at_ms";
     private static final String COMPLETED_AT_MS = "completed_at_ms";
+    private static final String FAILURE_REASON = "failure_reason";
 
     private static final String TABLE_ID = "table_id";
     private static final String PARTITION_ID = "partition_id";
@@ -74,6 +75,9 @@ public class RebalanceTaskJsonSerde
         generator.writeBooleanField(CANCEL_REQUESTED, rebalanceTask.isCancelRequested());
         generator.writeNumberField(STARTED_AT_MS, rebalanceTask.getStartedAtMs());
         generator.writeNumberField(COMPLETED_AT_MS, rebalanceTask.getCompletedAtMs());
+        if (rebalanceTask.getFailureReason() != null) {
+            generator.writeStringField(FAILURE_REASON, rebalanceTask.getFailureReason());
+        }
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -186,7 +190,8 @@ public class RebalanceTaskJsonSerde
                 canceledBuckets,
                 bucketStatuses,
                 startedAtMs,
-                completedAtMs);
+                completedAtMs,
+                node.has(FAILURE_REASON) ? node.get(FAILURE_REASON).asText() : null);
     }
 
     private void serializeRebalancePlanForBucket(

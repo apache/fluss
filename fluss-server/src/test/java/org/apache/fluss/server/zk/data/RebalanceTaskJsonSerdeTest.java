@@ -103,7 +103,8 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                     Collections.singleton(new TableBucket(0L, 0)),
                     Collections.emptyMap(),
                     1000L,
-                    -1L),
+                    -1L,
+                    null),
             // A finished task whose bucket ended with a status other than the task status.
             new RebalanceTask(
                     "rebalance-task-bucket-status",
@@ -113,7 +114,19 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                     Collections.emptySet(),
                     Collections.singletonMap(failedBucket, FAILED),
                     1000L,
-                    2000L)
+                    2000L,
+                    null),
+            // A failed task keeps why its bucket was given up on.
+            new RebalanceTask(
+                    "rebalance-task-failed",
+                    FAILED,
+                    failedBucketPlan,
+                    false,
+                    Collections.emptySet(),
+                    Collections.emptyMap(),
+                    1000L,
+                    2000L,
+                    "no progress")
         };
     }
 
@@ -133,7 +146,11 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
             "{\"version\":3,\"rebalance_id\":\"rebalance-task-bucket-status\",\"rebalance_status\":3,\"cancel_requested\":false,"
                     + "\"started_at_ms\":1000,\"completed_at_ms\":2000,\"rebalance_plan\":"
                     + "[{\"table_id\":2,\"buckets\":"
-                    + "[{\"bucket_id\":0,\"bucket_status\":2,\"original_leader\":0,\"new_leader\":1,\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}"
+                    + "[{\"bucket_id\":0,\"bucket_status\":2,\"original_leader\":0,\"new_leader\":1,\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}",
+            "{\"version\":3,\"rebalance_id\":\"rebalance-task-failed\",\"rebalance_status\":2,\"cancel_requested\":false,"
+                    + "\"started_at_ms\":1000,\"completed_at_ms\":2000,\"failure_reason\":\"no progress\",\"rebalance_plan\":"
+                    + "[{\"table_id\":2,\"buckets\":"
+                    + "[{\"bucket_id\":0,\"original_leader\":0,\"new_leader\":1,\"origin_replicas\":[0,1],\"new_replicas\":[1,0]}]}]}"
         };
     }
 
@@ -156,6 +173,7 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
         assertThat(rebalanceTask.getExecutePlan()).hasSize(5);
         assertThat(rebalanceTask.getStartedAtMs()).isEqualTo(-1L);
         assertThat(rebalanceTask.getCompletedAtMs()).isEqualTo(-1L);
+        assertThat(rebalanceTask.getFailureReason()).isNull();
     }
 
     @Test
@@ -188,7 +206,8 @@ public class RebalanceTaskJsonSerdeTest extends JsonSerdeTestBase<RebalanceTask>
                         Collections.emptySet(),
                         Collections.singletonMap(tb, COMPLETED),
                         -1L,
-                        -1L);
+                        -1L,
+                        null);
         RebalanceTask withoutOwnStatus = new RebalanceTask("r", COMPLETED, plan);
 
         assertThat(withOwnStatus).isEqualTo(withoutOwnStatus);

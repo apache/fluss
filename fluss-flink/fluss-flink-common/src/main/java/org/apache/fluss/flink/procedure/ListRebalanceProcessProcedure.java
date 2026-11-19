@@ -38,7 +38,7 @@ import java.util.Optional;
  *
  * <p>This procedure allows querying rebalance progress. See {@link
  * Admin#listRebalanceProgress(String)} for more details. To list all known rebalances as summaries,
- * see {@link ListRebalancesProcedure}.
+ * see {@link ListAllRebalancesProcedure}.
  *
  * <p>Usage examples:
  *

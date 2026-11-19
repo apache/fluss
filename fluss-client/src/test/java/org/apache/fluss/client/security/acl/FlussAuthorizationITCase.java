@@ -1175,9 +1175,9 @@ public class FlussAuthorizationITCase {
     }
 
     @Test
-    void testListRebalances() throws Exception {
-        // test listRebalances without DESCRIBE permission on cluster resource
-        assertThatThrownBy(() -> guestAdmin.listRebalances().get())
+    void testListAllRebalances() throws Exception {
+        // test listAllRebalances without DESCRIBE permission on cluster resource
+        assertThatThrownBy(() -> guestAdmin.listAllRebalances().get())
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
@@ -1198,8 +1198,8 @@ public class FlussAuthorizationITCase {
                 .all()
                 .get();
 
-        // test listRebalances with DESCRIBE permission should succeed
-        guestAdmin.listRebalances().get();
+        // test listAllRebalances with DESCRIBE permission should succeed
+        guestAdmin.listAllRebalances().get();
     }
 
     @Test

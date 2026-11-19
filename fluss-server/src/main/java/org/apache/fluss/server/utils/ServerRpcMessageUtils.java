@@ -105,7 +105,6 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
-import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
@@ -2621,12 +2620,12 @@ public class ServerRpcMessageUtils {
     }
 
     /**
-     * Converts the rebalance summaries to a {@link ListRebalancesResponse}. An unset timestamp (-1)
-     * is left absent on the wire.
+     * Converts the rebalance summaries to the response of a request with include_history. An unset
+     * timestamp (-1) is left absent on the wire.
      */
-    public static ListRebalancesResponse makeListRebalancesResponse(
+    public static ListRebalanceProgressResponse makeListAllRebalancesResponse(
             List<RebalanceInfo> rebalanceInfos) {
-        ListRebalancesResponse response = new ListRebalancesResponse();
+        ListRebalanceProgressResponse response = new ListRebalanceProgressResponse();
         for (RebalanceInfo rebalanceInfo : rebalanceInfos) {
             PbRebalanceInfo pbRebalanceInfo =
                     response.addRebalanceInfo()
@@ -2638,6 +2637,7 @@ public class ServerRpcMessageUtils {
             if (rebalanceInfo.completedAtMs() >= 0) {
                 pbRebalanceInfo.setCompletedAtMs(rebalanceInfo.completedAtMs());
             }
+            rebalanceInfo.failureReason().ifPresent(pbRebalanceInfo::setFailureReason);
         }
         return response;
     }

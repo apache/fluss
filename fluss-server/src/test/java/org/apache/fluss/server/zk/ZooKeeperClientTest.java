@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
@@ -1188,13 +1189,13 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getRebalanceTask())
                 .hasValue(rebalanceTask("history-task-11", COMPLETED, bucketPlan, 11, 111));
 
-        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        List<RebalanceInfo> history = zookeeperClient.getRebalanceHistory();
         assertThat(history).hasSize(10);
         // newest first, i.e. history-task-11 (completedAtMs=111) down to history-task-2
         // (completedAtMs=102); history-task-0 and history-task-1 were trimmed.
         List<String> rebalanceIds = new ArrayList<>();
-        for (RebalanceTask task : history) {
-            rebalanceIds.add(task.getRebalanceId());
+        for (RebalanceInfo info : history) {
+            rebalanceIds.add(info.rebalanceId());
         }
         assertThat(rebalanceIds)
                 .containsExactly(
@@ -1208,6 +1209,16 @@ class ZooKeeperClientTest {
                         "history-task-4",
                         "history-task-3",
                         "history-task-2");
+
+        // An entry is a summary: it does not store the plan, so its size does not grow with it.
+        String entryJson =
+                new String(
+                        zookeeperClient
+                                .getCuratorClient()
+                                .getData()
+                                .forPath(RebalanceHistoryTaskZNode.path("history-task-11")),
+                        StandardCharsets.UTF_8);
+        assertThat(entryJson).doesNotContain("rebalance_plan").doesNotContain("replicas");
     }
 
     @Test
@@ -1225,7 +1236,8 @@ class ZooKeeperClientTest {
         RebalanceTask original =
                 rebalanceTask("idempotent-history-task", COMPLETED, bucketPlan, 0, 100);
         zookeeperClient.registerFinalRebalanceTask(original, 10);
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(original);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(original.toRebalanceInfo());
 
         // A second write for the same rebalance id must overwrite the entry in place rather than
         // fail on the existing znode (which would also skip the retention trim that follows it).
@@ -1233,7 +1245,8 @@ class ZooKeeperClientTest {
                 rebalanceTask("idempotent-history-task", COMPLETED, bucketPlan, 0, 200);
         assertThatCode(() -> zookeeperClient.registerFinalRebalanceTask(updated, 10))
                 .doesNotThrowAnyException();
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(updated);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(updated.toRebalanceInfo());
 
         // Retention trimming still runs after the idempotent write: push past the retention
         // bound with fresh ids and confirm the oldest entry (the one just re-written) is trimmed.
@@ -1244,10 +1257,10 @@ class ZooKeeperClientTest {
                     10);
         }
 
-        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        List<RebalanceInfo> history = zookeeperClient.getRebalanceHistory();
         assertThat(history).hasSize(10);
         List<String> rebalanceIds =
-                history.stream().map(RebalanceTask::getRebalanceId).collect(Collectors.toList());
+                history.stream().map(RebalanceInfo::rebalanceId).collect(Collectors.toList());
         assertThat(rebalanceIds).doesNotContain("idempotent-history-task");
     }
 
@@ -1278,9 +1291,8 @@ class ZooKeeperClientTest {
         // Decodable JSON, but with an unknown rebalance_status code (e.g. written by a newer
         // coordinator, then read after a downgrade).
         String unknownStatusJson =
-                "{\"version\":2,\"rebalance_id\":\"unknown-status-history-task\","
-                        + "\"rebalance_status\":99,\"started_at_ms\":1,\"completed_at_ms\":200,"
-                        + "\"rebalance_plan\":[]}";
+                "{\"version\":1,\"rebalance_id\":\"unknown-status-history-task\","
+                        + "\"rebalance_status\":99,\"started_at_ms\":1,\"completed_at_ms\":200}";
         zookeeperClient
                 .getCuratorClient()
                 .create()
@@ -1290,7 +1302,7 @@ class ZooKeeperClientTest {
                         unknownStatusJson.getBytes(StandardCharsets.UTF_8));
 
         // Neither corrupt entry aborts the listing; only the good one is returned.
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(good);
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(good.toRebalanceInfo());
 
         // A history write within the retention bound keeps the corrupt entries: the trim never
         // reads payloads, so an entry a newer coordinator wrote survives a downgrade.
@@ -1304,9 +1316,9 @@ class ZooKeeperClientTest {
             zookeeperClient.registerFinalRebalanceTask(
                     rebalanceTask("more-history-task-" + i, COMPLETED, bucketPlan, i, 300 + i), 10);
         }
-        List<RebalanceTask> history = zookeeperClient.getRebalanceHistory();
+        List<RebalanceInfo> history = zookeeperClient.getRebalanceHistory();
         assertThat(history).hasSize(10);
-        assertThat(history).doesNotContain(good);
+        assertThat(history).doesNotContain(good.toRebalanceInfo());
         assertThat(zookeeperClient.getChildren(RebalanceHistoryZNode.path()))
                 .doesNotContain("malformed-history-task", "unknown-status-history-task");
     }
@@ -1327,18 +1339,12 @@ class ZooKeeperClientTest {
         RebalanceTask newer = rebalanceTask("newer-task", COMPLETED, bucketPlan, 0, 100);
         zookeeperClient.registerFinalRebalanceTask(older, 10);
         zookeeperClient.registerFinalRebalanceTask(newer, 10);
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(newer, older);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(newer.toRebalanceInfo(), older.toRebalanceInfo());
 
         // Retention keeps the entry written last, not the one with the latest clock.
         zookeeperClient.registerFinalRebalanceTask(newer, 1);
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(newer);
-    }
-
-    @Test
-    void testRebalanceHistoryTaskWithInvalidIdIsAbsent() throws Exception {
-        for (String invalidId : Arrays.asList("", ".", "..", "a/../b", "a/b")) {
-            assertThat(zookeeperClient.getRebalanceHistoryTask(invalidId)).isEmpty();
-        }
+        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(newer.toRebalanceInfo());
     }
 
     @Test
@@ -1360,7 +1366,8 @@ class ZooKeeperClientTest {
         zookeeperClient.registerFinalRebalanceTask(history, 10);
 
         assertThatCode(() -> zookeeperClient.deleteRebalanceTask()).doesNotThrowAnyException();
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(history);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(history.toRebalanceInfo());
     }
 
     @Test
@@ -1387,11 +1394,12 @@ class ZooKeeperClientTest {
                                         staleFinal, 10, epochZkVersion + 1))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getRebalanceTask()).hasValue(running);
-        assertThat(zookeeperClient.getRebalanceHistoryTask("fenced-task")).isEmpty();
+        assertThat(zookeeperClient.getRebalanceHistory()).isEmpty();
 
         zookeeperClient.registerFinalRebalanceTask(staleFinal, 10, epochZkVersion);
         assertThat(zookeeperClient.getRebalanceTask()).hasValue(staleFinal);
-        assertThat(zookeeperClient.getRebalanceHistoryTask("fenced-task")).hasValue(staleFinal);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(staleFinal.toRebalanceInfo());
     }
 
     private static RebalanceTask rebalanceTask(
@@ -1408,7 +1416,8 @@ class ZooKeeperClientTest {
                 Collections.emptySet(),
                 Collections.emptyMap(),
                 startedAtMs,
-                completedAtMs);
+                completedAtMs,
+                null);
     }
 
     @Test

@@ -35,6 +35,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -123,8 +124,6 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
-import org.apache.fluss.rpc.messages.ListRebalancesRequest;
-import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -177,7 +176,6 @@ import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
-import org.apache.fluss.server.coordinator.event.ListRebalancesEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
@@ -1920,12 +1918,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
         }
 
+        boolean includeHistory = request.hasIncludeHistory() && request.isIncludeHistory();
+        if (includeHistory && request.hasRebalanceId()) {
+            throw new InvalidRequestException(
+                    "include_history lists all known rebalances and cannot be combined with"
+                            + " rebalance_id.");
+        }
+
         CompletableFuture<ListRebalanceProgressResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
                 .put(
                         new ListRebalanceProgressEvent(
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
+                                includeHistory,
                                 response));
         return response;
     }
@@ -1944,17 +1950,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CancelRebalanceEvent(
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
                                 response));
-        return response;
-    }
-
-    @Override
-    public CompletableFuture<ListRebalancesResponse> listRebalances(ListRebalancesRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
-        }
-
-        CompletableFuture<ListRebalancesResponse> response = new CompletableFuture<>();
-        eventManagerSupplier.get().put(new ListRebalancesEvent(response));
         return response;
     }
 

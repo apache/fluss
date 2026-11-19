@@ -721,6 +721,15 @@ public class RebalanceManagerTest {
         assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
         assertThat(rebalanceManager.hasInProgressRebalance()).isFalse();
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus()).isEqualTo(FAILED);
+        // The reason is persisted with the final task, so the history and the listing carry it.
+        assertThat(zookeeperClient.getRebalanceHistory().get(0).failureReason())
+                .hasValueSatisfying(
+                        reason ->
+                                assertThat(reason)
+                                        .contains(tableBucket.toString())
+                                        .contains("made no progress"));
+        assertThat(rebalanceManager.listAllRebalances().get(0).failureReason())
+                .hasValueSatisfying(reason -> assertThat(reason).contains("made no progress"));
 
         TableBucket nextBucket = new TableBucket(1L, 1);
         Map<TableBucket, RebalancePlanForBucket> nextPlan = plans(nextBucket);
@@ -1041,7 +1050,8 @@ public class RebalanceManagerTest {
         assertThat(progress.completedAtMs()).isEqualTo(6_000L);
         RebalanceTask finalTask = task("timestamp-test", COMPLETED, plan, 1_000L, 6_000L);
         assertThat(zookeeperClient.getRebalanceTask()).hasValue(finalTask);
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(finalTask);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(finalTask.toRebalanceInfo());
     }
 
     @Test
@@ -1064,47 +1074,41 @@ public class RebalanceManagerTest {
         clock.advanceTime(4_000L, TimeUnit.MILLISECONDS);
         rebalanceManager.finishRebalanceTask(runningAttempt, COMPLETED);
 
-        RebalanceTask historyTask =
-                zookeeperClient.getRebalanceHistoryTask("cancel-history-test").get();
-        assertThat(historyTask).isEqualTo(zookeeperClient.getRebalanceTask().get());
-        assertThat(historyTask.getRebalanceStatus()).isEqualTo(CANCELED);
-        assertThat(historyTask.getStartedAtMs()).isEqualTo(1_000L);
-        assertThat(historyTask.getCompletedAtMs()).isEqualTo(4_000L);
+        RebalanceTask finalTask = zookeeperClient.getRebalanceTask().get();
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(
+                        new RebalanceInfo("cancel-history-test", CANCELED, 1_000L, 4_000L, null));
+        assertThat(finalTask.toRebalanceInfo())
+                .isEqualTo(zookeeperClient.getRebalanceHistory().get(0));
         // The bucket that finished its move keeps its own status in a canceled rebalance.
-        assertThat(historyTask.getBucketStatus(running)).isEqualTo(COMPLETED);
-        assertThat(historyTask.getBucketStatus(pending)).isEqualTo(CANCELED);
+        assertThat(finalTask.getBucketStatus(running)).isEqualTo(COMPLETED);
+        assertThat(finalTask.getBucketStatus(pending)).isEqualTo(CANCELED);
     }
 
     @Test
-    void testHistoricalProgressKeepsPerBucketStatus() throws Exception {
-        TableBucket failed = new TableBucket(1L, 0);
-        TableBucket completed = new TableBucket(1L, 1);
-        rebalanceManager.registerRebalance("per-bucket-1", plans(failed, completed));
-        rebalanceManager.finishRebalanceTask(failed, FAILED);
-        rebalanceManager.finishRebalanceTask(completed, COMPLETED);
-        assertThat(rebalanceManager.getRebalanceStatus()).isEqualTo(FAILED);
+    void testProgressOfOlderRebalanceThrows() {
+        TableBucket tableBucket = new TableBucket(1L, 0);
+        rebalanceManager.registerRebalance("older", plans(tableBucket));
+        rebalanceManager.finishRebalanceTask(tableBucket, COMPLETED);
+        rebalanceManager.registerRebalance("newer", plans(tableBucket));
 
-        // A second rebalance makes the first one historical.
-        rebalanceManager.registerRebalance("per-bucket-2", new HashMap<>());
-
-        // The in-memory view never serves a historical id (that would read ZooKeeper on the
-        // event thread); the caller routes it to historicalRebalanceProgress().
-        assertThat(rebalanceManager.isHistorical("per-bucket-1")).isTrue();
-        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress("per-bucket-1"))
-                .isInstanceOf(IllegalArgumentException.class);
-        RebalanceProgress historical = rebalanceManager.historicalRebalanceProgress("per-bucket-1");
-        assertThat(historical.status()).isEqualTo(FAILED);
-        assertThat(historical.progressForBucketMap().get(failed).status()).isEqualTo(FAILED);
-        assertThat(historical.progressForBucketMap().get(completed).status()).isEqualTo(COMPLETED);
-    }
-
-    @Test
-    void testHistoricalProgressOfUnknownIdThrows() {
-        assertThat(rebalanceManager.getRebalanceId()).isNull();
-        assertThatThrownBy(() -> rebalanceManager.historicalRebalanceProgress("unknown-id"))
+        // Detail is kept for the most recent rebalance only; the older one has just a summary.
+        assertThat(rebalanceManager.listRebalanceProgress("newer")).isNotNull();
+        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress("older"))
                 .isInstanceOf(NoRebalanceInProgressException.class)
-                .hasMessageContaining("retained history")
-                .hasMessageContaining("Admin#listRebalances()");
+                .hasMessageContaining("is not the most recent rebalance task")
+                .hasMessageContaining("Admin#listAllRebalances()");
+        assertThat(rebalanceManager.listAllRebalances())
+                .extracting(RebalanceInfo::rebalanceId)
+                .containsExactly("newer", "older");
+    }
+
+    @Test
+    void testProgressOfUnknownIdThrowsWithoutCurrentRebalance() {
+        assertThat(rebalanceManager.getRebalanceId()).isNull();
+        assertThatThrownBy(() -> rebalanceManager.listRebalanceProgress("unknown-id"))
+                .isInstanceOf(NoRebalanceInProgressException.class)
+                .hasMessageContaining("Admin#listAllRebalances()");
     }
 
     @Test
@@ -1120,7 +1124,8 @@ public class RebalanceManagerTest {
                         Collections.emptySet(),
                         Collections.singletonMap(completed, COMPLETED),
                         1_000L,
-                        2_000L);
+                        2_000L,
+                        "no progress");
         zookeeperClient.registerFinalRebalanceTask(finalTask, 10);
         configureManager(new Configuration());
 
@@ -1131,8 +1136,11 @@ public class RebalanceManagerTest {
                 .containsEntry(failed, FAILED)
                 .containsEntry(completed, COMPLETED);
         assertThat(rebalanceManager.currentRebalanceInfo())
-                .isEqualTo(new RebalanceInfo("recover-per-bucket", FAILED, 1_000L, 2_000L));
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(finalTask);
+                .isEqualTo(
+                        new RebalanceInfo(
+                                "recover-per-bucket", FAILED, 1_000L, 2_000L, "no progress"));
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(finalTask.toRebalanceInfo());
     }
 
     @Test
@@ -1145,7 +1153,8 @@ public class RebalanceManagerTest {
 
         configureManager(new Configuration());
 
-        assertThat(zookeeperClient.getRebalanceHistory()).containsExactly(upgradedTask);
+        assertThat(zookeeperClient.getRebalanceHistory())
+                .containsExactly(upgradedTask.toRebalanceInfo());
     }
 
     @Test
@@ -1159,12 +1168,12 @@ public class RebalanceManagerTest {
     }
 
     @Test
-    void testListRebalancesEmptyWhenNoRebalanceEverRun() {
-        assertThat(rebalanceManager.listRebalances()).isEmpty();
+    void testListAllRebalancesEmptyWhenNoRebalanceEverRun() {
+        assertThat(rebalanceManager.listAllRebalances()).isEmpty();
     }
 
     @Test
-    void testListRebalancesCurrentFirstThenHistoryNewestFirstDeduped() {
+    void testListAllRebalancesCurrentFirstThenHistoryNewestFirstDeduped() {
         TableBucket tableBucket = new TableBucket(1L, 0);
         for (String finishedId : Arrays.asList("rebalance-1", "rebalance-2")) {
             rebalanceManager.registerRebalance(finishedId, plans(tableBucket));
@@ -1174,45 +1183,39 @@ public class RebalanceManagerTest {
         // The third rebalance is still in progress, so only the current view holds it.
         rebalanceManager.registerRebalance("rebalance-3", plans(tableBucket));
 
-        assertThat(rebalanceManager.listRebalances())
+        assertThat(rebalanceManager.listAllRebalances())
                 .containsExactly(
-                        new RebalanceInfo("rebalance-3", REBALANCING, 2_000L, -1L),
-                        new RebalanceInfo("rebalance-2", COMPLETED, 1_000L, 2_000L),
-                        new RebalanceInfo("rebalance-1", COMPLETED, 0L, 1_000L));
-
-        // A historical id returns the full per-bucket detail from the ZooKeeper history.
-        RebalanceProgress historical = rebalanceManager.historicalRebalanceProgress("rebalance-1");
-        assertThat(historical.status()).isEqualTo(COMPLETED);
-        assertThat(historical.progressForBucketMap().get(tableBucket).status())
-                .isEqualTo(COMPLETED);
-        assertThat(historical.startedAtMs()).isEqualTo(0L);
-        assertThat(historical.completedAtMs()).isEqualTo(1_000L);
+                        new RebalanceInfo("rebalance-3", REBALANCING, 2_000L, -1L, null),
+                        new RebalanceInfo("rebalance-2", COMPLETED, 1_000L, 2_000L, null),
+                        new RebalanceInfo("rebalance-1", COMPLETED, 0L, 1_000L, null));
     }
 
     @Test
-    void testListRebalancesPrefersHistoryOverStaleCurrentSnapshot() throws Exception {
+    void testListAllRebalancesPrefersHistoryOverStaleCurrentSnapshot() throws Exception {
         // The snapshot of rebalance-1 is taken on the event thread, then rebalance-2 finishes
         // before the history is read: the list must stay newest first.
         Map<TableBucket, RebalancePlanForBucket> plan = plans(new TableBucket(1L, 0));
-        RebalanceInfo staleSnapshot = new RebalanceInfo("rebalance-1", COMPLETED, 1_000L, 2_000L);
+        RebalanceInfo staleSnapshot =
+                new RebalanceInfo("rebalance-1", COMPLETED, 1_000L, 2_000L, null);
         zookeeperClient.registerFinalRebalanceTask(
                 task("rebalance-1", COMPLETED, plan, 1_000L, 2_000L), 10);
         zookeeperClient.registerFinalRebalanceTask(
                 task("rebalance-2", COMPLETED, plan, 3_000L, 4_000L), 10);
 
-        assertThat(rebalanceManager.listRebalances(staleSnapshot))
+        assertThat(rebalanceManager.listAllRebalances(staleSnapshot))
                 .containsExactly(
-                        new RebalanceInfo("rebalance-2", COMPLETED, 3_000L, 4_000L), staleSnapshot);
+                        new RebalanceInfo("rebalance-2", COMPLETED, 3_000L, 4_000L, null),
+                        staleSnapshot);
     }
 
     @Test
-    void testListRebalancesPropagatesZooKeeperReadFailure() throws Exception {
+    void testListAllRebalancesPropagatesZooKeeperReadFailure() throws Exception {
         rebalanceManager.close();
         try (TestingZooKeeperClient testingClient = new TestingZooKeeperClient()) {
             rebalanceManager = createManager(new Configuration(), testingClient);
             testingClient.failHistoryRead = true;
 
-            assertThatThrownBy(() -> rebalanceManager.listRebalances())
+            assertThatThrownBy(() -> rebalanceManager.listAllRebalances())
                     .isInstanceOf(FlussRuntimeException.class)
                     .hasRootCauseMessage("zk read failed");
         }
@@ -1232,7 +1235,8 @@ public class RebalanceManagerTest {
                 Collections.emptySet(),
                 Collections.emptyMap(),
                 startedAtMs,
-                completedAtMs);
+                completedAtMs,
+                null);
     }
 
     private RebalanceManager createManager(Configuration conf) {
@@ -1485,7 +1489,7 @@ public class RebalanceManagerTest {
         }
 
         @Override
-        public List<RebalanceTask> getRebalanceHistory() throws Exception {
+        public List<RebalanceInfo> getRebalanceHistory() throws Exception {
             if (failHistoryRead) {
                 throw new Exception("zk read failed");
             }

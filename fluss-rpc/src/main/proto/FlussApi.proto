@@ -912,6 +912,9 @@ message RebalanceResponse {
 
 message ListRebalanceProgressRequest {
   optional string rebalance_id = 1;
+  // Since version 1. When true, the response carries only rebalance_infos: the current
+  // rebalance and the retained history as summaries. Must not be combined with rebalance_id.
+  optional bool include_history = 2;
 }
 
 message ListRebalanceProgressResponse {
@@ -920,6 +923,8 @@ message ListRebalanceProgressResponse {
   repeated PbRebalanceProgressForTable table_progress = 3;
   optional int64 started_at_ms = 4;
   optional int64 completed_at_ms = 5;
+  // Since version 1. Only set for a request with include_history.
+  repeated PbRebalanceInfo rebalance_infos = 6;
 }
 
 message CancelRebalanceRequest {
@@ -927,13 +932,6 @@ message CancelRebalanceRequest {
 }
 
 message CancelRebalanceResponse {
-}
-
-message ListRebalancesRequest {
-}
-
-message ListRebalancesResponse {
-  repeated PbRebalanceInfo rebalance_infos = 1;
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1481,6 +1479,8 @@ message PbRebalanceInfo {
   required int32 rebalance_status = 2;
   optional int64 started_at_ms = 3;
   optional int64 completed_at_ms = 4;
+  // Set only for a FAILED rebalance: why the first failed bucket was given up on.
+  optional string failure_reason = 5;
 }
 
 message PbRebalancePlanForBucket {

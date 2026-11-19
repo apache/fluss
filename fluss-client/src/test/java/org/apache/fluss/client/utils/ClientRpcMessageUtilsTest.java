@@ -33,7 +33,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
-import org.apache.fluss.rpc.messages.ListRebalancesResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
@@ -188,7 +188,7 @@ class ClientRpcMessageUtilsTest {
 
     @Test
     void testToRebalanceInfosWithUnsetTimestampsMapToMinusOne() {
-        ListRebalancesResponse response = new ListRebalancesResponse();
+        ListRebalanceProgressResponse response = new ListRebalanceProgressResponse();
         PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
         pbRebalanceInfo
                 .setRebalanceId("rebalance-1")
@@ -198,12 +198,12 @@ class ClientRpcMessageUtilsTest {
 
         assertThat(rebalanceInfos)
                 .containsExactly(
-                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1));
+                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1, null));
     }
 
     @Test
     void testToRebalanceInfosWithSetTimestampsPassThrough() {
-        ListRebalancesResponse response = new ListRebalancesResponse();
+        ListRebalanceProgressResponse response = new ListRebalanceProgressResponse();
         PbRebalanceInfo pbRebalanceInfo = response.addRebalanceInfo();
         pbRebalanceInfo
                 .setRebalanceId("rebalance-1")
@@ -216,12 +216,26 @@ class ClientRpcMessageUtilsTest {
         assertThat(rebalanceInfos)
                 .containsExactly(
                         new RebalanceInfo(
-                                "rebalance-1", RebalanceStatus.COMPLETED, 1_000L, 2_000L));
+                                "rebalance-1", RebalanceStatus.COMPLETED, 1_000L, 2_000L, null));
+    }
+
+    @Test
+    void testToRebalanceInfosKeepsFailureReason() {
+        ListRebalanceProgressResponse response = new ListRebalanceProgressResponse();
+        response.addRebalanceInfo()
+                .setRebalanceId("rebalance-1")
+                .setRebalanceStatus(RebalanceStatus.FAILED.getCode())
+                .setFailureReason("no progress");
+
+        assertThat(ClientRpcMessageUtils.toRebalanceInfos(response))
+                .containsExactly(
+                        new RebalanceInfo(
+                                "rebalance-1", RebalanceStatus.FAILED, -1, -1, "no progress"));
     }
 
     @Test
     void testToRebalanceInfosSkipsUnknownStatus() {
-        ListRebalancesResponse response = new ListRebalancesResponse();
+        ListRebalanceProgressResponse response = new ListRebalanceProgressResponse();
         response.addRebalanceInfo().setRebalanceId("future").setRebalanceStatus(99);
         response.addRebalanceInfo()
                 .setRebalanceId("rebalance-1")
@@ -229,7 +243,7 @@ class ClientRpcMessageUtilsTest {
 
         assertThat(ClientRpcMessageUtils.toRebalanceInfos(response))
                 .containsExactly(
-                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1));
+                        new RebalanceInfo("rebalance-1", RebalanceStatus.COMPLETED, -1, -1, null));
     }
 
     private static PbPartitionInfo makePbPartitionInfo(

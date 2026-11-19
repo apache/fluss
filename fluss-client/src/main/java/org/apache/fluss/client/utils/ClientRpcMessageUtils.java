@@ -79,7 +79,6 @@ import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
-import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -692,10 +691,10 @@ public class ClientRpcMessageUtils {
     }
 
     /**
-     * Converts a {@link ListRebalancesResponse} to rebalance summaries. Entries whose status code
-     * this client does not know are skipped; an absent timestamp maps to -1.
+     * Converts the response of a request with include_history to rebalance summaries. Entries whose
+     * status code this client does not know are skipped; an absent timestamp maps to -1.
      */
-    public static List<RebalanceInfo> toRebalanceInfos(ListRebalancesResponse response) {
+    public static List<RebalanceInfo> toRebalanceInfos(ListRebalanceProgressResponse response) {
         List<RebalanceInfo> rebalanceInfos = new ArrayList<>();
         for (PbRebalanceInfo pbRebalanceInfo : response.getRebalanceInfosList()) {
             RebalanceStatus status = RebalanceStatus.of(pbRebalanceInfo.getRebalanceStatus());
@@ -715,7 +714,10 @@ public class ClientRpcMessageUtils {
                                     : -1,
                             pbRebalanceInfo.hasCompletedAtMs()
                                     ? pbRebalanceInfo.getCompletedAtMs()
-                                    : -1));
+                                    : -1,
+                            pbRebalanceInfo.hasFailureReason()
+                                    ? pbRebalanceInfo.getFailureReason()
+                                    : null));
         }
         return rebalanceInfos;
     }

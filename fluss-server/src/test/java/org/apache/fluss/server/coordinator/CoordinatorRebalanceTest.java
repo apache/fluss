@@ -22,14 +22,12 @@ import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
-import org.apache.fluss.rpc.messages.ListRebalancesResponse;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
@@ -37,7 +35,6 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.TestingControlledNotifyGateway.PendingNotify;
 import org.apache.fluss.server.coordinator.event.ListRebalanceProgressEvent;
-import org.apache.fluss.server.coordinator.event.ListRebalancesEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
@@ -48,7 +45,6 @@ import org.apache.fluss.server.coordinator.rebalance.goal.ReplicaDistributionGoa
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
-import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
@@ -74,10 +70,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
@@ -1377,61 +1371,18 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testListRebalancesCompletesCallbackWhenRebalanceManagerClosed() {
+    void testListAllRebalancesCompletesCallbackWhenRebalanceManagerClosed() {
         // Once the manager is closed, the snapshot taken on the event thread throws; the handler
         // must still complete the callback rather than leave the client to hit the RPC timeout.
         eventProcessor.getRebalanceManager().close();
 
-        CompletableFuture<ListRebalancesResponse> callback = new CompletableFuture<>();
-        eventProcessor.getCoordinatorEventManager().put(new ListRebalancesEvent(callback));
+        CompletableFuture<ListRebalanceProgressResponse> callback = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new ListRebalanceProgressEvent(null, true, callback));
 
         assertThatThrownBy(() -> callback.get(10, TimeUnit.SECONDS))
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("RebalanceManager is already closed");
-    }
-
-    @Test
-    void testListHistoricalRebalanceProgressDoesNotBlockEventThread() throws Exception {
-        String historicalId = "unknown-id";
-        CountDownLatch release = new CountDownLatch(1);
-        Configuration zkConf = new Configuration();
-        zkConf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        ZooKeeperClient blockingZkClient =
-                new ZooKeeperClient(zookeeperClient.getCuratorFrameworkWrapper(), zkConf) {
-                    @Override
-                    public Optional<RebalanceTask> getRebalanceHistoryTask(String rebalanceId)
-                            throws Exception {
-                        if (rebalanceId.equals(historicalId)) {
-                            release.await();
-                        }
-                        return super.getRebalanceHistoryTask(rebalanceId);
-                    }
-                };
-        eventProcessor.shutdown();
-        eventProcessor =
-                buildCoordinatorEventProcessor(blockingZkClient, SystemClock.getInstance());
-        initCoordinatorChannel();
-        eventProcessor.startup();
-
-        try {
-            CompletableFuture<ListRebalanceProgressResponse> historical = new CompletableFuture<>();
-            eventProcessor
-                    .getCoordinatorEventManager()
-                    .put(new ListRebalanceProgressEvent(historicalId, historical));
-            // The event thread stays free while the history read waits.
-            CompletableFuture<ListRebalanceProgressResponse> current = new CompletableFuture<>();
-            eventProcessor
-                    .getCoordinatorEventManager()
-                    .put(new ListRebalanceProgressEvent(null, current));
-            current.get(10, TimeUnit.SECONDS);
-            assertThat(historical).isNotDone();
-
-            release.countDown();
-            // An unknown id throws, whether or not a rebalance is current.
-            assertThatThrownBy(() -> historical.get(10, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(NoRebalanceInProgressException.class);
-        } finally {
-            release.countDown();
-        }
     }
 }

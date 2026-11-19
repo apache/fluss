@@ -26,12 +26,14 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -332,9 +334,9 @@ public class RebalanceITCase {
                 .rootCause()
                 .isInstanceOf(NoRebalanceInProgressException.class)
                 .hasMessageContaining(
-                        "Rebalance task id unexisted-rebalance-id is neither the current rebalance"
-                                + " task nor in the retained history. Known rebalances are listed"
-                                + " by Admin#listRebalances().");
+                        "Rebalance task id unexisted-rebalance-id is not the most recent rebalance"
+                                + " task. Detailed progress is kept only for the most recent one;"
+                                + " Admin#listAllRebalances() lists the summaries of older ones.");
 
         assertThatThrownBy(() -> admin.cancelRebalance("unexisted-rebalance-id2").get())
                 .rootCause()
@@ -344,7 +346,22 @@ public class RebalanceITCase {
     }
 
     @Test
-    void testListRebalances() throws Exception {
+    void testIncludeHistoryWithRebalanceIdIsRejected() {
+        ListRebalanceProgressRequest request =
+                new ListRebalanceProgressRequest().setRebalanceId("id").setIncludeHistory(true);
+        assertThatThrownBy(
+                        () ->
+                                FLUSS_CLUSTER_EXTENSION
+                                        .newCoordinatorClient()
+                                        .listRebalanceProgress(request)
+                                        .get())
+                .rootCause()
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("cannot be combined with rebalance_id");
+    }
+
+    @Test
+    void testListAllRebalances() throws Exception {
         String dbName = "db-rebalance-list-summary";
         admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
 
@@ -367,7 +384,7 @@ public class RebalanceITCase {
         // no rebalance has happened yet for this admin session; the summary list may still
         // contain entries left over by other test methods sharing this cluster, so just make
         // sure the call succeeds without asserting emptiness here.
-        admin.listRebalances().get();
+        admin.listAllRebalances().get();
 
         // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
         String rebalanceId =
@@ -385,7 +402,7 @@ public class RebalanceITCase {
                     assertThat(progressOpt.get().status()).isEqualTo(RebalanceStatus.COMPLETED);
                 });
 
-        List<RebalanceInfo> rebalanceInfos = admin.listRebalances().get();
+        List<RebalanceInfo> rebalanceInfos = admin.listAllRebalances().get();
         // the just-completed rebalance is still the "current" one, so it must be first.
         assertThat(rebalanceInfos).isNotEmpty();
         RebalanceInfo info = rebalanceInfos.get(0);

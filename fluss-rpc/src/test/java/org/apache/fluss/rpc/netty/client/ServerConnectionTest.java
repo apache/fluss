@@ -39,6 +39,7 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
@@ -294,6 +295,39 @@ public class ServerConnectionTest {
                                         .get())
                 .rootCause()
                 .isInstanceOf(DisconnectException.class);
+    }
+
+    @Test
+    void testRejectRebalanceHistoryForOldServer() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            connection.validateVersionCompatibility(
+                    ApiKeys.LIST_REBALANCE_PROGRESS,
+                    (short) 0,
+                    new ListRebalanceProgressRequest().setRebalanceId("id"));
+            ListRebalanceProgressRequest historyRequest =
+                    new ListRebalanceProgressRequest().setIncludeHistory(true);
+            connection.validateVersionCompatibility(
+                    ApiKeys.LIST_REBALANCE_PROGRESS, (short) 1, historyRequest);
+
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.LIST_REBALANCE_PROGRESS,
+                                            (short) 0,
+                                            historyRequest))
+                    .isInstanceOf(UnsupportedVersionException.class)
+                    .hasMessageContaining("requires LIST_REBALANCE_PROGRESS version 1 or newer")
+                    .hasMessageContaining("negotiated version 0");
+        } finally {
+            connection.close().get();
+        }
     }
 
     @Test

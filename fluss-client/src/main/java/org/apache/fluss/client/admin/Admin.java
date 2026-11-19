@@ -807,14 +807,15 @@ public interface Admin extends AutoCloseable {
     CompletableFuture<String> rebalance(List<GoalType> priorityGoals);
 
     /**
-     * List the rebalance progress. A rebalance id from the retained history of finished rebalances
-     * (see {@link #listRebalances()}) is served from that history.
+     * List the rebalance progress of the most recent rebalance task, running or finished. The
+     * per-bucket plan and progress are kept only for that task. Older finished tasks are known only
+     * by their summary (see {@link #listAllRebalances()}).
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
-     *   <li>{@link NoRebalanceInProgressException} If the input rebalanceId is neither the current
-     *       rebalance task nor in the retained history.
+     *   <li>{@link NoRebalanceInProgressException} If the input rebalanceId is not the id of the
+     *       most recent rebalance task.
      * </ul>
      *
      * @param rebalanceId the rebalance id to list progress, if it is null means list the in
@@ -842,17 +843,18 @@ public interface Admin extends AutoCloseable {
     /**
      * List a summary of the known rebalance tasks. The latest rebalance, running or finished, is
      * listed first. Older finished tasks follow, newest first, limited to a bounded history
-     * (currently the 10 most recent). A task that has aged out of the history is no longer known to
-     * {@link #listRebalanceProgress(String)} either.
+     * (currently the 10 most recent). The history keeps the summary only: {@link
+     * #listRebalanceProgress(String)} serves the per-bucket detail of the latest rebalance alone.
      *
      * <ul>
      *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
      *       permissions.
+     *   <li>{@link UnsupportedVersionException} If the server does not keep a rebalance history.
      * </ul>
      *
      * @return the rebalance summaries.
      */
-    CompletableFuture<List<RebalanceInfo>> listRebalances();
+    CompletableFuture<List<RebalanceInfo>> listAllRebalances();
 
     // ==================================================================================
     // Producer Offset Management APIs (for Exactly-Once Semantics)

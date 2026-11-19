@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -922,7 +923,9 @@ public final class ZkData {
     }
 
     /**
-     * The znode for a single historical rebalance task, keyed by rebalance id. The znode path is:
+     * The znode for the summary of a single finished rebalance task, keyed by rebalance id. It
+     * holds no per-bucket plan, so its size does not grow with the size of the rebalance. The znode
+     * path is:
      *
      * <p>/cluster/rebalance_history/[rebalanceId]
      */
@@ -932,14 +935,14 @@ public final class ZkData {
             return RebalanceHistoryZNode.path() + "/" + rebalanceId;
         }
 
-        /** Encodes a history entry; it uses the same JSON format as {@link RebalanceZNode}. */
-        public static byte[] encode(RebalanceTask rebalanceTask) {
-            return RebalanceZNode.encode(rebalanceTask);
+        /** Encodes a history entry. */
+        public static byte[] encode(RebalanceInfo rebalanceInfo) {
+            return JsonSerdeUtils.writeValueAsBytes(rebalanceInfo, RebalanceInfoJsonSerde.INSTANCE);
         }
 
         /** Decodes a history entry written by {@link #encode}. */
-        public static RebalanceTask decode(byte[] json) {
-            return RebalanceZNode.decode(json);
+        public static RebalanceInfo decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceInfoJsonSerde.INSTANCE);
         }
     }
 

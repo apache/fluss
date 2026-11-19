@@ -102,7 +102,6 @@ import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
-import org.apache.fluss.rpc.messages.ListRebalancesRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
@@ -991,9 +990,11 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<List<RebalanceInfo>> listRebalances() {
-        ListRebalancesRequest request = new ListRebalancesRequest();
-        return gateway.listRebalances(request).thenApply(ClientRpcMessageUtils::toRebalanceInfos);
+    public CompletableFuture<List<RebalanceInfo>> listAllRebalances() {
+        ListRebalanceProgressRequest request =
+                new ListRebalanceProgressRequest().setIncludeHistory(true);
+        return gateway.listRebalanceProgress(request)
+                .thenApply(ClientRpcMessageUtils::toRebalanceInfos);
     }
 
     // ==================================================================================

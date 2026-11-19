@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.cluster.rebalance.RebalanceInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlan;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
@@ -72,6 +73,9 @@ public class RebalanceTask {
     /** The time when this rebalance task reached a final status, or {@code -1} if unset. */
     private final long completedAtMs;
 
+    /** Why the first failed bucket was given up on; null unless the task failed. */
+    private final @Nullable String failureReason;
+
     public RebalanceTask(
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
@@ -101,12 +105,13 @@ public class RebalanceTask {
                 canceledBuckets,
                 Collections.emptyMap(),
                 -1,
-                -1);
+                -1,
+                null);
     }
 
     /**
-     * Creates a task with per-bucket final statuses and timestamps. A bucket missing from {@code
-     * bucketStatuses} has the task status.
+     * Creates a task with per-bucket final statuses, timestamps and the failure reason. A bucket
+     * missing from {@code bucketStatuses} has the task status.
      */
     public RebalanceTask(
             String rebalanceId,
@@ -116,8 +121,10 @@ public class RebalanceTask {
             Set<TableBucket> canceledBuckets,
             Map<TableBucket, RebalanceStatus> bucketStatuses,
             long startedAtMs,
-            long completedAtMs) {
+            long completedAtMs,
+            @Nullable String failureReason) {
         this.rebalanceId = rebalanceId;
+        this.failureReason = failureReason;
         this.rebalanceStatus = rebalanceStatus;
         this.cancelRequested = cancelRequested;
         this.canceledBuckets = new HashSet<>(canceledBuckets);
@@ -191,6 +198,17 @@ public class RebalanceTask {
         return completedAtMs;
     }
 
+    /** Why the first failed bucket was given up on, or null if the task did not fail. */
+    public @Nullable String getFailureReason() {
+        return failureReason;
+    }
+
+    /** Returns the summary of this task: everything except the per-bucket plan and statuses. */
+    public RebalanceInfo toRebalanceInfo() {
+        return new RebalanceInfo(
+                rebalanceId, rebalanceStatus, startedAtMs, completedAtMs, failureReason);
+    }
+
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
         return planForBuckets;
     }
@@ -240,6 +258,9 @@ public class RebalanceTask {
                 + startedAtMs
                 + ", completedAtMs="
                 + completedAtMs
+                + ", failureReason='"
+                + failureReason
+                + '\''
                 + '}';
     }
 
@@ -256,6 +277,7 @@ public class RebalanceTask {
         return cancelRequested == that.cancelRequested
                 && startedAtMs == that.startedAtMs
                 && completedAtMs == that.completedAtMs
+                && Objects.equals(failureReason, that.failureReason)
                 && Objects.equals(bucketStatuses, that.bucketStatuses)
                 && rebalanceStatus == that.rebalanceStatus
                 && Objects.equals(rebalanceId, that.rebalanceId)
@@ -276,6 +298,7 @@ public class RebalanceTask {
                 planForBucketsOfPartitionedTable,
                 bucketStatuses,
                 startedAtMs,
-                completedAtMs);
+                completedAtMs,
+                failureReason);
     }
 }
