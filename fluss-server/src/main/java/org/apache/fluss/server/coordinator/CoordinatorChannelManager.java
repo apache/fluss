@@ -20,8 +20,10 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
@@ -50,6 +52,7 @@ import org.apache.fluss.server.coordinator.channel.QueueItem;
 import org.apache.fluss.server.coordinator.channel.TabletServerChannelState;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.utils.RpcGatewayManager;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -63,6 +66,7 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
@@ -84,6 +88,7 @@ public class CoordinatorChannelManager {
 
     private final IntSupplier epochSupplier;
     private final Configuration conf;
+    private final long controlRequestTimeoutMs;
     private final MetricGroup coordinatorMetricGroup;
 
     private final Object channelLock = new Object();
@@ -97,6 +102,8 @@ public class CoordinatorChannelManager {
         this.rpcGatewayManager = new RpcGatewayManager<>(rpcClient, TabletServerGateway.class);
         this.epochSupplier = epochSupplier;
         this.conf = conf;
+        this.controlRequestTimeoutMs =
+                conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT).toMillis();
         this.coordinatorMetricGroup = coordinatorMetricGroup;
     }
 
@@ -357,12 +364,17 @@ public class CoordinatorChannelManager {
     /** Sends a worker-side asynchronous recovery query to the matching current leader. */
     public CompletableFuture<NotifyLeaderAndIsrResponse> bulkLoadRestore(
             int leader, NotifyLeaderAndIsrRequest request) {
-        return getTabletServerGateway(leader)
-                .orElseThrow(
-                        () ->
-                                new NotLeaderOrFollowerException(
-                                        "BulkLoad bucket leader is unavailable."))
-                .notifyLeaderAndIsr(request);
+        TabletServerGateway gateway =
+                getTabletServerGateway(leader)
+                        .orElseThrow(
+                                () ->
+                                        new NotLeaderOrFollowerException(
+                                                "BulkLoad bucket leader is unavailable."));
+        return FutureUtils.orTimeout(
+                gateway.notifyLeaderAndIsr(request),
+                controlRequestTimeoutMs,
+                TimeUnit.MILLISECONDS,
+                "Timed out waiting for the BulkLoad recovery notification response.");
     }
 
     /** Reads the current leader LEO for a per-bucket BulkLoad allocation on a worker thread. */
@@ -382,8 +394,16 @@ public class CoordinatorChannelManager {
         if (bucket.getPartitionId() != null) {
             request.setPartitionId(bucket.getPartitionId());
         }
-        PbListOffsetsRespForBucket response =
-                gateway.listOffsets(request).get().getBucketsRespAt(0);
+        PbListOffsetsRespForBucket response;
+        try {
+            response =
+                    gateway.listOffsets(request)
+                            .get(controlRequestTimeoutMs, TimeUnit.MILLISECONDS)
+                            .getBucketsRespAt(0);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new TimeoutException(
+                    "Timed out reading the leader WAL end offset for " + bucket, e);
+        }
         if (response.hasErrorCode() && response.getErrorCode() != 0) {
             throw Errors.forCode(response.getErrorCode())
                     .exception(response.hasErrorMessage() ? response.getErrorMessage() : null);
