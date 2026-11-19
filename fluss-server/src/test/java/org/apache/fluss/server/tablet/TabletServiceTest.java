@@ -17,7 +17,11 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
@@ -29,8 +33,11 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
@@ -38,7 +45,19 @@ import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
+import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.rpc.netty.client.NettyClient;
+import org.apache.fluss.rpc.netty.server.BucketRequestExecution;
+import org.apache.fluss.rpc.netty.server.NettyServer;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -54,11 +73,16 @@ import org.apache.fluss.server.replica.ReplicaTestBase;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -71,6 +95,13 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -286,6 +317,163 @@ class TabletServiceTest extends ReplicaTestBase {
                 service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 20L));
         assertCommitResult(next, Errors.NONE);
         assertStoredOffset(GROUP_ID, 20L);
+    }
+
+    @Test
+    void testPreparedPutKeepsLocalResultsAcrossInputRelease() throws Exception {
+        TabletService service = createService();
+        service.setCurrentSession(
+                new Session(
+                        ApiKeys.PUT_KV.highestSupportedVersion,
+                        "CLIENT",
+                        false,
+                        InetAddress.getLoopbackAddress(),
+                        FlussPrincipal.ANONYMOUS));
+        TableBucket first = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        TableBucket second = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(first.getTableId(), DATA1_TABLE_PATH_PK, first.getBucket());
+        makeKvTableAsLeader(second.getTableId(), DATA1_TABLE_PATH_PK, second.getBucket());
+        PutKvRequest encoded =
+                newPutKvRequest(
+                        first.getTableId(),
+                        first.getBucket(),
+                        1,
+                        genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE));
+        encoded.addBucketsReq()
+                .setBucketId(second.getBucket())
+                .setRecords(encoded.getBucketsReqAt(0).getRecords());
+        byte[] backing = new byte[encoded.totalSize()];
+        ByteBuf frame = Unpooled.wrappedBuffer(backing).clear();
+        BucketRequestExecution execution;
+        try {
+            encoded.writeTo(frame);
+            PutKvRequest parsed = new PutKvRequest();
+            parsed.parseFrom(frame, frame.readableBytes());
+            execution = service.prepareBucketRequest(parsed);
+            assertThat(execution.buckets()).containsExactly(first, second);
+            execution.execute(second);
+            execution.detachInputs();
+        } finally {
+            frame.release();
+        }
+        Arrays.fill(backing, (byte) 99);
+        assertThat(replicaManager.getReplicaOrException(first).getLogTablet().localLogEndOffset())
+                .isZero();
+        assertThat(replicaManager.getReplicaOrException(second).getLogTablet().localLogEndOffset())
+                .isEqualTo(8);
+        execution.execute(first);
+        byte[] key =
+                new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0})
+                        .encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(0).f0));
+        List<byte[]> keys = Collections.singletonList(key);
+        ByteArraySlice expected =
+                replicaManager.getReplicaOrException(second).lookupsFromBufferOrKv(keys).get(0);
+        ByteArraySlice resumed =
+                replicaManager.getReplicaOrException(first).lookupsFromBufferOrKv(keys).get(0);
+        assertThat(resumed.toByteArray()).isEqualTo(expected.toByteArray());
+
+        PutKvResponse response = (PutKvResponse) execution.finish().get(5, TimeUnit.SECONDS);
+        assertThat(response.getBucketsRespsList())
+                .hasSize(2)
+                .allSatisfy(
+                        result -> {
+                            assertThat(result.hasErrorCode()).isFalse();
+                            assertThat(result.getLogEndOffset()).isEqualTo(8);
+                        });
+        assertThat(replicaManager.getReplicaOrException(second).getLogTablet().localLogEndOffset())
+                .isEqualTo(8);
+    }
+
+    @ParameterizedTest
+    @ResourceLock(Resources.SYSTEM_PROPERTIES)
+    @ValueSource(strings = {"legacy", "bucket-handoff"})
+    void testMultiBucketWriteAndReadsOverTcp(String schedulingMode) throws Exception {
+        TabletService service = createService();
+        for (int bucket = 0; bucket < 2; bucket++) {
+            makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, bucket);
+        }
+        Configuration rpcConfig = new Configuration();
+        rpcConfig.setInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 2);
+        rpcConfig.setInt(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
+        MetricGroup metrics = NOPMetricsGroup.newInstance();
+        String property = "fluss.poc.connectionScheduling";
+        String previous = System.setProperty(property, schedulingMode);
+        try (NettyServer server =
+                        new NettyServer(
+                                rpcConfig,
+                                Collections.singletonList(new Endpoint("localhost", 0, "CLIENT")),
+                                service,
+                                metrics,
+                                RequestsMetrics.createTabletServerRequestMetrics(metrics));
+                NettyClient client =
+                        new NettyClient(rpcConfig, TestingClientMetricGroup.newInstance())) {
+            server.start();
+            ServerNode node =
+                    new ServerNode(
+                            TABLET_SERVER_ID,
+                            "localhost",
+                            server.getBindEndpoints().get(0).getPort(),
+                            ServerType.TABLET_SERVER);
+            PutKvRequest write =
+                    newPutKvRequest(
+                            DATA1_TABLE_ID_PK, 0, -1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE));
+            write.addBucketsReq().setBucketId(1).setRecords(write.getBucketsReqAt(0).getRecords());
+            PutKvResponse written =
+                    (PutKvResponse)
+                            client.sendRequest(node, ApiKeys.PUT_KV, write)
+                                    .get(10, TimeUnit.SECONDS);
+            assertThat(written.getBucketsRespsList())
+                    .hasSize(2)
+                    .allSatisfy(
+                            bucket -> {
+                                assertThat(bucket.hasErrorCode()).isFalse();
+                                assertThat(bucket.getLogEndOffset()).isEqualTo(8);
+                            });
+
+            CompactedKeyEncoder encoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+            byte[] found = encoder.encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(0).f0));
+            byte[] deleted = encoder.encodeKey(row(DATA_1_WITH_KEY_AND_VALUE.get(2).f0));
+            LookupRequest lookup = new LookupRequest().setTableId(DATA1_TABLE_ID_PK);
+            PrefixLookupRequest prefix = new PrefixLookupRequest().setTableId(DATA1_TABLE_ID_PK);
+            for (int bucket = 0; bucket < 2; bucket++) {
+                PbLookupReqForBucket point = lookup.addBucketsReq().setBucketId(bucket);
+                point.addKey(found);
+                point.addKey(deleted);
+                prefix.addBucketsReq().setBucketId(bucket).addKey(found);
+            }
+
+            LookupResponse points =
+                    (LookupResponse)
+                            client.sendRequest(node, ApiKeys.LOOKUP, lookup)
+                                    .get(10, TimeUnit.SECONDS);
+            assertThat(points.getBucketsRespsList())
+                    .hasSize(2)
+                    .allSatisfy(
+                            bucket -> {
+                                assertThat(bucket.hasErrorCode()).isFalse();
+                                assertThat(bucket.getValuesCount()).isEqualTo(2);
+                                assertThat(bucket.getValueAt(0).hasValues()).isTrue();
+                                assertThat(bucket.getValueAt(1).hasValues()).isFalse();
+                            });
+            PrefixLookupResponse prefixes =
+                    (PrefixLookupResponse)
+                            client.sendRequest(node, ApiKeys.PREFIX_LOOKUP, prefix)
+                                    .get(10, TimeUnit.SECONDS);
+            assertThat(prefixes.getBucketsRespsList())
+                    .hasSize(2)
+                    .allSatisfy(
+                            bucket -> {
+                                assertThat(bucket.hasErrorCode()).isFalse();
+                                assertThat(bucket.getValueListsCount()).isOne();
+                                assertThat(bucket.getValueListAt(0).getValuesCount()).isOne();
+                            });
+        } finally {
+            if (previous == null) {
+                System.clearProperty(property);
+            } else {
+                System.setProperty(property, previous);
+            }
+        }
     }
 
     private TabletService createInitializedService() throws Exception {

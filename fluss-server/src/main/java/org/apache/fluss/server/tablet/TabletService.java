@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -45,6 +46,7 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.entity.TableStatsResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
@@ -82,6 +84,7 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
@@ -95,6 +98,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.BucketRequestExecution;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -143,6 +147,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -429,26 +434,10 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
-        authorizeTable(WRITE, request.getTableId());
-        long tableId = request.getTableId();
         Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
-        collectRoutingErrors(
-                request.getBucketsReqsList(),
-                pbBucket ->
-                        new TableBucket(
-                                tableId,
-                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
-                                pbBucket.getBucketId()),
-                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
-                PutKvResultForBucket::new,
-                routingErrors);
-
-        List<PutKvDataForBucket> putKvData = toPutKvDataForBuckets(request);
-        if (!routingErrors.isEmpty()) {
-            putKvData.removeIf(bucketData -> routingErrors.containsKey(bucketData.tableBucket()));
-            if (putKvData.isEmpty()) {
-                return CompletableFuture.completedFuture(makePutKvResponse(routingErrors.values()));
-            }
+        List<PutKvDataForBucket> putKvData = preparePutKv(request, routingErrors);
+        if (!routingErrors.isEmpty() && putKvData.isEmpty()) {
+            return CompletableFuture.completedFuture(makePutKvResponse(routingErrors.values()));
         }
 
         // Get mergeMode from request, default to DEFAULT if not set
@@ -486,10 +475,215 @@ public final class TabletService extends RpcServiceBase
         return response;
     }
 
-    @Override
-    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+    private List<PutKvDataForBucket> preparePutKv(
+            PutKvRequest request, Map<TableBucket, PutKvResultForBucket> routingErrors) {
+        authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
-        Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
+        collectRoutingErrors(
+                request.getBucketsReqsList(),
+                pbBucket ->
+                        new TableBucket(
+                                tableId,
+                                pbBucket.hasPartitionId() ? pbBucket.getPartitionId() : null,
+                                pbBucket.getBucketId()),
+                pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
+                PutKvResultForBucket::new,
+                routingErrors);
+
+        List<PutKvDataForBucket> putKvData = toPutKvDataForBuckets(request);
+        putKvData.removeIf(bucketData -> routingErrors.containsKey(bucketData.tableBucket()));
+        return putKvData;
+    }
+
+    @Override
+    public BucketRequestExecution prepareBucketRequest(ApiMessage message) {
+        if (message instanceof LookupRequest) {
+            LookupRequest lookup = (LookupRequest) message;
+            if (hasHistoricalLookup(lookup)
+                    || (lookup.hasInsertIfNotExists() && lookup.isInsertIfNotExists())) {
+                return null;
+            }
+            Map<TableBucket, LookupResultForBucket> errors = new HashMap<>();
+            Map<TableBucket, List<byte[]>> keys = prepareLookup(lookup, errors);
+            short version = currentSession().getApiVersion();
+            return TabletService.<LookupResultForBucket>prepareRead(
+                    keys,
+                    (bucket, input, result) ->
+                            replicaManager.lookups(
+                                    Collections.singletonMap(bucket, input), version, result),
+                    results -> makeLookupResponse(results, errors));
+        }
+        if (message instanceof PrefixLookupRequest) {
+            Map<TableBucket, PrefixLookupResultForBucket> errors = new HashMap<>();
+            Map<TableBucket, List<byte[]>> keys =
+                    preparePrefixLookup((PrefixLookupRequest) message, errors);
+            short version = currentSession().getApiVersion();
+            return TabletService.<PrefixLookupResultForBucket>prepareRead(
+                    keys,
+                    (bucket, input, result) ->
+                            replicaManager.prefixLookups(
+                                    Collections.singletonMap(bucket, input), version, result),
+                    results -> makePrefixLookupResponse(results, errors));
+        }
+        if (!(message instanceof PutKvRequest) || hasHistoricalPut((PutKvRequest) message)) {
+            return null;
+        }
+        PutKvRequest request = (PutKvRequest) message;
+        Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
+        List<PutKvDataForBucket> inputs = preparePutKv(request, routingErrors);
+        int acks = request.getAcks();
+        int timeoutMs = request.getTimeoutMs();
+        int[] targetColumns;
+        MergeMode mode;
+        if (inputs.isEmpty() && !routingErrors.isEmpty()) {
+            targetColumns = null;
+            mode = MergeMode.DEFAULT;
+        } else {
+            mode =
+                    request.hasAggMode()
+                            ? MergeMode.fromValue(request.getAggMode())
+                            : MergeMode.DEFAULT;
+            targetColumns = getTargetColumns(request);
+            replicaManager.validatePutKv(acks);
+        }
+        short apiVersion = currentSession().getApiVersion();
+        Map<TableBucket, PbPutKvReqForBucket> frames = new HashMap<>();
+        for (PbPutKvReqForBucket bucket : request.getBucketsReqsList()) {
+            TableBucket key =
+                    new TableBucket(
+                            request.getTableId(),
+                            bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                            bucket.getBucketId());
+            if (!routingErrors.containsKey(key)) {
+                frames.put(key, bucket);
+            }
+        }
+        List<TableBucket> buckets = new ArrayList<>(inputs.size());
+        Map<TableBucket, KvRecordBatch> records = new HashMap<>();
+        for (PutKvDataForBucket input : inputs) {
+            buckets.add(input.tableBucket());
+            records.put(input.tableBucket(), input.records());
+        }
+        return new BucketRequestExecution() {
+            private final Map<TableBucket, PutKvResultForBucket> results = new HashMap<>();
+
+            @Override
+            public List<TableBucket> buckets() {
+                return buckets;
+            }
+
+            @Override
+            public void execute(TableBucket bucket) {
+                KvRecordBatch batch = records.remove(bucket);
+                frames.remove(bucket);
+                results.put(
+                        bucket,
+                        replicaManager.putToLocalKv(
+                                bucket, batch, targetColumns, mode, acks, apiVersion));
+            }
+
+            @Override
+            public void detachInputs() {
+                frames.forEach(
+                        (bucket, frame) -> {
+                            try {
+                                records.put(
+                                        bucket,
+                                        DefaultKvRecordBatch.pointToBytes(frame.getRecords()));
+                            } catch (RuntimeException e) {
+                                records.remove(bucket);
+                                results.put(
+                                        bucket,
+                                        new PutKvResultForBucket(
+                                                bucket, ApiError.fromThrowable(e)));
+                            }
+                        });
+                frames.clear();
+            }
+
+            @Override
+            public boolean hasInput(TableBucket bucket) {
+                return records.containsKey(bucket);
+            }
+
+            @Override
+            public CompletableFuture<PutKvResponse> finish() {
+                CompletableFuture<PutKvResponse> response = new CompletableFuture<>();
+                replicaManager.completePutKv(
+                        timeoutMs,
+                        acks,
+                        buckets.size(),
+                        results,
+                        values ->
+                                response.complete(
+                                        makePutKvResponse(
+                                                withRoutingErrors(values, routingErrors))));
+                return response;
+            }
+        };
+    }
+
+    @FunctionalInterface
+    private interface BucketRead<T> {
+        void read(TableBucket bucket, List<byte[]> keys, Consumer<Map<TableBucket, T>> result);
+    }
+
+    private static <T> BucketRequestExecution prepareRead(
+            Map<TableBucket, List<byte[]>> keys,
+            BucketRead<T> read,
+            Function<Map<TableBucket, T>, ? extends ApiMessage> response) {
+        List<TableBucket> buckets = new ArrayList<>(keys.keySet());
+        return new BucketRequestExecution() {
+            private final Map<TableBucket, T> results = new HashMap<>();
+
+            @Override
+            public List<TableBucket> buckets() {
+                return buckets;
+            }
+
+            @Override
+            public boolean isRead() {
+                return true;
+            }
+
+            @Override
+            public void execute(TableBucket bucket) {
+                read.read(bucket, keys.remove(bucket), results::putAll);
+            }
+
+            @Override
+            public void detachInputs() {
+                // The decoder already owns the key arrays.
+            }
+
+            @Override
+            public boolean hasInput(TableBucket bucket) {
+                return keys.containsKey(bucket);
+            }
+
+            @Override
+            public CompletableFuture<? extends ApiMessage> finish() {
+                return CompletableFuture.completedFuture(response.apply(results));
+            }
+        };
+    }
+
+    private Map<TableBucket, List<byte[]>> prepareLookup(
+            LookupRequest request, Map<TableBucket, LookupResultForBucket> errors) {
+        collectLookupRoutingErrors(request, errors);
+        return authorizeLookup(request, errors);
+    }
+
+    private Map<TableBucket, List<byte[]>> authorizeLookup(
+            LookupRequest request, Map<TableBucket, LookupResultForBucket> errors) {
+        Map<TableBucket, List<byte[]>> keys = toLookupData(request);
+        keys.keySet().removeAll(errors.keySet());
+        return authorizeRequestData(READ, keys, errors, LookupResultForBucket::new);
+    }
+
+    private void collectLookupRoutingErrors(
+            LookupRequest request, Map<TableBucket, LookupResultForBucket> errors) {
+        long tableId = request.getTableId();
         collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
@@ -499,7 +693,13 @@ public final class TabletService extends RpcServiceBase
                                 pbBucket.getBucketId()),
                 pbBucket -> pbBucket.hasRoutingBucketCount() ? pbBucket.getRoutingBucketCount() : 0,
                 LookupResultForBucket::new,
-                errorResponseMap);
+                errors);
+    }
+
+    @Override
+    public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+        Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
+        collectLookupRoutingErrors(request, errorResponseMap);
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
 
         if (request.hasInsertIfNotExists() && request.isInsertIfNotExists()) {
@@ -538,14 +738,8 @@ public final class TabletService extends RpcServiceBase
                                         makeLookupResponse(
                                                 withRoutingErrors(value, errorResponseMap))));
             } else {
-                Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
-                normalLookupData.keySet().removeAll(errorResponseMap.keySet());
                 Map<TableBucket, List<byte[]>> interesting =
-                        authorizeRequestData(
-                                READ,
-                                normalLookupData,
-                                errorResponseMap,
-                                LookupResultForBucket::new);
+                        authorizeLookup(request, errorResponseMap);
                 if (interesting.isEmpty()) {
                     return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
                 }
@@ -558,11 +752,11 @@ public final class TabletService extends RpcServiceBase
         return response;
     }
 
-    @Override
-    public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+    private Map<TableBucket, List<byte[]>> preparePrefixLookup(
+            PrefixLookupRequest request,
+            Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap) {
         long tableId = request.getTableId();
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
-        Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         collectRoutingErrors(
                 request.getBucketsReqsList(),
                 pbBucket ->
@@ -574,16 +768,21 @@ public final class TabletService extends RpcServiceBase
                 PrefixLookupResultForBucket::new,
                 errorResponseMap);
         prefixLookupData.keySet().removeAll(errorResponseMap.keySet());
-        Map<TableBucket, List<byte[]>> interesting =
-                authorizeRequestData(
-                        READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
+        return authorizeRequestData(
+                READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
+    }
+
+    @Override
+    public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
+        Map<TableBucket, List<byte[]>> interesting = preparePrefixLookup(request, errorResponseMap);
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap));
         }
 
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
-                prefixLookupData,
+                interesting,
                 currentSession().getApiVersion(),
                 value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
@@ -1270,7 +1469,7 @@ public final class TabletService extends RpcServiceBase
             return requestData;
         }
 
-        Map<TableBucket, T> interesting = new HashMap<>();
+        Map<TableBucket, T> interesting = new LinkedHashMap<>();
         Set<Long> filteredTableIds = filterAuthorizedTables(requestData.keySet(), operationType);
         requestData.forEach(
                 (tableBucket, bucketData) -> {
