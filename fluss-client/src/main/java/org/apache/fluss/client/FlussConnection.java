@@ -214,7 +214,14 @@ public final class FlussConnection implements Connection {
         }
 
         if (lookupClient != null) {
-            lookupClient.close(timeout);
+            // Honor both the caller timeout and client.lookup.close-timeout. The option
+            // defaults to Long.MAX_VALUE so pending lookups still finish unless a shorter
+            // bound is configured or passed in.
+            Duration lookupCloseTimeout = conf.get(ConfigOptions.CLIENT_LOOKUP_CLOSE_TIMEOUT);
+            if (timeout.compareTo(lookupCloseTimeout) < 0) {
+                lookupCloseTimeout = timeout;
+            }
+            lookupClient.close(lookupCloseTimeout);
         }
 
         if (remoteFileDownloader != null) {
