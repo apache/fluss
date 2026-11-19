@@ -621,8 +621,9 @@ pub struct CommitConsumerOffsetsRequest {
     #[prost(message, repeated, tag = "2")]
     pub tables: ::prost::alloc::vec::Vec<PbCommitConsumerOffsetsRequestTable>,
 }
-/// Group validation, owner availability, authorization, and malformed requests use the RPC
-/// ErrorResponse envelope. Offset validation and write failures are reported per bucket.
+/// Group validation, owner availability, authorization, and malformed requests (including
+/// negative offsets) use the RPC ErrorResponse envelope. Metadata-size and write failures are
+/// reported per bucket.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommitConsumerOffsetsResponse {
     /// One result per distinct bucket in the request.
