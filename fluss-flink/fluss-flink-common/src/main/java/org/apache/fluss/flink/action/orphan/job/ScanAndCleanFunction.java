@@ -20,11 +20,13 @@ package org.apache.fluss.flink.action.orphan.job;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
+import org.apache.fluss.flink.action.orphan.fs.FileSystemProbe;
 import org.apache.fluss.flink.action.orphan.fs.SafeDeleter;
 import org.apache.fluss.flink.action.orphan.rule.BucketActiveRefs;
 import org.apache.fluss.flink.action.orphan.rule.Decision;
 import org.apache.fluss.flink.action.orphan.rule.FileMeta;
 import org.apache.fluss.flink.action.orphan.rule.FileRule;
+import org.apache.fluss.flink.action.orphan.rule.MtimePolicy;
 import org.apache.fluss.flink.action.orphan.rule.RuleDispatcher;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
@@ -33,13 +35,12 @@ import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLim
 
 import org.apache.flink.streaming.api.functions.ProcessFunction;
 import org.apache.flink.util.Collector;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Stage 2 of the orphan files cleanup job. Runs at user-configured parallelism (N) and performs
@@ -63,8 +64,6 @@ import java.util.Map;
 public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, CleanStats> {
 
     private static final long serialVersionUID = 1L;
-    private static final Logger LOG = LoggerFactory.getLogger(ScanAndCleanFunction.class);
-
     private final long remoteFsOpRateLimitPerSecond;
     private final Map<String, String> extraConfigs;
 
@@ -147,10 +146,6 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
     private CleanStats processOrphanDirTask(OrphanDirCleanTask task) throws IOException {
         FsPath dirPath = new FsPath(task.dirPath());
         FileSystem fs = dirPath.getFileSystem();
-        remoteFsOpRateLimiter.acquire();
-        if (!fs.exists(dirPath)) {
-            return CleanStats.empty();
-        }
 
         SafeDeleter safeDeleter = createSafeDeleter(fs, task.dryRun());
         RuleDispatcher dispatcher = new RuleDispatcher(task.allowDeleteManifest());
@@ -161,15 +156,22 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
         long deleteFailures = 0L;
         long bytesReclaimed = 0L;
 
-        remoteFsOpRateLimiter.acquire();
-        FileStatus rootStatus = fs.getFileStatus(dirPath);
+        Optional<FileStatus> rootStatusResult =
+                FileSystemProbe.getFileStatus(fs, dirPath, remoteFsOpRateLimiter);
+        if (!rootStatusResult.isPresent()) {
+            return CleanStats.empty();
+        }
+        FileStatus rootStatus = rootStatusResult.get();
         Deque<DirVisit> stack = new ArrayDeque<DirVisit>();
         stack.push(
                 new DirVisit(
                         dirPath,
                         false,
                         rootStatus.isDir()
-                                && rootStatus.getModificationTime() < task.cutoffMillis()));
+                                && MtimePolicy.evaluateInactiveFile(
+                                                rootStatus.getModificationTime(),
+                                                task.cutoffMillis())
+                                        == Decision.DELETE));
         while (!stack.isEmpty()) {
             DirVisit visit = stack.pop();
             if (visit.postOrder) {
@@ -179,17 +181,12 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
                 }
                 continue;
             }
-            FileStatus[] children;
-            try {
-                remoteFsOpRateLimiter.acquire();
-                children = fs.listStatus(visit.dir);
-            } catch (IOException e) {
-                LOG.warn("Failed to list directory: {}", visit.dir, e);
+            Optional<FileStatus[]> listing =
+                    FileSystemProbe.listStatus(fs, visit.dir, remoteFsOpRateLimiter);
+            if (!listing.isPresent()) {
                 continue;
             }
-            if (children == null) {
-                continue;
-            }
+            FileStatus[] children = listing.get();
             stack.push(new DirVisit(visit.dir, true, visit.oldEnough));
             for (FileStatus child : children) {
                 FsPath childPath = child.getPath();
@@ -198,11 +195,16 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
                             new DirVisit(
                                     childPath,
                                     false,
-                                    child.getModificationTime() < task.cutoffMillis()));
+                                    MtimePolicy.evaluateInactiveFile(
+                                                    child.getModificationTime(),
+                                                    task.cutoffMillis())
+                                            == Decision.DELETE));
                     continue;
                 }
                 scanned++;
-                if (child.getModificationTime() >= task.cutoffMillis()) {
+                if (MtimePolicy.evaluateInactiveFile(
+                                child.getModificationTime(), task.cutoffMillis())
+                        != Decision.DELETE) {
                     continue;
                 }
                 FileMeta meta =

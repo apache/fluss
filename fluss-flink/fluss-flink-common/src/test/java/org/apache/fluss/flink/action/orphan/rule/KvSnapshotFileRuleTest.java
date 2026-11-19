@@ -64,6 +64,14 @@ class KvSnapshotFileRuleTest {
     }
 
     @Test
+    void keepsInactiveSnapshotFileWhenMtimeIsUnavailable() {
+        FileMeta file = file("/kv/db/t-1/0/snap-5/001.sst", Long.MAX_VALUE);
+
+        assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
+                .isEqualTo(Decision.MTIME_UNAVAILABLE);
+    }
+
+    @Test
     void skipsUnknownFileNameInsideSnapshotDirectory() {
         FileMeta file = file("/kv/db/t-1/0/snap-5/data.bloom", NOW - 2 * DAY_MS);
 
