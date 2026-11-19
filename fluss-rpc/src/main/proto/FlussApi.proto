@@ -259,7 +259,7 @@ message DescribeClusterRequest {
 
 message DescribeClusterResponse {
   optional PbServerNode coordinator_server = 1;
-  // Live tablet servers with addresses, racks and server tags.
+  // Live tablet servers with addresses, racks, server tags and software versions.
   repeated PbServerNode tablet_servers = 2;
   // Also includes offline servers with assigned replicas. Missing loads are not zero counts.
   repeated PbTabletServerLoad tablet_server_loads = 3;
@@ -503,7 +503,7 @@ message GetConsumerOffsetsResponse {
   repeated PbGetConsumerOffsetsResponseTable tables = 1;
 }
 
-// Delete consumer offsets request and response.
+// Delete committed offsets for selected buckets. Requires Group WRITE; no source-table permission.
 message DeleteConsumerOffsetsRequest {
   required string group_id = 1;
   // An empty list, or tables containing no buckets, is a valid no-op and produces an empty
@@ -518,9 +518,10 @@ message DeleteConsumerOffsetsResponse {
   repeated PbDeleteConsumerOffsetsResponseTable tables = 1;
 }
 
-// Lists consumer groups currently owned by the tablet server receiving this request. This is not
-// a cluster-wide listing; callers that need a cluster-wide view must query every tablet server and
-// merge the responses.
+// Lists consumer groups currently owned by the tablet server receiving this request. Cluster
+// DESCRIBE grants visibility to all locally owned groups; otherwise only groups with Group
+// DESCRIBE are returned. This is not a cluster-wide listing; callers that need a cluster-wide
+// view must query every tablet server and merge the responses.
 message ListConsumerGroupsRequest {}
 
 // All failures are returned through the RPC ErrorResponse envelope.
@@ -528,7 +529,8 @@ message ListConsumerGroupsResponse {
   repeated PbListedGroup groups = 1;
 }
 
-// Delete consumer groups request and response.
+// Deletes consumer-group metadata and all committed offsets. A later offset commit may
+// recreate a deleted group. No source-table permission is required.
 message DeleteConsumerGroupsRequest {
   // An empty list is a valid no-op and produces an empty successful response.
   repeated string groups = 1;
@@ -545,6 +547,8 @@ message CommitKvSnapshotRequest {
   required bytes completed_snapshot = 1;
   required int32 coordinator_epoch = 2;
   required int32 bucket_leader_epoch = 3;
+  // The recovery snapshot this commit expects to replace (CAS precondition).
+  optional int64 previous_recovery_snapshot_id = 4;
 }
 
 message CommitKvSnapshotResponse {
@@ -1011,6 +1015,8 @@ message PbServerNode {
   optional string listeners = 4;
   optional string rack = 5;
   optional int32 server_tag = 6;
+  // Reported only for live tablet servers in DescribeClusterResponse.
+  optional string software_version = 7;
 }
 
 message PbTableMetadata {
@@ -1032,8 +1038,9 @@ message PbTableMetadata {
   // When present, bucket_count_epoch is also present, including epoch zero.
   optional int32 bucket_count = 10;
 
-  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
-  // trace by: https://github.com/apache/fluss/issues/981
+  // UPDATE_METADATA v1: a deletion applies only to the table instance identified by table_id.
+  // Version 0 uses a sentinel table_id or table_path instead.
+  optional bool deleted = 11;
 }
 
 message PbPartitionMetadata {
@@ -1764,6 +1771,7 @@ message PbUnionReadContext {
   optional PbPredicate partition_scope = 11;
   repeated PbUnionReadLogRange log_ranges = 12;
   // 0: complete captured partitions; 1: one selected bucket, including its lake baseline.
+  // 2: lake snapshot only; no Fluss log ranges are captured.
   optional int32 coverage = 13;
 }
 
@@ -1781,11 +1789,14 @@ message PbUnionReadLogRange {
   repeated string partition_values = 2;
   optional int32 bucket_id = 3;
   optional int32 bucket_count = 4;
-  // 0: no baseline; 1: lake snapshot, start_offset is its matching seam.
+  // 0: no baseline; 1: lake snapshot; 2: persisted KV snapshot.
+  // For either snapshot kind, start_offset is its matching log seam.
   optional int32 baseline = 5;
   // Concrete half-open range; no EARLIEST/LATEST sentinels.
   optional int64 start_offset = 6;
   optional int64 stop_offset = 7;
   // Observed retention lower bound, not a lease.
   optional int64 earliest_offset = 8;
+  // Required for baseline kind 2; absent for other kinds. Scoped to this bucket.
+  optional int64 kv_snapshot_id = 9;
 }

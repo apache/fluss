@@ -61,6 +61,12 @@ public final class ConsumerOffsetSchema {
     /** Sentinel used for non-partitioned tables because primary-key columns cannot be null. */
     public static final long NON_PARTITIONED_PARTITION_ID = -1L;
 
+    /** Sentinel table ID used by group metadata rows. */
+    private static final long GROUP_METADATA_TABLE_ID = -1L;
+
+    /** Sentinel bucket ID used by group metadata rows. */
+    private static final int GROUP_METADATA_BUCKET_ID = -1;
+
     private static final List<String> PRIMARY_KEYS =
             Collections.unmodifiableList(
                     Arrays.asList(
@@ -76,6 +82,12 @@ public final class ConsumerOffsetSchema {
     private static final Schema TABLE_SCHEMA = createTableSchema();
     private static final RowType ROW_TYPE = TABLE_SCHEMA.getRowType();
     private static final DataType[] DATA_TYPES = ROW_TYPE.getChildren().toArray(new DataType[0]);
+
+    /** Encoded prefix for all group metadata rows. Must not be modified. */
+    static final byte[] GROUP_METADATA_PREFIX =
+            KeyEncoder.ofBucketKeyEncoder(
+                            ROW_TYPE, Collections.singletonList(RECORD_TYPE_COLUMN), null)
+                    .encodeKey(GenericRow.of(GROUP_METADATA_RECORD_TYPE));
 
     private final ThreadLocal<CompactedRowEncoder> rowEncoder =
             ThreadLocal.withInitial(() -> new CompactedRowEncoder(DATA_TYPES));
@@ -161,6 +173,30 @@ public final class ConsumerOffsetSchema {
                                 BinaryString.fromString(groupId.getGroupId())));
     }
 
+    /** Encodes the complete primary key of a group metadata row. */
+    public byte[] encodeGroupMetadataKey(GroupId groupId) {
+        return primaryKeyEncoder
+                .get()
+                .encodeKey(
+                        GenericRow.of(
+                                GROUP_METADATA_RECORD_TYPE,
+                                BinaryString.fromString(groupId.getGroupId()),
+                                GROUP_METADATA_TABLE_ID,
+                                NON_PARTITIONED_PARTITION_ID,
+                                GROUP_METADATA_BUCKET_ID));
+    }
+
+    /** Encodes a group metadata row. */
+    public CompactedRow encodeGroupMetadataRow(GroupId groupId) {
+        return encodeOffsetRow(
+                GROUP_METADATA_RECORD_TYPE,
+                groupId,
+                GROUP_METADATA_TABLE_ID,
+                null,
+                GROUP_METADATA_BUCKET_ID,
+                new ConsumerOffsetAndMetadata(-1L, null));
+    }
+
     /** Encodes the complete primary key of an already materialized offset row. */
     byte[] encodeOffsetKey(InternalRow row) {
         return primaryKeyEncoder.get().encodeKey(row);
@@ -172,8 +208,8 @@ public final class ConsumerOffsetSchema {
 
     /** The returned row uses this thread's buffer until its next call to this method. */
     CompactedRow encodeOffsetRow(
-            GroupId groupId,
             int recordType,
+            GroupId groupId,
             long tableId,
             Long partitionId,
             int bucketId,

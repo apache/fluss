@@ -41,6 +41,8 @@ on:
       - 'fluss-rpc/src/main/proto/**'
       - '.github/workflows/rust-build-and-test.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '0 20 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
@@ -50,8 +52,8 @@ defaults:
   run:
     working-directory: fluss-rust
 
-# PRs run on arm64, whose queue stays short at peak hours. Pushes to main run
-# on x86, so a merge that breaks only x86 still shows up there.
+# Runs on arm64, whose queue stays short at peak hours. Main uses the same arch,
+# so PRs restore its caches. x86 runs nightly.
 jobs:
   build-and-unit-test:
     timeout-minutes: 60
@@ -59,7 +61,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+          - ${{ github.event_name == 'schedule' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
           - macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -72,6 +74,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
         run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif --features fluss-rs/kv-snapshot
@@ -83,38 +86,39 @@ jobs:
           RUST_BACKTRACE: full
 
   lake-msrv:
-    name: "Lake MSRV (1.91)"
+    name: "Lake MSRV (1.95)"
     # The development toolchain floats to stable; check the lake package's
     # declared MSRV explicitly without raising the core workspace's MSRV.
     timeout-minutes: 60
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'schedule' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Install the lake MSRV toolchain
-        run: rustup toolchain install 1.91.0 --profile minimal
+        run: rustup toolchain install 1.95.0 --profile minimal
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Check default features on the declared MSRV
-        run: cargo +1.91.0 check -p fluss-lake --locked --all-targets
+        run: cargo +1.95.0 check -p fluss-lake --locked --all-targets
 
       # Compile integration targets without starting Docker or Java services.
       - name: Check all features on the declared MSRV
-        run: cargo +1.91.0 check -p fluss-lake --locked --all-features --all-targets
+        run: cargo +1.95.0 check -p fluss-lake --locked --all-features --all-targets
 
-      - name: Test source preparation on the declared MSRV
-        run: cargo +1.91.0 test -p fluss-lake --locked --lib
+      - name: Test Paimon on the declared MSRV
+        run: cargo +1.95.0 test -p fluss-lake --locked --features paimon --lib
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
 
   proto-up-to-date:
     timeout-minutes: 15
-    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'schedule' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -129,6 +133,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Regenerate protobuf code
         run: ./crates/fluss/regen.sh

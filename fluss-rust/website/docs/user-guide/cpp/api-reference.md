@@ -39,6 +39,7 @@ Complete API reference for the Fluss C++ client.
 | `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
 | `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
 | `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
+| `scanner_log_check_crc`               | `bool`        | `true`               | Check the CRC of fetched log batches, so a corrupted batch fails the scan. Batches the server projected are not checked |
 | `lookup_queue_size`                   | `size_t`      | `25600`              | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
 | `lookup_max_retries`                  | `int32_t`     | `INT32_MAX`          | Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's leader is not a retry, so this is not a lookup timeout |
 | `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling with each retry of that lookup; also before a bucket without a known leader is refreshed again, doubling with each refresh of that bucket and shared by its lookups. ±20% jitter; `0` resends and refreshes immediately |
@@ -203,7 +204,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) -> Result` | Append a batch (fire-and-forget) |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out) -> Result` | Append a batch with write acknowledgment |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteCallback callback) -> Result` | Append a batch with one completion notification |
-| `Flush() -> Result`                                         | Flush all pending writes               |
+| `Flush() -> Result`                                         | Flush all pending writes, without returning the errors of failed writes |
 
 ## `UpsertWriter`
 
@@ -215,7 +216,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `Delete(const GenericRow& row) -> Result`                   | Delete a row by primary key (fire-and-forget) |
 | `Delete(const GenericRow& row, WriteResult& out) -> Result` | Delete a row with write acknowledgment        |
 | `Delete(const GenericRow& row, WriteCallback callback) -> Result` | Delete a row with completion notification |
-| `Flush() -> Result`                                         | Flush all pending operations                  |
+| `Flush() -> Result`                                         | Flush all pending operations, without returning the errors of failed ones |
 
 ## `WriteResult`
 
@@ -543,6 +544,8 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 |---------------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 | `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+| `LookupAsync(const GenericRow& pk_row, uint64_t request_id) const -> Result` | Start a lookup and associate it with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed lookups in completion order |
 
 Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
 
@@ -560,6 +563,61 @@ for (auto& lookup : pending) {
     }
 }
 ```
+
+For fan-out workloads, use `LookupAsync` and `Poll` instead of retaining one
+pending handle per key:
+
+```cpp
+size_t next = 0;
+size_t submitted = 0;
+std::vector<fluss::LookupCompletion> completed;
+while (next < keys.size() || submitted != 0) {
+    while (next < keys.size()) {
+        auto result = lookuper.LookupAsync(keys[next], next);
+        if (result.Ok()) {
+            ++next;
+            ++submitted;
+        } else if (result.error_code == fluss::ErrorCode::QUEUE_FULL) {
+            break;  // Poll before retrying this key.
+        } else {
+            // Handle an invalid key or another submission error.
+            ++next;
+        }
+    }
+    if (submitted == 0) {
+        continue;
+    }
+    if (!lookuper.Poll(1000, completed, 128).Ok()) {
+        // Handle a polling error.
+    }
+    submitted -= completed.size();
+    for (const auto& completion : completed) {
+        if (completion.result.Ok() && completion.lookup.Found()) {
+            // Match the result with completion.request_id.
+        }
+    }
+}
+```
+
+The number of outstanding asynchronous requests per lookuper is controlled by
+`Configuration::lookup_max_pending_operations`; the core lookup batching queue
+is configured independently by `lookup_queue_size`. If async capacity is reached,
+`LookupAsync` returns `QUEUE_FULL`; poll completed requests before retrying the
+submission. A finished lookup counts toward this limit until `Poll` returns it.
+`Poll` replaces `out`, accepts a caller-selected batch limit, and includes lock
+acquisition in its timeout.
+
+`Poll` waits for at most `timeout_ms` for the first completion and then drains
+already completed lookups. A timeout is not an error and does not cancel
+unfinished lookups. Each `LookupCompletion` contains the caller-supplied
+`request_id`, a per-lookup `result`, and the `lookup` result. The completion
+queue is owned by the lookuper and is safe to use from multiple threads.
+`Poll(-1, out)` returns an empty result once no asynchronous lookup is
+outstanding, also when another thread polled the last one. Destroying a
+lookuper aborts its in-flight asynchronous tasks. A lookup that never
+completes, for example on a dropped table, holds its slot until the lookuper
+is destroyed. Key conversion and validation happen at submission time, before
+capacity is reserved.
 
 ## `PendingLookup`
 
@@ -579,6 +637,13 @@ Performs prefix (bucket-key) lookups, returning all rows whose primary key start
 |---------------------------------------------------------------------------------------|-----------------------------------------------|
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 | `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
+| `PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const -> Result` | Start a prefix lookup with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed prefix lookups in completion order |
+
+`PrefixLookupAsync` and `PrefixLookuper::Poll` have the same timeout and
+completion-order semantics as the point-lookup polling API. Each
+`PrefixLookupCompletion` contains the request ID, per-lookup status, and a
+`PrefixLookupResult`.
 
 ## `LogScanner`
 

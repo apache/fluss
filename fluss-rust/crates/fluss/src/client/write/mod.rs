@@ -257,6 +257,9 @@ impl ResultHandle {
 /// 1. Await immediately to block on acknowledgment: `writer.upsert(&row)?.await?`
 /// 2. Fire-and-forget with later flush: `writer.upsert(&row)?; writer.flush().await?`
 ///
+/// `flush()` waits for every queued write but doesn't return their errors, so a write
+/// whose future was dropped can fail unnoticed.
+///
 /// This pattern is similar to rdkafka's `DeliveryFuture` and allows for efficient batching
 /// when users don't need immediate per-record acknowledgment.
 pub struct WriteResultFuture {

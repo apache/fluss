@@ -1060,7 +1060,7 @@ impl LogScannerInner {
         }
 
         // send any new fetches (won't resend pending fetches).
-        self.log_fetcher.send_fetches().await?;
+        self.log_fetcher.send_fetches(None).await?;
 
         // Collect completed fetches from buffer
         self.log_fetcher.collect_fetches().await
@@ -1105,7 +1105,11 @@ impl LogScannerInner {
             return Ok(result);
         }
 
-        self.log_fetcher.send_fetches().await?;
+        let bounded_table = self
+            .reader_active
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then_some(self.table_id);
+        self.log_fetcher.send_fetches(bounded_table).await?;
         self.log_fetcher.collect_batches().await
     }
 }
@@ -1479,7 +1483,8 @@ impl LogFetcher {
             remote_read_context,
             projected_fields,
         )
-        .with_schema_getter(Arc::clone(&schema_getter));
+        .with_schema_getter(Arc::clone(&schema_getter))
+        .with_check_crc(config.scanner_log_check_crc);
         if fixed_schema || resolver.projected_fields().is_some() {
             resolver = resolver.with_fixed_schema(table_info.get_schema());
         }
@@ -1621,7 +1626,11 @@ impl LogFetcher {
         }
     }
 
-    async fn check_and_update_metadata(&self, table_buckets: &[TableBucket]) -> Result<()> {
+    async fn check_and_update_metadata(
+        &self,
+        table_buckets: &[TableBucket],
+        bounded_table: Option<TableId>,
+    ) -> Result<()> {
         let mut partition_ids = Vec::new();
         let mut need_update = false;
 
@@ -1638,7 +1647,10 @@ impl LogFetcher {
             }
         }
 
-        let update_result = if self.is_partitioned && !partition_ids.is_empty() {
+        if !need_update && partition_ids.is_empty() {
+            return Ok(());
+        }
+        let update_result = if self.is_partitioned {
             self.metadata
                 .update_tables_metadata(
                     &HashSet::from([&self.table_path]),
@@ -1646,14 +1658,25 @@ impl LogFetcher {
                     partition_ids,
                 )
                 .await
-        } else if need_update {
-            self.metadata.update_table_metadata(&self.table_path).await
         } else {
-            Ok(())
+            self.metadata.update_table_metadata(&self.table_path).await
         };
+        if update_result.is_ok()
+            && let Some(expected) = bounded_table
+            && self
+                .metadata
+                .get_cluster()
+                .get_table_id(&self.table_path)
+                .is_some_and(|live| live != expected)
+        {
+            return Err(Error::table_not_exist(format!(
+                "frozen table {} (id {expected}) no longer exists",
+                self.table_path
+            )));
+        }
 
         update_result.or_else(|error| {
-            if matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
+            if bounded_table.is_none() && matches!(error.api_error(), Some(FlussError::PartitionNotExists)) {
                 warn!(
                     "Received PartitionNotExists while updating scanner metadata; ignoring it: {error}"
                 );
@@ -1708,8 +1731,8 @@ impl LogFetcher {
     }
 
     /// Send fetch requests asynchronously without waiting for responses
-    async fn send_fetches(&self) -> Result<()> {
-        self.check_and_update_metadata(self.fetchable_buckets().as_slice())
+    async fn send_fetches(&self, bounded_table: Option<TableId>) -> Result<()> {
+        self.check_and_update_metadata(self.fetchable_buckets().as_slice(), bounded_table)
             .await?;
         self.send_fetches_without_metadata_refresh();
         Ok(())
@@ -2192,7 +2215,7 @@ impl LogFetcher {
                         message: format!(
                             "The fetching offset {fetch_offset} is out of range: {error_message}"
                         ),
-                        source: None,
+                        source: Some(Box::new(Error::from(api_error.clone()))),
                     });
                 }
                 FetchErrorAction::Authorization => {
@@ -2793,7 +2816,7 @@ mod tests {
     use crate::rpc::FlussError;
     use crate::test_utils::{
         assert_scanner_entries_labeled, build_cluster_arc, build_table_info, test_scanner_metrics,
-        uncompressed_arrow_batch_config,
+        uncompressed_arrow_batch_config, update_crc,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -3335,18 +3358,15 @@ mod tests {
                         let mut bad = data.clone();
                         bad[..8].copy_from_slice(&bad_offset.to_le_bytes());
                         let expected_error = if count_mismatch {
-                            use crate::record::{
-                                CRC_OFFSET, RECORDS_COUNT_OFFSET, SCHEMA_ID_OFFSET,
-                            };
+                            use crate::record::RECORDS_COUNT_OFFSET;
                             bad[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + 4]
                                 .copy_from_slice(&2_i32.to_le_bytes());
-                            let crc = crc32c::crc32c(&bad[SCHEMA_ID_OFFSET..]);
-                            bad[CRC_OFFSET..CRC_OFFSET + 4].copy_from_slice(&crc.to_le_bytes());
                             "Arrow row count"
                         } else {
                             bad[RECORDS_OFFSET..].fill(0);
                             "Invalid continuation marker"
                         };
+                        update_crc(&mut bad);
                         let directory = tempfile::tempdir()?;
                         let add = |bytes: Vec<u8>, offset| {
                             let size = bytes.len();
@@ -4106,6 +4126,7 @@ mod tests {
             let schema_id = table_info.get_schema_id() as i16 + 1;
             unknown_schema[SCHEMA_ID_OFFSET..SCHEMA_ID_OFFSET + 2]
                 .copy_from_slice(&schema_id.to_le_bytes());
+            update_crc(&mut unknown_schema);
             let add = |bytes: Vec<u8>, offset| {
                 fetcher
                     .log_fetch_buffer
@@ -4273,6 +4294,7 @@ mod tests {
             let mut bad = good.clone();
             bad[..8].copy_from_slice(&5_i64.to_le_bytes());
             bad[RECORDS_OFFSET..].fill(0);
+            update_crc(&mut bad);
             for (bucket, bytes, offset) in
                 [(good_bucket.clone(), good, 0), (bad_bucket.clone(), bad, 5)]
             {
@@ -4357,6 +4379,7 @@ mod tests {
             let mut corrupted = data.clone();
             corrupted[..8].copy_from_slice(&(good_batches as i64).to_le_bytes());
             corrupted[RECORDS_OFFSET..].fill(0);
+            update_crc(&mut corrupted);
             if same_fetch {
                 combined.extend(corrupted);
                 fetcher.log_fetch_buffer.add(make_fetch(combined, 0));

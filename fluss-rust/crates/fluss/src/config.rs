@@ -183,6 +183,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)]
     pub scanner_log_fetch_max_bytes_for_bucket: i32,
 
+    /// Whether to check the CRC of fetched log batches, except the ones the server projected.
+    /// Default: true (matching Java CLIENT_SCANNER_LOG_CHECK_CRC)
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub scanner_log_check_crc: bool,
+
     /// Whether to enable idempotent writes. When enabled, each batch is tagged with
     /// a server-allocated writer ID and per-bucket sequence number so the server can
     /// detect and deduplicate retried batches.
@@ -341,6 +346,7 @@ impl std::fmt::Debug for Config {
                 "scanner_log_fetch_max_bytes_for_bucket",
                 &self.scanner_log_fetch_max_bytes_for_bucket,
             )
+            .field("scanner_log_check_crc", &self.scanner_log_check_crc)
             .field(
                 "scanner_log_fetch_wait_max_time_ms",
                 &self.scanner_log_fetch_wait_max_time_ms,
@@ -410,6 +416,7 @@ impl Default for Config {
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
             scanner_log_fetch_wait_max_time_ms: DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS,
             scanner_log_fetch_max_bytes_for_bucket: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET,
+            scanner_log_check_crc: true,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             writer_enable_idempotence: true,
             writer_max_inflight_requests_per_bucket:
@@ -776,6 +783,18 @@ mod tests {
             "false"
         ]));
         assert!(parse(&["--writer-dynamic-create-partition-enabled=true"]));
+    }
+
+    #[test]
+    fn test_scanner_log_check_crc_from_cli() {
+        let parse = |args: &[&str]| {
+            Config::try_parse_from(std::iter::once("fluss").chain(args.iter().copied()))
+                .expect("parse")
+                .scanner_log_check_crc
+        };
+        assert!(parse(&[]));
+        assert!(!parse(&["--scanner-log-check-crc", "false"]));
+        assert!(parse(&["--scanner-log-check-crc=true"]));
     }
 
     #[test]

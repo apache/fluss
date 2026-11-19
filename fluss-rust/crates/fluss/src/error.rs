@@ -194,6 +194,15 @@ impl Error {
         }
     }
 
+    pub fn corrupt_message(message: impl Into<String>) -> Self {
+        Error::FlussAPIError {
+            api_error: ApiError {
+                code: FlussError::CorruptMessage.code(),
+                message: message.into(),
+            },
+        }
+    }
+
     /// Returns the API error kind if this is an API error, for ergonomic pattern matching.
     pub fn api_error(&self) -> Option<FlussError> {
         if let Error::FlussAPIError { api_error } = self {

@@ -226,6 +226,7 @@ async fn decode_log_batch(
     let mut base_offset: Option<i64> = None;
     for log_batch in LogRecordsBatches::new(raw) {
         let log_batch = log_batch?;
+        log_batch.ensure_header_complete()?;
         if base_offset.is_none() {
             base_offset = Some(log_batch.base_log_offset());
         }
@@ -398,8 +399,8 @@ mod tests {
         Column, DataField, DataType, DataTypes, KvFormat, PhysicalTablePath, Schema, TableInfo,
         TablePath,
     };
-    use crate::record::MemoryLogRecordsArrowBuilder;
     use crate::record::kv::SCHEMA_ID_LENGTH;
+    use crate::record::{LOG_OVERHEAD, MemoryLogRecordsArrowBuilder};
     use crate::row::FixedSchemaDecoder;
     use crate::row::GenericRow;
     use crate::row::binary::BinaryWriter;
@@ -536,6 +537,26 @@ mod tests {
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 2);
         assert_eq!(base_offset, 0);
+    }
+
+    #[tokio::test]
+    async fn decode_log_batch_rejects_truncated_batch() {
+        let table_info = build_two_col_table_info();
+        let (resolver, full_schema) = create_test_log_decoder(&table_info);
+        let error = decode_log_batch(
+            &table_info,
+            &resolver,
+            full_schema,
+            None,
+            vec![0; LOG_OVERHEAD],
+            usize::MAX,
+        )
+        .await
+        .expect_err("truncated batch must fail");
+        assert!(
+            error.to_string().contains("does not reach the magic byte"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

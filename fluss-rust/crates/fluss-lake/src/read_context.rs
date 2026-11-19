@@ -28,8 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Baseline represented by a bucket's frozen log start.
 ///
-/// KV snapshots are not supported yet. Unknown baseline kinds are rejected
-/// by consumers rather than interpreted as an empty baseline.
+/// Unknown baseline kinds are rejected rather than interpreted as an empty baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FlussLakeBaseline {
@@ -39,6 +38,8 @@ pub enum FlussLakeBaseline {
     /// The context's pinned lake snapshot, with `start_offset` as its seam.
     /// A seam of zero is valid and does not mean the baseline is absent.
     Lake,
+    /// A persisted snapshot of this bucket, with `start_offset` as its log seam.
+    KvSnapshot { snapshot_id: i64 },
 }
 
 /// One frozen, half-open Fluss log range, not an engine scheduling unit.
@@ -58,6 +59,39 @@ pub struct FlussLakeLogRange {
 }
 
 impl FlussLakeLogRange {
+    /// Creates a range backed by a specified persisted KV snapshot.
+    ///
+    /// Capture `stop_offset` after selecting the snapshot and its matching `log_offset`.
+    /// This reference does not hold a lease. Execution must open exactly this snapshot
+    /// or fail if it has expired; it must not substitute a newer snapshot.
+    pub fn from_kv_snapshot(
+        table_bucket: TableBucket,
+        partition: FlussLakeLogPartition,
+        bucket_count: i32,
+        snapshot: &fluss::metadata::KvSnapshot,
+        stop_offset: i64,
+        earliest_offset: i64,
+    ) -> Result<Self> {
+        if snapshot.bucket_id != table_bucket.bucket_id() {
+            return Err(invalid_context("KV snapshot belongs to a different bucket"));
+        }
+        Ok(Self {
+            table_bucket,
+            partition,
+            bucket_count,
+            baseline: FlussLakeBaseline::KvSnapshot {
+                snapshot_id: snapshot
+                    .snapshot_id
+                    .ok_or_else(|| invalid_context("missing KV snapshot ID"))?,
+            },
+            start_offset: snapshot
+                .log_offset
+                .ok_or_else(|| invalid_context("missing KV snapshot log seam"))?,
+            stop_offset,
+            earliest_offset,
+        })
+    }
+
     /// Creates an externally captured log range without querying Fluss.
     ///
     /// `snapshot_offset` is the readable lake snapshot's seam for this bucket,
@@ -90,6 +124,27 @@ impl FlussLakeLogRange {
         }
     }
 
+    pub(crate) fn estimated_log_rows(&self) -> Option<usize> {
+        usize::try_from(self.stop_offset.checked_sub(self.start_offset)?).ok()
+    }
+
+    pub(crate) fn lake_only(
+        table_id: i64,
+        bucket_id: i32,
+        bucket_count: i32,
+        partition_identity: FlussLakePartitionIdentity,
+    ) -> Self {
+        Self {
+            table_bucket: TableBucket::new(table_id, bucket_id),
+            partition: FlussLakeLogPartition::Ordinary(partition_identity),
+            bucket_count,
+            baseline: FlussLakeBaseline::Lake,
+            start_offset: 0,
+            stop_offset: 0,
+            earliest_offset: 0,
+        }
+    }
+
     /// Server table, partition, and bucket identity used to subscribe.
     pub fn table_bucket(&self) -> &TableBucket {
         &self.table_bucket
@@ -116,7 +171,7 @@ impl FlussLakeLogRange {
         self.baseline
     }
 
-    /// Inclusive seam offset, or the captured earliest offset without a baseline.
+    /// Inclusive lake/KV seam offset, or the captured earliest offset without a baseline.
     pub fn start_offset(&self) -> i64 {
         self.start_offset
     }
@@ -156,7 +211,7 @@ impl FlussLakeLogRange {
 
 /// Immutable source state for one table, independent of physical execution.
 ///
-/// A context fixes the readable lake snapshot and live Fluss bucket boundaries
+/// A context fixes lake and KV baseline references and live Fluss bucket boundaries
 /// within its partition scope. It is not a global transactional
 /// snapshot, a retention lease, or a file/split plan. It carries neither
 /// credentials nor projection or row-filter configuration. Scans can share
@@ -180,6 +235,7 @@ pub struct FlussLakeReadContext {
     partition_keys: Vec<String>,
     partition_scope: Option<Predicate>,
     bucket_scoped: bool,
+    lake_only: bool,
     bucket_keys: Vec<String>,
     num_buckets: i32,
     merge_engine: Option<String>,
@@ -223,6 +279,54 @@ impl LakeDescriptor {
     }
 }
 
+pub(crate) fn validate_frozen_table(frozen: &TableInfo, live: &TableInfo) -> Result<()> {
+    validate_source(
+        &frozen.table_path,
+        frozen.table_id,
+        &frozen.partition_keys,
+        &frozen.bucket_keys,
+        LakeDescriptor::capture(frozen, None)?.as_ref(),
+        live,
+    )
+}
+
+fn validate_source(
+    path: &TablePath,
+    id: i64,
+    partition_keys: &[String],
+    bucket_keys: &[String],
+    lake: Option<&LakeDescriptor>,
+    live: &TableInfo,
+) -> Result<()> {
+    validate_source_identity(path, id, live)?;
+    crate::table::validate_supported_table(live)?;
+    // Enabling tiering later does not change a frozen Fluss-only read.
+    let lake_changed = match lake {
+        Some(lake) => LakeDescriptor::capture(live, None)?.is_none_or(|current| {
+            current.table_path != lake.table_path || current.format != lake.format
+        }),
+        None => false,
+    };
+    if lake_changed
+        || partition_keys != live.partition_keys.as_ref()
+        || bucket_keys != live.bucket_keys
+    {
+        return Err(FlussLakeError::SchemaIncompatible(format!(
+            "source layout changed for {path} (table id {id})"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_source_identity(path: &TablePath, id: i64, live: &TableInfo) -> Result<()> {
+    if path != &live.table_path || id != live.table_id {
+        return Err(FlussLakeError::DataUnavailable(format!(
+            "frozen source {path} (table id {id}) is no longer available"
+        )));
+    }
+    Ok(())
+}
+
 impl FlussLakeReadContext {
     /// Imports boundaries already captured by a trusted query coordinator.
     ///
@@ -258,6 +362,24 @@ impl FlussLakeReadContext {
         Ok(context)
     }
 
+    /// Imports a pinned lake-only boundary without querying Fluss log offsets.
+    /// It cannot be used for a union read, even when there are no live partitions.
+    pub fn from_lake_snapshot(
+        table: &TableInfo,
+        snapshot_id: Option<i64>,
+        scope: Option<&Predicate>,
+    ) -> Result<Self> {
+        let mut context = Self::from_inputs(table, snapshot_id, Vec::new(), scope)?;
+        context.lake_only = true;
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Whether only the lake snapshot was captured, without log boundaries.
+    pub fn is_lake_only(&self) -> bool {
+        self.lake_only
+    }
+
     fn from_inputs(
         table: &TableInfo,
         lake_snapshot_id: Option<i64>,
@@ -273,6 +395,7 @@ impl FlussLakeReadContext {
             partition_keys: table.partition_keys.to_vec(),
             partition_scope: partition_scope.cloned(),
             bucket_scoped: false,
+            lake_only: false,
             bucket_keys: table.bucket_keys.clone(),
             num_buckets: table.num_buckets,
             merge_engine: table
@@ -351,6 +474,7 @@ impl FlussLakeReadContext {
             partition_keys: self.partition_keys.clone(),
             partition_scope: self.partition_scope.clone(),
             bucket_scoped: true,
+            lake_only: false,
             bucket_keys: self.bucket_keys.clone(),
             num_buckets: self.num_buckets,
             merge_engine: self.merge_engine.clone(),
@@ -417,34 +541,64 @@ impl FlussLakeReadContext {
     /// verify that data is still retained. An engine-native adapter must also
     /// validate its lake layout and enforce bounded log availability.
     pub fn validate_table(&self, table: &TableInfo) -> Result<()> {
-        crate::table::validate_supported_table(table)?;
-        let lake_changed = if let Some(lake) = &self.lake {
-            let live = LakeDescriptor::capture(table, None)?;
-            live.as_ref()
-                .is_none_or(|live| live.table_path != lake.table_path || live.format != lake.format)
-        } else {
-            // Enabling tiering later does not change a frozen Fluss-only read.
-            false
-        };
-        if self.table_path() != &table.table_path
-            || self.table_id() != table.table_id
-            || lake_changed
-            || self.partition_keys.as_slice() != table.partition_keys.as_ref()
-            || self.bucket_keys != table.bucket_keys
-        {
-            return Err(FlussLakeError::SchemaIncompatible(format!(
-                "table metadata no longer matches the frozen read context for {} (table id {}, schema id {})",
-                self.table_path(),
-                self.table_id(),
-                self.schema_id()
-            )));
-        }
-        Ok(())
+        validate_source(
+            self.table_path(),
+            self.table_id(),
+            &self.partition_keys,
+            &self.bucket_keys,
+            self.lake.as_ref(),
+            table,
+        )
     }
 }
 
 impl FlussLakeReadContext {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn table_info(&self, live: &TableInfo) -> Result<TableInfo> {
+        self.validate_table(live)?;
+        let schema = self.schema.clone();
+        let mut properties = live.properties.clone();
+        // The format fixes key encoding/bucketing at table creation, even when
+        // tiering is disabled. Retain it from identity-checked live metadata.
+        for key in [
+            "table.merge-engine",
+            "table.datalake.enabled",
+            "table.datalake.database-name",
+            "table.datalake.table-name",
+        ] {
+            properties.remove(key);
+        }
+        if let Some(engine) = &self.merge_engine {
+            properties.insert("table.merge-engine".into(), engine.clone());
+        }
+        if let Some(lake) = &self.lake {
+            properties.insert("table.datalake.enabled".into(), "true".into());
+            properties.insert("table.datalake.format".into(), lake.format.clone());
+            properties.insert(
+                "table.datalake.database-name".into(),
+                lake.table_path.database().into(),
+            );
+            properties.insert(
+                "table.datalake.table-name".into(),
+                lake.table_path.table().into(),
+            );
+        }
+        Ok(TableInfo::new(
+            self.table_path.clone(),
+            self.table_id,
+            self.schema_id,
+            schema,
+            self.bucket_keys.clone(),
+            self.partition_keys.clone().into(),
+            self.num_buckets,
+            properties,
+            live.custom_properties.clone(),
+            live.comment.clone(),
+            live.created_time,
+            live.modified_time,
+        ))
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
         if self.table_path.database().is_empty()
             || self.table_path.table().is_empty()
             || self.table_id < 0
@@ -481,6 +635,15 @@ impl FlussLakeReadContext {
         if schema.primary_key().is_some() && self.bucket_keys.is_empty() {
             return Err(invalid_context("PK tables must have bucket keys"));
         }
+        if self.lake_only {
+            return if self.lake.is_some() && self.log_ranges.is_empty() && !self.bucket_scoped {
+                Ok(())
+            } else {
+                Err(invalid_context(
+                    "lake-only capture requires lake metadata and no log ranges",
+                ))
+            };
+        }
         let mut groups = HashMap::new();
         let mut partition_ids = HashMap::new();
         for range in &self.log_ranges {
@@ -503,6 +666,9 @@ impl FlussLakeReadContext {
                         .and_then(|lake| lake.snapshot_id)
                         .is_none(),
                     FlussLakeBaseline::None => range.start_offset != range.earliest_offset,
+                    FlussLakeBaseline::KvSnapshot { snapshot_id } => {
+                        snapshot_id < 0 || schema.primary_key().is_none()
+                    }
                 }
             {
                 return Err(invalid_context("invalid bucket identity or log boundary"));
@@ -512,7 +678,7 @@ impl FlussLakeReadContext {
                 && range.earliest_offset > 0
             {
                 return Err(FlussLakeError::DataUnavailable(format!(
-                    "PK bucket {bucket} has no baseline and its log begins at {}; KV snapshot fallback is required",
+                    "PK bucket {bucket} has no lake or KV baseline and its log begins at {}; complete log history is required",
                     range.earliest_offset
                 )));
             }
@@ -668,7 +834,7 @@ mod tests {
             assert_eq!(imported.table_schema(), schema.schema());
             assert_eq!(imported.schema_id(), schema.schema_id());
             let mut unknown = wire.clone();
-            unknown.log_ranges[0].baseline = Some(2);
+            unknown.log_ranges[0].baseline = Some(99);
             assert!(FlussLakeReadContext::from_protobuf(&unknown, &live, &schema).is_err());
             let mut version = wire.clone();
             version.version = Some(2);
@@ -875,7 +1041,7 @@ mod tests {
         for table in [recreated, moved] {
             assert!(matches!(
                 context.validate_table(&table),
-                Err(FlussLakeError::SchemaIncompatible(_))
+                Err(FlussLakeError::DataUnavailable(_))
             ));
         }
         evolved.schema = Schema::builder()

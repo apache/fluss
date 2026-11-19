@@ -24,6 +24,7 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -52,6 +53,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -66,6 +68,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -114,6 +117,88 @@ class AutoPartitionManagerTest {
     @AfterEach
     void afterEach() {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testTableDroppedAfterAutoPartitionValidation(boolean recreateTable) throws Exception {
+        TableInfo table = createPartitionedTable(2, 4, AutoPartitionTimeUnit.DAY);
+        AtomicBoolean dropped = new AtomicBoolean();
+        MetadataManager interleavingMetadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+                    @Override
+                    public void createPartition(
+                            TablePath tablePath,
+                            long tableId,
+                            String remoteDir,
+                            PartitionAssignment assignment,
+                            ResolvedPartitionSpec partition,
+                            boolean ignoreIfExists,
+                            int bucketCount) {
+                        // The scheduler already validated this table. Force DDL to finish before
+                        // its delayed partition registration, without relying on timing.
+                        if (dropped.compareAndSet(false, true)) {
+                            dropTable(tablePath, false);
+                            if (recreateTable) {
+                                createTable(
+                                        tablePath,
+                                        remoteDir,
+                                        table.toTableDescriptor(),
+                                        null,
+                                        false);
+                            }
+                        }
+                        super.createPartition(
+                                tablePath,
+                                tableId,
+                                remoteDir,
+                                assignment,
+                                partition,
+                                ignoreIfExists,
+                                bucketCount);
+                    }
+                };
+        ManuallyTriggeredScheduledExecutorService executor =
+                new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager manager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        interleavingMetadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        disabledCapacityController(),
+                        new ManualClock(),
+                        executor);
+        manager.start();
+        try {
+            manager.addAutoPartitionTable(table, true);
+            executor.triggerNonPeriodicScheduledTask();
+
+            assertThat(dropped).isTrue();
+            assertThat(zookeeperClient.getPartitions(table.getTablePath())).isEmpty();
+            Optional<TableRegistration> current = zookeeperClient.getTable(table.getTablePath());
+            if (recreateTable) {
+                assertThat(current).isPresent();
+                assertThat(current.get().tableId).isNotEqualTo(table.getTableId());
+                // The replacement table can still create its own partitions.
+                manager.addAutoPartitionTable(
+                        interleavingMetadataManager.getTable(table.getTablePath()), true);
+                executor.triggerNonPeriodicScheduledTask();
+                assertThat(zookeeperClient.getPartitionRegistrations(table.getTablePath()).values())
+                        .isNotEmpty()
+                        .allSatisfy(
+                                partition ->
+                                        assertThat(partition.getTableId())
+                                                .isEqualTo(current.get().tableId));
+            } else {
+                assertThat(current).isEmpty();
+            }
+        } finally {
+            manager.close();
+        }
     }
 
     static Stream<Arguments> parameters() {

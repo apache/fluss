@@ -260,7 +260,7 @@ class KvSnapshotConcurrencyTest {
             target =
                     new KvTabletSnapshotTarget(
                             log.getTableBucket(),
-                            (snapshot, coordinatorEpoch, leaderEpoch) ->
+                            (snapshot, coordinatorEpoch, leaderEpoch, recoverySnapshotId) ->
                                     committed.complete(snapshot),
                             null,
                             incremental,
@@ -271,7 +271,7 @@ class KvSnapshotConcurrencyTest {
                             new TestingSequenceIDCounter(new AtomicLong(1)),
                             tablet::getTabletState,
                             ignored -> {},
-                            () -> 1,
+                            1,
                             () -> 1,
                             0,
                             0);

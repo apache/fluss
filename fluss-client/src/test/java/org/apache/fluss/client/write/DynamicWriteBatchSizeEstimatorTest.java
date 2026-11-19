@@ -78,4 +78,22 @@ public class DynamicWriteBatchSizeEstimatorTest {
         estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 2000);
         assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(1000);
     }
+
+    @Test
+    void testDecreaseFloorBoundedByMaxBatchSize() {
+        // When pageSize > batchSize, the decrease floor must be capped at maxBatchSize so the
+        // estimate never exceeds the configured batch size (2 * pageSize = 512 would be larger).
+        DynamicWriteBatchSizeEstimator boundedEstimator =
+                new DynamicWriteBatchSizeEstimator(true, 100, 256);
+        assertThat(boundedEstimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
+                .isEqualTo(100);
+
+        // Observe tiny batches repeatedly to drive the decrease branch.
+        for (int i = 0; i < 10; i++) {
+            boundedEstimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 0);
+        }
+
+        assertThat(boundedEstimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
+                .isEqualTo(100);
+    }
 }

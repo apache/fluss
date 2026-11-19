@@ -59,6 +59,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_REPLICATION_FACTOR);
     }
 
+    /** Gets the minimum ISR override, or empty to inherit the current server configuration. */
+    public Optional<Integer> getMinInSyncReplicas() {
+        return config.getOptional(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS);
+    }
+
     /** Gets the log format of the table. */
     public LogFormat getLogFormat() {
         return config.get(ConfigOptions.TABLE_LOG_FORMAT);
