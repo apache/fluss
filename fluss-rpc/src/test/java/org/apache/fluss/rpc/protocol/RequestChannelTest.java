@@ -255,6 +255,48 @@ public class RequestChannelTest {
     }
 
     @Test
+    void testRegisterDuringActiveBackpressureStartsPaused() {
+        RequestChannel channel = new RequestChannel(1);
+        TestChannel existingChannel = new TestChannel();
+        channel.registerChannel(existingChannel);
+        channel.putRequest(createTestRequest(0));
+        assertThat(existingChannel.isAutoRead()).isFalse();
+
+        // A channel registering while backpressure is active joins the paused set instead of
+        // reading freely until the next threshold crossing.
+        TestChannel lateChannel = new TestChannel();
+        channel.registerChannel(lateChannel);
+        assertThat(lateChannel.isAutoRead()).isFalse();
+
+        // Draining below the resume threshold releases the late arrival with the rest.
+        assertThat(channel.pollRequest(0)).isNotNull();
+        assertThat(existingChannel.isAutoRead()).isTrue();
+        assertThat(lateChannel.isAutoRead()).isTrue();
+    }
+
+    @Test
+    void testRegisterEnablesReadsForStartPausedChannel() {
+        RequestChannel channel = new RequestChannel(1);
+        TestChannel testChannel = new TestChannel();
+        // ServerChannelInitializer delivers channels with reads disabled; registration is the
+        // single point that grants reads.
+        testChannel.config().setAutoRead(false);
+        channel.registerChannel(testChannel);
+        assertThat(testChannel.isAutoRead()).isTrue();
+    }
+
+    @Test
+    void testRegisterSkipsInactiveChannel() {
+        RequestChannel channel = new RequestChannel(1);
+        TestChannel closedChannel = new TestChannel(false);
+        closedChannel.config().setAutoRead(false);
+        // Registration races with disconnects on the event loop; an inactive channel's read
+        // state must be left untouched.
+        channel.registerChannel(closedChannel);
+        assertThat(closedChannel.isAutoRead()).isFalse();
+    }
+
+    @Test
     void testZeroBackpressureThresholdDoesNotSpin() throws Exception {
         RequestChannel channel = new RequestChannel(0);
         channel.putRequest(createTestRequest(0));
@@ -319,6 +361,15 @@ public class RequestChannelTest {
         private final TestEventLoop eventLoop = new TestEventLoop();
         private final ChannelId channelId = new TestChannelId();
         private final SocketAddress remoteAddress = new InetSocketAddress("localhost", 8080);
+        private final boolean active;
+
+        TestChannel() {
+            this(true);
+        }
+
+        TestChannel(boolean active) {
+            this.active = active;
+        }
 
         @Override
         public ChannelConfig config() {
@@ -342,7 +393,7 @@ public class RequestChannelTest {
 
         @Override
         public boolean isActive() {
-            return true;
+            return active;
         }
 
         boolean isAutoRead() {
