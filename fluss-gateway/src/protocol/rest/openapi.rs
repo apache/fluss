@@ -66,9 +66,6 @@ pub(crate) fn finalize(api: utoipa::openapi::OpenApi) -> Value {
         .servers(Some([utoipa::openapi::ServerBuilder::new()
             .url("/")
             .build()]))
-        // An explicit empty root security array: honest for this PR — no authentication exists yet. The
-        // authentication capability adds securitySchemes and per-operation requirements.
-        .security(Some(Vec::new()))
         .build();
     let mut document = serde_json::to_value(api).expect("generated OpenAPI is serializable");
     // utoipa does not propagate deny_unknown_fields to internally tagged enum variants.
@@ -182,12 +179,9 @@ mod tests {
                 .is_empty(),
             "a relative root server is declared"
         );
-        assert!(
-            document["security"]
-                .as_array()
-                .expect("security array")
-                .is_empty(),
-            "root security is explicitly empty until authentication lands"
+        assert_eq!(
+            document["security"],
+            serde_json::json!([{}, {"basicAuth": []}])
         );
         assert_eq!(
             document["paths"]["/v1/openapi.json"]["get"]["operationId"],

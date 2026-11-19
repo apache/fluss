@@ -91,20 +91,32 @@ gateway.cluster.default.connection.identity-mode: service
 # HTTP Caller Authentication
 #==============================================================================
 
-# Only trust mode is implemented today. The password, token, and trusted-header
-# values are reserved for the caller-authentication follow-up and do not protect
-# requests in this release. Trust mode is suitable only for local development or
-# a deployment protected by a trusted network boundary.
+# Select one mode: trust, password, token, or trusted-header.
+# Trust accepts anonymous requests and optional Basic usernames without verifying
+# passwords. The username "anonymous" is reserved in every mode. Use trust only
+# for development or within a trusted network boundary.
 gateway.security.authentication: trust
 
-# Reserved password-mode user table.
-# gateway.security.users: alice:change-me
+# Password entries are principal:password or principal:bcrypt:<hash>.
+# Commas separate entries. Quote bcrypt hashes in YAML; keep this file private.
+# gateway.security.users: "alice:bcrypt:<hash>"
+# bcrypt inputs must not exceed 72 bytes. Hash cost is limited to 14 and at
+# most four verifications run concurrently.
 
-# Reserved token-mode token table.
-# gateway.security.tokens: change-me:alice
+# Token entries are <token>:principal or sha256:<64-hex-digest>:principal.
+# Prefer SHA-256 digests of high-entropy tokens. Tokens use Bearer token syntax.
+# gateway.security.tokens: "sha256:<64-hex-digest>:alice"
 
-# Reserved trusted-header-mode header name.
+# Trusted-header mode requires the actual TCP peer to be in this explicit IP list.
+# The proxy MUST overwrite client-supplied identity headers. Forwarded headers
+# cannot supply the peer identity; an empty list is rejected in this mode.
 # gateway.security.trusted-header.name: x-forwarded-user
+# gateway.security.trusted-header.proxy-addresses: ["127.0.0.1", "::1"]
+
+# Native TLS termination is tracked separately. Password/token on non-loopback
+# plaintext listeners require an explicit opt-in for a trusted internal hop
+# behind a TLS proxy; this setting does not verify the proxy's TLS connection.
+gateway.security.allow-insecure-transport: false
 
 #==============================================================================
 # Request Admission

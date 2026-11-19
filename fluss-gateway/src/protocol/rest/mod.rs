@@ -25,6 +25,7 @@
 //! per-request deadline (504) — and assigns the request identity, deadline, and cancellation signal that
 //! [`RequestContext`] carries into the backend.
 
+pub mod auth;
 pub mod clusters;
 pub(crate) mod codec;
 pub mod datatype;
@@ -35,7 +36,7 @@ pub mod openapi;
 pub mod pagination;
 pub mod records;
 
-use crate::backend::context::RequestContext;
+use crate::backend::context::{Principal, RequestContext};
 use crate::backend::types::ClusterId;
 use crate::backend::{FlussBackend, unknown_cluster};
 #[cfg(test)]
@@ -75,6 +76,7 @@ pub struct RestState {
     /// The gateway's single backend dependency: it answers cluster discovery, validates the cluster a
     /// request names, and serves every cluster-scoped operation.
     pub backend: Arc<dyn FlussBackend>,
+    pub authentication: Arc<auth::HttpAuthentication>,
     pub readiness: Arc<Readiness>,
     pub bind_address: SocketAddr,
     pub started_at: Instant,
@@ -260,32 +262,35 @@ fn resolve_cluster(
         return Err(unknown_cluster(cluster));
     }
     let cluster = ClusterId::try_from(cluster).expect("the backend serves this cluster ID");
-    Ok((state.backend.clone(), request_context(cluster, request)))
+    Ok((state.backend.clone(), request_context(cluster, request)?))
 }
 
 /// Builds the backend context of one cluster-scoped request from the middleware-assigned metadata.
 ///
-/// The caller is anonymous until the authenticator lands; the deadline and the cancellation signal are
-/// the ones the middleware also enforces, so a backend call cannot outlive its request.
-fn request_context(cluster_id: ClusterId, request: &Request) -> RequestContext {
+/// Identity and budgets come from the middleware; missing authentication is a wiring error, never
+/// permission to execute an anonymous backend operation.
+fn request_context(cluster_id: ClusterId, request: &Request) -> GatewayResult<RequestContext> {
+    let missing = || GatewayError::internal("missing authenticated request context");
+    let principal = request
+        .extensions()
+        .get::<Principal>()
+        .cloned()
+        .ok_or_else(missing)?;
     let deadline = request
         .extensions()
         .get::<RequestDeadline>()
-        .copied()
-        .unwrap_or_else(|| deadline_from_now(MAX_REQUEST_DEADLINE));
+        .ok_or_else(missing)?;
     let cancellation = request
         .extensions()
         .get::<RequestCancellation>()
-        .map_or_else(CancellationToken::new, |cancellation| {
-            cancellation.0.clone()
-        });
-    RequestContext::new(
+        .ok_or_else(missing)?;
+    Ok(RequestContext::new(
         Arc::from(request_id(request).as_str()),
         cluster_id,
         deadline.instant(),
-        cancellation,
-        None,
-    )
+        cancellation.0.clone(),
+        Some(principal),
+    ))
 }
 
 /// Assembles the REST frontend from the REST configuration and the shared process services.
@@ -300,10 +305,12 @@ pub fn build(
     backend: Arc<dyn FlussBackend>,
     readiness: &Arc<Readiness>,
     local_addr: SocketAddr,
+    authentication: Arc<auth::HttpAuthentication>,
 ) -> Router {
     let options = RestOptions::from_config(rest_config, request_limits);
     let state = RestState {
         backend,
+        authentication,
         readiness: readiness.clone(),
         bind_address: local_addr,
         started_at: Instant::now(),
@@ -343,7 +350,9 @@ pub fn build_router(state: RestState, options: &RestOptions) -> Router {
     guarded_api.merge(metadata_api);
     guarded_api.merge(records_api);
     guarded_api.merge(open_api);
-    let _ = state.openapi.set(openapi::finalize(guarded_api));
+    let mut document = openapi::finalize(guarded_api);
+    state.authentication.describe(&mut document);
+    let _ = state.openapi.set(document);
 
     let backend = state.backend.clone();
     let metadata_router = apply_concurrency_limit(
@@ -363,7 +372,11 @@ pub fn build_router(state: RestState, options: &RestOptions) -> Router {
         .merge(records_router);
     // `apply_data_limits` also stamps the request deadline, so the guarded side needs no separate
     // `assign_request_deadline` layer.
-    let guarded = apply_data_limits(guarded_router.with_state(state.clone()), options);
+    let guarded = auth::apply(
+        guarded_router.with_state(state.clone()),
+        state.authentication.clone(),
+    );
+    let guarded = apply_data_limits(guarded, options);
     let guarded = apply_acceptance_guard(guarded, state.readiness.clone());
     let open = open_router
         .route_layer(middleware::from_fn(reject_query_parameters))
@@ -733,6 +746,12 @@ pub mod test_support {
     ) -> RestState {
         RestState {
             backend,
+            authentication: auth::HttpAuthentication::new(
+                &crate::config::SecurityConfig::default(),
+                crate::auth::build(&crate::config::SecurityConfig::default())
+                    .expect("default authentication"),
+            )
+            .expect("default HTTP authentication"),
             readiness: Arc::new(Readiness::new()),
             bind_address: "127.0.0.1:0".parse().expect("valid"),
             started_at: Instant::now(),

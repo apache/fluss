@@ -54,6 +54,10 @@ async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "matched-path", "tokio"] }
 # Encodes the self-describing keyset page token; already in the graph transitively.
 base64 = "0.22"
+bcrypt = "0.19.3"
+# Both are already in the native client dependency graph.
+ring = "0.17.14"
+subtle = "2.6.1"
 clap = { version = "4.5.37", features = ["derive"] }
 # Only FutureExt/join_all are used; avoid the larger futures facade crate.
 futures-util = "0.3"
