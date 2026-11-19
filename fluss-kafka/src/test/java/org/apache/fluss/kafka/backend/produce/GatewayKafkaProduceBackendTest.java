@@ -124,6 +124,32 @@ class GatewayKafkaProduceBackendTest extends KafkaServerTestBase {
     }
 
     @Test
+    void testDefaultDatabaseAliasCollisionFailsSecondNameOnly() throws Exception {
+        createTable("topic", 42L, Collections.singletonList(TABLET_SERVER_ID));
+        KafkaProduceResult result =
+                backend()
+                        .write(
+                                command(
+                                        (short) 1,
+                                        topic("topic", good(0)),
+                                        topic("kafka.topic", good(0))))
+                        .get(10, TimeUnit.SECONDS);
+        // The bare alias keeps its write; the qualified duplicate is rejected, not dropped.
+        assertErrors(result, Errors.NONE);
+        assertThat(result.topics())
+                .extracting(topic -> topic.topicName())
+                .containsExactly("topic", "kafka.topic");
+        assertThat(result.topics().get(1).partitions().get(0).error())
+                .isEqualTo(Errors.INVALID_REQUEST);
+        assertThat(
+                        replicaManager
+                                .getReplicaOrException(new TableBucket(42L, 0))
+                                .getLocalLogEndOffset())
+                .isEqualTo(1L);
+        assertThat(replicaManager.getMemorySegmentPool().usedPages()).isZero();
+    }
+
+    @Test
     void testRevokedWritePermissionIsCheckedForEveryRequest() throws Exception {
         createTable("topic", 42L, Collections.singletonList(TABLET_SERVER_ID));
         boolean[] allowed = {true};
