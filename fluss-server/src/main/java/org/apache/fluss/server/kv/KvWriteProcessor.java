@@ -803,7 +803,8 @@ public final class KvWriteProcessor {
                                 rowType,
                                 arrowCompressionInfo),
                         memorySegmentPool,
-                        false);
+                        false,
+                        deduplicating);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

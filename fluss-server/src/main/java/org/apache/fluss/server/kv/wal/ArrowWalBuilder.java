@@ -22,7 +22,6 @@ import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
-import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 
@@ -34,6 +33,7 @@ public class ArrowWalBuilder implements WalBuilder {
     private final MemorySegmentPool memorySegmentPool;
     private final ManagedPagedOutputView outputView;
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
+    private final boolean gatherWrites;
 
     /** Creates a WAL builder with optional append-only encoding (without a change-type vector). */
     public ArrowWalBuilder(
@@ -42,7 +42,19 @@ public class ArrowWalBuilder implements WalBuilder {
             MemorySegmentPool memorySegmentPool,
             boolean appendOnly)
             throws IOException {
+        this(schemaId, writer, memorySegmentPool, appendOnly, false);
+    }
+
+    /** Creates a WAL builder that can write the output pages directly during synchronous append. */
+    public ArrowWalBuilder(
+            int schemaId,
+            ArrowWriter writer,
+            MemorySegmentPool memorySegmentPool,
+            boolean appendOnly,
+            boolean gatherWrites)
+            throws IOException {
         this.memorySegmentPool = memorySegmentPool;
+        this.gatherWrites = gatherWrites;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(
@@ -54,14 +66,20 @@ public class ArrowWalBuilder implements WalBuilder {
         recordsBuilder.append(changeType, row);
     }
 
+    /** Builds the WAL batch using pages owned by this builder until {@link #deallocate()}. */
     @Override
     public MemoryLogRecords build() throws Exception {
+        boolean alreadyBuilt = recordsBuilder.isClosed();
         recordsBuilder.close();
-        MultiBytesView bytesView = recordsBuilder.build();
-        // netty nioBuffer() will deep copy bytes only when the underlying ByteBuf is composite
-        // TODO: this is a heavy operation, avoid copy bytes,
-        //  MemoryLogRecords supports cross segments
-        return MemoryLogRecords.pointToByteBuffer(bytesView.getByteBuf().nioBuffer());
+        if (!gatherWrites) {
+            return MemoryLogRecords.pointToByteBuffer(
+                    recordsBuilder.build().getByteBuf().nioBuffer());
+        }
+        if (alreadyBuilt) {
+            // A later build can refresh the writer state on the same pages.
+            recordsBuilder.build();
+        }
+        return MemoryLogRecords.pointToSingleBatch(outputView.getWrittenSegments());
     }
 
     @Override
