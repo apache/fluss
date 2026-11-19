@@ -849,9 +849,21 @@ public class FlinkSourceEnumerator
         try {
             boolean includeHistoricalPartition =
                     streaming && tableInfo.getTableConfig().isHistoricalPartitionEnabled();
-            List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tablePath, includeHistoricalPartition).get();
-            return new LinkedHashSet<>(applyPartitionFilter(partitionInfos));
+
+            List<PartitionInfo> partitionInfos;
+            if (partitionFilters == null) {
+                partitionInfos =
+                        flussAdmin.listPartitionInfos(tablePath, includeHistoricalPartition).get();
+            } else if (includeHistoricalPartition) {
+                // Historical partitions contain records from multiple business partitions and must
+                // not be pruned by partition predicates.
+                partitionInfos = flussAdmin.listPartitionInfos(tablePath, true).get();
+                partitionInfos = applyPartitionFilter(partitionInfos);
+            } else {
+                partitionInfos =
+                        flussAdmin.listPartitionInfosByPredicate(tableInfo, partitionFilters).get();
+            }
+            return new LinkedHashSet<>(partitionInfos);
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),

@@ -19,7 +19,11 @@ package org.apache.fluss.client.utils;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /** Utils for Fluss Client. */
 public final class ClientUtils {
@@ -39,6 +44,21 @@ public final class ClientUtils {
             Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
 
     private ClientUtils() {}
+
+    /** Filters regular partition metadata using the same typed values as server-side pruning. */
+    public static List<PartitionInfo> filterPartitionInfos(
+            List<PartitionInfo> partitions, RowType partitionRowType, Predicate predicate) {
+        return partitions.stream()
+                .filter(
+                        partition ->
+                                predicate.test(
+                                        PartitionUtils.toPartitionRow(
+                                                partition
+                                                        .getResolvedPartitionSpec()
+                                                        .getPartitionValues(),
+                                                partitionRowType)))
+                .collect(Collectors.toList());
+    }
 
     // todo: may add DnsLookup
     public static List<InetSocketAddress> parseAndValidateAddresses(List<String> urls) {

@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -39,6 +40,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -82,6 +84,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.OperationType;
@@ -103,6 +106,7 @@ import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.types.RowType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -138,6 +142,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbDatabaseSu
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.partitionRowType;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -633,8 +638,31 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
 
+        boolean includeSystemPartitions =
+                request.hasIncludeSystemPartitions() && request.isIncludeSystemPartitions();
         Map<String, PartitionRegistration> partitionRegistrations;
-        if (request.hasPartialPartitionSpec()) {
+        if (request.hasPartitionPredicate()) {
+            if (request.hasPartialPartitionSpec() || includeSystemPartitions) {
+                throw new InvalidPartitionException(
+                        "A partition predicate can only list regular partitions and cannot be combined with a partition spec.");
+            }
+            if (!tableInfo.isPartitioned()) {
+                throw new TableNotPartitionedException(
+                        "Table '" + tablePath + "' is not a partitioned table.");
+            }
+            RowType partitionType = partitionRowType(tableInfo);
+            Predicate predicate;
+            try {
+                predicate =
+                        PredicateMessageUtils.toPredicate(
+                                request.getPartitionPredicate(), partitionType);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                throw new InvalidPartitionException(
+                        "Invalid partition predicate: " + e.getMessage());
+            }
+            partitionRegistrations =
+                    metadataManager.listPartitionsByPredicate(tableInfo, partitionType, predicate);
+        } else if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
             partitionRegistrations =
@@ -642,8 +670,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         } else {
             partitionRegistrations = metadataManager.listPartitions(tablePath, tableInfo, null);
         }
-        boolean includeSystemPartitions =
-                request.hasIncludeSystemPartitions() && request.isIncludeSystemPartitions();
         if (!includeSystemPartitions) {
             partitionRegistrations.remove(HISTORICAL_PARTITION_VALUE);
         }

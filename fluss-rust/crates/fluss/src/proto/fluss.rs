@@ -843,6 +843,9 @@ pub struct ListPartitionInfosRequest {
     pub partial_partition_spec: ::core::option::Option<PbPartitionSpec>,
     #[prost(bool, optional, tag = "3")]
     pub include_system_partitions: ::core::option::Option<bool>,
+    /// Filters regular partitions by schema field ID. Mutually exclusive with the other filters.
+    #[prost(message, optional, tag = "4")]
+    pub partition_predicate: ::core::option::Option<PbPredicate>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListPartitionInfosResponse {

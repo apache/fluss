@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.utils
 
-import org.apache.fluss.metadata.{PartitionInfo, TableInfo}
+import org.apache.fluss.metadata.TableInfo
 import org.apache.fluss.predicate.{PartitionPredicateVisitor, Predicate => FlussPredicate, PredicateBuilder}
 import org.apache.fluss.utils.PartitionUtils
 
@@ -57,21 +57,6 @@ object SparkPartitionPredicate {
 
     (nonPartitionPredicates, partitionPredicate)
   }
-
-  def filterPartitions(
-      tableInfo: TableInfo,
-      partitionInfos: Seq[PartitionInfo],
-      partitionPredicate: Option[FlussPredicate]): Seq[PartitionInfo] =
-    partitionPredicate match {
-      case None => partitionInfos
-      case Some(predicate) =>
-        val rowType = PartitionUtils.partitionRowType(tableInfo)
-        partitionInfos.filter {
-          p =>
-            predicate.test(
-              PartitionUtils.toPartitionRow(p.getResolvedPartitionSpec.getPartitionValues, rowType))
-        }
-    }
 
   /**
    * Tests whether a partition (described by its ordered partition values) matches the given

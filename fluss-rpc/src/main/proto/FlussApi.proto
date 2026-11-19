@@ -648,6 +648,8 @@ message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
   optional PbPartitionSpec partial_partition_spec = 2;
   optional bool include_system_partitions = 3;
+  // Filters regular partitions by schema field ID. Mutually exclusive with the other filters.
+  optional PbPredicate partition_predicate = 4;
 }
 
 message ListPartitionInfosResponse {

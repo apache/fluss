@@ -26,11 +26,21 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
+import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.PartitionUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,6 +61,66 @@ class FlussAdminTest {
 
     private static final ServerNode OLD_COORDINATOR =
             new ServerNode(0, "old-coordinator", 9123, ServerType.COORDINATOR);
+
+    @Test
+    void testListPartitionInfosByPredicateFiltersLegacyResponse() throws Exception {
+        TableInfo tableInfo =
+                TableInfo.of(
+                        TablePath.of("test_db", "test_table"),
+                        1L,
+                        0,
+                        TableDescriptor.builder()
+                                .schema(Schema.newBuilder().column("pt", DataTypes.INT()).build())
+                                .distributedBy(1)
+                                .partitionedBy("pt")
+                                .build(),
+                        "file:///tmp",
+                        0L,
+                        0L);
+        ListPartitionInfosResponse response = new ListPartitionInfosResponse();
+        for (int value : new int[] {2, 10}) {
+            response.addPartitionsInfo()
+                    .setPartitionId(value)
+                    .setBucketCount(1)
+                    .setPartitionSpec()
+                    .addPartitionKeyValue()
+                    .setKey("pt")
+                    .setValue(String.valueOf(value));
+        }
+
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(api).isEqualTo(ApiKeys.LIST_PARTITION_INFOS);
+                            return CompletableFuture.completedFuture(response);
+                        }) {
+                    @Override
+                    public CompletableFuture<ApiMessage> sendRequest(
+                            ServerNode node, ApiKeys api, ApiMessage request) {
+                        assertThat(((ListPartitionInfosRequest) request).hasPartitionPredicate())
+                                .isTrue();
+                        // A legacy server ignores the predicate and returns all partitions.
+                        return super.sendRequest(node, api, request);
+                    }
+                };
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public ServerNode getRandomTabletServer() {
+                        return new ServerNode(0, "tablet", 9123, ServerType.TABLET_SERVER);
+                    }
+                };
+        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+            PredicateBuilder builder =
+                    new PredicateBuilder(PartitionUtils.partitionRowType(tableInfo));
+            assertThat(
+                            admin.listPartitionInfosByPredicate(
+                                            tableInfo, builder.greaterThan(0, 2))
+                                    .get(10, TimeUnit.SECONDS))
+                    .extracting(PartitionInfo::getPartitionName)
+                    .containsExactly("10");
+        }
+    }
 
     @ParameterizedTest
     @CsvSource({

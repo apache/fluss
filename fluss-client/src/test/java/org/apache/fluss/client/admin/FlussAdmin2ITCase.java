@@ -20,22 +20,31 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.client.FlussConnection;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -44,9 +53,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -56,6 +68,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.partitionRowType;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
@@ -179,6 +192,140 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
                                 .get())
                 .extracting(PartitionInfo::getPartitionName)
                 .doesNotContain(HISTORICAL_PARTITION_VALUE);
+    }
+
+    @Test
+    void testListPartitionInfosByPredicate() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "partition_predicate_listing");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("pt", DataTypes.INT())
+                                        .build())
+                        .distributedBy(1)
+                        .partitionedBy("pt")
+                        .build();
+        createTable(tablePath, descriptor, false);
+        for (String value : Arrays.asList("1", "2", "10", "20", "100")) {
+            admin.createPartition(
+                            tablePath,
+                            new PartitionSpec(Collections.singletonMap("pt", value)),
+                            false)
+                    .get();
+        }
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        PredicateBuilder builder = new PredicateBuilder(partitionRowType(tableInfo));
+        Predicate range =
+                PredicateBuilder.and(builder.greaterOrEqual(0, 10), builder.lessThan(0, 100));
+        ListPartitionInfosRequest request =
+                requestFor(tablePath, false)
+                        .setPartitionPredicate(
+                                PredicateMessageUtils.toPbPredicate(
+                                        range, partitionRowType(tableInfo)));
+        FlussAdmin flussAdmin = (FlussAdmin) admin;
+        assertThat(
+                        flussAdmin
+                                .getAdminReadOnlyGateway()
+                                .listPartitionInfos(request)
+                                .get()
+                                .getPartitionsInfosList())
+                .hasSize(2);
+        assertThat(admin.listPartitionInfosByPredicate(tableInfo, range).get())
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrder("10", "20");
+        assertThat(admin.listPartitionInfosByPredicate(tablePath, builder.equal(0, 999)).get())
+                .isEmpty();
+        assertThat(
+                        admin.listPartitionInfosByPredicate(
+                                        tableInfo, builder.in(0, Arrays.asList(1, 100)))
+                                .get())
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrder("1", "100");
+
+        Predicate nonPartitionPredicate = new PredicateBuilder(tableInfo.getRowType()).equal(0, 1);
+        request.setPartitionPredicate(
+                PredicateMessageUtils.toPbPredicate(nonPartitionPredicate, tableInfo.getRowType()));
+        assertThatThrownBy(
+                        () ->
+                                flussAdmin
+                                        .getAdminReadOnlyGateway()
+                                        .listPartitionInfos(request)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class);
+    }
+
+    @Test
+    void testListPartitionInfosByPredicateWithReorderedKeys() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "reordered_partition_keys");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("dt", DataTypes.DATE())
+                                        .column("region", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .partitionedBy("region", "dt")
+                        .build();
+        createTable(tablePath, descriptor, false);
+        for (String[] values :
+                new String[][] {
+                    {"us", "2026-01-01"},
+                    {"eu", "2026-01-31"},
+                    {"us", "2026-02-01"},
+                    {"ap", "2026-01-15"}
+                }) {
+            Map<String, String> spec = new HashMap<>();
+            spec.put("region", values[0]);
+            spec.put("dt", values[1]);
+            admin.createPartition(tablePath, new PartitionSpec(spec), false).get();
+        }
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        RowType partitionType = partitionRowType(tableInfo);
+        PredicateBuilder builder = new PredicateBuilder(partitionType);
+        Predicate predicate =
+                PredicateBuilder.and(
+                        Arrays.asList(
+                                builder.in(
+                                        0,
+                                        Arrays.asList(
+                                                BinaryString.fromString("us"),
+                                                BinaryString.fromString("eu"))),
+                                builder.greaterOrEqual(
+                                        1, (int) LocalDate.of(2026, 1, 1).toEpochDay()),
+                                builder.lessThan(1, (int) LocalDate.of(2026, 2, 1).toEpochDay())));
+        ListPartitionInfosRequest request =
+                requestFor(tablePath, false)
+                        .setPartitionPredicate(
+                                PredicateMessageUtils.toPbPredicate(predicate, partitionType));
+        FlussAdmin flussAdmin = (FlussAdmin) admin;
+        assertThat(
+                        ClientRpcMessageUtils.toPartitionInfos(
+                                flussAdmin
+                                        .getAdminReadOnlyGateway()
+                                        .listPartitionInfos(request)
+                                        .get(),
+                                -1))
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrder("us$2026-01-01", "eu$2026-01-31");
+        assertThat(admin.listPartitionInfosByPredicate(tableInfo, predicate).get())
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrder("us$2026-01-01", "eu$2026-01-31");
+
+        Map<String, String> malformedSpec = new HashMap<>();
+        malformedSpec.put("region", "us");
+        malformedSpec.put("dt", "bad_date");
+        admin.createPartition(tablePath, new PartitionSpec(malformedSpec), false).get();
+        assertThatThrownBy(() -> admin.listPartitionInfosByPredicate(tableInfo, predicate).get())
+                .cause()
+                .hasMessageContaining("partition 'us$bad_date'")
+                .hasMessageContaining("DATE");
     }
 
     @Test
