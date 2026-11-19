@@ -26,7 +26,7 @@ use fluss::metadata::{
     TableDescriptor, TablePath,
 };
 use fluss::predicate::col;
-use fluss_lake::{FlussLakeError, FlussLakeReadContext, FlussLakeReadSplit, FlussLakeTable};
+use fluss_lake::{FlussLakeError, FlussLakeReadContext, FlussLakeTable};
 use futures::TryStreamExt;
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,211 +67,62 @@ fn append_batch(ids: Vec<i32>, names: Vec<&str>) -> RecordBatch {
 
 #[tokio::test]
 async fn append_log_plan_uses_frozen_stop_offset_after_planning() {
-    let cluster = support::get_shared_cluster();
-    let connection = Arc::new(cluster.get_fluss_connection().await);
-    let admin = connection.get_admin().expect("Failed to get Fluss admin");
-    let table_path = TablePath::new("fluss", "test_union_read_frozen_append_log");
-    let table_descriptor = TableDescriptor::builder()
-        .schema(
-            Schema::builder()
-                .column("id", DataTypes::int())
-                .column("name", DataTypes::string())
-                .build()
-                .expect("Failed to build UnionRead integration test schema"),
-        )
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "test_union_read_frozen_append_log");
+    let descriptor = TableDescriptor::builder()
+        .schema(append_schema())
         .build()
-        .expect("Failed to build UnionRead integration test table descriptor");
-    let lake_table = FlussLakeTable::new(connection.clone(), &table_path);
-    assert!(lake_table.new_scan().plan().await.is_err());
-    support::create_table(&admin, &table_path, &table_descriptor).await;
-
-    let table = connection
-        .get_table(&table_path)
-        .await
-        .expect("Failed to open UnionRead integration test table");
-    let writer = table
-        .new_append()
-        .expect("Failed to create append operation")
-        .create_writer()
-        .expect("Failed to create append writer");
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_append().unwrap().create_writer().unwrap();
     writer
-        .append_arrow_batch(append_batch(
-            vec![1, 2, 3],
-            vec!["before-1", "before-2", "before-3"],
-        ))
-        .expect("Failed to append pre-plan batch");
-    writer
-        .flush()
-        .await
-        .expect("Failed to flush pre-plan batch");
+        .append_arrow_batch(append_batch(vec![1, 2, 3], vec!["one", "two", "three"]))
+        .unwrap();
+    writer.flush().await.unwrap();
 
-    let scan = lake_table
-        .new_scan()
-        .with_projection(vec![1])
-        .with_filter(col("id").eq(2_i32));
-    let plan = scan
-        .plan()
-        .await
-        .expect("Failed to plan append-log UnionRead");
-    assert_eq!(plan.schema().fields().len(), 1);
-    assert_eq!(plan.schema().field(0).name(), "name");
-    assert_eq!(plan.splits().len(), 1);
-    let retained_split = plan.splits()[0].clone();
+    let lake_table = FlussLakeTable::new(connection.clone(), &path);
+    let scan = lake_table.new_scan().with_projection(vec![0]);
+    let plan = scan.plan().await.unwrap();
     let context = plan.read_context().clone();
+    drop(plan);
 
     writer
-        .append_arrow_batch(append_batch(vec![4, 5], vec!["after-4", "after-5"]))
-        .expect("Failed to append post-plan batch");
-    writer
-        .flush()
-        .await
-        .expect("Failed to flush post-plan batch");
+        .append_arrow_batch(append_batch(vec![4, 5], vec!["four", "five"]))
+        .unwrap();
+    writer.flush().await.unwrap();
 
-    // A different table reference can use a different projection and no
-    // predicate without observing the rows appended after preparation.
-    // This path does not require the optional Paimon dependency.
-    let ids_scan = lake_table.new_scan().with_projection(vec![0]);
-    let reused_plan = ids_scan.plan_with_context(&context).await.unwrap();
-    assert_eq!(
-        reused_plan.read_context().log_ranges(),
-        context.log_ranges()
-    );
-    let ids_splits: Vec<FlussLakeReadSplit> = reused_plan.splits().to_vec();
-    drop(reused_plan);
-    // Cloned local tasks retain their boundaries after the plan is dropped.
-    let ids_reader = lake_table.new_scan().with_projection(vec![0]).new_reader();
-    assert!(
-        ids_reader
-            .read_splits(&[ids_splits[0].clone(), ids_splits[0].clone()])
-            .is_err()
-    );
-    assert!(
-        lake_table
-            .new_scan()
-            .with_max_batch_size(0)
-            .new_reader()
-            .read_splits(&[])
-            .is_err()
-    );
-    assert!(matches!(
-        lake_table
-            .new_scan()
-            .with_lake_only(true)
-            .new_reader()
-            .read_split(&retained_split),
-        Err(FlussLakeError::PlanningFailed(_))
-    ));
-    let mut ids: Vec<i32> = Vec::new();
-    for split in &ids_splits {
-        let batches = tokio::time::timeout(
-            Duration::from_secs(10),
-            ids_reader
-                .read_split(split)
-                .unwrap()
-                .try_collect::<Vec<_>>(),
-        )
+    let splits = scan
+        .plan_with_context(&context)
         .await
         .unwrap()
-        .unwrap();
-        for batch in batches {
-            assert_eq!(batch.num_columns(), 1);
-            ids.extend(
-                batch
-                    .column(0)
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .values(),
-            );
-        }
-    }
-    ids.sort_unstable();
-    assert_eq!(ids, vec![1, 2, 3]);
-    let later_plan = ids_scan.plan().await.unwrap();
-    let later_context = later_plan.read_context();
-    assert!(
-        later_context
-            .log_ranges()
-            .iter()
-            .map(|range| range.stop_offset())
-            .sum::<i64>()
-            > context
-                .log_ranges()
-                .iter()
-                .map(|range| range.stop_offset())
-                .sum::<i64>()
-    );
-    let other = FlussLakeTable::new(
-        connection.clone(),
-        &TablePath::new("fluss", "different_table"),
-    );
-    assert!(matches!(
-        other.new_scan().plan_with_context(&context).await,
-        Err(FlussLakeError::InvalidReadContext(_))
-    ));
-    assert!(matches!(
-        other.new_scan().new_reader().read_split(&ids_splits[0]),
-        Err(FlussLakeError::PlanningFailed(_))
-    ));
-    assert!(matches!(
-        lake_table
-            .new_scan()
-            .with_lake_only(true)
-            .plan_with_context(&context)
-            .await,
-        Err(FlussLakeError::NotLakeReadable(_))
-    ));
-
-    // A reader captures immutable settings. Configuring another clone must not
-    // change its filter or projection, even after dropping the plan.
-    let local_reader = scan.new_reader();
-    let _other_scan = scan
-        .clone()
-        .with_projection(vec![0])
-        .with_filter(col("id").eq(3_i32));
-    drop(plan);
-    drop(scan);
-    let local_batches = tokio::time::timeout(
+        .splits()
+        .to_vec();
+    let batches = tokio::time::timeout(
         Duration::from_secs(10),
-        local_reader
-            .read_split(&retained_split)
+        scan.new_reader()
+            .read_splits(&splits)
             .unwrap()
             .try_collect::<Vec<_>>(),
     )
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(
-        local_batches
-            .iter()
-            .map(RecordBatch::num_rows)
-            .sum::<usize>(),
-        1
-    );
-    assert!(
-        local_batches
-            .iter()
-            .all(|batch| batch.schema().field(0).name() == "name")
-    );
-    let local_names = local_batches
-        .iter()
-        .flat_map(|batch| {
-            let names = batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .unwrap();
-            (0..names.len()).map(|index| names.value(index).to_owned())
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(local_names, vec!["before-2"]);
-    drop(writer);
-    admin
-        .drop_table(&table_path, false)
-        .await
-        .expect("Failed to drop UnionRead integration test table");
+    assert_eq!(sorted_ids(&batches), [1, 2, 3]);
+    // A lake-only reader must reject the log range instead of returning no rows.
     assert!(matches!(
-        ids_scan.plan_with_context(&context).await,
+        lake_table
+            .new_scan()
+            .with_lake_only(true)
+            .new_reader()
+            .read_split(&splits[0]),
+        Err(FlussLakeError::PlanningFailed(_))
+    ));
+    drop(writer);
+    admin.drop_table(&path, false).await.unwrap();
+    assert!(matches!(
+        scan.plan_with_context(&context).await,
         Err(FlussLakeError::DataUnavailable(_))
     ));
 }

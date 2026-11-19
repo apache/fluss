@@ -19,7 +19,7 @@
 
 pub use crate::partition::FlussLakePartitionIdentity;
 use crate::{FlussLakeError, FlussLakeSplitDescriptor, Result};
-use fluss::metadata::{TableBucket, TableInfo, TablePath};
+use fluss::metadata::{TableInfo, TablePath};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -237,26 +237,6 @@ impl FlussLakeReadSplit {
         self.table_info.schema_id
     }
 
-    pub(crate) fn table_bucket(&self) -> &TableBucket {
-        &self.descriptor.table_bucket
-    }
-
-    pub(crate) fn start_offset(&self) -> i64 {
-        self.descriptor.start_offset
-    }
-
-    pub(crate) fn stop_offset(&self) -> i64 {
-        self.descriptor.stop_offset
-    }
-
-    pub(crate) fn snapshot_id(&self) -> Option<i64> {
-        self.descriptor.snapshot_id
-    }
-
-    pub(crate) fn lake_splits(&self) -> &[crate::LakeSplit] {
-        &self.descriptor.lake_splits
-    }
-
     pub(crate) fn is_primary_key(&self) -> bool {
         !self.primary_key_indexes.is_empty()
     }
@@ -318,6 +298,7 @@ pub(crate) fn testing_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fluss::metadata::TableBucket;
 
     #[test]
     fn lake_tasks_without_a_live_bucket_cannot_carry_a_tail() {

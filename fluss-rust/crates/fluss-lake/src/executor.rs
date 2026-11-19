@@ -19,7 +19,10 @@
 
 use crate::error::{error_message, execution_client_error};
 use crate::table::BoundScan;
-use crate::{FlussLakeError, FlussLakeReadSplit, FlussLakeScan, RecordBatchStream, Result};
+use crate::{
+    FlussLakeError, FlussLakeReadSplit, FlussLakeScan, FlussLakeSplitDescriptor, RecordBatchStream,
+    Result,
+};
 use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
 use fluss::client::{BoundedLogReadRange, FlussTable, RecordBatchLogReader};
@@ -49,7 +52,8 @@ pub(crate) fn execute_split(
             "split and reader refer to different tables".to_string(),
         ));
     }
-    if split.descriptor().kv_snapshot_id().is_some() {
+    let descriptor = split.descriptor();
+    if descriptor.kv_snapshot_id().is_some() {
         return Err(FlussLakeError::PlanningFailed(
             "KV snapshot baseline execution is not yet supported by the UnionRead reader".into(),
         ));
@@ -59,7 +63,7 @@ pub(crate) fn execute_split(
             "PK UnionRead execution requires the PK reconciliation executor".into(),
         ));
     }
-    if scan.lake_only() && split.start_offset() != split.stop_offset() {
+    if scan.lake_only() && descriptor.start_offset() != descriptor.stop_offset() {
         return Err(FlussLakeError::PlanningFailed(
             "lake-only reader cannot execute a log range".into(),
         ));
@@ -75,7 +79,7 @@ pub(crate) fn execute_split(
 }
 
 async fn open_logical_stream(
-    descriptor: FlussLakeReadSplit,
+    split: FlussLakeReadSplit,
     scan: Arc<FlussLakeScan>,
     resources: Arc<ReadResources>,
 ) -> Result<RecordBatchStream> {
@@ -91,8 +95,9 @@ async fn open_logical_stream(
                 .map_err(|error| execution_client_error("open Fluss table", error))
         })
         .await?;
-    descriptor.validate_live_table(live)?;
-    let frozen = descriptor.table_info().clone();
+    split.validate_live_table(live)?;
+    let descriptor = split.descriptor();
+    let frozen = split.table_info().clone();
     let table = FlussTable::new(scan.connection(), scan.connection().get_metadata(), frozen);
     let table_info = table.get_table_info();
     let BoundScan {
@@ -118,7 +123,7 @@ async fn open_logical_stream(
             .read(crate::LakeReaderContext {
                 table_info,
                 snapshot_id,
-                semantics: if descriptor.is_primary_key() {
+                semantics: if split.is_primary_key() {
                     crate::LakeReadSemantics::PrimaryKey
                 } else {
                     crate::LakeReadSemantics::Append
@@ -139,7 +144,7 @@ async fn open_logical_stream(
     } else {
         let log_filter = filter.to_pushdown_predicate();
         let log_stream = normalize_stream_schema(
-            open_logical_append_log_stream(&table, &descriptor, &physical, log_filter.as_ref())
+            open_logical_append_log_stream(&table, descriptor, &physical, log_filter.as_ref())
                 .await?,
             physical_schema,
         );
@@ -155,7 +160,7 @@ async fn open_logical_stream(
 
 async fn open_logical_append_log_stream(
     table: &FlussTable<'_>,
-    descriptor: &FlussLakeReadSplit,
+    descriptor: &FlussLakeSplitDescriptor,
     physical: &PhysicalProjection,
     filter: Option<&Predicate>,
 ) -> Result<RecordBatchStream> {
@@ -258,9 +263,8 @@ fn normalize_stream_schema(
     stream: RecordBatchStream,
     expected_schema: arrow::datatypes::SchemaRef,
 ) -> RecordBatchStream {
-    Box::pin(stream.and_then(move |batch| {
-        let expected_schema = expected_schema.clone();
-        async move { normalize_batch_schema(batch, expected_schema) }
+    Box::pin(stream.map(move |result| {
+        result.and_then(|batch| normalize_batch_schema(batch, expected_schema.clone()))
     }))
 }
 
@@ -320,51 +324,47 @@ fn apply_filter_and_projection(
     if matches!(filter, BoundPredicate::AlwaysTrue) && output_column_count.is_none() {
         return stream;
     }
-    let needs_filter = !matches!(filter, BoundPredicate::AlwaysTrue);
-    let filter = match filter.clone().into_evaluator() {
-        Ok(evaluator) => Arc::new(evaluator),
-        Err(error) => {
-            return Box::pin(futures::stream::once(async {
-                Err(predicate_evaluation_error(error))
-            }));
-        }
-    };
-    Box::pin(stream.try_filter_map(move |batch| {
-        let filter = Arc::clone(&filter);
-        async move {
-            let filtered = if !needs_filter {
-                batch
-            } else {
-                let mask = filter
-                    .evaluate_batch(&batch)
-                    .map_err(predicate_evaluation_error)?;
-                let true_count = mask.true_count();
-                if true_count == 0 {
-                    return Ok(None);
-                }
-                if true_count == batch.num_rows() {
-                    batch
-                } else {
-                    filter_record_batch(&batch, &mask).map_err(|error| {
-                        FlussLakeError::Internal(format!(
-                            "failed to apply filter to record batch: {error}"
-                        ))
-                    })?
-                }
-            };
-            if let Some(output_column_count) = output_column_count
-                && filtered.num_columns() != output_column_count
-            {
-                let projection: Vec<usize> = (0..output_column_count).collect();
-                return filtered.project(&projection).map(Some).map_err(|error| {
-                    FlussLakeError::Internal(format!(
-                        "failed to strip hidden UnionRead columns after filtering: {error}"
-                    ))
-                });
+    let evaluator = match filter {
+        BoundPredicate::AlwaysTrue => None,
+        _ => match filter.clone().into_evaluator() {
+            Ok(evaluator) => Some(evaluator),
+            Err(error) => {
+                return Box::pin(futures::stream::once(futures::future::ready(Err(
+                    predicate_evaluation_error(error),
+                ))));
             }
-            Ok(Some(filtered))
+        },
+    };
+    let projection = output_column_count.map(|count| (0..count).collect::<Vec<_>>());
+    let process = move |batch: RecordBatch| {
+        let batch = if let Some(filter) = &evaluator {
+            let mask = filter
+                .evaluate_batch(&batch)
+                .map_err(predicate_evaluation_error)?;
+            match mask.true_count() {
+                0 => return Ok(None),
+                count if count == batch.num_rows() => batch,
+                _ => filter_record_batch(&batch, &mask).map_err(|error| {
+                    FlussLakeError::Internal(format!(
+                        "failed to apply filter to record batch: {error}"
+                    ))
+                })?,
+            }
+        } else {
+            batch
+        };
+        if let Some(indices) = &projection
+            && indices.len() != batch.num_columns()
+        {
+            return batch.project(indices).map(Some).map_err(|error| {
+                FlussLakeError::Internal(format!(
+                    "failed to strip hidden UnionRead columns after filtering: {error}"
+                ))
+            });
         }
-    }))
+        Ok(Some(batch))
+    };
+    Box::pin(stream.try_filter_map(move |batch| futures::future::ready(process(batch))))
 }
 
 /// Slices oversized batches so every emitted batch contains at most
