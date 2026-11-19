@@ -34,6 +34,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.kafka.common.TopicPartition;
@@ -83,13 +84,17 @@ class KafkaProduceConcurrencyITCase {
                     .setTabletServerListeners("FLUSS://localhost:0,KAFKA://localhost:0")
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final String scopedOrderedFirst = tableNames.tableName("ordered_first");
+    private final String scopedOrderedSecond = tableNames.tableName("ordered_second");
+
     @ParameterizedTest
     @ValueSource(shorts = {1, -1})
     void testPipelinedAliasesPreserveNativeOrder(short acks) throws Exception {
         List<TablePath> paths =
                 Arrays.asList(
-                        TablePath.of(DATABASE, "ordered_first"),
-                        TablePath.of(DATABASE, "ordered_second"));
+                        TablePath.of(DATABASE, scopedOrderedFirst),
+                        TablePath.of(DATABASE, scopedOrderedSecond));
         Map<TopicPartition, List<String>> expected = new HashMap<>();
         List<Map<TopicPartition, Long>> expectedOffsets = new ArrayList<>();
         List<RequestHeader> headers = new ArrayList<>();

@@ -30,6 +30,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -55,6 +56,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** The IT case for tiering. */
 abstract class TieringITCase extends FlinkTieringTestBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkTieringTestBase.beforeAll();
@@ -77,9 +80,9 @@ abstract class TieringITCase extends FlinkTieringTestBase {
     @Test
     @MultiVersionTest
     void testTieringReachMaxDuration() throws Exception {
-        TablePath logTablePath = TablePath.of("fluss", "logtable");
+        TablePath logTablePath = tableNames.tablePath("fluss", "logtable");
         createTable(logTablePath, false);
-        TablePath pkTablePath = TablePath.of("fluss", "pktable");
+        TablePath pkTablePath = tableNames.tablePath("fluss", "pktable");
         createTable(pkTablePath, true);
 
         // write some records to log table
@@ -116,7 +119,7 @@ abstract class TieringITCase extends FlinkTieringTestBase {
 
     @Test
     void testTieringReadsRemoteFirstAndSwitchesToLocalTail() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "remote_first_log_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "remote_first_log_table");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())

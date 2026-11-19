@@ -37,9 +37,10 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
   private val TVF = "fluss_incremental_between_timestamp"
 
   test("Spark Lake Read: log table time-range forces log-only (skips lake snapshot)") {
-    withTable("t_lake_tr_log") {
+    val tableName = scopedTableName("t_lake_tr_log")
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_lake_tr_log (id INT, name STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id INT, name STRING)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -47,22 +48,22 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
              |""".stripMargin)
 
       // group 1 (before the window) -> tiered to lake, but also still retained in Fluss
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t_lake_tr_log VALUES (1, "hello"), (2, "world")""")
-      tierToLake("t_lake_tr_log")
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.$tableName VALUES (1, "hello"), (2, "world")""")
+      tierToLake(tableName)
 
       val t1 = System.currentTimeMillis()
       Thread.sleep(50)
       // group 2 (inside the window)
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t_lake_tr_log VALUES (3, "fluss"), (4, "spark")""")
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.$tableName VALUES (3, "fluss"), (4, "spark")""")
       Thread.sleep(500)
       val t2 = System.currentTimeMillis()
       Thread.sleep(50)
       // group 3 (after the window)
-      sql(s"""INSERT INTO $DEFAULT_DATABASE.t_lake_tr_log VALUES (5, "lake")""")
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.$tableName VALUES (5, "lake")""")
       Thread.sleep(200)
 
       val df =
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_lake_tr_log', '$t1', '$t2') ORDER BY id")
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$tableName', '$t1', '$t2') ORDER BY id")
       val partitions = lakeInputPartitions(df)
       assert(partitions.nonEmpty, "expected at least one Fluss log partition")
       assert(
@@ -74,9 +75,10 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
   }
 
   test("Spark Lake Read: pk table time-range forces log-only (skips lake + kv snapshot)") {
-    withTable("t_lake_tr_pk") {
+    val tableName = scopedTableName("t_lake_tr_pk")
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_lake_tr_pk (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -86,16 +88,16 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
 
       // group 1 (before the window) -> tiered to lake, still retained in Fluss changelog
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_lake_tr_pk VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
              |""".stripMargin)
-      tierToLake("t_lake_tr_pk")
+      tierToLake(tableName)
 
       val t1 = System.currentTimeMillis()
       Thread.sleep(50)
       // group 2 (inside the window): update id=2, insert id=4
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_lake_tr_pk VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(2, "bob_updated", 100), (4, "david", 88)
              |""".stripMargin)
       Thread.sleep(500)
@@ -103,13 +105,13 @@ abstract class SparkLakeTimeRangeReadTest extends SparkLakeTableReadTestBase {
       Thread.sleep(50)
       // group 3 (after the window): update id=1, insert id=5
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_lake_tr_pk VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, "alice_updated", 91), (5, "eve", 92)
              |""".stripMargin)
       Thread.sleep(200)
 
       val df =
-        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.t_lake_tr_pk', '$t1', '$t2') ORDER BY id")
+        sql(s"SELECT * FROM $TVF('$DEFAULT_DATABASE.$tableName', '$t1', '$t2') ORDER BY id")
       val partitions = lakeInputPartitions(df)
       assert(partitions.nonEmpty, "expected at least one Fluss changelog partition")
       assert(

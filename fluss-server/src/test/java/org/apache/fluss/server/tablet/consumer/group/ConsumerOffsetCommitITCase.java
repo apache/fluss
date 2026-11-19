@@ -29,7 +29,6 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.ValueDecoder;
@@ -46,6 +45,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -83,12 +83,14 @@ class ConsumerOffsetCommitITCase {
                                     .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 3))
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testCommitConsumerOffsetsAfterLeaderChange() throws Exception {
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
-                        TablePath.of("test_db", "consumer_offset_source"),
+                        tableNames.tablePath("test_db", "consumer_offset_source"),
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()

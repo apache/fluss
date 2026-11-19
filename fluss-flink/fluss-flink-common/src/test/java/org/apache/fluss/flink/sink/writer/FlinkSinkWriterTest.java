@@ -63,8 +63,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class FlinkSinkWriterTest extends FlinkTestBase {
     private static final String DEFAULT_SINK_DB = "test-sink-db";
 
-    private static final TablePath DEFAULT_SINK_TABLE_PATH =
-            TablePath.of(DEFAULT_SINK_DB, "test-sink-table");
+    private final TablePath sinkTablePath =
+            tableNames.tablePath(DEFAULT_SINK_DB, "test-sink-table");
 
     private static final TableDescriptor TABLE_DESCRIPTOR =
             TableDescriptor.builder()
@@ -78,10 +78,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"", "1"})
     void testSinkMetrics(String clientId) throws Exception {
-        admin.createDatabase(
-                        DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
-                .get();
-        createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
+        admin.createDatabase(sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+        createTable(sinkTablePath, TABLE_DESCRIPTOR);
 
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         flussConf.set(ConfigOptions.CLIENT_ID, clientId);
@@ -112,12 +110,10 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
 
     @Test
     void testFlussSchemaChange() throws Exception {
-        admin.createDatabase(
-                        DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
-                .get();
-        createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
+        admin.createDatabase(sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+        createTable(sinkTablePath, TABLE_DESCRIPTOR);
         admin.alterTable(
-                        DEFAULT_SINK_TABLE_PATH,
+                        sinkTablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "c1",
@@ -220,11 +216,9 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             try (Connection connection = ConnectionFactory.createConnection(clientConfig);
                     Admin admin = connection.getAdmin()) {
                 admin.createDatabase(
-                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
-                                DatabaseDescriptor.EMPTY,
-                                true)
+                                sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
-                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+                admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
             }
 
             MockWriterInitContext mockWriterInitContext =
@@ -285,11 +279,9 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             try (Connection connection = ConnectionFactory.createConnection(clientConfig);
                     Admin admin = connection.getAdmin()) {
                 admin.createDatabase(
-                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
-                                DatabaseDescriptor.EMPTY,
-                                true)
+                                sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
-                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+                admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
             }
 
             MockWriterInitContext mockWriterInitContext =
@@ -319,11 +311,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         RowDataSerializationSchema serializationSchema =
                 new RowDataSerializationSchema(true, false);
         return new AppendSinkWriter<>(
-                DEFAULT_SINK_TABLE_PATH,
-                configuration,
-                tableRowType,
-                mailboxExecutor,
-                serializationSchema);
+                sinkTablePath, configuration, tableRowType, mailboxExecutor, serializationSchema);
     }
 
     static class MockSinkWriterContext implements SinkWriter.Context {

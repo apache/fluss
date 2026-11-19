@@ -43,6 +43,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -77,9 +78,11 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
                     .column("score", DataTypes.BIGINT())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testSingleTableSubscribeAndPoll() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_single");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_single");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -121,7 +124,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollReturnsProgressOnlyRecords() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_progress_only");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_progress_only");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(LOG_SCHEMA)
@@ -169,7 +172,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testWrongOverloadSubscribeDoesNotRegisterTable() throws Exception {
         TablePath partitionedPath =
-                TablePath.of(TEST_DB, "multi_scanner_wrong_overload_partitioned");
+                tableNames.tablePath(TEST_DB, "multi_scanner_wrong_overload_partitioned");
         Schema partitionedSchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -185,7 +188,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
                 false);
 
         TablePath nonPartitionedPath =
-                TablePath.of(TEST_DB, "multi_scanner_wrong_overload_non_partitioned");
+                tableNames.tablePath(TEST_DB, "multi_scanner_wrong_overload_non_partitioned");
         createTable(
                 nonPartitionedPath,
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build(),
@@ -214,8 +217,8 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testMultipleTableSubscribeAndPoll() throws Exception {
-        TablePath tablePath1 = TablePath.of(TEST_DB, "multi_scanner_t1");
-        TablePath tablePath2 = TablePath.of(TEST_DB, "multi_scanner_t2");
+        TablePath tablePath1 = tableNames.tablePath(TEST_DB, "multi_scanner_t1");
+        TablePath tablePath2 = tableNames.tablePath(TEST_DB, "multi_scanner_t2");
         TableDescriptor descriptor1 =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         TableDescriptor descriptor2 =
@@ -288,7 +291,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testUnsubscribe() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_unsub");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_unsub");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(2).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -346,7 +349,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollWithoutSubscription() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_no_sub");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_no_sub");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         createTable(tablePath, descriptor, false);
@@ -361,7 +364,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollAfterClose() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_closed");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_closed");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         createTable(tablePath, descriptor, false);
@@ -377,7 +380,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedTableSubscribeAndPoll() throws Exception {
         // Create a partitioned log table with partition key "pt".
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_partitioned");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_partitioned");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -462,7 +465,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedAndNonPartitionedMixed() throws Exception {
         // Table 1: partitioned log table.
-        TablePath tablePath1 = TablePath.of(TEST_DB, "multi_scanner_part_mix1");
+        TablePath tablePath1 = tableNames.tablePath(TEST_DB, "multi_scanner_part_mix1");
         Schema schema1 =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -486,7 +489,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
         assertThat(partitionIdByNames).isNotEmpty();
 
         // Table 2: non-partitioned log table.
-        TablePath tablePath2 = TablePath.of("test_db", "multi_scanner_part_mix2");
+        TablePath tablePath2 = tableNames.tablePath("test_db", "multi_scanner_part_mix2");
         TableDescriptor descriptor2 =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId2 = createTable(tablePath2, descriptor2, true);
@@ -552,7 +555,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testMultipleBucketsOfSameTable() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_buckets");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_buckets");
         int bucketCount = 3;
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(bucketCount).build();
@@ -593,7 +596,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testReadDataBeforeAndAfterAddColumn() throws Exception {
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_add_col");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_add_col");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, descriptor, false);
@@ -672,7 +675,7 @@ public class MultiTableLogScannerITCase extends ClientToServerITCaseBase {
         // the same path must detect the tableId change (once the shared connection metadata learns
         // the new id) and fail fast. Recovery: unsubscribe all stale buckets (which evicts the
         // cached registration) and subscribe again, which re-resolves the recreated table.
-        TablePath tablePath = TablePath.of(TEST_DB, "multi_scanner_drop_recreate");
+        TablePath tablePath = tableNames.tablePath(TEST_DB, "multi_scanner_drop_recreate");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long oldTableId = createTable(tablePath, descriptor, false);

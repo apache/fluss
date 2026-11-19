@@ -36,6 +36,7 @@ import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -76,6 +77,8 @@ class KvReplicaRestoreITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
 
     @BeforeEach
@@ -98,7 +101,7 @@ class KvReplicaRestoreITCase {
                             .distributedBy(3, "a")
                             .logFormat(i % 2 == 0 ? LogFormat.ARROW : LogFormat.COMPACTED)
                             .build();
-            TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "test_table_" + i);
             long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
@@ -219,7 +222,7 @@ class KvReplicaRestoreITCase {
         // Create a primary key table
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
-        TablePath tablePath = TablePath.of("test_db", "test_row_count_recovery");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_row_count_recovery");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tableBucket = new TableBucket(tableId, 0);
 

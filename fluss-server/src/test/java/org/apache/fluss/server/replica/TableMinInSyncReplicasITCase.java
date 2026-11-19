@@ -29,6 +29,7 @@ import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -61,11 +62,13 @@ class TableMinInSyncReplicasITCase {
                     .setClusterConf(clusterConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testCreateAndRejectAlter(boolean primaryKey) throws Exception {
         String key = ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS.key();
-        TablePath overriddenPath = TablePath.of("min_isr", "overridden_" + primaryKey);
+        TablePath overriddenPath = tableNames.tablePath("min_isr", "overridden_" + primaryKey);
         TableDescriptor overriddenDescriptor =
                 TableDescriptor.builder()
                         .schema(primaryKey ? DATA1_SCHEMA_PK : DATA1_SCHEMA)
@@ -81,7 +84,7 @@ class TableMinInSyncReplicasITCase {
 
         Map<String, String> properties = new HashMap<>(overriddenDescriptor.getProperties());
         properties.remove(key);
-        TablePath inheritedPath = TablePath.of("min_isr", "inherited_" + primaryKey);
+        TablePath inheritedPath = tableNames.tablePath("min_isr", "inherited_" + primaryKey);
         long inheritedId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,

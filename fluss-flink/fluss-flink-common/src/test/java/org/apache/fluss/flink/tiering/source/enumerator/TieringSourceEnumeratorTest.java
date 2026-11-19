@@ -116,7 +116,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         Long partitionId = partitioned ? 2L : null;
         TableInfo tableInfo =
                 TableInfo.of(
-                        DEFAULT_TABLE_PATH,
+                        defaultTablePath,
                         tableId,
                         1,
                         partitioned
@@ -202,7 +202,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         lakeSnapshot.set(new LakeSnapshot(1, committedOffsets));
         offsets.replaceAll((bucket, offset) -> CompletableFuture.completedFuture(10L));
         TieringLogSplit logSplit =
-                new TieringLogSplit(DEFAULT_TABLE_PATH, bucket0, partitionName, 0, 10, 0);
+                new TieringLogSplit(defaultTablePath, bucket0, partitionName, 0, 10, 0);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions)).containsExactly(logSplit);
         assertThat(kvSnapshotRequests).hasValue(0);
@@ -212,15 +212,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         lakeSnapshot.set(new LakeSnapshot(2, committedOffsets));
         TieringLogSplit bucket1LogSplit =
                 new TieringLogSplit(
-                        DEFAULT_TABLE_PATH, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
+                        defaultTablePath, bucket1, partitionName, EARLIEST_OFFSET, 10, 0);
         TieringLogSplit bucket2LogSplit =
                 new TieringLogSplit(
-                        DEFAULT_TABLE_PATH, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
+                        defaultTablePath, bucket2, partitionName, EARLIEST_OFFSET, 10, 0);
         TieringSplit untieredBucketSplit =
                 historicalPartition
                         ? bucket2LogSplit
                         : new TieringSnapshotSplit(
-                                DEFAULT_TABLE_PATH, bucket2, partitionName, 1, 6, 0);
+                                defaultTablePath, bucket2, partitionName, 1, 6, 0);
 
         assertThat(generator.generateTableSplits(tableInfo, partitions))
                 .containsExactly(logSplit, bucket1LogSplit, untieredBucketSplit);
@@ -251,7 +251,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testPrimaryKeyTableWithNoSnapshotSplits(boolean markDoneEnabled) throws Throwable {
-        TablePath tablePath = DEFAULT_TABLE_PATH;
+        TablePath tablePath = defaultTablePath;
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
@@ -330,7 +330,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testPrimaryKeyTableWithSnapshotSplits() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-pk-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "tiering-test-pk-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
         final Map<Integer, Long> bucketOffsetOfInitialWrite =
@@ -416,7 +416,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testLogTableSplits() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-log-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "tiering-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
@@ -501,7 +501,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testPartitionedPrimaryKeyTable() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-partitioned-pk-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "tiering-test-partitioned-pk-table");
         long tableId =
                 createPartitionedTable(tablePath, DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR);
         Map<String, Long> partitionNameByIds =
@@ -622,7 +622,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testPartitionedLogTableSplits() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-test-partitioned-log-table");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "tiering-test-partitioned-log-table");
         long tableId =
                 createPartitionedTable(tablePath, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
         Map<String, Long> partitionNameByIds =
@@ -744,7 +745,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testHandleFailedTieringTableEvent() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-fail-test-log-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "tiering-fail-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
@@ -801,11 +802,11 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                 TableDescriptor.builder(DEFAULT_LOG_TABLE_DESCRIPTOR)
                         .distributedBy(4, "id")
                         .build();
-        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table1");
+        TablePath tablePath1 = tableNames.tablePath(DEFAULT_DB, "tiering-failover-test-log-table1");
         createTable(tablePath1, tableDescriptor);
         appendRow(tablePath1, tableDescriptor, 0, 10);
 
-        TablePath tablePath2 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table2");
+        TablePath tablePath2 = tableNames.tablePath(DEFAULT_DB, "tiering-failover-test-log-table2");
         createTable(tablePath2, tableDescriptor);
         appendRow(tablePath2, tableDescriptor, 0, 10);
 
@@ -1000,7 +1001,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testTableValidationFailureDoesNotAssignSplits() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-validation-failure");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "tiering-validation-failure");
         createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         AtomicReference<TableInfo> validatedTable = new AtomicReference<>();
         TestingLakeTieringFactory lakeTieringFactory =
@@ -1048,7 +1049,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
     @Test
     void testTableReachMaxTieringDuration() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-max-duration-test-log-table");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "tiering-max-duration-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
         int numSubtasks = 2;
 

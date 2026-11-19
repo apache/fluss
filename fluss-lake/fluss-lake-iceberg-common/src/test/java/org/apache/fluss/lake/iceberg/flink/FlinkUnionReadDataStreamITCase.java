@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -85,6 +86,8 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     private static final int[] FULL_PARTITIONED_COLS = new int[] {0, 1, 2, 3};
     private static final int[] PROJECTED_ID_AMOUNT_COLS = new int[] {0, 2};
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -95,7 +98,9 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testUnionReadLogTable(boolean isPartitioned) throws Exception {
         JobClient tieringJob = buildTieringJob(execEnv);
 
-        String tableName = "ds_union_log_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "ds_union_log_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createLogTable(tablePath, isPartitioned);
         List<String> partitions = partitionsOf(tablePath, isPartitioned);
@@ -129,7 +134,9 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testUnionReadPrimaryKeyTable(boolean isPartitioned) throws Exception {
         JobClient tieringJob = buildTieringJob(execEnv);
 
-        String tableName = "ds_union_pk_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "ds_union_pk_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createPkTable(tablePath, isPartitioned);
         List<String> partitions = partitionsOf(tablePath, isPartitioned);
@@ -165,7 +172,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testUnionReadWithProjectionPushdown() throws Exception {
         JobClient tieringJob = buildTieringJob(execEnv);
 
-        String tableName = "ds_union_projection";
+        String tableName = tableNames.tableName("ds_union_projection");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createLogTable(tablePath, false);
 
@@ -194,7 +201,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testUnionReadWithFilterPushdown() throws Exception {
         JobClient tieringJob = buildTieringJob(execEnv);
 
-        String tableName = "ds_union_filter";
+        String tableName = tableNames.tableName("ds_union_filter");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createLogTable(tablePath, false);
 
@@ -236,7 +243,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
 
     @Test
     void testBatchRequiresFullStartupModeFailsFast() throws Exception {
-        String tableName = "ds_batch_invalid_startup";
+        String tableName = tableNames.tableName("ds_batch_invalid_startup");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         createPkTable(tablePath, false);
 
@@ -259,7 +266,7 @@ public class FlinkUnionReadDataStreamITCase extends FlinkUnionReadTestBase {
     void testBatchUnionReadLogTable() throws Exception {
         JobClient tieringJob = buildTieringJob(execEnv);
 
-        String tableName = "ds_batch_union_log";
+        String tableName = tableNames.tableName("ds_batch_union_log");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         long tableId = createLogTable(tablePath, false);
 

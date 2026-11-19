@@ -41,6 +41,7 @@ import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.kafka.clients.CommonClientConfigs;
@@ -101,8 +102,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class KafkaSaslPlainAuthenticationITCase {
 
     private static final String DATABASE = "fluss";
-    private static final String TABLE_NAME = "sasl-plain-topic";
-    private static final String TOPIC = DATABASE + "." + TABLE_NAME;
     private static final String USERNAME = "writer";
     private static final String PASSWORD = "writer-secret";
     private static final byte[] KEY = "authenticated-key".getBytes(StandardCharsets.UTF_8);
@@ -116,6 +115,10 @@ public class KafkaSaslPlainAuthenticationITCase {
                     .setTabletServerListeners("FLUSS://localhost:0,KAFKA://localhost:0")
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final String tableName = tableNames.tableName("sasl-plain-topic");
+    private final String topic = DATABASE + "." + tableName;
+
     private Connection connection;
     private org.apache.fluss.client.admin.Admin flussAdmin;
     private String bootstrapServers;
@@ -127,7 +130,7 @@ public class KafkaSaslPlainAuthenticationITCase {
         flussAdmin.createDatabase(DATABASE, DatabaseDescriptor.EMPTY, true).get();
         flussAdmin
                 .createTable(
-                        TablePath.of(DATABASE, TABLE_NAME),
+                        TablePath.of(DATABASE, tableName),
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
@@ -144,7 +147,7 @@ public class KafkaSaslPlainAuthenticationITCase {
                         false)
                 .get();
         long tableId =
-                flussAdmin.getTableInfo(TablePath.of(DATABASE, TABLE_NAME)).get().getTableId();
+                flussAdmin.getTableInfo(TablePath.of(DATABASE, tableName)).get().getTableId();
         // Wait for leadership before testing authorization and Produce.
         FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(new TableBucket(tableId, 0));
         bootstrapServers =
@@ -157,7 +160,7 @@ public class KafkaSaslPlainAuthenticationITCase {
     public void teardown() throws Exception {
         if (flussAdmin != null) {
             try {
-                flussAdmin.dropTable(TablePath.of(DATABASE, TABLE_NAME), true).get();
+                flussAdmin.dropTable(TablePath.of(DATABASE, tableName), true).get();
             } catch (Exception ignored) {
                 // Preserve the primary test failure when cleanup cannot complete.
             }
@@ -185,17 +188,17 @@ public class KafkaSaslPlainAuthenticationITCase {
         try (Admin admin = Admin.create(kafkaClientConfig(USERNAME, PASSWORD));
                 KafkaProducer<byte[], byte[]> producer = producer(USERNAME, PASSWORD)) {
             assertThat(
-                            admin.describeTopics(Collections.singleton(TOPIC))
+                            admin.describeTopics(Collections.singleton(topic))
                                     .allTopicNames()
                                     .get(30, TimeUnit.SECONDS))
-                    .containsKey(TOPIC);
+                    .containsKey(topic);
             assertThat(
-                            producer.send(new ProducerRecord<byte[], byte[]>(TOPIC, KEY, null))
+                            producer.send(new ProducerRecord<byte[], byte[]>(topic, KEY, null))
                                     .get(30, TimeUnit.SECONDS)
                                     .offset())
                     .isZero();
             assertThat(
-                            producer.send(new ProducerRecord<>(TOPIC, KEY, VALUE))
+                            producer.send(new ProducerRecord<>(topic, KEY, VALUE))
                                     .get(30, TimeUnit.SECONDS)
                                     .offset())
                     .isEqualTo(1L);
@@ -207,10 +210,10 @@ public class KafkaSaslPlainAuthenticationITCase {
     public void testMetadataHidesTablesWithoutDescribePermission() throws Exception {
         try (Admin admin = Admin.create(kafkaClientConfig(USERNAME, PASSWORD))) {
             // Native Fluss Metadata omits unauthorized tables, keeping their existence private.
-            assertThat(admin.listTopics().names().get(30, TimeUnit.SECONDS)).doesNotContain(TOPIC);
+            assertThat(admin.listTopics().names().get(30, TimeUnit.SECONDS)).doesNotContain(topic);
             assertThatThrownBy(
                             () ->
-                                    admin.describeTopics(Collections.singleton(TOPIC))
+                                    admin.describeTopics(Collections.singleton(topic))
                                             .allTopicNames()
                                             .get(30, TimeUnit.SECONDS))
                     .hasRootCauseInstanceOf(UnknownTopicOrPartitionException.class);
@@ -230,7 +233,7 @@ public class KafkaSaslPlainAuthenticationITCase {
                     .singleElement()
                     .satisfies(
                             topic -> {
-                                assertThat(topic.name()).isEqualTo(TOPIC);
+                                assertThat(topic.name()).isEqualTo(this.topic);
                                 assertThat(topic.errorCode()).isEqualTo(Errors.NONE.code());
                                 assertThat(topic.partitions()).hasSize(1);
                             });
@@ -260,9 +263,9 @@ public class KafkaSaslPlainAuthenticationITCase {
         grantAccess("reader", OperationType.DESCRIBE);
         try (KafkaProducer<byte[], byte[]> writer = producer(USERNAME, PASSWORD);
                 KafkaProducer<byte[], byte[]> reader = producer("reader", "reader-secret")) {
-            writer.send(new ProducerRecord<>(TOPIC, KEY, VALUE)).get(30, TimeUnit.SECONDS);
-            assertThat(reader.partitionsFor(TOPIC)).hasSize(1);
-            assertDeniedValues(reader, TOPIC);
+            writer.send(new ProducerRecord<>(topic, KEY, VALUE)).get(30, TimeUnit.SECONDS);
+            assertThat(reader.partitionsFor(topic)).hasSize(1);
+            assertDeniedValues(reader, topic);
 
             Collection<AclBinding> removed =
                     flussAdmin
@@ -272,7 +275,7 @@ public class KafkaSaslPlainAuthenticationITCase {
             FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(removed, false);
             grantAccess(USERNAME, OperationType.DESCRIBE);
             // Revocation must also apply to an already authenticated producer with cached metadata.
-            assertDeniedValues(writer, TOPIC);
+            assertDeniedValues(writer, topic);
         }
         assertRecords("authenticated-value");
     }
@@ -412,8 +415,8 @@ public class KafkaSaslPlainAuthenticationITCase {
         output.flush();
     }
 
-    private static MetadataRequest metadataRequest() {
-        return new MetadataRequest.Builder(Collections.singletonList(TOPIC), false)
+    private MetadataRequest metadataRequest() {
+        return new MetadataRequest.Builder(Collections.singletonList(topic), false)
                 .build((short) 9);
     }
 
@@ -456,7 +459,7 @@ public class KafkaSaslPlainAuthenticationITCase {
     private void grantAccess(String username, OperationType operation) throws Exception {
         AclBinding aclBinding =
                 new AclBinding(
-                        Resource.table(TablePath.of(DATABASE, TABLE_NAME)),
+                        Resource.table(TablePath.of(DATABASE, tableName)),
                         new AccessControlEntry(
                                 new FlussPrincipal(username, "User"),
                                 AccessControlEntry.WILD_CARD_HOST,
@@ -468,7 +471,7 @@ public class KafkaSaslPlainAuthenticationITCase {
     }
 
     private void assertRecords(String... expectedValues) throws Exception {
-        try (Table table = connection.getTable(TablePath.of(DATABASE, TABLE_NAME));
+        try (Table table = connection.getTable(TablePath.of(DATABASE, tableName));
                 LogScanner scanner = table.newScan().createLogScanner()) {
             scanner.subscribeFromBeginning(0);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);

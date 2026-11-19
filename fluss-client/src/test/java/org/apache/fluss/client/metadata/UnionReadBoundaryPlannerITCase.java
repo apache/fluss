@@ -40,6 +40,7 @@ import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.rpc.messages.PbUnionReadContext;
 import org.apache.fluss.rpc.messages.PbUnionReadLogRange;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -68,9 +69,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Exercises the public capture entry against the ordinary Java client test cluster. */
 class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testPartitionScopeAndConcurrentCapture() throws Exception {
-        TablePath path = TablePath.of("union_read_boundary", "double_partitions");
+        TablePath path = tableNames.tablePath("union_read_boundary", "double_partitions");
         long tableId =
                 createTable(
                         path,
@@ -221,7 +224,7 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testInterruptedCaptureStopsOffsetRequests() throws Exception {
-        TablePath path = TablePath.of("union_read_boundary", "interrupted_capture");
+        TablePath path = tableNames.tablePath("union_read_boundary", "interrupted_capture");
         createTable(
                 path,
                 TableDescriptor.builder()
@@ -255,7 +258,7 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCaptureReadableSnapshotAndLogTail() throws Exception {
-        TablePath path = TablePath.of("union_read_boundary_lake", "events");
+        TablePath path = tableNames.tablePath("union_read_boundary_lake", "events");
         long tableId =
                 createTable(
                         path,
@@ -298,7 +301,7 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPkBaselineSelection() throws Exception {
-        TablePath path = TablePath.of("union_read_boundary", "pk_baseline");
+        TablePath path = tableNames.tablePath("union_read_boundary", "pk_baseline");
         long tableId =
                 createTable(
                         path,
@@ -420,7 +423,7 @@ class UnionReadBoundaryPlannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {false, true})
     void testRecreatedPartitionIsExcludedWithoutHidingLivePartitionErrors(boolean lookupFails)
             throws Exception {
-        TablePath path = TablePath.of("union_read_boundary", "partition_recreation");
+        TablePath path = tableNames.tablePath("union_read_boundary", "partition_recreation");
         createTable(
                 path,
                 TableDescriptor.builder()

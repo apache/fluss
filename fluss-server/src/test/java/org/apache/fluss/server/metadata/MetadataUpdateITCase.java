@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -38,6 +39,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,8 +60,6 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
@@ -76,6 +76,10 @@ class MetadataUpdateITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data2TablePath = tableNames.tablePath(TestData.DATA2_TABLE_PATH);
 
     private CoordinatorGateway coordinatorGateway;
     private ServerNode coordinatorServerNode;
@@ -96,7 +100,7 @@ class MetadataUpdateITCase {
 
     @Test
     void testMetadataRequestReloadsIncompleteTableCache() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "incomplete_table_metadata");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "incomplete_table_metadata");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
@@ -128,7 +132,7 @@ class MetadataUpdateITCase {
     void testMetadataRequestReloadsIncompletePartitionCache(boolean explicitCount)
             throws Exception {
         TablePath tablePath =
-                TablePath.of("test_db_1", "incomplete_partition_metadata_" + explicitCount);
+                tableNames.tablePath("test_db_1", "incomplete_partition_metadata_" + explicitCount);
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -190,17 +194,17 @@ class MetadataUpdateITCase {
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
         // create non-partitioned table
         long tableId1 =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId1, new TableContext(false, false, DATA1_TABLE_PATH, tableId1, null));
+                tableId1, new TableContext(false, false, data1TablePath, tableId1, null));
         // create partitioned table
         long tableId2 =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
-                        DATA2_TABLE_PATH,
+                        data2TablePath,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId2, new TableContext(false, true, DATA2_TABLE_PATH, tableId2, null));
+                tableId2, new TableContext(false, true, data2TablePath, tableId2, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -271,10 +275,9 @@ class MetadataUpdateITCase {
         assertUpdateMetadataEquals(
                 coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId, new TableContext(false, false, DATA1_TABLE_PATH, tableId, null));
+                tableId, new TableContext(false, false, data1TablePath, tableId, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -285,7 +288,7 @@ class MetadataUpdateITCase {
                                 Collections.emptyMap()));
 
         // create a partitioned table.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath partitionTablePath = tableNames.tablePath("test_db_1", "test_partition_table_1");
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -310,11 +313,9 @@ class MetadataUpdateITCase {
         // test drop table.
         coordinatorGateway.dropTable(
                 newDropTableRequest(
-                        DATA1_TABLE_PATH.getDatabaseName(),
-                        DATA1_TABLE_PATH.getTableName(),
-                        false));
+                        data1TablePath.getDatabaseName(), data1TablePath.getTableName(), false));
         expectedTablePathById.put(
-                tableId, new TableContext(true, false, DATA1_TABLE_PATH, tableId, null));
+                tableId, new TableContext(true, false, data1TablePath, tableId, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -354,7 +355,7 @@ class MetadataUpdateITCase {
                 coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
         // create a partitioned table.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath partitionTablePath = tableNames.tablePath("test_db_1", "test_partition_table_1");
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)

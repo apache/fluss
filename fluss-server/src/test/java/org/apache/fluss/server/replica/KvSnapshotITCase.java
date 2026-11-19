@@ -32,6 +32,7 @@ import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -69,6 +70,8 @@ class KvSnapshotITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
     private CoordinatorService coordinatorService;
     private String remoteDataDir;
@@ -90,7 +93,7 @@ class KvSnapshotITCase {
         List<TableBucket> tableBuckets = new ArrayList<>();
         Map<Long, TablePath> tablePathMap = new HashMap<>();
         for (int i = 0; i < tableNum; i++) {
-            TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "test_table_" + i);
             long tableId =
                     RpcMessageTestUtils.createTable(
                             FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);

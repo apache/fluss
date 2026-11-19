@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
@@ -116,6 +117,10 @@ abstract class FlinkCatalogITCase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static FlinkCatalog catalog;
+
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final String scopedAppendOnlyTable = tableNames.tableName("append_only_table");
 
     protected TableEnvironment tEnv;
 
@@ -318,7 +323,7 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterPartitionedTableBucketCount() throws Exception {
-        String tableName = "test_alter_partitioned_table_bucket_count";
+        String tableName = tableNames.tableName("test_alter_partitioned_table_bucket_count");
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tableName);
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         tEnv.executeSql(
@@ -359,11 +364,13 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterTableSchema() throws Exception {
-        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "append_only_table");
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, scopedAppendOnlyTable);
         tEnv.executeSql(
-                        "create table append_only_table(a int, b STRING) with ('bucket.num' = '10')")
+                        ("create table "
+                                + scopedAppendOnlyTable
+                                + "(a int, b STRING) with ('bucket.num' = '10')"))
                 .await();
-        tEnv.executeSql("alter table append_only_table add c int").await();
+        tEnv.executeSql(("alter table " + scopedAppendOnlyTable + " add c int")).await();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
 
         Schema.Builder schemaBuilder = Schema.newBuilder();
@@ -394,13 +401,16 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testCreateNoPkTable() throws Exception {
-        tEnv.executeSql("create table append_only_table(a int, b int) with ('bucket.num' = '10')");
+        tEnv.executeSql(
+                ("create table "
+                        + scopedAppendOnlyTable
+                        + "(a int, b int) with ('bucket.num' = '10')"));
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.INT());
         addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table =
-                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "append_only_table"));
+                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, scopedAppendOnlyTable));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "10");
@@ -876,7 +886,7 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterTableWatermark() throws Exception {
-        String tableName = "test_watermark_table";
+        String tableName = tableNames.tableName("test_watermark_table");
         ObjectPath tablePath = new ObjectPath(DEFAULT_DB, tableName);
 
         // 1. create table without watermark
@@ -1343,7 +1353,7 @@ abstract class FlinkCatalogITCase {
     @Test
     @MultiVersionTest
     void testBucketsVirtualTable() throws Exception {
-        String tableName = "table_for_buckets";
+        String tableName = tableNames.tableName("table_for_buckets");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         ObjectPath bucketsPath =
                 new ObjectPath(DEFAULT_DB, tableName + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
@@ -1410,7 +1420,7 @@ abstract class FlinkCatalogITCase {
                                     });
                 });
 
-        String partitionedTableName = "partitioned_table_for_buckets";
+        String partitionedTableName = tableNames.tableName("partitioned_table_for_buckets");
         tEnv.executeSql(
                 "CREATE TABLE "
                         + partitionedTableName

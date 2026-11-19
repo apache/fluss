@@ -32,8 +32,10 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -55,7 +57,6 @@ import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -63,14 +64,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** ITCase for {@link LogScannerImpl}. */
 public class LogScannerITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     @Test
     void testPoll() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -96,7 +100,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollReturnsProgressOnlyRecords() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_log_scanner_progress_only");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_log_scanner_progress_only");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -130,12 +134,12 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         int bucketNumber = 30;
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        createTable(data1TablePath, tableDescriptor, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -161,12 +165,12 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLogScannerMultiThreadAccess() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -314,7 +318,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromStartTimestamp(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_db_1",
                         "test_scan_from_timestamp" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
@@ -417,7 +421,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromLatestOffsets(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_db_1",
                         "test_scan_from_latest_offsets" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
@@ -476,7 +480,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testSubscribeOutOfRangeLog() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_subscribe_out_of_range_log");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_subscribe_out_of_range_log");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -508,7 +512,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollArrowBatchesWithSchemaEvolution() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_arrow_batches_with_schema_evolution");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)

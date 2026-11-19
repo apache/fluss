@@ -42,6 +42,7 @@ import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -96,6 +97,8 @@ public abstract class FlinkProcedureITCase {
     static String bootstrapServers;
     static Connection conn;
     static Admin admin;
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     TableEnvironment tEnv;
 
@@ -192,7 +195,7 @@ public abstract class FlinkProcedureITCase {
 
     @Test
     void testListPartitionInfos() throws Exception {
-        String tableName = "partition_infos_table";
+        String tableName = tableNames.tableName("partition_infos_table");
         tEnv.executeSql(
                 String.format(
                         "create table %s (a int, b varchar) partitioned by (b) "
@@ -1003,7 +1006,7 @@ public abstract class FlinkProcedureITCase {
 
         // first create some unbalance assignment table.
         for (int i = 0; i < 2; i++) {
-            String tableName = "reblance_test_tab_" + i;
+            String tableName = tableNames.tableName("reblance_test_tab_" + i);
             tEnv.executeSql(
                     String.format(
                             "create table %s (a int, b varchar, c bigint, d int ) "
@@ -1096,7 +1099,7 @@ public abstract class FlinkProcedureITCase {
 
         // first create some unbalance assignment table.
         for (int i = 0; i < 10; i++) {
-            String tableName = "reblance_test_tab_" + i;
+            String tableName = tableNames.tableName("reblance_test_tab_" + i);
             tEnv.executeSql(
                     String.format(
                             "create table %s (a int, b varchar, c bigint, d int ) "

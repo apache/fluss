@@ -87,7 +87,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
     void testSnapshotAndChangelog(KvFormat format, KvBatchStrategy strategy, boolean withSnapshot)
             throws Exception {
         TablePath path =
-                TablePath.of(
+                tableNames.tablePath(
                         DEFAULT_DB,
                         "full-cache-cdc-" + format + "-" + strategy + "-" + withSnapshot);
         createTable(
@@ -159,7 +159,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testEmptySnapshotAndClose() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-empty");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-empty");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));
         FullCacheLookupTable lookupTable = lookupTable(path, DEFAULT_BUCKET_NUM);
         MetricGroup metricGroup = mock(MetricGroup.class);
@@ -190,7 +190,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testCloseWinsOverQueuedBootstrapPublication() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-bootstrap-close");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-bootstrap-close");
         try (FullCacheLookupTable lookupTable = lookupTable(path, DEFAULT_BUCKET_NUM)) {
             Field lockField = FullCacheLookupTable.class.getDeclaredField("stateLock");
             lockField.setAccessible(true);
@@ -224,7 +224,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testCloseInterruptsWorkerWhileBatchHoldsCacheLock() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-close-blocked-batch");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-close-blocked-batch");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));
         CountDownLatch batchStarted = new CountDownLatch(1);
         CountDownLatch batchInterrupted = new CountDownLatch(1);
@@ -298,7 +298,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testClosedBatchDoesNotPublishWorkerFailure() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-closed-batch");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-closed-batch");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));
         TestingMetricGroup metrics = new TestingMetricGroup();
         try (FullCacheLookupTable lookupTable = lookupTable(path, DEFAULT_BUCKET_NUM)) {
@@ -315,7 +315,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testFirstWorkerFailureCannotBeOverwrittenOrMadeReady() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-first-failure");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-first-failure");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));
         TestingMetricGroup metrics = new TestingMetricGroup();
         try (FullCacheLookupTable lookupTable = lookupTable(path, DEFAULT_BUCKET_NUM)) {
@@ -347,7 +347,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
 
     @Test
     void testFailedBatchCannotBeRead() throws Exception {
-        TablePath path = TablePath.of(DEFAULT_DB, "full-cache-failure");
+        TablePath path = tableNames.tablePath(DEFAULT_DB, "full-cache-failure");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));
         ExecutorService executor = Executors.newFixedThreadPool(2);
         CountDownLatch partialWrite = new CountDownLatch(1);
@@ -398,7 +398,7 @@ class FullCacheLookupTableTest extends FlinkTestBase {
     @MethodSource("pollingFailures")
     void testEscapedPollingFailureStopsWorker(RuntimeException failure) throws Exception {
         TablePath path =
-                TablePath.of(
+                tableNames.tablePath(
                         DEFAULT_DB,
                         "full-cache-poll-failure-" + failure.getClass().getSimpleName());
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(createTable(path, DEFAULT_PK_TABLE_DESCRIPTOR));

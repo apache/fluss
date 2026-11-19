@@ -201,7 +201,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     @CsvSource({"false, 0", "false, 2", "false, 3", "true, 0", "true, 2", "true, 3"})
     void testFilterUnchangedUpdatesFromConfiguration(boolean enabled, int projectedColumnCount)
             throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "configured_projected_updates");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "configured_projected_updates");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -274,7 +274,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testSanityCheck() throws Exception {
-        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "test1");
+        TablePath tablePath1 = tableNames.tablePath(DEFAULT_DB, "test1");
         Schema schema1 =
                 Schema.newBuilder()
                         .primaryKey("id")
@@ -335,7 +335,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testHandleHybridSnapshotLogSplitChangesAndFetch() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-only-snapshot-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (FlinkSourceSplitReader splitReader =
                 createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
@@ -369,7 +369,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testTableIdChange() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-only-snapshot-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (FlinkSourceSplitReader splitReader =
                 createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
@@ -383,7 +383,13 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                                     null,
                                                                     0)))))
                     .hasMessageContaining(
-                            "Table ID mismatch: expected 0, but split contains 1 for table 'test-flink-db.test-only-snapshot-table'. "
+                            "Table ID mismatch: expected "
+                                    + tableId
+                                    + ", but split contains "
+                                    + (tableId + 1)
+                                    + " for table '"
+                                    + tablePath
+                                    + "'. "
                                     + "This usually happens when a table with the same name was dropped and recreated between job runs, "
                                     + "causing metadata inconsistency. To resolve this, please restart the job **without** using "
                                     + "the previous savepoint or checkpoint.");
@@ -417,7 +423,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
         final TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(1).build();
-        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "test-only-log-table");
+        TablePath tablePath1 = tableNames.tablePath(DEFAULT_DB, "test-only-log-table");
         long tableId = createTable(tablePath1, tableDescriptor);
 
         try (FlinkSourceSplitReader splitReader =
@@ -457,7 +463,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         .column("id", DataTypes.INT())
                         .column("name", DataTypes.STRING())
                         .build();
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-pending-records-metric");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-pending-records-metric");
         long tableId =
                 createTable(
                         tablePath,
@@ -578,7 +584,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testHandleMixSnapshotLogSplitChangesAndFetch() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-mix-snapshot-log-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-mix-snapshot-log-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
         try (FlinkSourceSplitReader splitReader =
@@ -642,7 +648,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testHandleKvBatchSplitChangesAndFetch() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-batch-split-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-kv-batch-split-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (FlinkSourceSplitReader splitReader =
                 createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
@@ -671,7 +677,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testNoSubscribedBucket() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-no-subscribe-bucket-table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-no-subscribe-bucket-table");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -691,7 +697,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testSubscribeEmptySplits() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-subscribe-empty-splits");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-subscribe-empty-splits");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())

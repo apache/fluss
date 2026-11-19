@@ -20,6 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.JobID;
@@ -134,6 +135,9 @@ public abstract class MaterializedTableITCase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final String scopedShopDetail = tableNames.tableName("shop_detail");
+
     protected SessionHandle sessionHandle;
     protected RestClusterClient<?> restClusterClient;
 
@@ -168,14 +172,16 @@ public abstract class MaterializedTableITCase {
     @MultiVersionTest
     void testCreateMaterializedTableInContinuousMode() throws Exception {
         String materializedTableDDL =
-                "CREATE MATERIALIZED TABLE shop_detail\n"
+                ("CREATE MATERIALIZED TABLE "
+                        + scopedShopDetail
+                        + "\n"
                         + " FRESHNESS = INTERVAL '3' SECOND\n"
                         + " AS SELECT \n"
                         + "  DATE_FORMAT(order_created_at, 'yyyy-MM-dd') AS ds,\n"
                         + "  user_id,\n"
                         + "  shop_id,\n"
                         + "  payment_amount_cents\n"
-                        + " FROM datagenSource";
+                        + " FROM datagenSource");
         OperationHandle materializedTableHandle =
                 service.executeStatement(
                         sessionHandle,
@@ -190,7 +196,7 @@ public abstract class MaterializedTableITCase {
                 (ResolvedCatalogMaterializedTable)
                         service.getTable(
                                 sessionHandle,
-                                ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, "shop_detail"));
+                                ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, scopedShopDetail));
 
         // Expected schema
         ResolvedSchema expectedSchema =
@@ -238,21 +244,23 @@ public abstract class MaterializedTableITCase {
         assertThat(checkpointInterval).isEqualTo(3 * 1000);
 
         // drop materialized table
-        dropMaterializedTable(ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, "shop_detail"));
+        dropMaterializedTable(ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, scopedShopDetail));
     }
 
     @Test
     void testSuspendAndResumeMaterializedTableInContinuousMode(@TempDir Path temporaryPath)
             throws Exception {
         String materializedTableDDL =
-                "CREATE MATERIALIZED TABLE shop_detail\n"
+                ("CREATE MATERIALIZED TABLE "
+                        + scopedShopDetail
+                        + "\n"
                         + " FRESHNESS = INTERVAL '3' SECOND\n"
                         + " AS SELECT \n"
                         + "  DATE_FORMAT(order_created_at, 'yyyy-MM-dd') AS ds,\n"
                         + "  user_id,\n"
                         + "  shop_id,\n"
                         + "  payment_amount_cents\n"
-                        + " FROM datagenSource";
+                        + " FROM datagenSource");
         OperationHandle materializedTableHandle =
                 service.executeStatement(
                         sessionHandle,
@@ -262,7 +270,7 @@ public abstract class MaterializedTableITCase {
         awaitOperationTermination(service, sessionHandle, materializedTableHandle);
 
         ObjectIdentifier mtIdentifier =
-                ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, "shop_detail");
+                ObjectIdentifier.of(CATALOG_NAME, DEFAULT_DB, scopedShopDetail);
         // validate materialized table: refresh status, refresh handler,
         // doesn't check the data because it generates randomly.
         ResolvedCatalogMaterializedTable activeMaterializedTable =
@@ -292,7 +300,8 @@ public abstract class MaterializedTableITCase {
         awaitOperationTermination(service, sessionHandle, alterMaterializedTableSavepointHandle);
 
         // suspend materialized table
-        String alterMaterializedTableSuspendDDL = "ALTER MATERIALIZED TABLE shop_detail SUSPEND";
+        String alterMaterializedTableSuspendDDL =
+                ("ALTER MATERIALIZED TABLE " + scopedShopDetail + " SUSPEND");
         OperationHandle alterMaterializedTableSuspendHandle =
                 service.executeStatement(
                         sessionHandle,
@@ -330,7 +339,8 @@ public abstract class MaterializedTableITCase {
         String actualSavepointPath = suspendRefreshHandler.getRestorePath().get();
 
         // resume materialized table
-        String alterMaterializedTableResumeDDL = "ALTER MATERIALIZED TABLE shop_detail RESUME";
+        String alterMaterializedTableResumeDDL =
+                ("ALTER MATERIALIZED TABLE " + scopedShopDetail + " RESUME");
         OperationHandle alterMaterializedTableResumeHandle =
                 service.executeStatement(
                         sessionHandle,

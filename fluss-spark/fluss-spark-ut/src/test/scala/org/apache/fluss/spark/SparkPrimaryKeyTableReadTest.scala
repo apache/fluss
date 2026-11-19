@@ -33,6 +33,8 @@ import scala.collection.JavaConverters._
 /** This test case is used to verify the correctness of primary key table read. */
 class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
+  private def testTableName: String = scopedTableName("t")
+
   /**
    * Do not set [[ConfigOptions.KV_SNAPSHOT_INTERVAL]] here, we want to control the snapshot trigger
    * by manually.
@@ -50,15 +52,15 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   test("Spark Read: primary key table") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$testTableName (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
              |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
              |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
              |(1000L, 25L, 605, "addr5")
@@ -70,7 +72,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       assertThat(inputPartitions.forall(hasLogChanges)).isEqualTo(true)
       // Read data from log scanner.
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1") ::
           Row(700L, 22L, 602, "addr2") ::
           Row(800L, 23L, 603, "addr3") ::
@@ -83,7 +85,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       inputPartitions = genInputPartition(tablePath, null)
       assertThat(inputPartitions.forall(hasSnapshotData)).isEqualTo(true)
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1") ::
           Row(700L, 22L, 602, "addr2") ::
           Row(800L, 23L, 603, "addr3") ::
@@ -93,7 +95,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
       // Upsert.
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(700L, 220L, 602, "addr2"),
              |(900L, 240L, 604, "addr4"),
              |(1100L, 260L, 606, "addr6")
@@ -105,7 +107,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       assertThat(inputPartitions.exists(hasLogChanges)).isEqualTo(true)
       checkAnswer(
         sql(s"""
-               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.t
+               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.$testTableName
                |WHERE amount <= 603 ORDER BY orderId""".stripMargin),
         Row(600L, 21L, "addr1") ::
           Row(700L, 220L, "addr2") ::
@@ -115,7 +117,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       withSQLConf(
         s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.READ_OPTIMIZED_OPTION.key()}" -> "true") {
         checkAnswer(
-          sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+          sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName ORDER BY orderId"),
           Row(600L, 21L, 601, "addr1") ::
             Row(700L, 22L, 602, "addr2") ::
             Row(800L, 23L, 603, "addr3") ::
@@ -128,7 +130,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       flussServer.triggerAndWaitSnapshot(tablePath)
       checkAnswer(
         sql(s"""
-               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.t
+               |SELECT orderId, itemId, address FROM $DEFAULT_DATABASE.$testTableName
                |WHERE amount <= 603 ORDER BY orderId""".stripMargin),
         Row(600L, 21L, "addr1") ::
           Row(700L, 220L, "addr2") ::
@@ -139,16 +141,16 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   test("Spark Read: partitioned primary key table") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$testTableName (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
              |PARTITIONED BY (dt)
              |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
              |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
              |(1000L, 25L, 605, "addr5", "2026-01-03")
@@ -161,7 +163,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       assertThat(inputPartitions.exists(hasSnapshotData)).isEqualTo(false)
       assertThat(inputPartitions.forall(hasLogChanges)).isEqualTo(true)
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
           Row(700L, 22L, 602, "addr2", "2026-01-01") ::
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
@@ -175,7 +177,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       var inputPartition0 = genInputPartition(tablePath, "2026-01-01").head
       assertThat(hasSnapshotData(inputPartition0)).isEqualTo(true)
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
           Row(700L, 22L, 602, "addr2", "2026-01-01") ::
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
@@ -186,7 +188,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
       // Upsert.
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(700L, 220L, 602, "addr2_updated", "2026-01-01"),
              |(900L, 240L, 604, "addr4_updated", "2026-01-02"),
              |(1100L, 260L, 606, "addr6", "2026-01-03")
@@ -199,7 +201,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       // Read with partition filter
       checkAnswer(
         sql(s"""
-               |SELECT * FROM $DEFAULT_DATABASE.t
+               |SELECT * FROM $DEFAULT_DATABASE.$testTableName
                |WHERE dt = '2026-01-01'
                |ORDER BY orderId""".stripMargin),
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
@@ -211,7 +213,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       flussServer.triggerAndWaitSnapshot(inputPartition0.tableBucket)
       checkAnswer(
         sql(s"""
-               |SELECT * FROM $DEFAULT_DATABASE.t
+               |SELECT * FROM $DEFAULT_DATABASE.$testTableName
                |WHERE dt = '2026-01-01'
                |ORDER BY orderId""".stripMargin),
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
@@ -228,7 +230,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       // Read with multiple partition filters
       checkAnswer(
         sql(
-          s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt IN ('2026-01-01', '2026-01-02') ORDER BY orderId"),
+          s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt IN ('2026-01-01', '2026-01-02') ORDER BY orderId"),
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
           Row(700L, 220L, 602, "addr2_updated", "2026-01-01") ::
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
@@ -239,23 +241,26 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   test("Spark Read: primary key table with random project") {
-    withTable("t") {
+    withTable(testTableName) {
       sql(
-        "CREATE TABLE t (id int, name string, pk int, pk2 string) TBLPROPERTIES('primary.key'='pk,pk2')")
-      checkAnswer(sql("SELECT * FROM t"), Nil)
-      sql("INSERT INTO t VALUES (1, 'a', 10, 'x'), (2, 'b', 20, 'y')")
+        s"CREATE TABLE $testTableName (id int, name string, pk int, pk2 string) TBLPROPERTIES('primary.key'='pk,pk2')")
+      flussServer.waitUntilTableReady(createTablePath(testTableName))
+      checkAnswer(sql(s"SELECT * FROM $testTableName"), Nil)
+      sql(s"INSERT INTO $testTableName VALUES (1, 'a', 10, 'x'), (2, 'b', 20, 'y')")
       checkAnswer(
-        sql("SELECT * FROM t ORDER BY id"),
+        sql(s"SELECT * FROM $testTableName ORDER BY id"),
         Row(1, "a", 10, "x") :: Row(2, "b", 20, "y") :: Nil)
-      checkAnswer(sql("SELECT pk, id FROM t ORDER BY id"), Row(10, 1) :: Row(20, 2) :: Nil)
+      checkAnswer(
+        sql(s"SELECT pk, id FROM $testTableName ORDER BY id"),
+        Row(10, 1) :: Row(20, 2) :: Nil)
     }
   }
 
   test("Spark Read: primary key table projection with type-dependent columns") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (
+             |CREATE TABLE $DEFAULT_DATABASE.$testTableName (
              |pk INT,
              |ts TIMESTAMP,
              |name STRING,
@@ -266,7 +271,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(1, TIMESTAMP "2026-01-01 12:00:00", "a", ARRAY(1, 2), STRUCT(10, 'x'),
              | TIMESTAMP "2026-01-01 12:00:00"),
              |(2, TIMESTAMP "2026-01-02 12:00:00", "b", ARRAY(3, 4), STRUCT(20, 'y'),
@@ -275,7 +280,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
       // Log-only: projection reorders type-dependent columns (PK not in projection)
       checkAnswer(
-        sql(s"SELECT arr, ts, struct_col FROM $DEFAULT_DATABASE.t ORDER BY ts"),
+        sql(s"SELECT arr, ts, struct_col FROM $DEFAULT_DATABASE.$testTableName ORDER BY ts"),
         Row(Seq(1, 2), java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), Row(10, "x")) ::
           Row(Seq(3, 4), java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Row(20, "y")) :: Nil
       )
@@ -284,14 +289,14 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       flussServer.triggerAndWaitSnapshot(tablePath)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
              |(1, TIMESTAMP "2026-03-01 12:00:00", "a_updated", ARRAY(10, 20), STRUCT(100, 'xx'),
              | TIMESTAMP "2026-03-01 12:00:00")
              |""".stripMargin)
 
       // Snapshot + log: projection with type-dependent columns at shifted ordinals
       checkAnswer(
-        sql(s"SELECT ts_ltz, arr, name FROM $DEFAULT_DATABASE.t ORDER BY name"),
+        sql(s"SELECT ts_ltz, arr, name FROM $DEFAULT_DATABASE.$testTableName ORDER BY name"),
         Row(java.sql.Timestamp.valueOf("2026-03-01 12:00:00"), Seq(10, 20), "a_updated") ::
           Row(java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Seq(3, 4), "b") :: Nil
       )
@@ -334,20 +339,20 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   test("Spark Read: primary key table scan metrics") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$testTableName (id INT, name STRING)
              |TBLPROPERTIES("primary.key" = "id", "bucket.num" = 1)
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+             |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES (1, 'a'), (2, 'b'), (3, 'c')
              |""".stripMargin)
 
       flussServer.triggerAndWaitSnapshot(tablePath)
 
-      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName")
 
       // Verify scan description and supportedCustomMetrics before execution
       val scan = df.queryExecution.optimizedPlan
@@ -376,7 +381,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   test("Spark Read: partition pushdown — equality on partition key (PK table)") {
     withPkPartitionedTable {
       val query =
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' ORDER BY orderId")
+        sql(
+          s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2026-01-01' ORDER BY orderId")
       checkAnswer(
         query,
         Row(600L, 21L, 601, "addr1", "2026-01-01") ::
@@ -388,7 +394,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   test("Spark Read: partition pushdown — IN on partition key (PK table)") {
     withPkPartitionedTable {
       val query = sql(s"""
-                         |SELECT orderId, dt FROM $DEFAULT_DATABASE.t
+                         |SELECT orderId, dt FROM $DEFAULT_DATABASE.$testTableName
                          |WHERE dt IN ('2026-01-01', '2026-01-03') ORDER BY orderId""".stripMargin)
       checkAnswer(
         query,
@@ -401,7 +407,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: partition pushdown — non-matching partition prunes to empty (PK table)") {
     withPkPartitionedTable {
-      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2099-01-01'")
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2099-01-01'")
       checkAnswer(query, Nil)
       assert(partitionPredicate(query).isDefined)
     }
@@ -409,7 +415,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: partition pushdown — predicate on non-partition column not extracted") {
     withPkPartitionedTable {
-      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE amount = 603 ORDER BY orderId")
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE amount = 603 ORDER BY orderId")
       checkAnswer(query, Row(800L, 23L, 603, "addr3", "2026-01-02") :: Nil)
       // amount is not a partition key — no partition predicate extracted.
       assert(partitionPredicate(query).isEmpty)
@@ -418,8 +425,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: scan description surfaces partition filter when pushed (PK table)") {
     withPkPartitionedTable {
-      val withPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")
-      val noPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE amount = 603")
+      val withPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2026-01-01'")
+      val noPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE amount = 603")
       val withDesc = flussUpsertScan(withPart).get.description()
       val noDesc = flussUpsertScan(noPart).get.description()
       assert(withDesc.contains("[PartitionFilter:"))
@@ -430,7 +437,8 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: mixed partition and non-partition filter (PK table)") {
     withPkPartitionedTable {
-      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' AND amount > 601")
+      val query = sql(
+        s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2026-01-01' AND amount > 601")
       checkAnswer(query, Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
       // Partition predicate extracted for partition pruning
       assert(partitionPredicate(query).isDefined)
@@ -452,7 +460,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: partition-only filter should not leave FilterExec in plan (PK table)") {
     withPkPartitionedTable {
-      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2026-01-01'")
       checkAnswer(
         query,
         Row(700L, 22L, 602, "addr2", "2026-01-01") :: Row(
@@ -479,15 +487,15 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
-  private def withPkPartitionedTable(body: => Unit): Unit = withTable("t") {
+  private def withPkPartitionedTable(body: => Unit): Unit = withTable(testTableName) {
     sql(s"""
-           |CREATE TABLE $DEFAULT_DATABASE.t (
+           |CREATE TABLE $DEFAULT_DATABASE.$testTableName (
            |  orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING
            |)
            |PARTITIONED BY (dt)
            |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)""".stripMargin)
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.t VALUES
+           |INSERT INTO $DEFAULT_DATABASE.$testTableName VALUES
            |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
            |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
            |(1000L, 25L, 605, "addr5", "2026-01-03")
@@ -497,10 +505,11 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: primary key table limit pushdown") {
     withPkPartitionedTable {
-      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName")
       assert(flussUpsertScan(dfNoLimit).flatMap(_.limit).isEmpty)
 
-      val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' LIMIT 1")
+      val dfLimit =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$testTableName WHERE dt = '2026-01-01' LIMIT 1")
       assert(flussUpsertScan(dfLimit).flatMap(_.limit).contains(1))
 
       // Verify limit pushdown actually reduces rows read via metrics
@@ -514,29 +523,30 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   test("Spark Read: primary key table batch read has no data hole with monotonic keys") {
-    withTable("fluss_fault_test_pk") {
-      val tablePath = createTablePath("fluss_fault_test_pk")
+    val tableName = scopedTableName("fluss_fault_test_pk")
+    withTable(tableName) {
+      val tablePath = createTablePath(tableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.fluss_fault_test_pk (seq_id BIGINT, payload STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (seq_id BIGINT, payload STRING)
              |TBLPROPERTIES("primary.key" = "seq_id", "bucket.num" = 1)
              |""".stripMargin)
 
       // First batch: seq_id 1..100, materialized into a kv snapshot.
       val firstBatch = (1 to 100).map(i => s"($i, 'v$i')").mkString(", ")
-      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $firstBatch")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.$tableName VALUES $firstBatch")
       flussServer.triggerAndWaitSnapshot(tablePath)
 
       // Second batch: seq_id 101..200, only present in the log tail. All keys are
       // strictly greater than the max key in the snapshot, mimicking a datagen job
       // that keeps appending monotonically increasing primary keys.
       val secondBatch = (101 to 200).map(i => s"($i, 'v$i')").mkString(", ")
-      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $secondBatch")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.$tableName VALUES $secondBatch")
 
       // total_count must equal max_seq - min_seq + 1, i.e. no data hole.
       checkAnswer(
         sql(s"""
                |SELECT COUNT(*) AS total_count, MAX(seq_id) AS max_seq, MIN(seq_id) AS min_seq
-               |FROM $DEFAULT_DATABASE.fluss_fault_test_pk""".stripMargin),
+               |FROM $DEFAULT_DATABASE.$tableName""".stripMargin),
         Row(200L, 200L, 1L) :: Nil
       )
     }

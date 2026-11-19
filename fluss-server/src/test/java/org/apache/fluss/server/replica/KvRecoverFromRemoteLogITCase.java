@@ -40,6 +40,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -107,10 +108,12 @@ class KvRecoverFromRemoteLogITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testKvRecoverFromRemoteLogAfterLeaderTransfer() throws Exception {
         // Step 1: Create a PK table with 1 bucket and replication factor 3.
-        TablePath tablePath = TablePath.of("test_db", "test_kv_recover_from_remote");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_kv_recover_from_remote");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(EVENT_TIME_SCHEMA)

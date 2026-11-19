@@ -34,6 +34,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -118,6 +119,12 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final String scopedCombinedFiltersTable =
+            tableNames.tableName("combined_filters_table");
+    private final String scopedWatermarkUpdates = tableNames.tableName("watermark_updates");
+
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
     protected static Connection conn;
@@ -228,7 +235,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"ARROW", "INDEXED"})
     void testAppendTableProjectPushDown(String logFormat) throws Exception {
-        String tableName = "append_table_project_push_down_" + logFormat;
+        String tableName = tableNames.tableName("append_table_project_push_down_" + logFormat);
         tEnv.executeSql(
                 String.format(
                         "create table %s (a int, b varchar, c bigint, d int, e int, f bigint) with"
@@ -278,7 +285,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     void testTableProjectPushDown(String mode) throws Exception {
         boolean isPkTable = mode.startsWith("PK");
         boolean testPkLog = mode.equals("PK_LOG");
-        String tableName = "table_" + mode;
+        String tableName = tableNames.tableName("table_" + mode);
         String pkDDL = isPkTable ? ", primary key (a) not enforced" : "";
         tEnv.executeSql(
                 String.format(
@@ -343,7 +350,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"ARROW", "COMPACTED"})
     void testSkipUpdatesToNonProjectedColumns(String logFormat) throws Exception {
-        String tableName = "projected_updates";
+        String tableName = tableNames.tableName("projected_updates");
         tEnv.executeSql(
                 "CREATE TABLE "
                         + tableName
@@ -395,21 +402,25 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     void testProjectedUpdatesWithPushedDownWatermark(boolean skipUnchangedUpdates)
             throws Exception {
         tEnv.executeSql(
-                "CREATE TABLE watermark_updates (id INT PRIMARY KEY NOT ENFORCED, ts TIMESTAMP(3), "
-                        + "v INT, WATERMARK FOR ts AS ts) WITH ('bucket.num' = '1')");
+                ("CREATE TABLE "
+                        + scopedWatermarkUpdates
+                        + " (id INT PRIMARY KEY NOT ENFORCED, ts TIMESTAMP(3), "
+                        + "v INT, WATERMARK FOR ts AS ts) WITH ('bucket.num' = '1')"));
         LocalDateTime ts = LocalDateTime.of(2025, 1, 1, 12, 0);
         TimestampNtz timestamp = TimestampNtz.fromLocalDateTime(ts);
         writeRows(
                 conn,
-                TablePath.of(DEFAULT_DB, "watermark_updates"),
+                TablePath.of(DEFAULT_DB, scopedWatermarkUpdates),
                 Arrays.asList(
                         row(1, timestamp, 10),
                         row(1, timestamp, 20),
                         row(1, TimestampNtz.fromLocalDateTime(ts.plusMinutes(1)), 20)),
                 false);
         String query =
-                "SELECT id, ts FROM watermark_updates /*+ OPTIONS('scan.startup.mode' = 'earliest', "
-                        + "'scan.bounded.mode' = 'latest-offset'"
+                ("SELECT id, ts FROM "
+                                + scopedWatermarkUpdates
+                                + " /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                + "'scan.bounded.mode' = 'latest-offset'")
                         + (skipUnchangedUpdates
                                 ? ", 'scan.filter-unchanged-row.enabled' = 'true'"
                                 : "")
@@ -532,7 +543,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testReadLogTableWithDifferentScanStartupMode(boolean isPartitioned) throws Exception {
-        String tableName = "tab1_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName("tab1_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String partitionName = null;
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         if (!isPartitioned) {
@@ -667,7 +679,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     void testReadKvTableWithEarliestAndTimestampScanStartupMode(String mode, boolean isPartitioned)
             throws Exception {
         long timestamp = CLOCK.milliseconds();
-        String tableName = mode + "_test_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        mode + "_test_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         String partitionName = null;
         if (!isPartitioned) {
@@ -734,7 +748,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testReadPrimaryKeyPartitionedTable(boolean isAutoPartition) throws Exception {
-        String tableName = "read_primary_key_partitioned_table" + (isAutoPartition ? "_auto" : "");
+        String tableName =
+                tableNames.tableName(
+                        "read_primary_key_partitioned_table" + (isAutoPartition ? "_auto" : ""));
         String createTableDdl;
         if (isAutoPartition) {
             createTableDdl =
@@ -1782,11 +1798,13 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @Test
     void testStreamingReadWithCombinedFilters1() throws Exception {
         tEnv.executeSql(
-                "create table combined_filters_table"
-                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+                ("create table "
+                        + scopedCombinedFiltersTable
+                        + ""
+                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) "));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, scopedCombinedFiltersTable);
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2025)"));
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2026)"));
 
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues1 = new ArrayList<>();
@@ -1812,34 +1830,46 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d % 200 = 0"));
         assertThat(plan)
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
 
         // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d % 200 = 0"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues1, true);
 
         plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d = 200");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d = 200"));
         assertThat(plan)
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
 
         // test column filter, partition filter and flink runtime filter
         rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d = 200")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d = 200"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues2, true);
@@ -1866,12 +1896,14 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @Test
     void testStreamingReadNonPKTableWithCombinedFilters() throws Exception {
         tEnv.executeSql(
-                "create table combined_filters_table"
+                ("create table "
+                        + scopedCombinedFiltersTable
+                        + ""
                         + " (a int not null, b varchar, c string, d int) partitioned by (c)"
-                        + " with ('table.statistics.columns' = 'd')");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+                        + " with ('table.statistics.columns' = 'd')"));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, scopedCombinedFiltersTable);
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2025)"));
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2026)"));
 
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
@@ -1893,21 +1925,27 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d > 200");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d > 200"));
 
         // assert both partition filter and record batch filter are pushed down
         assertThat(withLowerCaseAnd(plan))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), >(d, 200))], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
         // assert predicates are still retained in the Calc operator (FLINK-38635 safety net)
         assertThat(plan).contains("where=");
 
         // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d > 200;")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d > 200;"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);

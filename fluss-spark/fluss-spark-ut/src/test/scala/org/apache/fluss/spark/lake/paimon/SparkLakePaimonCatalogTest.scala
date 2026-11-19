@@ -133,7 +133,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
 
   test("Lake Catalog: basic table") {
     // bucket log table
-    var tableName = "bucket_log_table"
+    var tableName = scopedTableName("bucket_log_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
@@ -163,7 +163,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // non-bucket log table
-    tableName = "non_bucket_log_table"
+    tableName = scopedTableName("non_bucket_log_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
@@ -193,7 +193,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // pk table
-    tableName = "pk_table"
+    tableName = scopedTableName("pk_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string, pk1 string)
@@ -225,7 +225,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // partitioned pk table
-    tableName = "partitioned_pk_table"
+    tableName = scopedTableName("partitioned_pk_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string, pk1 string, pt1 string)
@@ -260,9 +260,11 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: table with all types") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName
              | (c1 boolean, c2 byte, c3 short, c4 int, c5 long, c6 float, c7 double, c8 date,
              |  c9 timestamp, c10 timestamp_ntz, c11 string, c12 binary, c13 decimal(10, 2),
              |  c14 array<int>, c15 struct<a int, b string>, c16 map<string, int>)
@@ -271,9 +273,10 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
              |  '${BUCKET_NUMBER.key()}' = 2, 'k1' = 'v1', 'paimon.file.format' = 'parquet')
              |""".stripMargin)
 
-      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "t")).get()
+      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, tableName)).get()
       val paimonTable =
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       verifyLakePaimonTable(
         paimonTable,
         flussTable,
@@ -329,13 +332,15 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: unsettable properties") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       val unsettableProperties =
         PaimonConversions.PAIMON_UNSETTABLE_OPTIONS.asScala.map(e => s"'$e' = 'v'").mkString(", ")
 
       intercept[java.util.concurrent.ExecutionException] {
         sql(s"""
-               |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string)
+               |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
                | TBLPROPERTIES (
                |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
                |  $unsettableProperties,
@@ -346,23 +351,27 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: alter table with lake enabled") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = false,
              |  '${BUCKET_NUMBER.key()}' = 2, 'k1' = 'v1', 'paimon.file.format' = 'parquet')
              |""".stripMargin)
       intercept[org.apache.paimon.catalog.Catalog.TableNotExistException] {
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       }
 
       sql(
-        s"ALTER TABLE $DEFAULT_DATABASE.t SET TBLPROPERTIES ('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true)")
+        s"ALTER TABLE $DEFAULT_DATABASE.$tableName SET TBLPROPERTIES ('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true)")
 
-      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "t")).get()
+      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, tableName)).get()
       val paimonTable =
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       verifyLakePaimonTable(
         paimonTable,
         flussTable,
