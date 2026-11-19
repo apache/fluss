@@ -1698,6 +1698,10 @@ public class ReplicaManager implements ServerReconfigurable {
             try {
                 LOG.trace("Put records to local kv tablet for table bucket {}", tb);
                 Replica replica = getReplicaOrException(tb);
+                if (replica.getTableInfo().hasDeduplicationKey()) {
+                    throw new org.apache.fluss.exception.InvalidTableException(
+                            "Deduplicating log tables require ProduceLog.");
+                }
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
@@ -1790,7 +1794,7 @@ public class ReplicaManager implements ServerReconfigurable {
             Replica replica = getReplicaOrException(tableBucket);
             tableMetrics = replica.tableMetrics();
             tableMetrics.totalLimitScanRequests().inc();
-            if (replica.isKvTable()) {
+            if (replica.getTableInfo().hasPrimaryKey()) {
                 limitScanResultForBucket =
                         new LimitScanResultForBucket(tableBucket, replica.limitKvScan(limit));
             } else {
@@ -2551,7 +2555,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
                 String remoteDataDir = getRemoteDataDir(tb, physicalTablePath, tableRegistration);
 
-                boolean isKvTable = tableInfo.hasPrimaryKey();
+                boolean isKvTable = tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey();
                 Optional<LogTablet> existingLogTabletOpt = logManager.getLog(tb);
                 File dataDir =
                         existingLogTabletOpt

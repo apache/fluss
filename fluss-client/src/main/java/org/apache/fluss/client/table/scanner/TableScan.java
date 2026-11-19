@@ -183,7 +183,10 @@ public class TableScan implements Scan {
                 schemaGetter,
                 conn.getMetadataUpdater(),
                 projectedColumns,
-                limit);
+                limit,
+                tableInfo.hasPrimaryKey()
+                        ? null
+                        : () -> new TableScan(conn, tableInfo, schemaGetter).createLogScanner());
     }
 
     private int kvBatchSizeBytes() {
@@ -195,6 +198,10 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId) {
+        if (tableInfo.hasDeduplicationKey()) {
+            throw new UnsupportedOperationException(
+                    "Deduplicating log tables do not support KV snapshot row scans.");
+        }
         if (recordBatchFilter != null) {
             throw new UnsupportedOperationException(
                     String.format(

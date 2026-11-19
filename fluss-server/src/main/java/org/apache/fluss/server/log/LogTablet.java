@@ -499,12 +499,18 @@ public final class LogTablet {
      * Leader Epochs.
      */
     public LogAppendInfo appendAsLeader(MemoryLogRecords records) throws Exception {
-        return append(records, true);
+        return append(records, true, null);
+    }
+
+    /** Appends a leader batch with the timestamp already used for its KV state. */
+    public LogAppendInfo appendAsLeader(MemoryLogRecords records, long commitTimestamp)
+            throws Exception {
+        return append(records, true, commitTimestamp);
     }
 
     /** Append this message set to the active segment of the local log without assigning offsets. */
     public LogAppendInfo appendAsFollower(MemoryLogRecords records) throws Exception {
-        return append(records, false);
+        return append(records, false, null);
     }
 
     /** Read messages from the local log without projection or filter. */
@@ -921,7 +927,8 @@ public final class LogTablet {
      * if the appendAsLeader=false flag is passed we will only check that the existing offsets are
      * valid.
      */
-    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
+    private LogAppendInfo append(
+            MemoryLogRecords records, boolean appendAsLeader, @Nullable Long commitTimestamp)
             throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
@@ -940,11 +947,13 @@ public final class LogTablet {
                 // assign offsets to the message set.
                 appendInfo.setFirstOffset(offset);
 
-                AssignResult result =
-                        assignOffsetAndTimestamp(
-                                validRecords,
-                                offset,
-                                Math.max(localLog.getLocalMaxTimestamp(), clock.milliseconds()));
+                long maxTimestamp = localLog.getLocalMaxTimestamp();
+                long timestamp =
+                        commitTimestamp == null
+                                ? Math.max(maxTimestamp, clock.milliseconds())
+                                : commitTimestamp;
+                checkState(timestamp >= maxTimestamp, "Leader commit timestamp must be monotonic.");
+                AssignResult result = assignOffsetAndTimestamp(validRecords, offset, timestamp);
                 appendInfo.setLastOffset(result.lastOffset);
                 appendInfo.setMaxTimestamp(result.maxTimestamp);
                 appendInfo.setStartOffsetOfMaxTimestamp(result.startOffsetOfMaxTimestampMs);

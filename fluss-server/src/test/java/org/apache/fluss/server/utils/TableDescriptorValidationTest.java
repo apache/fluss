@@ -106,6 +106,101 @@ class TableDescriptorValidationTest {
     }
 
     @Test
+    void testDeduplicationTtl() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .deduplicationKey("id")
+                                        .build())
+                        .distributedBy(4)
+                        .property("table.deduplication.ttl", "1 h")
+                        .property(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION, 2)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+
+        assertThatCode(() -> validate(descriptor, null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testDeduplicationRejectsPrimaryKeyTtlOption() {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .deduplicationKey("id")
+                                        .build())
+                        .distributedBy(4)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+        assertThatCode(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor, 100, null))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateTableDescriptor(
+                                        descriptor
+                                                .withProperties(
+                                                        Collections.singletonMap(
+                                                                "table.kv.ttl", "1 d"))
+                                                .withReplicationFactor(3),
+                                        100,
+                                        null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_KV_TTL.key());
+    }
+
+    @Test
+    void testDeduplicationTtlRequiresDeduplicationKey() {
+        assertThatThrownBy(
+                        () ->
+                                validate(
+                                        logTableWithProperty("table.deduplication.ttl", "1 h"),
+                                        null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("deduplication key");
+        assertThatThrownBy(
+                        () -> validate(pkTableWithProperty("table.deduplication.ttl", "1 h"), null))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("deduplication key");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0 ms", "-1 ms", "1 ns", "106751991168 d"})
+    void testDeduplicationTtlRejectsInvalidDuration(String ttl) {
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .deduplicationKey("id")
+                                        .build())
+                        .distributedBy(4)
+                        .property("table.deduplication.ttl", ttl)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+
+        assertThatThrownBy(() -> validate(descriptor, null))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("table.deduplication.ttl");
+    }
+
+    @Test
+    void testDeduplicationTtlCannotBeAltered() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptorValidation.validateAlterTableProperties(
+                                        plainTableInfo(),
+                                        Collections.singleton("table.deduplication.ttl")))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("table.deduplication.ttl");
+    }
+
+    @Test
     void testSkipUnchangedUpsertsWithDefaultMergeBehavior() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperty(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED.key(), "true"),

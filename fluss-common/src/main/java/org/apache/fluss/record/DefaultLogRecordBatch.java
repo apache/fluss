@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.columnar.ColumnarRow;
@@ -38,6 +39,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -90,6 +93,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private MemorySegment segment;
     private int position;
     private byte magic;
+    @Nullable private List<MemorySegmentBytesView> batchSegments;
 
     // Cache for statistics to avoid repeated parsing
     private Optional<LogRecordBatchStatistics> cachedStatistics = null;
@@ -98,8 +102,23 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         this.segment = segment;
         this.position = position;
         this.magic = segment.get(position + MAGIC_OFFSET);
+        this.batchSegments = null;
         // Reset cache when pointing to new memory segment
         this.cachedStatistics = null;
+    }
+
+    static DefaultLogRecordBatch pointToBatchSegments(List<MemorySegmentBytesView> segments) {
+        DefaultLogRecordBatch batch = new DefaultLogRecordBatch();
+        MemorySegmentBytesView header = segments.get(0);
+        batch.pointTo(header.getMemorySegment(), header.getPosition());
+        batch.batchSegments = segments;
+        return batch;
+    }
+
+    private DefaultLogRecordBatch contiguousBatch() {
+        DefaultLogRecordBatch batch = new DefaultLogRecordBatch();
+        batch.pointTo(MemoryLogRecords.copyBatchSegments(batchSegments, sizeInBytes()), 0);
+        return batch;
     }
 
     public void setBaseLogOffset(long baseLogOffset) {
@@ -176,8 +195,11 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private long computeChecksum() {
-        ByteBuffer buffer = segment.wrap(position, sizeInBytes());
         int schemaIdOffset = schemaIdOffset(magic);
+        if (batchSegments != null) {
+            return Crc32C.compute(batchSegments, schemaIdOffset);
+        }
+        ByteBuffer buffer = segment.wrap(position, sizeInBytes());
         return Crc32C.compute(buffer, schemaIdOffset, sizeInBytes() - schemaIdOffset);
     }
 
@@ -238,6 +260,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             return CloseableIterator.emptyIterator();
         }
 
+        if (batchSegments != null) {
+            return contiguousBatch().records(context);
+        }
         int schemaId = schemaId();
         long timestamp = commitTimestamp();
         LogFormat logFormat = context.getLogFormat();
@@ -262,6 +287,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public ArrowBatchData loadArrowBatch(ReadContext context) {
+        if (batchSegments != null) {
+            return contiguousBatch().loadArrowBatch(context);
+        }
         if (context.getLogFormat() != LogFormat.ARROW) {
             throw new UnsupportedOperationException(
                     "loadArrowBatch is only supported for ARROW log format.");
@@ -292,6 +320,36 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         }
     }
 
+    /**
+     * Wraps a fully retained append-only Arrow payload in the existing INSERT WAL format. The
+     * source payload must remain readable until the synchronous WAL append finishes.
+     */
+    public MemoryLogRecords asArrowInsertBatch() {
+        checkArgument(
+                magic == LogRecordBatchFormat.LOG_MAGIC_VALUE_V0 && isAppendOnly(),
+                "Expected an append-only Arrow batch in the original log format");
+        if (batchSegments != null) {
+            return contiguousBatch().asArrowInsertBatch();
+        }
+        int headerSize = recordBatchHeaderSize(magic);
+        int count = getRecordCount();
+        int originalSize = sizeInBytes();
+        int insertSize = Math.addExact(originalSize, count);
+        byte[] prefix = new byte[Math.addExact(headerSize, count)];
+        segment.get(position, prefix, 0, headerSize);
+        Arrays.fill(prefix, headerSize, prefix.length, ChangeType.INSERT.toByteValue());
+        MemorySegment header = MemorySegment.wrap(prefix);
+        header.put(attributeOffset(magic), (byte) (attributes() & ~APPEND_ONLY_FLAG_MASK));
+        header.putInt(LENGTH_OFFSET, insertSize - LOG_OVERHEAD);
+        List<MemorySegmentBytesView> segments =
+                Arrays.asList(
+                        new MemorySegmentBytesView(header, 0, prefix.length),
+                        new MemorySegmentBytesView(
+                                segment, position + headerSize, originalSize - headerSize));
+        header.putInt(crcOffset(magic), (int) Crc32C.compute(segments, schemaIdOffset(magic)));
+        return MemoryLogRecords.pointToSingleBatch(segments);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -303,14 +361,20 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         }
 
         DefaultLogRecordBatch that = (DefaultLogRecordBatch) o;
-        int sizeInBytes = sizeInBytes();
-        return sizeInBytes == that.sizeInBytes()
-                && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+        int size = sizeInBytes();
+        if (size != that.sizeInBytes()) {
+            return false;
+        }
+        DefaultLogRecordBatch left = batchSegments == null ? this : contiguousBatch();
+        DefaultLogRecordBatch right = that.batchSegments == null ? that : that.contiguousBatch();
+        return left.segment.equalTo(right.segment, left.position, right.position, size);
     }
 
     @Override
     public int hashCode() {
-        return MurmurHashUtils.hashBytes(segment, position, sizeInBytes());
+        return batchSegments == null
+                ? MurmurHashUtils.hashBytes(segment, position, sizeInBytes())
+                : contiguousBatch().hashCode();
     }
 
     private CloseableIterator<LogRecord> rowRecordIterator(

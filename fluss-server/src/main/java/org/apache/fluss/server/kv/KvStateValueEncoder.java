@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.row.encode.KvValueLayout;
 
 /** Encodes KV state values using the encoding policy bound to their tablet. */
 @Internal
@@ -32,4 +33,14 @@ public interface KvStateValueEncoder {
      * uses its configured plain or row TTL encoding.
      */
     byte[] encodeValue(BinaryValue value, long logOffset);
+
+    /** Encodes a presence marker with the layout's optional TTL timestamp. */
+    static byte[] encodePresenceMarker(KvValueLayout layout, long timestamp) {
+        byte[] marker = new byte[layout.valueBodyOffset() + 1];
+        marker[layout.valueBodyOffset()] = 1;
+        if (layout.hasValueTag()) {
+            layout.writeValueTag(marker, timestamp);
+        }
+        return marker;
+    }
 }

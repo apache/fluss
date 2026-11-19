@@ -140,6 +140,35 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
+    @Test
+    @MultiVersionTest
+    void testDeduplicatingLogTable() throws Exception {
+        tEnv.executeSql(
+                "create table dedup_events (id int not null, payload string) with "
+                        + "('bucket.num' = '1', 'deduplication.key' = 'id')");
+        tEnv.executeSql("insert into dedup_events values (1, 'first'), (2, 'second')").await();
+        tEnv.executeSql("insert into dedup_events values (1, 'replacement'), (3, 'third')").await();
+        tEnv.executeSql("insert into dedup_events values (1, 'ignored')").await();
+        assertResultsIgnoreOrder(
+                tEnv.executeSql("select * from dedup_events").collect(),
+                Arrays.asList("+I[1, first]", "+I[2, second]", "+I[3, third]"),
+                true);
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("select count(*) from dedup_events").collect(),
+                java.util.Collections.singletonList("+I[3]"),
+                true);
+        try (CloseableIterator<Row> rows =
+                tBatchEnv.executeSql("select * from dedup_events limit 1").collect()) {
+            assertThat(rows.hasNext()).isTrue();
+            rows.next();
+            assertThat(rows.hasNext()).isFalse();
+        }
+        assertResultsIgnoreOrder(
+                tBatchEnv.executeSql("select 1 from dedup_events limit 1").collect(),
+                java.util.Collections.singletonList("+I[1]"),
+                true);
+    }
+
     @ParameterizedTest
     @MultiVersionTest
     @ValueSource(booleans = {true, false})

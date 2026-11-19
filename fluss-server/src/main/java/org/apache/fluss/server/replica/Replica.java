@@ -29,6 +29,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
@@ -48,11 +49,17 @@ import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultValueRecordBatch;
+import org.apache.fluss.record.FileChannelChunk;
+import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
+import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -92,6 +99,7 @@ import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogOffsetMetadata;
 import org.apache.fluss.server.log.LogOffsetSnapshot;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
@@ -933,7 +941,9 @@ public final class Replica {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
                 rowCount =
-                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
+                        supportsExactRowCount(tableConfig) && !getTableInfo().hasDeduplicationKey()
+                                ? completedSnapshot.getRowCount()
+                                : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -960,6 +970,7 @@ public final class Replica {
 
                 rowCount =
                         isHistoricalPartition()
+                                        || getTableInfo().hasDeduplicationKey()
                                         || tableConfig.getChangelogImage() == ChangelogImage.WAL
                                         || tableConfig.getKvTTL().isPresent()
                                 ? null
@@ -1270,19 +1281,34 @@ public final class Replica {
                                         "Leader not local for bucket %s on tabletServer %d",
                                         tableBucket, localTabletServerId));
                     }
-                    // Primary-key writes must go through PUT_KV so the log and local KV state are
-                    // updated together. PRODUCE_LOG is only valid for append-only tables.
-                    if (isKvTable()) {
+                    TableInfo tableInfo = getTableInfo();
+                    if (isKvTable() && !tableInfo.hasDeduplicationKey()) {
                         throw new InvalidPartitionException(
                                 "Produce-log request must not target a primary-key table.");
                     }
-
                     validateInSyncReplicaSize(requiredAcks);
 
-                    // TODO WRITE a leader epoch.
                     LogAppendInfo appendInfo;
                     try {
-                        appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+                        if (tableInfo.hasDeduplicationKey()) {
+                            KvTablet kv =
+                                    checkNotNull(kvTablet, "Deduplication tablet is not ready");
+                            Integer bucketCount = getRoutingBucketCount();
+                            if (bucketCount == null && tableBucket.getPartitionId() != null) {
+                                throw new InvalidPartitionException(
+                                        "Partition routing metadata is not ready for "
+                                                + tableBucket);
+                            }
+                            appendInfo =
+                                    kv.appendDeduplicatingLog(
+                                            memoryLogRecords,
+                                            tableInfo,
+                                            bucketCount == null
+                                                    ? tableInfo.getNumBuckets()
+                                                    : bucketCount);
+                        } else {
+                            appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+                        }
                     } catch (IOException e) {
                         LOG.error("Error while appending records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
@@ -1705,7 +1731,7 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> lookups(List<byte[]> keys) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1740,7 +1766,7 @@ public final class Replica {
      * flush may not have materialized the insert into RocksDB yet).
      */
     public List<ByteArraySlice> lookupsFromBufferOrKv(List<byte[]> keys) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1769,7 +1795,7 @@ public final class Replica {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
         }
@@ -1799,7 +1825,7 @@ public final class Replica {
     }
 
     public DefaultValueRecordBatch limitKvScan(int limit) {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1848,7 +1874,7 @@ public final class Replica {
     public OpenScanResult openScan(
             ScannerManager scannerManager, String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
-        if (!isKvTable()) {
+        if (!getTableInfo().hasPrimaryKey()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
         }
@@ -1898,7 +1924,7 @@ public final class Replica {
                         long highWatermark = logTablet.getHighWatermark();
                         // client can only read under high watermark.
                         long readOffset =
-                                Math.max(logTablet.logStartOffset(), highWatermark - limit);
+                                Math.max(logTablet.localLogStartOffset(), highWatermark - limit);
                         FetchDataInfo dataInfo =
                                 logTablet.read(
                                         readOffset,
@@ -1907,7 +1933,22 @@ public final class Replica {
                                         true,
                                         null,
                                         null);
-                        return dataInfo.getRecords();
+                        LogRecords records = dataInfo.getRecords();
+                        long recordCount = 0;
+                        long scannedUpTo = readOffset;
+                        boolean withinHighWatermark = true;
+                        for (LogRecordBatch batch : records.batches()) {
+                            recordCount += batch.getRecordCount();
+                            scannedUpTo = batch.nextLogOffset();
+                            withinHighWatermark &= batch.lastLogOffset() < highWatermark;
+                        }
+                        if (withinHighWatermark
+                                && scannedUpTo >= highWatermark
+                                && recordCount >= limit) {
+                            return records;
+                        }
+                        // Empty control batches consume offsets without contributing rows.
+                        return readLastLogRecords(limit, highWatermark);
                     } catch (IOException e) {
                         String errorMsg =
                                 String.format(
@@ -1917,6 +1958,80 @@ public final class Replica {
                         throw new LogStorageException(errorMsg, e);
                     }
                 });
+    }
+
+    private LogRecords readLastLogRecords(int limit, long highWatermark) throws IOException {
+        List<LogSegment> segments = logTablet.getSegments();
+        List<FileChannelChunk> selected = new ArrayList<>();
+        long recordCount = 0;
+        long logStartOffset = logTablet.localLogStartOffset();
+        for (int segmentIndex = segments.size() - 1;
+                segmentIndex >= 0 && recordCount < limit;
+                segmentIndex--) {
+            LogSegment segment = segments.get(segmentIndex);
+            FileLogRecords records = segment.getFileLogRecords();
+            long end =
+                    segmentIndex + 1 == segments.size()
+                            ? highWatermark
+                            : Math.min(
+                                    highWatermark, segments.get(segmentIndex + 1).getBaseOffset());
+            long lowerBound = Math.max(logStartOffset, segment.getBaseOffset());
+            long window = limit - recordCount;
+            List<LogRecordBatch> batches = new ArrayList<>();
+            while (end > lowerBound) {
+                long start = Math.max(lowerBound, end - window);
+                FileLogRecords.LogOffsetPosition position = segment.translateOffset(start);
+                batches.clear();
+                long rows = 0;
+                if (position != null) {
+                    for (LogRecordBatch batch :
+                            records.slice(position.position, Integer.MAX_VALUE).batches()) {
+                        if (batch.lastLogOffset() >= end) {
+                            break;
+                        }
+                        if (batch.getRecordCount() > 0) {
+                            batches.add(batch);
+                            rows += batch.getRecordCount();
+                        }
+                    }
+                }
+                if (rows >= limit - recordCount || start == lowerBound) {
+                    break;
+                }
+                window =
+                        Math.min(
+                                end - lowerBound,
+                                window > Long.MAX_VALUE / 2 ? Long.MAX_VALUE : window * 2);
+            }
+            for (int batchIndex = batches.size() - 1;
+                    batchIndex >= 0 && recordCount < limit;
+                    batchIndex--) {
+                FileChannelLogRecordBatch batch =
+                        (FileChannelLogRecordBatch) batches.get(batchIndex);
+                selected.add(
+                        new FileChannelChunk(
+                                records.toChunk().getFileChannel(),
+                                batch.position(),
+                                batch.sizeInBytes()));
+                recordCount += batch.getRecordCount();
+            }
+        }
+        long earliestOffset = logTablet.logStartOffset();
+        if (recordCount < limit && earliestOffset < Math.min(logStartOffset, highWatermark)) {
+            throw new LogOffsetOutOfRangeException(
+                    String.format(
+                            "LIMIT %d for bucket %s requires reading before local offset %d (earliest available offset %d).",
+                            limit, tableBucket, logStartOffset, earliestOffset));
+        }
+        if (selected.isEmpty()) {
+            return MemoryLogRecords.EMPTY;
+        }
+        MultiBytesView.Builder result = MultiBytesView.builder();
+        for (int index = selected.size() - 1; index >= 0; index--) {
+            FileChannelChunk chunk = selected.get(index);
+            result.addBytes(chunk.getFileChannel(), chunk.getPosition(), chunk.getSize());
+        }
+        return new BytesViewLogRecords(result.build());
     }
 
     /**
@@ -1951,11 +2066,15 @@ public final class Replica {
     }
 
     public long getRowCount() {
+        if (getTableInfo().hasDeduplicationKey()) {
+            throw new org.apache.fluss.exception.InvalidTableException(
+                    "Exact row-count statistics are unavailable for deduplicating log tables.");
+        }
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
                     KvTablet kv = this.kvTablet;
-                    if (kv != null) {
+                    if (kv != null && !getTableInfo().hasDeduplicationKey()) {
                         // return materialized row count for primary key table
                         return kv.getRowCount();
                     } else {

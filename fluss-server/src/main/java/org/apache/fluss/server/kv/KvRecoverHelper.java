@@ -296,7 +296,20 @@ public class KvRecoverHelper {
                                         key);
                     }
                     byte[] value = null;
-                    if (changeType != ChangeType.DELETE) {
+                    if (schemaGetter
+                            .getLatestSchemaInfo()
+                            .getSchema()
+                            .getDeduplicationKey()
+                            .isPresent()) {
+                        if (changeType != ChangeType.INSERT) {
+                            throw new IllegalStateException(
+                                    "Invalid change in deduplicating append log.");
+                        }
+                        value =
+                                KvStateValueEncoder.encodePresenceMarker(
+                                        kvTablet.getKvValueLayout(),
+                                        logRecordBatch.commitTimestamp());
+                    } else if (changeType != ChangeType.DELETE) {
                         // the log row format may not compatible with kv row format,
                         // e.g, arrow vs. compacted, thus needs a conversion here.
                         BinaryRow row = toKvRow(logRow);
@@ -320,6 +333,9 @@ public class KvRecoverHelper {
     private LogRecordReadContext createLogRecordReadContext() {
         if (logFormat == LogFormat.ARROW) {
             return LogRecordReadContext.createArrowReadContext(
+                    currentRowType, currentSchemaId, schemaGetter);
+        } else if (logFormat == LogFormat.INDEXED) {
+            return LogRecordReadContext.createIndexedReadContext(
                     currentRowType, currentSchemaId, schemaGetter);
         } else if (logFormat == LogFormat.COMPACTED) {
             return LogRecordReadContext.createCompactedRowReadContext(
@@ -359,10 +375,16 @@ public class KvRecoverHelper {
         DataType[] dataTypes = currentRowType.getChildren().toArray(new DataType[0]);
         currentSchemaId = schemaId;
 
+        List<String> stateKeys =
+                new java.util.ArrayList<>(
+                        tableInfo.hasDeduplicationKey()
+                                ? tableInfo.getDeduplicationKeys()
+                                : tableInfo.getPrimaryKeys());
+        stateKeys.removeAll(tableInfo.getPartitionKeys());
         keyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
                         tableInfo.getRowType(),
-                        tableInfo.getPhysicalPrimaryKeys(),
+                        stateKeys,
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
         if (historicalPartition) {

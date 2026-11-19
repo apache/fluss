@@ -149,20 +149,19 @@ public class RemoteLogTablet {
     }
 
     /**
-     * Returns the expired segments based on the given time and lake log end offset.
+     * Returns expired segments covered by the supplied safe cleanup offset.
      *
-     * <p>Only segments that have been tiered to lake (i.e., remoteLogEndOffset <= lakeLogEndOffset)
-     * can be safely deleted. This ensures that we don't delete segments that haven't been tiered to
-     * lake yet.
+     * <p>The cleanup offset can protect data pending lake tiering or a committed key-state
+     * snapshot.
      *
      * @param currentTimeMs the current time in milliseconds
-     * @param lakeLogEndOffset the log end offset that has been synced to lake, null if data lake is
-     *     disabled
+     * @param maxDeletableOffset the exclusive end of the prefix safe to delete, or null if
+     *     unbounded
      * @param ttlMs the current table log TTL in milliseconds
      * @return list of expired segments that can be safely deleted
      */
     public List<RemoteLogSegment> expiredRemoteLogSegments(
-            long currentTimeMs, Long lakeLogEndOffset, long ttlMs) {
+            long currentTimeMs, Long maxDeletableOffset, long ttlMs) {
         if (ttlMs <= 0) {
             return Collections.emptyList();
         }
@@ -176,10 +175,8 @@ public class RemoteLogTablet {
                         if (currentTimeMs - ts > ttlMs) {
                             for (UUID uuid : entry.getValue()) {
                                 RemoteLogSegment segment = idToRemoteLogSegment.get(uuid);
-                                if (lakeLogEndOffset != null) {
-                                    // if datalake is enabled, only include segments that have been
-                                    // tiered to lake.
-                                    if (segment.remoteLogEndOffset() <= lakeLogEndOffset) {
+                                if (maxDeletableOffset != null) {
+                                    if (segment.remoteLogEndOffset() <= maxDeletableOffset) {
                                         expiredSegments.add(segment);
                                     }
                                 } else {

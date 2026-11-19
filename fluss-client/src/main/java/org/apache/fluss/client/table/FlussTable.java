@@ -69,6 +69,9 @@ public class FlussTable implements Table {
 
     @Override
     public Lookup newLookup() {
+        checkState(
+                !tableInfo.hasDeduplicationKey(),
+                "Deduplicating log tables do not support keyed lookup.");
         return new TableLookup(
                 tableInfo, schemaGetter, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
     }

@@ -523,8 +523,14 @@ public class FlinkTableSource
 
         // handle normal scan
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
-        if (projectedFields != null) {
-            flussRowType = flussRowType.project(projectedFields);
+        // Log projection requires a physical column. COUNT(*) can still emit zero-field rows
+        // through the source's output projection after scanning one physical column.
+        int[] scanProjectedFields =
+                projectedFields != null && projectedFields.length == 0
+                        ? new int[] {0}
+                        : projectedFields;
+        if (scanProjectedFields != null) {
+            flussRowType = flussRowType.project(scanProjectedFields);
         }
         OffsetsInitializer offsetsInitializer;
         boolean enableLakeSource = false;
@@ -560,7 +566,7 @@ public class FlinkTableSource
                         hasPrimaryKey(),
                         isPartitioned(),
                         flussRowType,
-                        projectedFields,
+                        scanProjectedFields,
                         logRecordBatchFilter,
                         offsetsInitializer,
                         stoppingOffsetsInitializer,
@@ -1054,6 +1060,25 @@ public class FlinkTableSource
             }
         }
 
+        if (flussConfig.toMap().containsKey(FlinkConnectorOptions.DEDUPLICATION_KEY.key())) {
+            return false;
+        }
+        // A connector table can omit the deduplication key from its declaration.
+        if (!hasPrimaryKey()) {
+            try (org.apache.fluss.client.Connection connection =
+                            org.apache.fluss.client.ConnectionFactory.createConnection(
+                                    flussConfig);
+                    org.apache.fluss.client.admin.Admin admin = connection.getAdmin()) {
+                if (admin.getTableInfo(tablePath).get().hasDeduplicationKey()) {
+                    return false;
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            } catch (Exception e) {
+                return false;
+            }
+        }
         selectRowCount = true;
         this.producedDataType = dataType.getLogicalType();
         return true;

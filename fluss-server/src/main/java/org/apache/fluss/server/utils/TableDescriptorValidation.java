@@ -123,6 +123,23 @@ public class TableDescriptorValidation {
             }
         }
 
+        if (schema.getDeduplicationKey().isPresent()) {
+            if (tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)
+                    || tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).isPresent()
+                    || tableConf.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED)
+                    || Boolean.TRUE.equals(
+                            tableConf.get(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED))) {
+                throw new InvalidTableException(
+                        "Deduplicating log tables do not support merge engines, lake storage, historical partitions or standby KV replicas.");
+            }
+            for (String key : schema.getDeduplicationKeyColumnNames()) {
+                if (KEY_UNSUPPORTED_TYPES.contains(
+                        schema.getColumn(key).getDataType().getTypeRoot())) {
+                    throw new InvalidTableException(
+                            "Unsupported deduplication key type for column " + key);
+                }
+            }
+        }
         KafkaTableSchema.validate(tableDescriptor);
 
         // check distribution
@@ -138,9 +155,10 @@ public class TableDescriptorValidation {
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkHistoricalPartition(tableDescriptor, tableConf);
+        checkDeduplicationTTL(tableConf, schema);
         checkKvTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(tableConf);
-        checkKvValueLayout(tableConf, hasPrimaryKey);
+        checkKvValueLayout(tableConf, hasPrimaryKey || schema.getDeduplicationKey().isPresent());
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
@@ -151,6 +169,19 @@ public class TableDescriptorValidation {
     /** Validates the schema after altering table columns. */
     @Internal
     public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (!table.getSchema().getDeduplicationKey().equals(newSchema.getDeduplicationKey())) {
+            throw new InvalidAlterTableException(
+                    "The deduplication key cannot be enabled, changed or removed.");
+        }
+        for (String key : table.getDeduplicationKeys()) {
+            Schema.Column before = table.getSchema().getColumn(key);
+            Schema.Column after = newSchema.getColumn(key);
+            if (before.getColumnId() != after.getColumnId()
+                    || !before.getDataType().equals(after.getDataType())) {
+                throw new InvalidAlterTableException(
+                        "Deduplication key column type and identity cannot change.");
+            }
+        }
         checkSystemColumns(newSchema.getRowType());
         if (table.getTableConfig()
                 .getMergeEngineType()
@@ -265,6 +296,11 @@ public class TableDescriptorValidation {
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
+        if (currentTable.hasDeduplicationKey()
+                && tableKeysToChange.stream().anyMatch(key -> key.startsWith("table.datalake."))) {
+            throw new InvalidAlterTableException(
+                    "Lake storage is not supported for deduplicating log tables.");
+        }
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =
@@ -335,6 +371,27 @@ public class TableDescriptorValidation {
                                     + "The reserved system columns are: %s",
                             String.join(", ", unsupportedColumns),
                             String.join(", ", SYSTEM_COLUMNS)));
+        }
+    }
+
+    private static void checkDeduplicationTTL(Configuration tableConf, Schema schema) {
+        Optional<Duration> ttl = tableConf.getOptional(ConfigOptions.TABLE_DEDUPLICATION_TTL);
+        if (!ttl.isPresent()) {
+            return;
+        }
+        String option = ConfigOptions.TABLE_DEDUPLICATION_TTL.key();
+        if (!schema.getDeduplicationKey().isPresent()) {
+            throw new InvalidTableException(
+                    String.format("'%s' requires a log table with a deduplication key.", option));
+        }
+        try {
+            RowTtlUtils.validateAndConvertTtlDurationToMillis(ttl.get());
+        } catch (IllegalArgumentException e) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Invalid value for '%s': the duration must be at least 1 ms "
+                                    + "and fit in a signed 64-bit millisecond value.",
+                            option));
         }
     }
 
@@ -414,8 +471,12 @@ public class TableDescriptorValidation {
         }
     }
 
-    private static void checkKvValueLayout(Configuration tableConf, boolean hasPrimaryKey) {
-        boolean rowTtlEnabled = tableConf.getOptional(ConfigOptions.TABLE_KV_TTL).isPresent();
+    private static void checkKvValueLayout(Configuration tableConf, boolean hasKvState) {
+        boolean rowTtlEnabled = new TableConfig(tableConf).getKvTTL().isPresent();
+        String ttlOption =
+                tableConf.contains(ConfigOptions.TABLE_DEDUPLICATION_TTL)
+                        ? ConfigOptions.TABLE_DEDUPLICATION_TTL.key()
+                        : ConfigOptions.TABLE_KV_TTL.key();
         Optional<Integer> layoutVersion =
                 tableConf.getOptional(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION);
         if (!layoutVersion.isPresent()) {
@@ -423,15 +484,14 @@ public class TableDescriptorValidation {
                 throw new InvalidConfigException(
                         String.format(
                                 "'%s' must be set when '%s' is set.",
-                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
-                                ConfigOptions.TABLE_KV_TTL.key()));
+                                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(), ttlOption));
             }
             return;
         }
-        if (!hasPrimaryKey) {
+        if (!hasKvState) {
             throw new InvalidConfigException(
                     String.format(
-                            "'%s' is only supported for primary key tables.",
+                            "'%s' is only supported for primary key tables or deduplicating log tables.",
                             ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key()));
         }
 
@@ -452,7 +512,7 @@ public class TableDescriptorValidation {
                             "'%s' version %d is incompatible with '%s'.",
                             ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
                             layout.version(),
-                            ConfigOptions.TABLE_KV_TTL.key()));
+                            ttlOption));
         }
     }
 

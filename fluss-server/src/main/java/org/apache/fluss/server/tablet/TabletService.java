@@ -606,7 +606,19 @@ public final class TabletService extends RpcServiceBase
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId()),
                 request.getLimit(),
-                value -> response.complete(makeLimitScanResponse(value)));
+                value -> {
+                    LimitScanResponse reply = makeLimitScanResponse(value);
+                    if (reply.hasErrorCode()
+                            && reply.getErrorCode()
+                                    == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION.code()) {
+                        // Older clients interpret a normal response without records as end of
+                        // input.
+                        response.completeExceptionally(
+                                ApiError.fromErrorMessage(reply).exception());
+                    } else {
+                        response.complete(reply);
+                    }
+                });
         return response;
     }
 

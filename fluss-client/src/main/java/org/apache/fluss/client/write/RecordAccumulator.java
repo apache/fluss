@@ -91,6 +91,7 @@ public final class RecordAccumulator {
     private volatile boolean closed;
     private final AtomicInteger flushesInProgress;
     private final int batchSize;
+    private final ConfigOptions.BatchDeduplicationMode batchDeduplicationMode;
     private final BucketAssignerFactory bucketAssignerFactory;
 
     /**
@@ -231,6 +232,9 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT).toMillis());
         this.batchSize =
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
+
+        this.batchDeduplicationMode =
+                conf.get(ConfigOptions.CLIENT_WRITER_BATCH_DEDUPLICATION_MODE);
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
         this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
@@ -1156,7 +1160,14 @@ public final class RecordAccumulator {
                         outputView,
                         isHistoricalPartition,
                         clock.milliseconds(),
-                        statisticsCollector);
+                        statisticsCollector,
+                        tableInfo.hasDeduplicationKey()
+                                        && !tableInfo
+                                                .getTableConfig()
+                                                .getDeduplicationTTL()
+                                                .isPresent()
+                                ? batchDeduplicationMode
+                                : ConfigOptions.BatchDeduplicationMode.NONE);
 
             case COMPACTED_LOG:
                 return new CompactedLogWriteBatch(

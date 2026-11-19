@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.write;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
@@ -140,7 +141,8 @@ public class ArrowLogWriteBatchTest {
                         new PreAllocatedPagedOutputView(memorySegmentList),
                         false,
                         System.currentTimeMillis(),
-                        null);
+                        null,
+                        ConfigOptions.BatchDeduplicationMode.NONE);
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
 
         int count = 0;
@@ -218,7 +220,8 @@ public class ArrowLogWriteBatchTest {
                             new PreAllocatedPagedOutputView(memorySegmentList),
                             false,
                             System.currentTimeMillis(),
-                            null);
+                            null,
+                            ConfigOptions.BatchDeduplicationMode.NONE);
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
@@ -322,7 +325,8 @@ public class ArrowLogWriteBatchTest {
                 new UnmanagedPagedOutputView(128),
                 false,
                 System.currentTimeMillis(),
-                null);
+                null,
+                ConfigOptions.BatchDeduplicationMode.NONE);
     }
 
     private WriteCallback newWriteCallback() {

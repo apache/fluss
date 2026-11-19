@@ -33,7 +33,7 @@ public enum ApiKeys {
     DROP_DATABASE(1002, 0, 0, PUBLIC),
     LIST_DATABASES(1003, 0, 0, PUBLIC),
     DATABASE_EXISTS(1004, 0, 0, PUBLIC),
-    CREATE_TABLE(1005, 0, 0, PUBLIC),
+    CREATE_TABLE(1005, 0, 1, PUBLIC),
     DROP_TABLE(1006, 0, 0, PUBLIC),
     GET_TABLE_INFO(1007, 0, 0, PUBLIC),
     LIST_TABLES(1008, 0, 0, PUBLIC),
@@ -44,7 +44,7 @@ public enum ApiKeys {
     // Version 1: table deletions carry the actual table ID and an explicit deletion flag.
     UPDATE_METADATA(1013, 0, 1, PRIVATE),
     // Version 1: Supports original_partition_name in requests and responses for historical writes.
-    PRODUCE_LOG(1014, 0, 1, PUBLIC),
+    PRODUCE_LOG(1014, 0, 2, PUBLIC),
     FETCH_LOG(1015, 0, 0, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).

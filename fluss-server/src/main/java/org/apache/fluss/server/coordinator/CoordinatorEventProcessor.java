@@ -197,6 +197,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
+
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
@@ -304,6 +305,17 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
+    }
+
+    /** Requires every currently online tablet server to support deduplicating append. */
+    public java.util.concurrent.CompletableFuture<Void> requireDeduplicatingAppend(
+            int[] serverIds) {
+        java.util.List<java.util.concurrent.CompletableFuture<Void>> checks =
+                new java.util.ArrayList<>();
+        for (int id : serverIds) {
+            checks.add(coordinatorChannelManager.requireDeduplicatingAppend(id));
+        }
+        return org.apache.fluss.utils.concurrent.FutureUtils.completeAll(checks);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -662,7 +674,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // During failover, an orphan assignment may outlive its table metadata. Conservatively
         // treat it as KV until lifecycle cleanup removes the buckets to avoid underestimating
         // the KV leader replica count.
-        if (tableInfo == null || tableInfo.hasPrimaryKey()) {
+        if (tableInfo == null || tableInfo.hasPrimaryKey() || tableInfo.hasDeduplicationKey()) {
             coordinatorContext.addKvBuckets(tableBuckets);
         }
     }
@@ -1175,8 +1187,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // Remove table metrics before dropping their backing snapshot stores.
         coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
 
-        // If this is a primary key table, drop the kv snapshot store.
-        if (dropTableInfo.hasPrimaryKey()) {
+        // Persistent key state owns a KV snapshot store.
+        if (dropTableInfo.hasPrimaryKey() || dropTableInfo.hasDeduplicationKey()) {
             Set<TableBucket> deleteTableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
             completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
                     deleteTableBuckets);
@@ -1221,14 +1233,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         TablePartition tablePartition =
                 new TablePartition(tableId, dropPartitionEvent.getPartitionId());
 
-        // If this is a primary key table partition, drop the kv snapshot store.
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
 
         // Remove partition metrics before dropping their backing snapshot stores.
         coordinatorMetricGroup.removeTablePartitionMetricsGroup(
                 dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
 
-        if (dropTableInfo.hasPrimaryKey()) {
+        if (dropTableInfo.hasPrimaryKey() || dropTableInfo.hasDeduplicationKey()) {
             Set<TableBucket> deleteTableBuckets =
                     coordinatorContext.getAllBucketsForPartition(
                             tableId, dropPartitionEvent.getPartitionId());

@@ -324,6 +324,42 @@ public class ServerConnectionTest {
     }
 
     @Test
+    void testDeduplicationRequiresSupportedCreateVersion() throws Exception {
+        ServerConnection connection =
+                new ServerConnection(
+                        bootstrap,
+                        serverNode,
+                        TestingClientMetricGroup.newInstance(),
+                        clientAuthenticator,
+                        (con, ignore) -> {});
+        try {
+            org.apache.fluss.rpc.messages.CreateTableRequest create =
+                    new org.apache.fluss.rpc.messages.CreateTableRequest()
+                            .setTableJson(
+                                    org.apache.fluss.metadata.TableDescriptor.builder()
+                                            .schema(
+                                                    org.apache.fluss.metadata.Schema.newBuilder()
+                                                            .column(
+                                                                    "id",
+                                                                    org.apache.fluss.types.DataTypes
+                                                                            .INT())
+                                                            .deduplicationKey("id")
+                                                            .build())
+                                            .distributedBy(1)
+                                            .build()
+                                            .toJsonBytes());
+            assertThatThrownBy(
+                            () ->
+                                    connection.validateVersionCompatibility(
+                                            ApiKeys.CREATE_TABLE, (short) 0, create))
+                    .isInstanceOf(UnsupportedVersionException.class);
+            connection.validateVersionCompatibility(ApiKeys.CREATE_TABLE, (short) 1, create);
+        } finally {
+            connection.close().get();
+        }
+    }
+
+    @Test
     void testRejectBucketCountChangeForOldServer() throws Exception {
         ServerConnection connection =
                 new ServerConnection(

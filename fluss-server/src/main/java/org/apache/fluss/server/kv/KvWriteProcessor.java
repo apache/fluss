@@ -18,12 +18,14 @@
 package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -31,14 +33,24 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchFormat;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.PaddingRow;
+import org.apache.fluss.row.RowPartitionGetter;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
+import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.protocol.MergeMode;
@@ -59,6 +71,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArrayWrapper;
 import org.apache.fluss.utils.BytesUtils;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.clock.Clock;
 
 import org.slf4j.Logger;
@@ -67,7 +80,12 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
+import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -99,6 +117,7 @@ public final class KvWriteProcessor {
     private final KvFormat kvFormat;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
+    private final boolean deduplicating;
     // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
     // This avoids creating a new instance on every putAsLeader call
     private final RowMerger overwriteRowMerger;
@@ -108,6 +127,7 @@ public final class KvWriteProcessor {
     private final ChangelogImage changelogImage;
     private final AutoIncrementManager autoIncrementManager;
     private final KvStateValueEncoder stateValueEncoder;
+    private final KvValueLayout kvValueLayout;
     private final ValueDecoder valueDecoder;
     private final ValueDecoder lakeValueDecoder;
     @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
@@ -127,6 +147,7 @@ public final class KvWriteProcessor {
             ChangelogImage changelogImage,
             AutoIncrementManager autoIncrementManager,
             KvStateValueEncoder stateValueEncoder,
+            KvValueLayout kvValueLayout,
             ValueDecoder valueDecoder,
             @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             Clock clock,
@@ -137,6 +158,8 @@ public final class KvWriteProcessor {
         this.memorySegmentPool = memorySegmentPool;
         this.logFormat = logTablet.getLogFormat();
         this.kvFormat = kvFormat;
+        this.deduplicating =
+                schemaGetter.getLatestSchemaInfo().getSchema().getDeduplicationKey().isPresent();
         this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
@@ -146,6 +169,7 @@ public final class KvWriteProcessor {
         this.changelogImage = changelogImage;
         this.autoIncrementManager = autoIncrementManager;
         this.stateValueEncoder = stateValueEncoder;
+        this.kvValueLayout = kvValueLayout;
         this.valueDecoder = valueDecoder;
         this.lakeValueDecoder = new ValueDecoder(schemaGetter, kvFormat, KvValueLayout.PLAIN);
         this.rowTtlTimestampProvider = rowTtlTimestampProvider;
@@ -164,30 +188,194 @@ public final class KvWriteProcessor {
             throws Exception {
         WriteContext writeContext = createWriteContext(kvRecords, targetColumns, mergeMode);
         RowType latestRowType = writeContext.latestSchema.getRowType();
-        WalBuilder walBuilder = createWalBuilder(writeContext.latestSchemaId, latestRowType);
-        walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
-        // we only support ADD COLUMN LAST, so the BinaryRow after RowMerger is
-        // only has fewer ending columns than latest schema, so we pad nulls to
-        // the end of the BinaryRow to get the latest schema row.
         PaddingRow latestSchemaRow = new PaddingRow(latestRowType.getFieldCount());
-        // get offset to track the offset corresponded to the kv record
+        return appendWal(
+                writeContext.latestSchemaId,
+                latestRowType,
+                kvRecords.writerId(),
+                kvRecords.batchSequence(),
+                stateAccessor,
+                (walBuilder, startOffset, marker) -> {
+                    processKvRecords(
+                            kvRecords,
+                            kvRecords.schemaId(),
+                            writeContext.rowMerger,
+                            writeContext.autoIncrementUpdater,
+                            walBuilder,
+                            latestSchemaRow,
+                            startOffset,
+                            stateAccessor,
+                            originalPartitionName,
+                            historicalValueLookup);
+                    return null;
+                });
+    }
+
+    /** Filters a ProduceLog batch and appends only its accepted rows. */
+    public LogAppendInfo appendDeduplicatingLog(
+            MemoryLogRecords records,
+            TableInfo tableInfo,
+            int bucketCount,
+            String partitionName,
+            KvStateAccessor stateAccessor)
+            throws Exception {
+        if (!deduplicating) {
+            throw new InvalidTableException(
+                    "Deduplicating ProduceLog requires a deduplication table.");
+        }
+        Iterator<LogRecordBatch> batches = records.batches().iterator();
+        if (!batches.hasNext()) {
+            throw new InvalidTableException("ProduceLog requires one complete log batch.");
+        }
+        LogRecordBatch batch = batches.next();
+        if (batch.sizeInBytes() != records.sizeInBytes() || batch.getRecordCount() <= 0) {
+            throw new InvalidTableException("ProduceLog requires one complete log batch.");
+        }
+        batch.ensureValid();
+
+        SchemaInfo latest = schemaGetter.getLatestSchemaInfo();
+        short latestSchemaId = (short) latest.getSchemaId();
+        validateSchemaId(batch.schemaId(), latestSchemaId);
+        Schema input = schemaGetter.getSchema(batch.schemaId());
+        RowType inputRowType = input.getRowType();
+        List<String> stateKeys = new ArrayList<>(tableInfo.getDeduplicationKeys());
+        stateKeys.removeAll(tableInfo.getPartitionKeys());
+        boolean defaultBucketKey = tableInfo.isDefaultBucketKey();
+        KeyEncoder keyEncoder =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        inputRowType, stateKeys, tableInfo.getTableConfig(), defaultBucketKey);
+        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        KeyEncoder bucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        inputRowType,
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        defaultBucketKey,
+                        keyEncoder);
+        boolean reuseBucketKey = bucketKeyEncoder == keyEncoder;
+        BucketingFunction bucketing = BucketingFunction.of(lakeFormat);
+        RowPartitionGetter partitionGetter =
+                tableInfo.getPartitionKeys().isEmpty()
+                        ? null
+                        : new RowPartitionGetter(inputRowType, tableInfo.getPartitionKeys());
+        boolean reuseArrow =
+                logFormat == LogFormat.ARROW
+                        && batch.schemaId() == latestSchemaId
+                        && batch.magic() == LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
+        PaddingRow latestRow = new PaddingRow(latest.getSchema().getRowType().getFieldCount());
+        return appendWal(
+                latestSchemaId,
+                latest.getSchema().getRowType(),
+                batch.writerId(),
+                batch.batchSequence(),
+                stateAccessor,
+                (walBuilder, startOffset, marker) -> {
+                    try (LogRecordReadContext readContext =
+                            LogRecordReadContext.createReadContext(
+                                    tableInfo,
+                                    false,
+                                    LogRecordReadContext.SchemaResolution.DYNAMIC,
+                                    null,
+                                    schemaGetter,
+                                    null)) {
+                        long offset = startOffset;
+                        BitSet retained = reuseArrow ? new BitSet(batch.getRecordCount()) : null;
+                        int rowCount = 0;
+                        try (CloseableIterator<LogRecord> rows = batch.records(readContext)) {
+                            while (rows.hasNext()) {
+                                LogRecord record = rows.next();
+                                if (++rowCount > batch.getRecordCount()
+                                        || record.getChangeType() != ChangeType.APPEND_ONLY) {
+                                    throw new InvalidTableException(
+                                            "ProduceLog requires a complete append-only log batch.");
+                                }
+                                InternalRow row = record.getRow();
+                                validateDeduplicationRow(input, row);
+                                if (partitionGetter != null
+                                        && !Objects.equals(
+                                                partitionName, partitionGetter.getPartition(row))) {
+                                    throw new InvalidTableException(
+                                            "ProduceLog row does not match its partition.");
+                                }
+                                byte[] bucketKey = bucketKeyEncoder.encodeKey(row);
+                                if (bucketing.bucketing(bucketKey, bucketCount)
+                                        != tableBucket.getBucket()) {
+                                    throw new InvalidTableException(
+                                            "ProduceLog row does not match its bucket.");
+                                }
+                                KvPreWriteBuffer.Key key =
+                                        stateAccessor.encodeKey(
+                                                reuseBucketKey
+                                                        ? bucketKey
+                                                        : keyEncoder.encodeKey(row),
+                                                null);
+                                if (retained != null) {
+                                    if (!stateAccessor.lookupLocal(key).isPresent()) {
+                                        stateAccessor.insert(key, marker, offset++);
+                                        retained.set(rowCount - 1);
+                                    }
+                                } else {
+                                    offset =
+                                            appendDeduplicatedRow(
+                                                    key,
+                                                    row,
+                                                    walBuilder,
+                                                    latestRow,
+                                                    offset,
+                                                    marker,
+                                                    stateAccessor);
+                                }
+                            }
+                        }
+                        if (rowCount != batch.getRecordCount()) {
+                            throw new InvalidTableException(
+                                    "Decoded row count does not match the batch record count.");
+                        }
+                        if (retained == null || retained.isEmpty()) {
+                            return null;
+                        }
+                        if (offset - startOffset == rowCount) {
+                            return ((DefaultLogRecordBatch) batch).asArrowInsertBatch();
+                        }
+                        try (CloseableIterator<LogRecord> rows = batch.records(readContext)) {
+                            for (int i = 0; rows.hasNext(); i++) {
+                                InternalRow row = rows.next().getRow();
+                                if (retained.get(i)) {
+                                    walBuilder.append(ChangeType.INSERT, latestRow.replaceRow(row));
+                                }
+                            }
+                        }
+                        return null;
+                    }
+                });
+    }
+
+    private LogAppendInfo appendWal(
+            short schemaId,
+            RowType rowType,
+            long writerId,
+            int batchSequence,
+            KvStateAccessor stateAccessor,
+            WalBatchWriter writer)
+            throws Exception {
+        WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
+        walBuilder.setWriterState(writerId, batchSequence);
         long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
 
         try {
-            if (rowTtlTimestampProvider != null) {
+            Long commitTimestamp =
+                    deduplicating && rowTtlTimestampProvider != null
+                            ? Math.max(logTablet.localMaxTimestamp(), clock.milliseconds())
+                            : null;
+            if (!deduplicating && rowTtlTimestampProvider != null) {
                 rowTtlTimestampProvider.prepareForBatch(clock.milliseconds());
             }
-            processKvRecords(
-                    kvRecords,
-                    kvRecords.schemaId(),
-                    writeContext.rowMerger,
-                    writeContext.autoIncrementUpdater,
-                    walBuilder,
-                    latestSchemaRow,
-                    logEndOffsetOfPrevBatch,
-                    stateAccessor,
-                    originalPartitionName,
-                    historicalValueLookup);
+            byte[] marker =
+                    deduplicating
+                            ? KvStateValueEncoder.encodePresenceMarker(
+                                    kvValueLayout, commitTimestamp == null ? 0L : commitTimestamp)
+                            : null;
+            MemoryLogRecords reused = writer.write(walBuilder, logEndOffsetOfPrevBatch, marker);
 
             // There will be a situation that these batches of kvRecordBatch have not
             // generated any CDC logs, for example, when client attempts to delete
@@ -199,7 +387,11 @@ public final class KvWriteProcessor {
             // put a batch into file with recordCount 0 and offset plus 1L, it will
             // update the batchSequence corresponding to the writerId and also increment
             // the CDC log offset by 1.
-            LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+            MemoryLogRecords records = reused == null ? walBuilder.build() : reused;
+            LogAppendInfo logAppendInfo =
+                    commitTimestamp == null
+                            ? logTablet.appendAsLeader(records)
+                            : logTablet.appendAsLeader(records, commitTimestamp);
 
             // if the batch is duplicated, we should truncate the state pre-write
             // buffer already written.
@@ -276,6 +468,9 @@ public final class KvWriteProcessor {
                     "MergeMode.OVERWRITE cannot be used with table.upsert.skip-unchanged enabled.");
         }
 
+        if (deduplicating) {
+            throw new InvalidTableException("Deduplicating log tables require ProduceLog.");
+        }
         SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
         Schema latestSchema = schemaInfo.getSchema();
         short latestSchemaId = (short) schemaInfo.getSchemaId();
@@ -294,6 +489,22 @@ public final class KvWriteProcessor {
                                 targetColumns, latestSchemaId, latestSchema);
         return new WriteContext(
                 latestSchema, latestSchemaId, autoIncrementUpdater, configuredRowMerger);
+    }
+
+    private static void validateDeduplicationRow(Schema schema, InternalRow row) {
+        for (int field = 0; field < schema.getColumns().size(); field++) {
+            Schema.Column column = schema.getColumns().get(field);
+            if (!column.getDataType().isNullable() && row.isNullAt(field)) {
+                throw new InvalidTableException("Column must not be null: " + column.getName());
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface WalBatchWriter {
+        @Nullable
+        MemoryLogRecords write(WalBuilder builder, long startOffset, @Nullable byte[] marker)
+                throws Exception;
     }
 
     private void validateSchemaId(short schemaIdOfNewData, short latestSchemaId) {
@@ -328,9 +539,8 @@ public final class KvWriteProcessor {
             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
             KvPreWriteBuffer.Key key = stateAccessor.encodeKey(keyBytes, originalPartitionName);
             BinaryRow row = kvRecord.getRow();
-            BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
-            if (currentValue == null) {
+            if (row == null) {
                 logOffset =
                         processDeletion(
                                 key,
@@ -345,7 +555,7 @@ public final class KvWriteProcessor {
                 logOffset =
                         processUpsert(
                                 key,
-                                currentValue,
+                                new BinaryValue(schemaIdOfNewData, row),
                                 currentMerger,
                                 autoIncrementUpdater,
                                 walBuilder,
@@ -460,6 +670,23 @@ public final class KvWriteProcessor {
         return logOffset + 1;
     }
 
+    private long appendDeduplicatedRow(
+            KvPreWriteBuffer.Key key,
+            InternalRow row,
+            WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long logOffset,
+            byte[] marker,
+            KvStateAccessor stateAccessor)
+            throws Exception {
+        if (stateAccessor.lookupLocal(key).isPresent()) {
+            return logOffset;
+        }
+        walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(row));
+        stateAccessor.insert(key, marker, logOffset);
+        return logOffset + 1;
+    }
+
     private long applyInsert(
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
@@ -551,7 +778,7 @@ public final class KvWriteProcessor {
     private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {
         switch (logFormat) {
             case INDEXED:
-                if (kvFormat == KvFormat.COMPACTED) {
+                if (kvFormat == KvFormat.COMPACTED && !deduplicating) {
                     // convert from compacted row to indexed row is time cost, and gain
                     // less benefits, currently we won't support compacted as kv format and
                     // indexed as cdc log format.
@@ -559,7 +786,9 @@ public final class KvWriteProcessor {
                     throw new IllegalArgumentException(
                             "Primary Key Table with COMPACTED kv format doesn't support INDEXED cdc log format.");
                 }
-                return new IndexWalBuilder(schemaId, memorySegmentPool);
+                return deduplicating
+                        ? new IndexWalBuilder(schemaId, memorySegmentPool, rowType)
+                        : new IndexWalBuilder(schemaId, memorySegmentPool);
             case COMPACTED:
                 return new CompactedWalBuilder(schemaId, rowType, memorySegmentPool);
             case ARROW:
@@ -574,7 +803,8 @@ public final class KvWriteProcessor {
                                 rowType,
                                 arrowCompressionInfo),
                         memorySegmentPool,
-                        false);
+                        false,
+                        deduplicating);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

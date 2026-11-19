@@ -25,6 +25,8 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
@@ -35,8 +37,10 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -68,7 +72,7 @@ class ArrowWalBuilderTest {
     }
 
     @Test
-    void testArrowWalBuilderCrossSeveralMemoryPages() throws Exception {
+    void testArrowWalBuilderCrossSeveralMemoryPages(@TempDir Path logDirectory) throws Exception {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("2kb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("128b"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("128b"));
@@ -87,26 +91,30 @@ class ArrowWalBuilderTest {
             expectedResult.add(Tuple2.of(changeType, objects));
         }
 
-        // consume log records before walBuilder deallocate memory. it's safe.
-        MemoryLogRecords logRecords = walBuilder.build();
         long totalPages = memorySegmentPool.totalSize() / memorySegmentPool.pageSize();
-        assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
-        // allocate multiple pages
-        assertThat(totalPages - memorySegmentPool.freePages()).isGreaterThan(1);
-        assertLogRecordsEqualsWithRowKind(DATA1_ROW_TYPE, logRecords, expectedResult);
-
-        // consume log records after walBuilder deallocate memory. Even the content in memory
-        // segment pool is changed, the log records is still valid. Because the memory of logRecords
-        // is deeply copied.
-        walBuilder.deallocate();
-        assertThat(memorySegmentPool.freePages()).isEqualTo(totalPages);
-        assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
-        // change some bytes of memory segment pool.
-        for (MemorySegment memorySegment : memorySegmentPool.getAllCachePages()) {
-            memorySegment.put(50, (byte) 4);
+        try (FileLogRecords fileRecords =
+                FileLogRecords.open(logDirectory.resolve("records.log").toFile())) {
+            try {
+                MemoryLogRecords logRecords = walBuilder.build();
+                assertThat(totalPages - memorySegmentPool.freePages()).isGreaterThan(1);
+                logRecords.batches().iterator().next().ensureValid();
+                assertLogRecordsEqualsWithRowKind(DATA1_ROW_TYPE, logRecords, expectedResult);
+                walBuilder.setWriterState(1000L, 6);
+                logRecords = walBuilder.build();
+                assertThat(fileRecords.append(logRecords)).isEqualTo(logRecords.sizeInBytes());
+            } finally {
+                walBuilder.deallocate();
+            }
+            assertThat(memorySegmentPool.freePages()).isEqualTo(totalPages);
+            for (MemorySegment segment : memorySegmentPool.getAllCachePages()) {
+                segment.put(50, (byte) 4);
+            }
+            LogRecordBatch persisted = fileRecords.batches().iterator().next();
+            persisted.ensureValid();
+            assertThat(persisted.writerId()).isEqualTo(1000L);
+            assertThat(persisted.batchSequence()).isEqualTo(6);
+            assertLogRecordsEqualsWithRowKind(DATA1_ROW_TYPE, fileRecords, expectedResult);
         }
-        assertThat(logRecords.batches().iterator().next().isValid()).isTrue();
-        assertLogRecordsEqualsWithRowKind(DATA1_ROW_TYPE, logRecords, expectedResult);
     }
 
     @Test
@@ -162,6 +170,7 @@ class ArrowWalBuilderTest {
                         DATA1_ROW_TYPE,
                         DEFAULT_COMPRESSION),
                 memorySegmentPool,
-                false);
+                false,
+                true);
     }
 }

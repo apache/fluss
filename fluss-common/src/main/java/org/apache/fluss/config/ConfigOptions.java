@@ -1472,6 +1472,22 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines how long the writer will block when waiting for segments to become available.");
 
+    /** How a writer identifies exact duplicate keys within one pending batch. */
+    public enum BatchDeduplicationMode {
+        NONE,
+        ADJACENT,
+        BATCH
+    }
+
+    public static final ConfigOption<BatchDeduplicationMode>
+            CLIENT_WRITER_BATCH_DEDUPLICATION_MODE =
+                    key("client.writer.batch-deduplication.mode")
+                            .enumType(BatchDeduplicationMode.class)
+                            .defaultValue(BatchDeduplicationMode.NONE)
+                            .withDescription(
+                                    "Controls client-side filtering of exact duplicate keys within an Arrow "
+                                            + "batch for log tables with a deduplication key and no deduplication TTL.");
+
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BATCH_SIZE =
             key("client.writer.batch-size")
                     .memoryType()
@@ -2124,6 +2140,17 @@ public class ConfigOptions {
                                     + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
                                     + "Disabled if not configured, including for tables created before this option was introduced. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
+
+    public static final ConfigOption<Duration> TABLE_DEDUPLICATION_TTL =
+            key("table.deduplication.ttl")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The best-effort retention of deduplication keys in a log table. "
+                                    + "The duration starts when the first record is accepted; duplicates do not refresh it. "
+                                    + "Expired keys are removed by RocksDB compaction, after which the same key can be accepted again. "
+                                    + "If not set, keys remain until the table or partition is dropped. "
+                                    + "The duration must be at least 1 millisecond and does not change log retention.");
 
     public static final ConfigOption<Duration> TABLE_KV_TTL =
             key("table.kv.ttl")

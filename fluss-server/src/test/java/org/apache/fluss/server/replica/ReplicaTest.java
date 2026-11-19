@@ -56,6 +56,7 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -86,6 +87,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -248,6 +250,48 @@ final class ReplicaTest extends ReplicaTestBase {
                                         new ListOffsetsParam(
                                                 -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
                 .isInstanceOf(NotLeaderOrFollowerException.class);
+    }
+
+    @Test
+    void testLimitLogScanSkipsEmptyBatchesAcrossSegments() throws Exception {
+        Replica replica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(replica);
+        LogTablet log = replica.getLogTablet();
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.emptyList()));
+        log.updateHighWatermark(replica.getLocalLogEndOffset());
+        assertThat(replica.limitLogScan(1).batches()).isEmpty();
+        LogAppendInfo first =
+                log.appendAsLeader(
+                        genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(0))));
+        log.roll(Optional.empty());
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.emptyList()));
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.emptyList()));
+        LogAppendInfo second =
+                log.appendAsLeader(
+                        genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(1))));
+        log.roll(Optional.empty());
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.emptyList()));
+        log.updateHighWatermark(replica.getLocalLogEndOffset());
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(DATA1.get(2))));
+
+        List<Long> offsets = new ArrayList<>();
+        for (LogRecordBatch batch : replica.limitLogScan(1).batches()) {
+            if (batch.getRecordCount() > 0) {
+                offsets.add(batch.baseLogOffset());
+            }
+        }
+        assertThat(offsets).containsExactly(second.firstOffset());
+        offsets.clear();
+        for (LogRecordBatch batch : replica.limitLogScan(2).batches()) {
+            if (batch.getRecordCount() > 0) {
+                offsets.add(batch.baseLogOffset());
+            }
+        }
+        assertThat(offsets).containsExactly(first.firstOffset(), second.firstOffset());
+        assertThat(replica.limitLogScan(3).batches())
+                .extracting(LogRecordBatch::baseLogOffset)
+                .containsExactly(first.firstOffset(), second.firstOffset());
     }
 
     @Test
