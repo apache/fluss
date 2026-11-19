@@ -338,14 +338,14 @@ public enum Errors {
     BULK_LOAD_CONFLICT(
             84, "BulkLoad conflicts with another operation.", BulkLoadConflictException::new),
     BULK_LOAD_STATE_CONFLICT(
-            86,
+            85,
             "BulkLoad operation conflicts with the transaction state.",
             BulkLoadStateException::new),
     INVALID_BULK_LOAD_SNAPSHOT(
-            87, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
+            86, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
     BULK_LOAD_TARGET_WITHDRAWN(
-            88, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
-    KV_RECOVERY_IN_PROGRESS(89, "KV recovery is in progress.", KvRecoveryInProgressException::new);
+            87, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
+    KV_RECOVERY_IN_PROGRESS(88, "KV recovery is in progress.", KvRecoveryInProgressException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
