@@ -33,6 +33,7 @@ import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -42,11 +43,13 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -72,6 +75,12 @@ public final class NettyClient implements RpcClient {
      */
     private final Map<ConnectionKey, ServerConnection> connections;
 
+    // Never enter a ServerConnection lock while holding this lock: connection callbacks reenter it.
+    private final Object registryLock = new Object();
+    private final Map<ConnectionKey, ReconnectState> reconnectStates = new HashMap<>();
+    private final LongSupplier nanoTime;
+    private final ExponentialBackoff reconnectBackoff;
+
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
 
@@ -80,7 +89,37 @@ public final class NettyClient implements RpcClient {
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
+        this(
+                conf,
+                clientMetricGroup,
+                System::nanoTime,
+                new ExponentialBackoff(100L, 2, 5000L, 0.2));
+    }
+
+    @VisibleForTesting
+    NettyClient(
+            Configuration conf,
+            ClientMetricGroup clientMetricGroup,
+            LongSupplier nanoTime,
+            ExponentialBackoff reconnectBackoff) {
+        this(
+                conf,
+                clientMetricGroup,
+                nanoTime,
+                reconnectBackoff,
+                AuthenticationFactory.loadClientAuthenticatorSupplier(conf));
+    }
+
+    @VisibleForTesting
+    NettyClient(
+            Configuration conf,
+            ClientMetricGroup clientMetricGroup,
+            LongSupplier nanoTime,
+            ExponentialBackoff reconnectBackoff,
+            Supplier<ClientAuthenticator> authenticatorSupplier) {
         this.connections = new ConcurrentHashMap<>();
+        this.nanoTime = nanoTime;
+        this.reconnectBackoff = reconnectBackoff;
 
         // build bootstrap
         this.eventGroup =
@@ -103,7 +142,7 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
         this.clientMetricGroup = clientMetricGroup;
-        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
+        this.authenticatorSupplier = authenticatorSupplier;
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
@@ -187,6 +226,14 @@ public final class NettyClient implements RpcClient {
         return connection != null && connection.isReady();
     }
 
+    @Override
+    public boolean isBackingOff(ServerNode node) {
+        synchronized (registryLock) {
+            ReconnectState state = reconnectStates.get(ConnectionKey.from(node));
+            return state != null && state.remainingNanos(nanoTime.getAsLong()) > 0;
+        }
+    }
+
     /** Send an RPC request to the given server and return a future for the response. */
     @Override
     public CompletableFuture<ApiMessage> sendRequest(
@@ -198,12 +245,16 @@ public final class NettyClient implements RpcClient {
     @Override
     public void close() throws Exception {
         try {
-            isClosed = true;
+            List<ServerConnection> closing;
+            synchronized (registryLock) {
+                isClosed = true;
+                closing = new ArrayList<>(connections.values());
+                connections.clear();
+                reconnectStates.clear();
+            }
             final List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-            for (Map.Entry<ConnectionKey, ServerConnection> conn : connections.entrySet()) {
-                if (connections.remove(conn.getKey(), conn.getValue())) {
-                    shutdownFutures.add(conn.getValue().close());
-                }
+            for (ServerConnection connection : closing) {
+                shutdownFutures.add(connection.close());
             }
             shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
             CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
@@ -214,22 +265,72 @@ public final class NettyClient implements RpcClient {
         }
     }
 
-    private ServerConnection getOrCreateConnection(ServerNode node) {
-        ConnectionKey connectionKey = ConnectionKey.from(node);
-        return connections.computeIfAbsent(
-                connectionKey,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
+    @VisibleForTesting
+    ServerConnection getOrCreateConnection(ServerNode node) {
+        ConnectionKey key = ConnectionKey.from(node);
+        ServerConnection connection = connections.get(key);
+        if (connection != null) {
+            return connection;
+        }
+
+        long delayNanos;
+        synchronized (registryLock) {
+            connection = connections.get(key);
+            if (connection != null) {
+                return connection;
+            }
+            LOG.debug("Creating connection to server {}.", node);
+            connection =
+                    new ServerConnection(
                             node,
                             clientMetricGroup,
                             authenticatorSupplier.get(),
-                            // Avoid recursive map updates when connecting fails synchronously.
-                            (con, ignore) ->
-                                    eventGroup.execute(
-                                            () -> connections.remove(connectionKey, con)));
-                });
+                            this::onDisconnected,
+                            this::onReady);
+            // Publish before starting I/O: even an immediate connect failure can evict this entry.
+            connections.put(key, connection);
+            ReconnectState state = reconnectStates.get(key);
+            delayNanos = state == null ? 0 : state.remainingNanos(nanoTime.getAsLong());
+        }
+        // Either close() sees the registered connection, or this check closes it before starting.
+        if (isClosed) {
+            connection.close();
+        } else {
+            connection.connect(bootstrap, delayNanos);
+        }
+        return connection;
+    }
+
+    private void onDisconnected(ServerConnection connection, boolean transportFailure) {
+        synchronized (registryLock) {
+            ConnectionKey key = ConnectionKey.from(connection.getServerNode());
+            if (connections.remove(key, connection) && transportFailure && !isClosed) {
+                ReconnectState state =
+                        reconnectStates.computeIfAbsent(key, ignored -> new ReconnectState());
+                state.failedAtNanos = nanoTime.getAsLong();
+                state.delayNanos =
+                        TimeUnit.MILLISECONDS.toNanos(reconnectBackoff.backoff(state.failures++));
+            }
+        }
+    }
+
+    private void onReady(ServerConnection connection) {
+        synchronized (registryLock) {
+            ConnectionKey key = ConnectionKey.from(connection.getServerNode());
+            if (connections.get(key) == connection) {
+                reconnectStates.remove(key);
+            }
+        }
+    }
+
+    private static final class ReconnectState {
+        private long failures;
+        private long failedAtNanos;
+        private long delayNanos;
+
+        private long remainingNanos(long now) {
+            return delayNanos == 0 ? 0 : Math.max(0, delayNanos - (now - failedAtNanos));
+        }
     }
 
     @VisibleForTesting

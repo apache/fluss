@@ -54,4 +54,7 @@ public interface ClientHandlerCallback {
      * @param cause Cause of the failure
      */
     void onFailure(Throwable cause);
+
+    /** Called when the channel is closed locally because it is idle. */
+    default void onIdle() {}
 }

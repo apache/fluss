@@ -46,6 +46,9 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
@@ -90,6 +93,90 @@ public class MetadataUpdaterTest {
                         null,
                         null);
         assertThat(cluster.getBucketCount(TableOrPartition.ofTable(1))).hasValue(3);
+    }
+
+    @Test
+    void testMetadataRefreshDoesNotResetConnectionBackoff() {
+        ServerNode failed = new ServerNode(2, "localhost", 8081, ServerType.TABLET_SERVER);
+        Map<Integer, ServerNode> nodes = new HashMap<>();
+        nodes.put(TS_NODE.id(), TS_NODE);
+        nodes.put(failed.id(), failed);
+        Cluster cluster =
+                new Cluster(
+                        nodes,
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        MetadataResponse response = new MetadataResponse();
+        for (ServerNode node : nodes.values()) {
+            response.addTabletServer()
+                    .setNodeId(node.id())
+                    .setHost(node.host())
+                    .setPort(node.port());
+        }
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(node).isEqualTo(TS_NODE);
+                            assertThat(api).isEqualTo(ApiKeys.GET_METADATA);
+                            return CompletableFuture.completedFuture(response);
+                        }) {
+                    @Override
+                    public boolean isBackingOff(ServerNode node) {
+                        return node.equals(failed);
+                    }
+
+                    @Override
+                    public boolean connect(ServerNode node) {
+                        throw new AssertionError("Node selection should not open a connection");
+                    }
+                };
+        MetadataUpdater updater = new MetadataUpdater(client, new Configuration(), cluster);
+        updater.refreshClusterUntilAvailable();
+        assertThat(updater.getCluster().getAliveTabletServerList())
+                .containsExactlyInAnyOrder(TS_NODE, failed);
+        updater.updateMetadata(null, null, null);
+        for (int i = 0; i < 100; i++) {
+            assertThat(updater.getRandomTabletServer()).isEqualTo(TS_NODE);
+        }
+    }
+
+    @Test
+    void testBackoffSelectionFallbackPreservesExclusions() {
+        ServerNode second = new ServerNode(2, "localhost", 8081, ServerType.TABLET_SERVER);
+        Map<Integer, ServerNode> nodes = new HashMap<>();
+        nodes.put(TS_NODE.id(), TS_NODE);
+        nodes.put(second.id(), second);
+        Cluster cluster =
+                new Cluster(
+                        nodes,
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        Collections.emptyMap());
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster, Collections.singleton(TS_NODE.id()), node -> true))
+                .isEqualTo(second);
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster,
+                                new HashSet<>(Arrays.asList(TS_NODE.id(), second.id())),
+                                node -> true))
+                .isNull();
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                Cluster.empty(), Collections.emptySet(), node -> true))
+                .isNull();
+        assertThat(
+                        MetadataUtils.getOneAvailableTabletServerNode(
+                                cluster, Collections.emptySet(), node -> true))
+                .isIn(TS_NODE, second);
     }
 
     @Test
