@@ -240,15 +240,19 @@ public final class KvWriteProcessor {
         RowType inputRowType = input.getRowType();
         List<String> stateKeys = new ArrayList<>(tableInfo.getDeduplicationKeys());
         stateKeys.removeAll(tableInfo.getPartitionKeys());
+        boolean defaultBucketKey = tableInfo.isDefaultBucketKey();
         KeyEncoder keyEncoder =
                 KeyEncoder.ofPrimaryKeyEncoder(
-                        inputRowType,
-                        stateKeys,
-                        tableInfo.getTableConfig(),
-                        tableInfo.isDefaultBucketKey());
+                        inputRowType, stateKeys, tableInfo.getTableConfig(), defaultBucketKey);
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         KeyEncoder bucketKeyEncoder =
-                KeyEncoder.ofBucketKeyEncoder(inputRowType, tableInfo.getBucketKeys(), lakeFormat);
+                KeyEncoder.ofBucketKeyEncoder(
+                        inputRowType,
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        defaultBucketKey,
+                        keyEncoder);
+        boolean reuseBucketKey = bucketKeyEncoder == keyEncoder;
         BucketingFunction bucketing = BucketingFunction.of(lakeFormat);
         RowPartitionGetter partitionGetter =
                 tableInfo.getPartitionKeys().isEmpty()
@@ -287,19 +291,24 @@ public final class KvWriteProcessor {
                                 }
                                 InternalRow row = record.getRow();
                                 validateDeduplicationRow(input, row);
-                                if ((partitionGetter != null
-                                                && !Objects.equals(
-                                                        partitionName,
-                                                        partitionGetter.getPartition(row)))
-                                        || bucketing.bucketing(
-                                                        bucketKeyEncoder.encodeKey(row),
-                                                        bucketCount)
-                                                != tableBucket.getBucket()) {
+                                if (partitionGetter != null
+                                        && !Objects.equals(
+                                                partitionName, partitionGetter.getPartition(row))) {
                                     throw new InvalidTableException(
-                                            "ProduceLog row does not match its partition or bucket.");
+                                            "ProduceLog row does not match its partition.");
+                                }
+                                byte[] bucketKey = bucketKeyEncoder.encodeKey(row);
+                                if (bucketing.bucketing(bucketKey, bucketCount)
+                                        != tableBucket.getBucket()) {
+                                    throw new InvalidTableException(
+                                            "ProduceLog row does not match its bucket.");
                                 }
                                 KvPreWriteBuffer.Key key =
-                                        stateAccessor.encodeKey(keyEncoder.encodeKey(row), null);
+                                        stateAccessor.encodeKey(
+                                                reuseBucketKey
+                                                        ? bucketKey
+                                                        : keyEncoder.encodeKey(row),
+                                                null);
                                 if (retained != null) {
                                     if (!stateAccessor.lookupLocal(key).isPresent()) {
                                         stateAccessor.insert(key, marker, offset++);
