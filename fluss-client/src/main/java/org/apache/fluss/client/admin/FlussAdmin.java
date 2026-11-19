@@ -54,6 +54,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -811,7 +812,18 @@ public class FlussAdmin implements Admin {
         if (physicalTablePath.getPartitionName() != null) {
             metadataUpdater.updatePhysicalTableMetadata(Collections.singleton(physicalTablePath));
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
+        } else if (tableInfo.isPartitioned()) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Table %s is a partitioned table, please specify a partition name "
+                                    + "to list offsets.",
+                            physicalTablePath.getTablePath()));
         }
+        checkBucketsExist(
+                metadataUpdater.getCluster(),
+                physicalTablePath,
+                TableOrPartition.of(tableInfo.getTableId(), partitionId),
+                buckets);
         Map<Integer, ListOffsetsRequest> requestMap =
                 prepareListOffsetsRequests(
                         metadataUpdater,
@@ -1099,6 +1111,27 @@ public class FlussAdmin implements Admin {
                         .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
             } else {
                 bucketToRowCountMap.get(tb).complete(resp.getRowCount());
+            }
+        }
+    }
+
+    private static void checkBucketsExist(
+            Cluster cluster,
+            PhysicalTablePath physicalTablePath,
+            TableOrPartition tableOrPartition,
+            Collection<Integer> buckets) {
+        Optional<Integer> bucketCount = cluster.getBucketCount(tableOrPartition);
+        // Older metadata may not include a bucket count. Preserve leader lookup in that case.
+        if (!bucketCount.isPresent()) {
+            return;
+        }
+        int count = bucketCount.get();
+        for (int bucket : buckets) {
+            if (bucket < 0 || bucket >= count) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Bucket %d does not exist in %s, which has %d buckets.",
+                                bucket, physicalTablePath, count));
             }
         }
     }

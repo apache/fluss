@@ -18,18 +18,110 @@
 #[cfg(test)]
 mod admin_test {
     use crate::integration::utils::{
-        create_partitions, create_table, get_shared_cluster, wait_for_partitions_ready,
-        wait_for_table_buckets_ready,
+        create_partitions, create_table, get_shared_cluster, wait_for_partition_buckets_ready,
+        wait_for_partitions_ready, wait_for_table_buckets_ready,
     };
     use fluss::client::{FlussAdmin, FlussConnection};
     use fluss::config::Config;
-    use fluss::error::FlussError;
+    use fluss::error::{Error, FlussError};
     use fluss::metadata::{
         BucketStatsRequest, DataTypes, DatabaseDescriptorBuilder, KvFormat, LogFormat,
         PartitionSpec, Schema, TableDescriptor, TablePath,
     };
     use fluss::row::GenericRow;
+    use fluss::rpc::message::OffsetSpec;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_list_offsets_with_invalid_buckets() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().unwrap();
+        let table_path = TablePath::new("fluss", "test_list_offsets_invalid_buckets");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .build()
+                    .unwrap(),
+            )
+            .distributed_by(Some(3), vec![])
+            .build()
+            .unwrap();
+        create_table(&admin, &table_path, &descriptor).await;
+        wait_for_table_buckets_ready(&admin, &table_path, &[0, 1, 2]).await;
+
+        let offsets = admin
+            .list_offsets(&table_path, &[0, 1, 2], OffsetSpec::Latest)
+            .await
+            .unwrap();
+        assert_eq!(offsets, HashMap::from([(0, 0), (1, 0), (2, 0)]));
+        for bucket_id in [-1, 3, 99] {
+            let error = admin
+                .list_offsets(&table_path, &[0, bucket_id], OffsetSpec::Latest)
+                .await
+                .expect_err("Listing offsets of a nonexistent bucket should fail");
+            assert!(
+                matches!(&error, Error::IllegalArgument { message }
+                    if message == &format!("Bucket id {bucket_id} out of range for 3 buckets")),
+                "unexpected error: {error}"
+            );
+        }
+        admin.drop_table(&table_path, false).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_offsets_with_partitioned_table() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().unwrap();
+        let table_path = TablePath::new("fluss", "test_list_offsets_partitioned_table");
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("pt", DataTypes::string())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["pt"])
+            .distributed_by(Some(2), vec![])
+            .build()
+            .unwrap();
+        create_table(&admin, &table_path, &descriptor).await;
+
+        let error = admin
+            .list_offsets(&table_path, &[0], OffsetSpec::Latest)
+            .await
+            .expect_err("Listing offsets of a partitioned table needs a partition");
+        assert!(
+            matches!(&error, Error::IllegalArgument { message }
+            if message == &format!(
+                "Table {table_path} is a partitioned table, please specify a partition name to list offsets."
+            )),
+            "unexpected error: {error}"
+        );
+
+        create_partitions(&admin, &table_path, "pt", &["a"]).await;
+        wait_for_partition_buckets_ready(&admin, &table_path, "a", &[0, 1]).await;
+        let offsets = admin
+            .list_partition_offsets(&table_path, "a", &[0, 1], OffsetSpec::Latest)
+            .await
+            .unwrap();
+        assert_eq!(offsets, HashMap::from([(0, 0), (1, 0)]));
+        for bucket_id in [-1, 2, 99] {
+            let error = admin
+                .list_partition_offsets(&table_path, "a", &[0, bucket_id], OffsetSpec::Latest)
+                .await
+                .expect_err("Listing offsets of a nonexistent bucket should fail");
+            assert!(
+                matches!(&error, Error::IllegalArgument { message }
+                    if message == &format!("Bucket id {bucket_id} out of range for 2 buckets")),
+                "unexpected error: {error}"
+            );
+        }
+        admin.drop_table(&table_path, false).await.unwrap();
+    }
 
     #[tokio::test]
     async fn test_create_database() {

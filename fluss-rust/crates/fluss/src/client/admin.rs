@@ -365,6 +365,9 @@ impl FlussAdmin {
 
     /// List offset for the specified buckets. This operation enables to find the beginning offset,
     /// end offset as well as the offset matching a timestamp in buckets.
+    ///
+    /// Fails with [`Error::IllegalArgument`] if the table is partitioned or a bucket is outside
+    /// the known bucket range. A missing bucket leader is reported as a retriable error.
     pub async fn list_offsets(
         &self,
         table_path: &TablePath,
@@ -377,6 +380,9 @@ impl FlussAdmin {
 
     /// List offset for the specified buckets in a partition. This operation enables to find
     /// the beginning offset, end offset as well as the offset matching a timestamp in buckets.
+    ///
+    /// Fails with [`Error::IllegalArgument`] if a bucket is outside the partition's known bucket
+    /// range. A missing bucket leader is reported as a retriable error.
     pub async fn list_partition_offsets(
         &self,
         table_path: &TablePath,
@@ -405,7 +411,16 @@ impl FlussAdmin {
         self.metadata.update_table_metadata(table_path).await?;
 
         let cluster = self.metadata.get_cluster();
-        let table_id = cluster.get_table(table_path)?.table_id;
+        let table_info = cluster.get_table(table_path)?;
+        let table_id = table_info.table_id;
+        if partition_name.is_none() && table_info.is_partitioned() {
+            return Err(Error::IllegalArgument {
+                message: format!(
+                    "Table {table_path} is a partitioned table, please specify a partition name \
+                     to list offsets."
+                ),
+            });
+        }
 
         // Resolve partition_id from partition_name if provided
         let partition_id = if let Some(name) = partition_name {
@@ -434,8 +449,13 @@ impl FlussAdmin {
         };
 
         // Prepare requests
-        let requests_by_server =
-            self.prepare_list_offsets_requests(table_id, partition_id, buckets_id, offset_spec)?;
+        let requests_by_server = prepare_list_offsets_requests(
+            &self.metadata.get_cluster(),
+            table_id,
+            partition_id,
+            buckets_id,
+            offset_spec,
+        )?;
 
         // Send Requests
         let response_futures = self.send_list_offsets_request(requests_by_server).await?;
@@ -450,44 +470,6 @@ impl FlussAdmin {
             results.extend(offsets?);
         }
         Ok(results)
-    }
-
-    fn prepare_list_offsets_requests(
-        &self,
-        table_id: TableId,
-        partition_id: Option<PartitionId>,
-        buckets: &[BucketId],
-        offset_spec: OffsetSpec,
-    ) -> Result<HashMap<i32, ListOffsetsRequest>> {
-        let cluster = self.metadata.get_cluster();
-        let mut node_for_bucket_list: HashMap<i32, Vec<BucketId>> = HashMap::new();
-
-        for bucket_id in buckets {
-            let table_bucket = TableBucket::new_with_partition(table_id, partition_id, *bucket_id);
-            let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
-                // todo: consider retry?
-                Error::UnexpectedError {
-                    message: format!("No leader found for table bucket: {table_bucket}."),
-                    source: None,
-                }
-            })?;
-
-            node_for_bucket_list
-                .entry(leader.id())
-                .or_default()
-                .push(*bucket_id);
-        }
-
-        let routing_bucket_count =
-            cluster.bucket_count(TableOrPartition::of(table_id, partition_id));
-        let mut list_offsets_requests = HashMap::new();
-        for (leader_id, bucket_ids) in node_for_bucket_list {
-            let request =
-                ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone())
-                    .with_routing_bucket_count(routing_bucket_count);
-            list_offsets_requests.insert(leader_id, request);
-        }
-        Ok(list_offsets_requests)
     }
 
     async fn send_list_offsets_request(
@@ -952,6 +934,53 @@ impl FlussAdmin {
     }
 }
 
+fn prepare_list_offsets_requests(
+    cluster: &Cluster,
+    table_id: TableId,
+    partition_id: Option<PartitionId>,
+    buckets: &[BucketId],
+    offset_spec: OffsetSpec,
+) -> Result<HashMap<i32, ListOffsetsRequest>> {
+    let routing_bucket_count = cluster.bucket_count(TableOrPartition::of(table_id, partition_id));
+    // Validate all buckets first so that a missing leader cannot mask an invalid bucket.
+    // Older metadata may not include a bucket count; preserve leader lookup in that case.
+    if let Some(bucket_count) = routing_bucket_count {
+        for &bucket_id in buckets {
+            if bucket_id < 0 || bucket_id >= bucket_count {
+                return Err(Error::IllegalArgument {
+                    message: format!(
+                        "Bucket id {bucket_id} out of range for {bucket_count} buckets"
+                    ),
+                });
+            }
+        }
+    }
+
+    let mut buckets_by_leader: HashMap<i32, Vec<BucketId>> = HashMap::new();
+    for bucket_id in buckets {
+        let table_bucket = TableBucket::new_with_partition(table_id, partition_id, *bucket_id);
+        let leader = cluster.leader_for(&table_bucket).ok_or_else(|| {
+            Error::leader_not_available(format!(
+                "No leader found for table bucket: {table_bucket}."
+            ))
+        })?;
+
+        buckets_by_leader
+            .entry(leader.id())
+            .or_default()
+            .push(*bucket_id);
+    }
+
+    let mut requests_by_leader = HashMap::new();
+    for (leader_id, bucket_ids) in buckets_by_leader {
+        let request =
+            ListOffsetsRequest::new(table_id, partition_id, bucket_ids, offset_spec.clone())
+                .with_routing_bucket_count(routing_bucket_count);
+        requests_by_leader.insert(leader_id, request);
+    }
+    Ok(requests_by_leader)
+}
+
 fn group_stats_requests_by_leader(
     cluster: &Cluster,
     table_id: TableId,
@@ -1000,13 +1029,17 @@ fn fill_bucket_counts(
 
 #[cfg(test)]
 mod tests {
-    use super::{fill_bucket_counts, group_stats_requests_by_leader, parse_table_descriptor};
+    use super::{
+        fill_bucket_counts, group_stats_requests_by_leader, parse_table_descriptor,
+        prepare_list_offsets_requests,
+    };
     use crate::cluster::{BucketLocation, Cluster, ServerNode, ServerType};
     use crate::error::{Error, FlussError};
     use crate::metadata::{
         BucketStatsRequest, PartitionInfo, PhysicalTablePath, ResolvedPartitionSpec, TableBucket,
-        TablePath,
+        TableOrPartition, TablePath,
     };
+    use crate::rpc::message::OffsetSpec;
     use crate::test_utils::build_table_info;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1014,6 +1047,10 @@ mod tests {
     const TABLE_ID: i64 = 1;
 
     fn cluster(leaders: [Option<i32>; 4]) -> Cluster {
+        cluster_with_bucket_count(leaders, Some(4))
+    }
+
+    fn cluster_with_bucket_count(leaders: [Option<i32>; 4], bucket_count: Option<i32>) -> Cluster {
         let table_path = TablePath::new("db", "tbl");
         let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
         let servers: HashMap<i32, ServerNode> = (1..=2)
@@ -1044,7 +1081,10 @@ mod tests {
                 build_table_info(table_path, TABLE_ID, 4),
             )]),
             HashMap::new(),
-            HashMap::new(),
+            bucket_count
+                .map(|count| (TableOrPartition::Table(TABLE_ID), count))
+                .into_iter()
+                .collect(),
         )
     }
 
@@ -1077,6 +1117,147 @@ mod tests {
             error.api_error(),
             Some(FlussError::LeaderNotAvailableException)
         );
+    }
+
+    #[test]
+    fn list_offsets_requests_are_grouped_by_bucket_leader() {
+        let cluster = cluster([Some(1), Some(2), Some(1), Some(2)]);
+        let requests = prepare_list_offsets_requests(
+            &cluster,
+            TABLE_ID,
+            None,
+            &[0, 1, 2, 3],
+            OffsetSpec::Latest,
+        )
+        .unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[&1].inner_request.bucket_id, vec![0, 2]);
+        assert_eq!(requests[&2].inner_request.bucket_id, vec![1, 3]);
+        for request in requests.values() {
+            assert_eq!(request.inner_request.table_id, TABLE_ID);
+            assert_eq!(request.inner_request.partition_id, None);
+            assert_eq!(request.inner_request.routing_bucket_count, Some(4));
+        }
+    }
+
+    #[test]
+    fn list_offsets_validates_all_buckets_before_looking_up_leaders() {
+        let cluster = cluster([None; 4]);
+        for bucket in [4, 99, -1] {
+            let error = prepare_list_offsets_requests(
+                &cluster,
+                TABLE_ID,
+                None,
+                &[0, bucket],
+                OffsetSpec::Latest,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                Error::IllegalArgument { message }
+                    if message == format!("Bucket id {bucket} out of range for 4 buckets")
+            ));
+        }
+    }
+
+    #[test]
+    fn list_offsets_reports_a_missing_leader_as_retriable() {
+        let cluster = cluster([Some(1), None, Some(1), Some(1)]);
+        let error =
+            prepare_list_offsets_requests(&cluster, TABLE_ID, None, &[1], OffsetSpec::Latest)
+                .unwrap_err();
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::LeaderNotAvailableException)
+        );
+        assert!(error.is_retriable());
+    }
+
+    #[test]
+    fn list_offsets_preserves_leader_lookup_without_a_bucket_count() {
+        let cluster = cluster_with_bucket_count([Some(1); 4], None);
+        let requests =
+            prepare_list_offsets_requests(&cluster, TABLE_ID, None, &[3], OffsetSpec::Latest)
+                .unwrap();
+        assert_eq!(requests[&1].inner_request.bucket_id, vec![3]);
+        assert_eq!(requests[&1].inner_request.routing_bucket_count, None);
+
+        let error =
+            prepare_list_offsets_requests(&cluster, TABLE_ID, None, &[99], OffsetSpec::Latest)
+                .unwrap_err();
+        assert_eq!(
+            error.api_error(),
+            Some(FlussError::LeaderNotAvailableException)
+        );
+    }
+
+    #[test]
+    fn list_offsets_uses_the_partition_bucket_count() {
+        const PARTITION_ID: i64 = 10;
+        for (partition_bucket_count, table_bucket_count) in [(2, 4), (4, 2)] {
+            let table_path = TablePath::new("db", "tbl");
+            let physical_path = Arc::new(PhysicalTablePath::of_partitioned(
+                Arc::new(table_path.clone()),
+                Some("p".to_string()),
+            ));
+            let server =
+                ServerNode::new(1, "127.0.0.1".to_string(), 9000, ServerType::TabletServer);
+            let locations = (0..partition_bucket_count)
+                .map(|bucket| {
+                    BucketLocation::new(
+                        TableBucket::new_with_partition(TABLE_ID, Some(PARTITION_ID), bucket),
+                        Some(server.clone()),
+                        Arc::clone(&physical_path),
+                    )
+                })
+                .collect();
+            let cluster = Cluster::new(
+                None,
+                HashMap::from([(server.id(), server)]),
+                HashMap::from([(Arc::clone(&physical_path), locations)]),
+                HashMap::from([(table_path.clone(), TABLE_ID)]),
+                HashMap::from([(
+                    table_path.clone(),
+                    build_table_info(table_path, TABLE_ID, table_bucket_count),
+                )]),
+                HashMap::from([(physical_path, PARTITION_ID)]),
+                HashMap::from([
+                    (TableOrPartition::Table(TABLE_ID), table_bucket_count),
+                    (
+                        TableOrPartition::Partition(PARTITION_ID),
+                        partition_bucket_count,
+                    ),
+                ]),
+            );
+            let requests = prepare_list_offsets_requests(
+                &cluster,
+                TABLE_ID,
+                Some(PARTITION_ID),
+                &[0, partition_bucket_count - 1],
+                OffsetSpec::Latest,
+            )
+            .unwrap();
+            let request = &requests[&1].inner_request;
+            assert_eq!(request.partition_id, Some(PARTITION_ID));
+            assert_eq!(request.bucket_id, vec![0, partition_bucket_count - 1]);
+            assert_eq!(request.routing_bucket_count, Some(partition_bucket_count));
+
+            let error = prepare_list_offsets_requests(
+                &cluster,
+                TABLE_ID,
+                Some(PARTITION_ID),
+                &[partition_bucket_count],
+                OffsetSpec::Latest,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                Error::IllegalArgument { message }
+                    if message == format!(
+                        "Bucket id {partition_bucket_count} out of range for {partition_bucket_count} buckets"
+                    )
+            ));
+        }
     }
 
     fn partition(id: i64, bucket_count: i32) -> PartitionInfo {
