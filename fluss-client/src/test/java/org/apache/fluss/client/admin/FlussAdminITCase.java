@@ -437,6 +437,36 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterTableWithoutChanges() throws Exception {
+        List<TableChange> noChanges = Collections.emptyList();
+        TablePath tablePath = TablePath.of("test_db", "alter_table_without_changes");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        // should be a no-op if the table exists
+        admin.alterTable(tablePath, noChanges, false).get();
+        assertThat(admin.getTableInfo(tablePath).get().toTableDescriptor())
+                .isEqualTo(tableInfo.toTableDescriptor());
+
+        // throw exception if table not exist
+        TablePath notExistTable = TablePath.of("test_db", "alter_table_without_changes_not_exist");
+        assertThatThrownBy(() -> admin.alterTable(notExistTable, noChanges, false).get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(notExistTable, noChanges, true).get();
+
+        // throw exception if database not exist
+        TablePath notExistDatabase =
+                TablePath.of("test_db_not_exist", "alter_table_without_changes_not_exist");
+        assertThatThrownBy(() -> admin.alterTable(notExistDatabase, noChanges, false).get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(notExistDatabase, noChanges, true).get();
+    }
+
+    @Test
     void testAlterTableLogTtl() throws Exception {
         TablePath tablePath = TablePath.of("test_db", "alter_table_log_ttl");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
