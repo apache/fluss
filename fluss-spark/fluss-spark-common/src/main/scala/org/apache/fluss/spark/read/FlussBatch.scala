@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.Configuration
-import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.lake.FlussLakePartitionReaderFactory
 
@@ -71,6 +71,16 @@ class FlussAppendBatch(
         projection,
         pushedPredicate,
         appendPlanner.logTailPredicate,
+        limit,
+        flussConfig)
+    } else if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
+      val columnProjection =
+        if (readSchema.isEmpty) Array.empty[Int] else projection
+      new FlussAppendColumnarReaderFactory(
+        tablePath,
+        tableInfo.getRowType,
+        columnProjection,
+        pushedPredicate,
         limit,
         flussConfig)
     } else {

@@ -28,6 +28,35 @@ import org.assertj.core.api.Assertions.assertThat
 
 class SparkLogTableReadTest extends FlussSparkTestBase {
 
+  test("Spark Read: Arrow scans execute columnar with projection and empty schema") {
+    withTable("t") {
+      sql(s"CREATE TABLE $DEFAULT_DATABASE.t (id INT, value STRING)")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 'a'), (2, NULL), (3, 'c')")
+      val df = sql(s"SELECT value, id FROM $DEFAULT_DATABASE.t")
+      checkAnswer(df, Seq(Row("a", 1), Row(null, 2), Row("c", 3)))
+      val scans = df.queryExecution.executedPlan.collect { case scan: BatchScanExec => scan }
+      assertThat(scans.isEmpty).isFalse
+      scans.foreach(scan => assertThat(scan.supportsColumnar).isTrue)
+      val count = sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t")
+      checkAnswer(count, Seq(Row(3L)))
+      val batch = flussAppendScans(count).head.toBatch
+      val factory = batch.createReaderFactory()
+      val partitions = batch.planInputPartitions()
+      assertThat(partitions.isEmpty).isFalse
+      partitions.foreach {
+        partition =>
+          assertThat(factory.supportColumnarReads(partition)).isTrue
+          val reader = factory.createColumnarReader(partition)
+          try {
+            while (reader.next()) {
+              assertThat(reader.get().numCols()).isZero
+              assertThat(reader.get().numRows()).isGreaterThan(0)
+            }
+          } finally reader.close()
+      }
+    }
+  }
+
   test("Spark Read: log table") {
     withTable("t") {
       sql(s"""
@@ -431,6 +460,11 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
         sql(s"SELECT * FROM $DEFAULT_DATABASE.indexed WHERE amount = 602 ORDER BY orderId")
       checkAnswer(query, Row(700L, 602) :: Nil)
       assert(pushedPredicates(query).isEmpty)
+      val batch = flussAppendScans(query).head.toBatch
+      val factory = batch.createReaderFactory()
+      batch.planInputPartitions().foreach {
+        partition => assertThat(factory.supportColumnarReads(partition)).isFalse
+      }
     }
   }
 
