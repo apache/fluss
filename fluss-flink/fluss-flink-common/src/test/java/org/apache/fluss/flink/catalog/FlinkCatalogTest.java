@@ -360,6 +360,32 @@ class FlinkCatalogTest {
     }
 
     @Test
+    void testStreamTablePreservesSchemaAndOptions() throws Exception {
+        for (boolean lakeEnabled : Arrays.asList(false, true)) {
+            ObjectPath basePath = new ObjectPath(DEFAULT_DB, "stream_base_" + lakeEnabled);
+            ObjectPath streamPath =
+                    new ObjectPath(DEFAULT_DB, basePath.getObjectName() + "$stream");
+            Map<String, String> options = new HashMap<>();
+            options.put(TABLE_DATALAKE_ENABLED.key(), String.valueOf(lakeEnabled));
+            options.put(TABLE_DATALAKE_FORMAT.key(), PAIMON.name());
+            catalog.createTable(basePath, newCatalogTable(options), false);
+
+            CatalogTable baseTable = (CatalogTable) catalog.getTable(basePath);
+            CatalogTable streamTable = (CatalogTable) catalog.getTable(streamPath);
+            assertThat(streamTable.getUnresolvedSchema())
+                    .isEqualTo(baseTable.getUnresolvedSchema());
+            assertThat(streamTable.getPartitionKeys()).isEqualTo(baseTable.getPartitionKeys());
+            assertThat(streamTable.getComment()).isEqualTo(baseTable.getComment());
+            assertThat(streamTable.getOptions()).isEqualTo(baseTable.getOptions());
+            assertThat(catalog.tableExists(streamPath)).isTrue();
+        }
+        ObjectPath missingPath = new ObjectPath(DEFAULT_DB, "missing$stream");
+        assertThat(catalog.tableExists(missingPath)).isFalse();
+        assertThatThrownBy(() -> catalog.getTable(missingPath))
+                .isInstanceOf(TableNotExistException.class);
+    }
+
+    @Test
     void testGetLakeTableWithCustomLakePath() throws Exception {
         String flussTableName = "fluss_table";
         TablePath lakeTablePath = TablePath.of("custom_lake_db", "custom_lake_table");
@@ -935,6 +961,11 @@ class FlinkCatalogTest {
         List<CatalogPartitionSpec> basePartitions = catalog.listPartitions(basePath);
         assertThat(basePartitions).hasSize(1);
         assertThat(basePartitions.get(0).getPartitionSpec()).containsEntry("first", "1");
+
+        ObjectPath streamPath = new ObjectPath(DEFAULT_DB, "partitioned_virtual_t$stream");
+        assertThat(catalog.tableExists(streamPath)).isTrue();
+        assertThat(catalog.listPartitions(streamPath)).isEqualTo(basePartitions);
+        assertThat(catalog.listPartitions(streamPath, partSpec)).isEqualTo(basePartitions);
 
         // Test tableExists on $changelog virtual table — should return true (base table exists)
         ObjectPath changelogPath =

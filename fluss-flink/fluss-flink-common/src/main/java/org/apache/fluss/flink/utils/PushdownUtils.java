@@ -275,7 +275,8 @@ public class PushdownUtils {
             Configuration flussConfig,
             RowType sourceOutputType,
             int[] primaryKeyIndexes,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            boolean historicalPartitionFallbackEnabled) {
         LookupNormalizer lookupNormalizer =
                 createPrimaryKeyLookupNormalizer(primaryKeyIndexes, sourceOutputType);
         LookupFunction lookupFunction =
@@ -285,7 +286,8 @@ public class PushdownUtils {
                         sourceOutputType,
                         lookupNormalizer,
                         projectedFields,
-                        false);
+                        false,
+                        historicalPartitionFallbackEnabled);
         try {
             // it's fine to pass null here, as we don't use it in it
             lookupFunction.open(null);

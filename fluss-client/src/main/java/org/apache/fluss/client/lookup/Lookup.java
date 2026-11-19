@@ -101,6 +101,14 @@ public interface Lookup {
     Lookup enableInsertIfNotExists();
 
     /**
+     * Disables fallback to lake storage when a Fluss partition is missing. Such lookups return an
+     * empty result instead. Lookups of existing Fluss partitions are unaffected.
+     *
+     * @return a new Lookup instance with historical partition fallback disabled
+     */
+    Lookup disableHistoricalPartitionFallback();
+
+    /**
      * Creates a {@link Lookuper} instance to lookup rows of a primary key table by the specified
      * lookup columns. By default, the lookup columns are the primary key columns, but can be
      * changed with ({@link #lookupBy(List)}) method.

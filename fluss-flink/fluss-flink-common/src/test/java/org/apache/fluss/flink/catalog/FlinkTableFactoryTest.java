@@ -48,6 +48,7 @@ import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.LookupTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
+import org.apache.flink.table.connector.source.SourceProvider;
 import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.cache.DefaultLookupCache;
@@ -57,6 +58,8 @@ import org.apache.flink.table.functions.AsyncLookupFunction;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.runtime.connector.source.LookupRuntimeProviderContext;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -92,6 +95,9 @@ abstract class FlinkTableFactoryTest {
 
     public static final ObjectIdentifier BUCKETS_TABLE_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
+
+    private static final ObjectIdentifier STREAM_TABLE_IDENTIFIER =
+            ObjectIdentifier.of("default", "default", "t1$stream");
 
     @Test
     void testResolveToLakeObjectName() {
@@ -560,6 +566,27 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testStreamReadSuffix() {
+        assertThat(FlinkCatalog.isStreamTableName("fluss_table$stream")).isTrue();
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$stream")).isFalse();
+        assertThat(FlinkCatalog.isStreamTableName("fluss_table$lake$stream")).isFalse();
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$stream")).isFalse();
+        assertThat(FlinkCatalog.isStreamTableName("fluss_table")).isFalse();
+    }
+
+    @Test
+    void testStreamTableSinkIsRejected() {
+        assertThatThrownBy(
+                        () ->
+                                createTableSink(
+                                        STREAM_TABLE_IDENTIFIER,
+                                        createBasicSchema(),
+                                        getBasicOptions()))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("read-only $stream table");
+    }
+
+    @Test
     void testVirtualTableSinkIsRejected() {
         assertThatThrownBy(
                         () ->
@@ -569,6 +596,86 @@ abstract class FlinkTableFactoryTest {
                                         getBasicOptions()))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("read-only virtual table");
+    }
+
+    @Test
+    void testStreamSourceDoesNotLoadLakePlugin() {
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("table.datalake.enabled", "true");
+        properties.put("table.datalake.format", "paimon");
+        properties.put("table.datalake.paimon.warehouse", "file:///tmp/fluss-test-warehouse");
+        Configuration configuration = new Configuration();
+        configuration.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+        FlinkTableSource original =
+                (FlinkTableSource)
+                        createTableSource(
+                                STREAM_TABLE_IDENTIFIER,
+                                createBasicSchema(),
+                                properties,
+                                Collections.emptyMap(),
+                                configuration);
+        FlinkTableSource source = (FlinkTableSource) original.copy();
+        // A scan provider needs no ScanContext unless it executes a planner-side pushdown.
+        assertThat(source.getScanRuntimeProvider(null)).isInstanceOf(SourceProvider.class);
+        assertThat(((SourceProvider) source.getScanRuntimeProvider(null)).createSource())
+                .isNotNull();
+
+        properties.put("lookup.insert-if-not-exists", "true");
+        assertThatThrownBy(
+                        () ->
+                                createTableSource(
+                                        STREAM_TABLE_IDENTIFIER,
+                                        createBasicSchema(),
+                                        properties,
+                                        Collections.emptyMap(),
+                                        configuration))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("read-only $stream");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testStreamLookupAcceptsHistoricalPartitionOption(boolean async) {
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("table.datalake.enabled", "true");
+        properties.put("table.datalake.format", "paimon");
+        properties.put(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED.key(), "true");
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), String.valueOf(async));
+        FlinkTableSource source =
+                (FlinkTableSource)
+                        createTableSource(
+                                STREAM_TABLE_IDENTIFIER,
+                                createBasicSchema(),
+                                properties,
+                                Collections.emptyMap(),
+                                new Configuration());
+        FlinkTableSource copiedSource = (FlinkTableSource) source.copy();
+        assertThat(
+                        copiedSource.getLookupRuntimeProvider(
+                                createLookupContext(new int[][] {{0}, {2}})))
+                .isInstanceOf(
+                        async ? AsyncLookupFunctionProvider.class : LookupFunctionProvider.class);
+    }
+
+    @Test
+    void testStreamLookupSupportsRegularPartitions() {
+        Map<String, String> properties = getBasicOptionsWithBucketKey();
+        properties.put("table.datalake.enabled", "true");
+        properties.put("table.datalake.format", "paimon");
+        properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
+        FlinkTableSource source =
+                (FlinkTableSource)
+                        createTableSource(
+                                STREAM_TABLE_IDENTIFIER,
+                                createBasicSchema(),
+                                properties,
+                                Collections.emptyMap(),
+                                new Configuration());
+        FlinkTableSource copiedSource = (FlinkTableSource) source.copy();
+        assertThat(
+                        copiedSource.getLookupRuntimeProvider(
+                                createLookupContext(new int[][] {{0}, {2}})))
+                .isInstanceOf(LookupFunctionProvider.class);
     }
 
     @Test
