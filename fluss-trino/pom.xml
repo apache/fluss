@@ -39,7 +39,7 @@
         <trino.version>483</trino.version>
         <dep.airlift.version>439</dep.airlift.version>
         <dep.slice.version>2.8</dep.slice.version>
-        <dep.opentelemetry.version>1.63.0</dep.opentelemetry.version>
+        <dep.opentelemetry.version>1.67.0</dep.opentelemetry.version>
         <jackson.version>2.22</jackson.version>
 
         <!-- Test dependencies -->
