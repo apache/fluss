@@ -83,54 +83,52 @@ public final class BulkLoadManager {
             throws Exception {
         BulkLoadTransaction original = transaction.data();
         TableBucket bucket = new TableBucket(original.tableId, partitionId, bucketId);
-        while (true) {
-            VersionedData<BulkLoadTarget> target = resolveTarget(transaction.data(), bucket);
-            BulkLoadBucket existing =
-                    client.getBulkLoadBucket(transaction.data(), bucket)
-                            .map(VersionedData::data)
-                            .orElse(null);
-            if (existing != null && existing.state == BulkLoadBucket.COMMITTED) {
-                return existing;
-            }
-
-            requireRunning(transaction.data());
-            BuildContextVersions versions = validateBuildContext(transaction.data(), target.data());
-            if (existing != null) {
-                return existing;
-            }
-
-            try {
-                return createBucketAllocation(
-                        transaction, target, bucket, versions, leaderLogEndOffsetFetcher);
-            } catch (KeeperException.NodeExistsException e) {
-                // Read the winning allocation on the next iteration.
-                transaction = resolveTransaction(original.tableId, original.bulkLoadId);
-            } catch (KeeperException.BadVersionException e) {
-                requireRunning(resolveTransaction(original.tableId, original.bulkLoadId).data());
-                throw e;
-            }
+        VersionedData<BulkLoadTarget> target = resolveTarget(original, bucket);
+        BulkLoadBucket existing =
+                client.getBulkLoadBucket(original, bucket).map(VersionedData::data).orElse(null);
+        if (existing != null) {
+            return reuseBucketAllocation(original, target.data(), existing);
         }
-    }
 
-    private BulkLoadBucket createBucketAllocation(
-            VersionedData<BulkLoadTransaction> transaction,
-            VersionedData<BulkLoadTarget> target,
-            TableBucket bucket,
-            BuildContextVersions versions,
-            FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher)
-            throws Exception {
+        requireRunning(original);
+        TableAndPartitionZkVersions registrationVersions =
+                validateBuildContext(original, target.data());
         long snapshotId = client.allocateBucketSnapshotId(bucket);
         long logOffset = leaderLogEndOffsetFetcher.apply(bucket);
         BulkLoadBucket allocation =
                 new BulkLoadBucket(snapshotId, logOffset, BulkLoadBucket.ALLOCATED);
-        client.allocateBulkLoadBucket(
-                transaction,
-                target,
-                bucket,
-                allocation,
-                versions.tableZkVersion,
-                versions.partitionZkVersion,
-                epochVersion);
+        try {
+            client.allocateBulkLoadBucket(
+                    transaction,
+                    target,
+                    bucket,
+                    allocation,
+                    registrationVersions.tableZkVersion,
+                    registrationVersions.partitionZkVersion,
+                    epochVersion);
+            return allocation;
+        } catch (KeeperException.NodeExistsException e) {
+            BulkLoadTransaction current =
+                    resolveTransaction(original.tableId, original.bulkLoadId).data();
+            BulkLoadTarget currentTarget = resolveTarget(current, bucket).data();
+            BulkLoadBucket winner =
+                    client.getBulkLoadBucket(current, bucket)
+                            .map(VersionedData::data)
+                            .orElseThrow(() -> e);
+            return reuseBucketAllocation(current, currentTarget, winner);
+        } catch (KeeperException.BadVersionException e) {
+            requireRunning(resolveTransaction(original.tableId, original.bulkLoadId).data());
+            throw e;
+        }
+    }
+
+    private BulkLoadBucket reuseBucketAllocation(
+            BulkLoadTransaction transaction, BulkLoadTarget target, BulkLoadBucket allocation)
+            throws Exception {
+        if (allocation.state != BulkLoadBucket.COMMITTED) {
+            requireRunning(transaction);
+            validateBuildContext(transaction, target);
+        }
         return allocation;
     }
 
@@ -149,7 +147,7 @@ public final class BulkLoadManager {
     }
 
     // Schema is compared at read time. Callers coordinate DDL through publication.
-    private BuildContextVersions validateBuildContext(
+    private TableAndPartitionZkVersions validateBuildContext(
             BulkLoadTransaction transaction, BulkLoadTarget target) throws Exception {
         if (target.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
@@ -169,12 +167,18 @@ public final class BulkLoadManager {
                         .toTableInfo(
                                 original.getTablePath(),
                                 metadata.getLatestSchema(original.getTablePath()));
-        if (!table.toTableDescriptor().equals(original.toTableDescriptor())
+        // KV encoding, row TTL, and changelog image are immutable through ALTER TABLE.
+        if (!table.getSchema().equals(original.getSchema())
+                || !table.getPartitionKeys().equals(original.getPartitionKeys())
+                || !table.getBucketKeys().equals(original.getBucketKeys())
                 || !Objects.equals(table.getRemoteDataDir(), original.getRemoteDataDir())) {
             throw new InvalidBulkLoadRequestException("BulkLoad build context changed.");
         }
         if (target.partitionId == null) {
-            return new BuildContextVersions(current.zkVersion(), null);
+            if (table.getNumBuckets() != target.bucketCount) {
+                throw new InvalidBulkLoadRequestException("BulkLoad target bucket count changed.");
+            }
+            return new TableAndPartitionZkVersions(current.zkVersion(), null);
         }
 
         VersionedData<PartitionRegistration> partition =
@@ -194,7 +198,7 @@ public final class BulkLoadManager {
                 || !Objects.equals(registration.getRemoteDataDir(), target.remoteDataDir)) {
             throw new InvalidBulkLoadRequestException("BulkLoad target build context changed.");
         }
-        return new BuildContextVersions(current.zkVersion(), partition.zkVersion());
+        return new TableAndPartitionZkVersions(current.zkVersion(), partition.zkVersion());
     }
 
     /**
@@ -222,7 +226,8 @@ public final class BulkLoadManager {
         }
 
         requireRunning(bulkLoadTransaction);
-        BuildContextVersions versions = validateBuildContext(bulkLoadTransaction, target.data());
+        TableAndPartitionZkVersions registrationVersions =
+                validateBuildContext(bulkLoadTransaction, target.data());
         TableInfo table = bulkLoadTransaction.tableInfo;
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
@@ -248,8 +253,8 @@ public final class BulkLoadManager {
                                             bucket,
                                             allocation,
                                             snapshotReference,
-                                            versions.tableZkVersion,
-                                            versions.partitionZkVersion,
+                                            registrationVersions.tableZkVersion,
+                                            registrationVersions.partitionZkVersion,
                                             epochVersion));
         } catch (BulkLoadPublicationUnknownException e) {
             requestRecovery.run();
@@ -291,11 +296,12 @@ public final class BulkLoadManager {
         }
     }
 
-    private static final class BuildContextVersions {
+    private static final class TableAndPartitionZkVersions {
         private final int tableZkVersion;
         private final @Nullable Integer partitionZkVersion;
 
-        private BuildContextVersions(int tableZkVersion, @Nullable Integer partitionZkVersion) {
+        private TableAndPartitionZkVersions(
+                int tableZkVersion, @Nullable Integer partitionZkVersion) {
             this.tableZkVersion = tableZkVersion;
             this.partitionZkVersion = partitionZkVersion;
         }

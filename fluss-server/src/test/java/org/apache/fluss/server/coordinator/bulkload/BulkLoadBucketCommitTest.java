@@ -84,6 +84,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
@@ -429,6 +430,15 @@ class BulkLoadBucketCommitTest {
                                                         .getErrorCode())
                                         .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code()));
             } else {
+                coordinator
+                        .alterTable(
+                                newAlterTableRequest(
+                                        path,
+                                        Collections.singletonMap("owner", "orders-team"),
+                                        Collections.emptyList(),
+                                        Collections.emptyList(),
+                                        false))
+                        .get(30, TimeUnit.SECONDS);
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
                 assertThat(zk.getRecoverySnapshotSelection(target).get().data())
                         .isEqualTo(allocated.getSnapshotId());
