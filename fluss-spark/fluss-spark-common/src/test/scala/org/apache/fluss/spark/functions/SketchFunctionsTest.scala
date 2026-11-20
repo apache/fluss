@@ -21,6 +21,9 @@ import org.apache.datasketches.hll.HllSketch
 import org.apache.datasketches.kll.KllDoublesSketch
 import org.apache.datasketches.memory.Memory
 import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.Literal
+import org.apache.spark.sql.types.BinaryType
 import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -58,6 +61,45 @@ class SketchFunctionsTest extends AnyFunSuite with BeforeAndAfterAll {
       .head()
     assertThat(result.getDouble(0)).isBetween(95.0, 105.0)
     assertThat(result.getDouble(1)).isBetween(45.0, 55.0)
+  }
+
+  test("HLL skips empty strings but counts whitespace") {
+    val empty = spark
+      .sql("SELECT fluss_hll_build_agg(v), " +
+        "fluss_hll_estimate(fluss_hll_build_agg(v)) FROM VALUES (''), (CAST(NULL AS STRING)) t(v)")
+      .head()
+    assertThat(HllSketch.heapify(empty.getAs[Array[Byte]](0)).isEmpty).isTrue()
+    assertThat(empty.isNullAt(1)).isTrue()
+    val mixed = spark
+      .sql(
+        "SELECT fluss_hll_estimate(fluss_hll_build_agg(v)) " +
+          "FROM VALUES (''), (' '), ('user'), ('user') t(v)")
+      .head()
+    assertThat(mixed.getDouble(0)).isBetween(1.99, 2.01)
+  }
+
+  test("KLL merge does not retain or change input and restored buffers stay mutable") {
+    for (k <- Seq(8, 200, 1024); count <- Seq(0, 1, 2, 200, 201, 20000)) {
+      val input = KllDoublesSketch.newHeapInstance(k)
+      (0 until count).foreach(value => input.update(value.toDouble))
+      val bytes = input.toByteArray
+      val original = bytes.clone()
+      val function =
+        SketchAggregate(Literal.create(bytes, BinaryType), hll = false, mergeInput = true)
+      val buffer = function.createAggregationBuffer()
+      function.update(buffer, InternalRow.empty)
+      assertThat(bytes).containsExactly(original: _*)
+      assertThat(buffer.kll.getN).isEqualTo(count.toLong)
+      java.util.Arrays.fill(bytes, 0.toByte)
+      if (count > 0) {
+        assertThat(buffer.kll.getMinItem).isEqualTo(0.0)
+        assertThat(buffer.kll.getMaxItem).isEqualTo((count - 1).toDouble)
+      }
+      val restored = function.deserialize(function.serialize(buffer))
+      restored.kll.update(-1.0)
+      assertThat(restored.kll.getN).isEqualTo(count + 1L)
+      assertThat(buffer.kll.getN).isEqualTo(count.toLong)
+    }
   }
 
   test("benchmark SQL with one million events") {

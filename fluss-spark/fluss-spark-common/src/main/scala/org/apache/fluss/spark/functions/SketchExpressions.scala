@@ -72,7 +72,7 @@ case class SketchAggregate(
           buffer.hll.update(value.asInstanceOf[UTF8String].toString)
         else buffer.hll.update(value.asInstanceOf[Number].longValue())
       } else if (mergeInput) {
-        buffer.kll.merge(KllDoublesSketch.heapify(Memory.wrap(value.asInstanceOf[Array[Byte]])))
+        buffer.kll.merge(KllDoublesSketch.wrap(Memory.wrap(value.asInstanceOf[Array[Byte]])))
       } else buffer.kll.update(value.asInstanceOf[Double])
     }
     buffer

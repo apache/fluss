@@ -42,9 +42,17 @@ FROM daily_latency_metrics;
 
 Aggregates ignore null inputs. KLL empty aggregates return null; HLL build follows the Spark
 built-in's serialized empty-sketch behavior. Readers return null for null or empty sketches.
+HLL ignores empty strings (`''`) as well as nulls. An all-empty-string group produces serialized
+empty HLL bytes, whose `fluss_hll_estimate` is null; `COUNT(DISTINCT ...)` would count `''`.
+Nonempty whitespace strings are counted.
 Invalid bytes, wrong sketch families and ranks outside `[0, 1]` fail the query.
 
 These aggregates support batch queries and Spark's distributed partial aggregation. They do not
 support subtracting previous observations. KLL batches are not idempotent: replaying a batch adds
 its observations again. KLL write-side merging requires a Fluss server with `kll_double_sketch`
 support. Spark `approx_percentile` returns values, not compatible serialized KLL state.
+
+When writing KLL results to a Fluss aggregation table, use independent, non-overlapping input
+batches. Do not write a cumulative sketch after each update: merging `[10, 20]` and then
+`[10, 20, 30]` counts five observations, not three. Replaying an independent batch also counts it
+again; batching does not by itself provide exactly-once writes or deduplication.
