@@ -63,6 +63,8 @@ use std::{
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
+pub(super) const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
+
 pub struct TableScan<'a> {
     conn: &'a FlussConnection,
     table_info: TableInfo,
@@ -1132,10 +1134,16 @@ impl LogScanner {
     /// Poll records from a frozen source. A metadata refresh confirming that
     /// the subscribed partition or original table disappeared fails the read.
     /// The caller enforces its stopping offsets; this method does not cap a batch.
-    pub async fn poll_frozen(&self, timeout: Duration) -> Result<ScanRecords> {
+    pub async fn poll_frozen(&self) -> Result<ScanRecords> {
         self.inner
-            .poll_records(timeout, Some(self.inner.table_id))
+            .poll_records(DEFAULT_POLL_TIMEOUT, Some(self.inner.table_id))
             .await
+    }
+
+    /// Returns the bucket's next scan offset, or `None` if it is not subscribed.
+    /// Consuming a zero-record batch can advance this offset without returning a row.
+    pub fn bucket_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.inner.log_scanner_status.get_bucket_offset(bucket)
     }
 
     pub async fn subscribe(&self, bucket: i32, offset: i64) -> Result<()> {

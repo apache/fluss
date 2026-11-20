@@ -32,6 +32,7 @@
 
 use crate::client::admin::FlussAdmin;
 use crate::client::table::RecordBatchLogScanner;
+use crate::client::table::scanner::DEFAULT_POLL_TIMEOUT;
 use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
 use crate::record::ScanBatch;
@@ -42,8 +43,6 @@ use arrow_schema::SchemaRef;
 use futures::{Stream, future::try_join_all};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
-
-const DEFAULT_POLL_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Outcome of a bounded record-batch read with a caller-supplied timeout.
 #[derive(Debug)]

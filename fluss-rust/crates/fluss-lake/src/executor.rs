@@ -36,6 +36,8 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
+const DEFAULT_SURVIVOR_BATCH_ROWS: usize = 4096;
+
 /// Resources shared only by tasks in one read attempt.
 #[derive(Default)]
 pub(crate) struct ReadResources {
@@ -186,7 +188,11 @@ async fn open_logical_stream(
         }
         .map_err(reconciliation_error)?;
         fold_logical_changelog_tail(&table, descriptor, &physical, &mut current_view).await?;
-        reconciled_stream(current_view, lake_stream, batch_size.unwrap_or(4096))
+        reconciled_stream(
+            current_view,
+            lake_stream,
+            batch_size.unwrap_or(DEFAULT_SURVIVOR_BATCH_ROWS),
+        )
     } else {
         let log_filter = filter.to_pushdown_predicate();
         let log_stream = normalize_stream_schema(
@@ -267,24 +273,21 @@ async fn fold_logical_changelog_tail(
             .map_err(|error| execution_client_error("subscribe table bucket", error))?,
     }
 
-    let mut next_offset = descriptor.start_offset();
-    while next_offset < descriptor.stop_offset() {
+    let stop = descriptor.stop_offset();
+    loop {
         let records = scanner
-            .poll_frozen(std::time::Duration::from_millis(500))
+            .poll_frozen()
             .await
             .map_err(|error| execution_client_error("poll bounded changelog tail", error))?;
-        let bucket_records = records.records(&table_bucket);
-        if bucket_records.is_empty() {
-            continue;
+        fold_tail_records(records.records(&table_bucket), stop, current_view)?;
+        // An empty CDC batch consumes an offset without yielding a ScanRecord.
+        let position = scanner.bucket_offset(&table_bucket).ok_or_else(|| {
+            FlussLakeError::DataUnavailable(format!("lost subscription for bucket {table_bucket}"))
+        })?;
+        if position >= stop {
+            return Ok(());
         }
-        next_offset = fold_tail_records(
-            bucket_records,
-            next_offset,
-            descriptor.stop_offset(),
-            current_view,
-        )?;
     }
-    Ok(())
 }
 
 /// Output columns come first so predicate-only columns can be stripped after filtering.
@@ -353,43 +356,29 @@ impl PhysicalProjection {
 // same Arrow batch together, clipping the last run to the frozen stop.
 fn fold_tail_records(
     records: &[fluss::record::ScanRecord],
-    next: i64,
     stop: i64,
     view: &mut DeduplicateCurrentView,
-) -> Result<i64> {
-    let mut records = records.iter().skip_while(|r| r.offset() < next).peekable();
-    let mut expected = next;
-    while expected < stop {
-        let Some(record) = records.next() else { break };
-        if record.offset() != expected {
-            return Err(FlussLakeError::DataUnavailable(format!(
-                "expected changelog offset {expected}, got {}",
-                record.offset()
-            )));
-        }
+) -> Result<()> {
+    let mut records = records.iter().take_while(|r| r.offset() < stop).peekable();
+    while let Some(record) = records.next() {
         let row = record.row();
         let batch = row.get_record_batch().ok_or_else(|| {
             FlussLakeError::Internal("changelog record has no backing Arrow batch".into())
         })?;
         let start = row.get_row_id();
         let mut changes = vec![*record.change_type()];
-        expected += 1;
-        while expected < stop
-            && let Some(r) = records.next_if(|r| {
-                r.offset() == expected
-                    && r.row().get_row_id() == start + changes.len()
-                    && r.row()
-                        .get_record_batch()
-                        .is_some_and(|b| std::ptr::eq(batch, b))
-            })
-        {
+        while let Some(r) = records.next_if(|r| {
+            r.row().get_row_id() == start + changes.len()
+                && r.row()
+                    .get_record_batch()
+                    .is_some_and(|b| std::ptr::eq(batch, b))
+        }) {
             changes.push(*r.change_type());
-            expected += 1;
         }
         view.fold_changelog_batch(batch.slice(start, changes.len()), &changes)
             .map_err(reconciliation_error)?;
     }
-    Ok(expected)
+    Ok(())
 }
 
 /// Defers an asynchronous stream setup until the stream's first poll.
@@ -874,27 +863,5 @@ mod tests {
                 FlussLakeError::MemoryLimitExceeded(_)
             ));
         });
-    }
-
-    #[test]
-    fn changelog_offset_gap_invalidates_the_frozen_plan() {
-        use fluss::record::{ArrowReader, ChangeType, ScanRecord};
-
-        let batch = Arc::new(id_batch(vec![1]));
-        let schema = batch.schema();
-        let row_type = RowType::new(vec![DataField::new("id", DataTypes::int(), None)]);
-        let reader = ArrowReader::new(batch, Arc::new(row_type)).unwrap();
-        let records = vec![ScanRecord::new(
-            reader.read(0),
-            6,
-            0,
-            ChangeType::UpdateAfter,
-        )];
-        let mut current_view = DeduplicateCurrentView::try_new(schema, vec![0]).unwrap();
-
-        assert!(matches!(
-            fold_tail_records(&records, 5, 7, &mut current_view),
-            Err(FlussLakeError::DataUnavailable(_))
-        ));
     }
 }
