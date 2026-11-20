@@ -19,7 +19,6 @@ package org.apache.fluss.flink.functions.sketch;
 
 import org.apache.datasketches.kll.KllDoublesSketch;
 import org.apache.datasketches.memory.Memory;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
@@ -45,7 +44,7 @@ public class KllDoubleMergeAggFunction extends AggregateFunction<byte[], KllDoub
     /** Adds non-null input to the sketch. */
     public void accumulate(KllDoublesSketch acc, byte[] bytes) {
         if (bytes != null) {
-            acc.merge(KllDoublesSketch.heapify(Memory.wrap(bytes)));
+            acc.merge(KllDoublesSketch.wrap(Memory.wrap(bytes)));
         }
     }
 
@@ -66,10 +65,5 @@ public class KllDoubleMergeAggFunction extends AggregateFunction<byte[], KllDoub
     @Override
     public byte[] getValue(KllDoublesSketch acc) {
         return acc.isEmpty() ? null : acc.toByteArray();
-    }
-
-    @Override
-    public TypeInformation<KllDoublesSketch> getAccumulatorType() {
-        return KllDoublesTypeInfo.INSTANCE;
     }
 }

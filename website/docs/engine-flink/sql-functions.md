@@ -79,6 +79,8 @@ default `k=200`. Merge aggregates never increase the precision of an existing sk
 | `fluss_kll_double_quantile(sketch, rank)` | KLL doubles `BYTES`, rank in `[0, 1]` | Quantile as `DOUBLE` |
 
 Null inputs are ignored by aggregates. Empty aggregates and readers of empty sketches return null.
+HLL also ignores empty strings (`''`); a group containing only empty strings and nulls returns null,
+unlike `COUNT(DISTINCT ...)`, which counts `''`. Nonempty whitespace strings are counted.
 Readers return null for null arguments. Malformed or wrong-family sketch bytes and invalid ranks
 fail the query. KLL follows DataSketches semantics: NaN input values are ignored.
 
@@ -89,6 +91,9 @@ observations again; KLL merging is not idempotent.
 
 ```sql
 USE CATALOG fluss_catalog;
+
+-- Read a bounded snapshot, including when the source is an updating primary-key table.
+SET 'execution.runtime-mode' = 'batch';
 
 SELECT fluss_hll_estimate(fluss_hll_build_agg(user_id)) AS unique_users
 FROM user_events;
@@ -105,6 +110,54 @@ FROM daily_user_metrics;
 HLL output is compatible with the `hll_sketch` merge engine and Spark 3.5's DataSketches HLL
 functions. KLL output is serialized `KllDoublesSketch` data; a Fluss server must support
 `kll_double_sketch` before it can merge those values on write. Neither reader returns sketch bytes.
+
+### Example: Windowed Sketch Batches
+
+Build independent sketches for completed, non-overlapping windows, then let Fluss merge those
+batches by key. This example assumes an append-only `requests` table with `metric_day STRING`,
+`user_id BIGINT`, `latency_ms DOUBLE`, and an `event_time TIMESTAMP(3)` event-time column with a watermark.
+
+```sql
+USE CATALOG fluss_catalog;
+SET 'execution.runtime-mode' = 'streaming';
+
+CREATE TABLE daily_metric_sketches (
+    metric_day STRING,
+    user_hll BYTES,
+    latency_kll BYTES,
+    PRIMARY KEY (metric_day) NOT ENFORCED
+) WITH (
+    'table.merge-engine' = 'aggregation',
+    'fields.user_hll.agg' = 'hll_sketch',
+    'fields.latency_kll.agg' = 'kll_double_sketch'
+);
+
+INSERT INTO daily_metric_sketches
+SELECT metric_day,
+       fluss_hll_build_agg(user_id),
+       fluss_kll_double_build_agg(latency_ms)
+FROM TABLE(
+    TUMBLE(TABLE requests, DESCRIPTOR(event_time), INTERVAL '5' SECOND)
+)
+GROUP BY metric_day, window_start, window_end;
+```
+
+Each completed window contributes only its own observations. Do not repeatedly write a cumulative
+KLL sketch: merging `[10, 20]` and then `[10, 20, 30]` counts five observations, not three. Unlike HLL
+union, KLL merge is not idempotent. Replaying even a completed window adds its observations again;
+windowing alone does not provide exactly-once writes or deduplication.
+
+In a separate SQL session, read a bounded snapshot of the merged sketches:
+
+```sql
+USE CATALOG fluss_catalog;
+SET 'execution.runtime-mode' = 'batch';
+
+SELECT metric_day,
+       fluss_hll_estimate(user_hll) AS unique_users,
+       fluss_kll_double_quantile(latency_kll, 0.95) AS p95
+FROM daily_metric_sketches;
+```
 
 ## Example: Windowed Bitmap Batches
 

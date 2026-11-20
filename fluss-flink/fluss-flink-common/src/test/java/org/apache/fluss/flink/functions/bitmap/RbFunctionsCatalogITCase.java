@@ -20,11 +20,17 @@ package org.apache.fluss.flink.functions.bitmap;
 import org.apache.fluss.flink.catalog.FlinkCatalog;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
+import org.apache.datasketches.kll.KllDoublesSketch;
+import org.apache.datasketches.memory.Memory;
+import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +38,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.roaringbitmap.RoaringBitmap;
 
+import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -135,6 +143,71 @@ class RbFunctionsCatalogITCase {
         assertThat(rows).hasSize(1);
         assertThat((Double) rows.get(0).getField(0)).isBetween(1.99, 2.01);
         assertThat((Double) rows.get(0).getField(1)).isEqualTo(2.0);
+
+        List<Row> merged =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql(
+                                        "SELECT fluss_hll_estimate(fluss_hll_merge_agg(h)), "
+                                                + "fluss_kll_double_quantile(fluss_kll_double_merge_agg(q), 0.5) "
+                                                + "FROM (SELECT MOD(v, 2) AS k, fluss_hll_build_agg(v) AS h, "
+                                                + "fluss_kll_double_build_agg(CAST(v AS DOUBLE)) AS q "
+                                                + "FROM sketch_events GROUP BY MOD(v, 2))")
+                                .collect());
+        assertThat((Double) merged.get(0).getField(0)).isBetween(1.99, 2.01);
+        assertThat((Double) merged.get(0).getField(1)).isEqualTo(2.0);
+    }
+
+    @Test
+    void testWindowedSketchBatchesWrittenToFluss() throws Exception {
+        LocalDateTime start = LocalDateTime.of(2026, 1, 1, 0, 0);
+        StreamExecutionEnvironment execution = StreamExecutionEnvironment.getExecutionEnvironment();
+        execution.setParallelism(1);
+        StreamTableEnvironment streaming = StreamTableEnvironment.create(execution);
+        streaming.registerCatalog(CATALOG_NAME, tEnv.getCatalog(CATALOG_NAME).get());
+        streaming.useCatalog(CATALOG_NAME);
+        streaming.createTemporaryView(
+                "requests",
+                streaming.fromDataStream(
+                        execution.fromCollection(
+                                Arrays.asList(
+                                        Row.of("2026-01-01", 1L, 10.0, start),
+                                        Row.of("2026-01-01", 2L, 20.0, start.plusSeconds(1)),
+                                        Row.of("2026-01-01", 2L, 30.0, start.plusSeconds(5)),
+                                        Row.of("2026-01-01", 3L, 40.0, start.plusSeconds(6))),
+                                Types.ROW_NAMED(
+                                        new String[] {"metric_day", "user_id", "latency_ms", "ts"},
+                                        Types.STRING,
+                                        Types.LONG,
+                                        Types.DOUBLE,
+                                        Types.LOCAL_DATE_TIME)),
+                        Schema.newBuilder()
+                                .columnByExpression("event_time", "CAST(ts AS TIMESTAMP(3))")
+                                .watermark("event_time", "event_time - INTERVAL '1' SECOND")
+                                .build()));
+        tEnv.executeSql(
+                "CREATE TABLE daily_metric_sketches (metric_day STRING, "
+                        + "user_hll BYTES, latency_kll BYTES, PRIMARY KEY(metric_day) NOT ENFORCED) WITH ("
+                        + "'table.merge-engine' = 'aggregation', 'fields.user_hll.agg' = 'hll_sketch', "
+                        + "'fields.latency_kll.agg' = 'kll_double_sketch')");
+        streaming
+                .executeSql(
+                        "INSERT INTO daily_metric_sketches SELECT metric_day, "
+                                + "fluss_hll_build_agg(user_id), fluss_kll_double_build_agg(latency_ms) "
+                                + "FROM TABLE(TUMBLE(TABLE requests, DESCRIPTOR(event_time), INTERVAL '5' SECOND)) "
+                                + "GROUP BY metric_day, window_start, window_end")
+                .await();
+        List<Row> rows =
+                CollectionUtil.iteratorToList(
+                        tEnv.executeSql(
+                                        "SELECT fluss_hll_estimate(user_hll), latency_kll FROM daily_metric_sketches")
+                                .collect());
+        assertThat(rows).hasSize(1);
+        assertThat((Double) rows.get(0).getField(0)).isBetween(2.99, 3.01);
+        KllDoublesSketch kll =
+                KllDoublesSketch.heapify(Memory.wrap((byte[]) rows.get(0).getField(1)));
+        assertThat(kll.getN()).isEqualTo(4);
+        assertThat(kll.getMinItem()).isEqualTo(10.0);
+        assertThat(kll.getMaxItem()).isEqualTo(40.0);
     }
 
     @Test

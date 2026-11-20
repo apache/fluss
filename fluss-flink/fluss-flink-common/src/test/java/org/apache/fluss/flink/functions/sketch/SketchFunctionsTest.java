@@ -48,6 +48,56 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Sketch SQL execution, partial aggregation and persisted accumulator coverage. */
 class SketchFunctionsTest {
+    @Test
+    void testEmptyHllStringsInSql() throws Exception {
+        TableEnvironment env = TableEnvironment.create(EnvironmentSettings.inBatchMode());
+        env.createTemporarySystemFunction("fluss_hll_build_agg", HllBuildAggFunction.class);
+        env.createTemporarySystemFunction("fluss_hll_estimate", HllEstimateFunction.class);
+        try (CloseableIterator<Row> rows =
+                env.executeSql(
+                                "SELECT fluss_hll_build_agg(v), fluss_hll_estimate(fluss_hll_build_agg(v)) "
+                                        + "FROM (VALUES (''), (CAST(NULL AS STRING))) t(v)")
+                        .collect()) {
+            Row row = rows.next();
+            assertThat(row.getField(0)).isNull();
+            assertThat(row.getField(1)).isNull();
+        }
+        try (CloseableIterator<Row> rows =
+                env.executeSql(
+                                "SELECT fluss_hll_estimate(fluss_hll_build_agg(v)) "
+                                        + "FROM (VALUES (''), (' '), ('user'), ('user')) t(v)")
+                        .collect()) {
+            assertThat((Double) rows.next().getField(0)).isBetween(1.99, 2.01);
+        }
+    }
+
+    @Test
+    void testKllMergeDoesNotRetainOrChangeInput() {
+        for (int k : new int[] {8, 200, 1024}) {
+            for (int count : new int[] {0, 1, 2, 200, 201, 20_000}) {
+                KllDoublesSketch input = KllDoublesSketch.newHeapInstance(k);
+                for (int value = 0; value < count; value++) {
+                    input.update((double) value);
+                }
+                byte[] bytes = input.toByteArray();
+                byte[] original = bytes.clone();
+                KllDoubleMergeAggFunction function = new KllDoubleMergeAggFunction();
+                KllDoublesSketch acc = function.createAccumulator();
+                function.accumulate(acc, bytes);
+                assertThat(bytes).containsExactly(original);
+                assertThat(acc.getN()).isEqualTo(count);
+                Arrays.fill(bytes, (byte) 0);
+                if (count > 0) {
+                    assertThat(acc.getMinItem()).isEqualTo(0.0);
+                    assertThat(acc.getMaxItem()).isEqualTo((double) (count - 1));
+                }
+                acc.update(-1.0);
+                assertThat(acc.getN()).isEqualTo(count + 1L);
+                assertThat(acc.getMinItem()).isEqualTo(-1.0);
+            }
+        }
+    }
+
     /** Opt-in SQL benchmark; iteration 0 and 1 warm up the engine. */
     @Test
     void benchmarkSql() throws Exception {

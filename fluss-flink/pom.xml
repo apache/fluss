@@ -79,6 +79,9 @@
                             <excludes>
                                 <!-- fluss-client bundles SLF4J classes; use Flink's logging API. -->
                                 <exclude>org/slf4j/**</exclude>
+                                <!-- These inherited entries have unrelocated paths but relocated bytecode. -->
+                                <exclude>META-INF/versions/**/com/fasterxml/jackson/**</exclude>
+                                <exclude>META-INF/versions/**/org/yaml/snakeyaml/**</exclude>
                             </excludes>
                         </filter>
                     </filters>

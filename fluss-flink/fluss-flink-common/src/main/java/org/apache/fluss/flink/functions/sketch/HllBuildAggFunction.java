@@ -18,7 +18,6 @@
 package org.apache.fluss.flink.functions.sketch;
 
 import org.apache.datasketches.hll.Union;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
@@ -77,10 +76,5 @@ public class HllBuildAggFunction extends AggregateFunction<byte[], Union> {
     @Override
     public byte[] getValue(Union acc) {
         return acc.isEmpty() ? null : acc.toCompactByteArray();
-    }
-
-    @Override
-    public TypeInformation<Union> getAccumulatorType() {
-        return HllUnionTypeInfo.INSTANCE;
     }
 }

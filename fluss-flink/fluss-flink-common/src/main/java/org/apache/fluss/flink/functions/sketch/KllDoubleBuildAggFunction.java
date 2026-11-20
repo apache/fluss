@@ -18,7 +18,6 @@
 package org.apache.fluss.flink.functions.sketch;
 
 import org.apache.datasketches.kll.KllDoublesSketch;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.FunctionHint;
 import org.apache.flink.table.functions.AggregateFunction;
@@ -65,10 +64,5 @@ public class KllDoubleBuildAggFunction extends AggregateFunction<byte[], KllDoub
     @Override
     public byte[] getValue(KllDoublesSketch acc) {
         return acc.isEmpty() ? null : acc.toByteArray();
-    }
-
-    @Override
-    public TypeInformation<KllDoublesSketch> getAccumulatorType() {
-        return KllDoublesTypeInfo.INSTANCE;
     }
 }

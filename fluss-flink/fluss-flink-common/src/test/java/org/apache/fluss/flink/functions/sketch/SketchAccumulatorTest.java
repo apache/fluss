@@ -19,9 +19,8 @@ package org.apache.fluss.flink.functions.sketch;
 
 import org.apache.datasketches.hll.Union;
 import org.apache.datasketches.kll.KllDoublesSketch;
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
+import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
 import org.apache.flink.api.common.typeutils.TypeSerializerSnapshot;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
@@ -174,7 +173,24 @@ class SketchAccumulatorTest {
                 new DataInputDeserializer(snapshotBytes.getCopyOfBuffer()),
                 getClass().getClassLoader());
         assertThat(bytes(loaded.restoreSerializer(), value)).isEqualTo(original);
-        assertThat(loaded.resolveSchemaCompatibility(serializer).isCompatibleAsIs()).isTrue();
+        TypeSerializerSchemaCompatibility<?> compatibility;
+        // Flink 2.x removed the serializer-based compatibility overload.
+        try {
+            compatibility =
+                    (TypeSerializerSchemaCompatibility<?>)
+                            TypeSerializerSnapshot.class
+                                    .getMethod(
+                                            "resolveSchemaCompatibility",
+                                            TypeSerializerSnapshot.class)
+                                    .invoke(loaded, snapshot);
+        } catch (NoSuchMethodException e) {
+            compatibility =
+                    (TypeSerializerSchemaCompatibility<?>)
+                            TypeSerializerSnapshot.class
+                                    .getMethod("resolveSchemaCompatibility", TypeSerializer.class)
+                                    .invoke(loaded, serializer);
+        }
+        assertThat(compatibility.isCompatibleAsIs()).isTrue();
 
         DataOutputSerializer negative = new DataOutputSerializer(4);
         negative.writeInt(-1);
@@ -195,26 +211,6 @@ class SketchAccumulatorTest {
     }
 
     @Test
-    void testTypeMetadata() {
-        for (TypeInformation<?> info :
-                Arrays.asList(HllUnionTypeInfo.INSTANCE, KllDoublesTypeInfo.INSTANCE)) {
-            assertThat(info.isBasicType()).isFalse();
-            assertThat(info.isTupleType()).isFalse();
-            assertThat(info.isKeyType()).isFalse();
-            assertThat(info.getArity()).isEqualTo(1);
-            assertThat(info.getTotalFields()).isEqualTo(1);
-            assertThat(info.getTypeClass()).isNotNull();
-            assertThat(info.createSerializer(new ExecutionConfig())).isNotNull();
-            assertThat(info.canEqual(info)).isTrue();
-            assertThat(info.canEqual(new Object())).isFalse();
-            assertThat(info.equals(info)).isTrue();
-            assertThat(info.equals(null)).isFalse();
-            assertThat(info.hashCode()).isEqualTo(info.hashCode());
-            assertThat(info.toString()).isNotEmpty();
-        }
-    }
-
-    @Test
     void testResetAndRetractionContracts() {
         HllBuildAggFunction hllBuild = new HllBuildAggFunction();
         Union hll = hllBuild.createAccumulator();
@@ -222,7 +218,6 @@ class SketchAccumulatorTest {
         hllBuild.accumulate(hll, (String) null);
         hllBuild.accumulate(hll, (Long) null);
         hllBuild.merge(hll, Collections.singletonList(hllBuild.createAccumulator()));
-        assertThat(hllBuild.getAccumulatorType()).isEqualTo(HllUnionTypeInfo.INSTANCE);
         assertThatThrownBy(() -> hllBuild.retract(hll, 1L))
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> hllBuild.retract(hll, "user"))
@@ -230,7 +225,6 @@ class SketchAccumulatorTest {
 
         HllMergeAggFunction hllMerge = new HllMergeAggFunction();
         hllMerge.accumulate(hll, null);
-        assertThat(hllMerge.getAccumulatorType()).isEqualTo(HllUnionTypeInfo.INSTANCE);
         assertThatThrownBy(() -> hllMerge.retract(hll, new byte[0]))
                 .isInstanceOf(UnsupportedOperationException.class);
         hllMerge.resetAccumulator(hll);
@@ -240,7 +234,6 @@ class SketchAccumulatorTest {
         KllDoublesSketch kll = kllBuild.createAccumulator();
         kllBuild.accumulate(kll, null);
         kllBuild.merge(kll, Collections.singletonList(kllBuild.createAccumulator()));
-        assertThat(kllBuild.getAccumulatorType()).isEqualTo(KllDoublesTypeInfo.INSTANCE);
         assertThatThrownBy(() -> kllBuild.retract(kll, 1.0))
                 .isInstanceOf(UnsupportedOperationException.class);
         kllBuild.resetAccumulator(kll);
@@ -248,7 +241,6 @@ class SketchAccumulatorTest {
 
         KllDoubleMergeAggFunction kllMerge = new KllDoubleMergeAggFunction();
         kllMerge.accumulate(kll, null);
-        assertThat(kllMerge.getAccumulatorType()).isEqualTo(KllDoublesTypeInfo.INSTANCE);
         assertThatThrownBy(() -> kllMerge.retract(kll, new byte[0]))
                 .isInstanceOf(UnsupportedOperationException.class);
         kllMerge.resetAccumulator(kll);
