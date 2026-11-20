@@ -34,6 +34,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -75,6 +76,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -90,6 +92,7 @@ import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.keyRow;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -298,6 +301,93 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThatRow(lookupRow(newSchemaTable.newLookup().createLookuper(), row(1)))
                 .withSchema(newSchemaTable.getTableInfo().getSchema().getRowType())
                 .isEqualTo(row(1, "a", null));
+    }
+
+    @Test
+    void testLookupAfterTableDropped() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_lookup_after_table_dropped");
+        createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
+
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, new Object[] {1, "a"});
+        Lookuper lookuper = table.newLookup().createLookuper();
+
+        admin.dropTable(tablePath, false).get();
+
+        // The tablet servers delete the replicas asynchronously, so a lookup can still succeed
+        // right after the drop.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(lookuper.lookup(row(1)))
+                                .failsWithin(Duration.ofMinutes(1))
+                                .withThrowableOfType(ExecutionException.class)
+                                .withCauseInstanceOf(TableNotExistException.class));
+    }
+
+    @Test
+    void testLookupAfterTableRecreated() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_lookup_after_table_recreated");
+        createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
+
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, new Object[] {1, "a"});
+        Lookuper lookuper = table.newLookup().createLookuper();
+
+        admin.dropTable(tablePath, false).get();
+        admin.createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false).get();
+
+        // The tablet servers delete the replicas asynchronously, so a lookup can still succeed
+        // right after the drop.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(lookuper.lookup(row(1)))
+                                .failsWithin(Duration.ofMinutes(1))
+                                .withThrowableOfType(ExecutionException.class)
+                                .withCauseInstanceOf(TableNotExistException.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testLookupAfterPartitionedTableDropped(boolean recreate) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1", "test_lookup_after_partitioned_table_dropped_" + recreate);
+        Schema schema =
+                Schema.newBuilder()
+                        .column("dt", DataTypes.STRING())
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("dt", "a")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("dt")
+                        .distributedBy(2, "a")
+                        .build();
+        createTable(tablePath, descriptor, false);
+
+        Table table = conn.getTable(tablePath);
+        verifyPutAndLookup(table, new Object[] {"2026-01-06", 1, "a"});
+        // The lookuper caches the id of the partition.
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThat(lookuper.lookup(row("2026-01-06", 1)).get().getRowList()).hasSize(1);
+
+        admin.dropTable(tablePath, false).get();
+        if (recreate) {
+            admin.createTable(tablePath, descriptor, false).get();
+        }
+
+        // A lookup must not report a missing key for a table that no longer exists.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(lookuper.lookup(row("2026-01-06", 1)))
+                                .failsWithin(Duration.ofMinutes(1))
+                                .withThrowableOfType(ExecutionException.class)
+                                .withCauseInstanceOf(TableNotExistException.class));
     }
 
     @Test

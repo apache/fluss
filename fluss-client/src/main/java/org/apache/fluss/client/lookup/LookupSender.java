@@ -29,9 +29,11 @@ import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
@@ -41,6 +43,7 @@ import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
@@ -56,10 +59,12 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
@@ -216,6 +221,8 @@ class LookupSender implements Runnable {
         // only check the refreshed metadata instead of sending the same requests again, e.g. when
         // a restarting TabletServer leads several buckets of the same table.
         Map<Tuple2<Long, Long>, Exception> failedMetadataRefreshes = new HashMap<>();
+        // Ids of the tables refreshed in this pass after one of their partitions was not found.
+        Set<Long> refreshedTablesOfMissingPartitions = new HashSet<>();
         for (Map.Entry<TableBucket, List<AbstractLookupQuery<?>>> entry :
                 lookupsByBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -247,11 +254,19 @@ class LookupSender implements Runnable {
                 leader = metadataUpdater.getCluster().leaderFor(tb);
             }
             if (leader == null) {
-                if (leaderLookupError instanceof PartitionNotExistException) {
+                Exception droppedError =
+                        droppedTableOrPartitionError(
+                                bucketLookups.get(0).tablePath(),
+                                tb,
+                                leaderLookupError,
+                                refreshedTablesOfMissingPartitions);
+                if (droppedError != null) {
+                    failedMetadataRefreshes.put(tableOrPartition, droppedError);
                     // Metadata refresh confirmed that the queued lookups carry a deleted partition
-                    // id. Complete them instead of repeatedly enqueueing the stale TableBucket; a
-                    // primary key lookuper can then reroute by partition name.
-                    failLookups(bucketLookups, leaderLookupError);
+                    // id, or the id of a dropped or re-created table. Complete them instead of
+                    // repeatedly enqueueing the stale TableBucket; a primary key lookuper can then
+                    // reroute a partition lookup by partition name.
+                    failLookups(bucketLookups, droppedError);
                     // Completing a lookup runs its callbacks on this thread, e.g. that reroute.
                     // So the bucket's waiting lookups, however many, go back to the queue and fail
                     // in later batches like these, instead of all at once here.
@@ -692,6 +707,49 @@ class LookupSender implements Runnable {
                     lookupBatch.lookups(),
                     "prefix lookup");
         }
+    }
+
+    /**
+     * Returns why the bucket's table or partition is gone after a metadata refresh failed to find
+     * its leader, or null if the leader may still show up, e.g. during a leader election. A table
+     * of a missing partition is refreshed once per pass to tell a dropped partition from a dropped
+     * or re-created table.
+     */
+    private @Nullable Exception droppedTableOrPartitionError(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            Exception leaderLookupError,
+            Set<Long> refreshedTablesOfMissingPartitions) {
+        if (leaderLookupError instanceof TableNotExistException) {
+            // Already resolved for another bucket of this table or partition in this pass.
+            return leaderLookupError;
+        }
+        Exception tableLookupError = leaderLookupError;
+        boolean partitionMissing = leaderLookupError instanceof PartitionNotExistException;
+        if (partitionMissing && refreshedTablesOfMissingPartitions.add(tableBucket.getTableId())) {
+            // The server rejects the whole request for an unknown partition id, so the id of a
+            // re-created table is only learned by refreshing the table on its own.
+            try {
+                metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+            } catch (Exception e) {
+                tableLookupError = e;
+            }
+        }
+        if (ExceptionUtils.findThrowable(tableLookupError, TableNotExistException.class)
+                .isPresent()) {
+            return new TableNotExistException(
+                    String.format(
+                            "Table '%s' (table id %d) does not exist.",
+                            tablePath, tableBucket.getTableId()));
+        }
+        Optional<Long> tableId = metadataUpdater.getCluster().getTableId(tablePath);
+        if (tableId.isPresent() && tableId.get() != tableBucket.getTableId()) {
+            return new TableNotExistException(
+                    String.format(
+                            "Table '%s' (table id %d) has been dropped and re-created with table id %d.",
+                            tablePath, tableBucket.getTableId(), tableId.get()));
+        }
+        return partitionMissing ? leaderLookupError : null;
     }
 
     private void reEnqueueLookup(AbstractLookupQuery<?> lookup) {

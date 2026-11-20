@@ -466,6 +466,69 @@ final class SenderTest {
         assertThat(accumulator.hasIncomplete()).isFalse();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testBatchForBucketMissingFromCachedLayoutIsCheckedWithCoordinator(boolean bucketExists)
+            throws Exception {
+        sender.destroyResources();
+        TableInfo tableInfo = createPartitionedTableInfo(AutoPartitionTimeUnit.DAY, 7, false);
+        PhysicalTablePath partitionPath =
+                PhysicalTablePath.of(tableInfo.getTablePath(), "20990101");
+        TableBucket staleBucket = new TableBucket(tableInfo.getTableId(), 21L, 3);
+        Map<TableOrPartition, Integer> bucketCounts = new HashMap<>();
+        bucketCounts.put(TableOrPartition.ofPartition(staleBucket.getPartitionId()), 4);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, staleBucket),
+                        bucketCounts));
+        sender = setupWithIdempotenceState();
+
+        accumulator.checkAndCacheHistoricalPartitionEnabled(tableInfo);
+        BinaryRow row =
+                compactedRow(
+                        tableInfo.getRowType(), new Object[] {1, partitionPath.getPartitionName()});
+        byte[] key =
+                new CompactedKeyEncoder(
+                                tableInfo.getRowType(),
+                                tableInfo.getSchema().getPrimaryKeyIndexes())
+                        .encodeKey(row);
+        CompletableFuture<Exception> future = new CompletableFuture<>();
+        bucketAssigner.setBucketId(staleBucket.getBucket());
+        accumulator.append(
+                WriteRecord.forUpsert(
+                        tableInfo, partitionPath, row, key, key, WriteFormat.COMPACTED_KV, null),
+                (tableBucket, logEndOffset, error) -> future.complete(error),
+                metadataUpdater.getCluster());
+
+        // The cached layout shows a single bucket, so bucket 3 may never get a leader. The cache
+        // can be stale, so only the coordinator decides whether bucket 3 exists.
+        bucketCounts.put(TableOrPartition.ofPartition(staleBucket.getPartitionId()), 1);
+        TableBucket currentBucket = new TableBucket(tableInfo.getTableId(), 21L, 0);
+        metadataUpdater.updateCluster(
+                partitionedCluster(
+                        tableInfo,
+                        Collections.singletonMap(partitionPath, currentBucket),
+                        bucketCounts));
+        metadataUpdater.setCoordinatorBucketCount(partitionPath, bucketExists ? 4 : 1);
+        sender.runOnce();
+        assertThat(metadataUpdater.bucketLayoutChecks()).isEqualTo(1);
+        if (bucketExists) {
+            // The write is valid, so it keeps waiting for the leader of bucket 3.
+            assertThat(future).isNotDone();
+            assertThat(accumulator.hasIncomplete()).isTrue();
+            assertThat(accumulator.getReadyDeque(partitionPath, staleBucket.getBucket()))
+                    .hasSize(1);
+        } else {
+            assertThat(future.get())
+                    .isInstanceOf(InvalidBucketRoutingException.class)
+                    .hasMessageContaining("from 4 to 1");
+            assertThat(accumulator.hasIncomplete()).isFalse();
+        }
+        // Other tables share the writer, so it keeps running.
+        assertThat(sender.isRunning()).isTrue();
+    }
+
     @Test
     void testAbortsOnlyMissingPartitionWhenRerouteIsUnsafe() throws Exception {
         sender.destroyResources();
