@@ -22,6 +22,7 @@ import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.committer.PartitionMarkDoneCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.metadata.TableInfo;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -49,6 +50,21 @@ public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializa
      */
     LakeWriter<WriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException;
+
+    /**
+     * Returns whether the lake writers of this factory accept Arrow record batches for the given
+     * table. If true, every {@link LakeWriter} created for the table must implement {@link
+     * SupportsRecordBatchWrite}, and the tiering job writes append-only tables in the ARROW log
+     * format batch by batch instead of row by row.
+     *
+     * <p>This check must not access lake resources.
+     *
+     * @param tableInfo the Fluss table to tier
+     * @return true if the lake writers accept Arrow record batches for the table
+     */
+    default boolean supportsRecordBatchWrite(TableInfo tableInfo) {
+        return false;
+    }
 
     /**
      * Returns the serializer for write results.

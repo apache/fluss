@@ -40,7 +40,6 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -430,7 +429,7 @@ public class TieringSplitReader<WriteResult>
     /**
      * Determines whether the current table should use the Arrow record batch path for tiering. The
      * batch path is used when the table is an ARROW format append-only (log) table and the lake
-     * writer supports batch writing.
+     * tiering factory supports record batch writes for it.
      */
     private boolean useRecordBatchPath() {
         if (currentTableUseRecordBatchPath != null) {
@@ -439,12 +438,23 @@ public class TieringSplitReader<WriteResult>
         TableInfo tableInfo = checkNotNull(currentTable).getTableInfo();
 
         currentTableUseRecordBatchPath =
-                unshadedArrowAvailable
-                        && !tableInfo.hasPrimaryKey()
-                        && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
-                        && tableInfo.getTableConfig().getDataLakeFormat().orElse(null)
-                                == DataLakeFormat.PAIMON;
+                useRecordBatchPath(tableInfo, lakeTieringFactory, unshadedArrowAvailable);
         return currentTableUseRecordBatchPath;
+    }
+
+    /**
+     * Whether a table is tiered batch by batch: an ARROW log table whose lake tiering factory
+     * declares record batch write support for it, whatever the table's lake format.
+     */
+    @VisibleForTesting
+    static boolean useRecordBatchPath(
+            TableInfo tableInfo,
+            LakeTieringFactory<?, ?> lakeTieringFactory,
+            boolean unshadedArrowAvailable) {
+        return unshadedArrowAvailable
+                && !tableInfo.hasPrimaryKey()
+                && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
+                && lakeTieringFactory.supportsRecordBatchWrite(tableInfo);
     }
 
     /**
