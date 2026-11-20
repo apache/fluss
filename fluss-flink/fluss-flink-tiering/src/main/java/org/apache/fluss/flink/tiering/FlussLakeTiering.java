@@ -31,6 +31,7 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.function.Function;
 
 import static org.apache.flink.configuration.RestartStrategyOptions.RestartStrategyType.EXPONENTIAL_DELAY;
 import static org.apache.flink.runtime.executiongraph.failover.FailoverStrategyFactoryLoader.FULL_RESTART_STRATEGY_NAME;
@@ -50,8 +51,8 @@ import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
  */
 public class FlussLakeTiering {
 
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
-    private static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
+    static final String FLUSS_CONF_PREFIX = "fluss.";
+    static final String LAKE_TIERING_CONFIG_PREFIX = "lake.tiering.";
 
     protected final StreamExecutionEnvironment execEnv;
     protected final String dataLake;
@@ -60,9 +61,28 @@ public class FlussLakeTiering {
     protected final Configuration lakeTieringConfig;
 
     public FlussLakeTiering(String[] args) {
-        // parse params
-        final MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(args);
-        Map<String, String> paramsMap = resolveConfigProviders(params.toMap());
+        this(
+                MultipleParameterToolAdapter.fromArgs(args).toMap(),
+                new org.apache.flink.configuration.Configuration(),
+                StreamExecutionEnvironment::getExecutionEnvironment);
+    }
+
+    /**
+     * Creates a tiering job from the given parameters, obtaining the execution environment from the
+     * given factory. The failover and restart strategy are set on the given Flink configuration
+     * before it is passed to the factory.
+     *
+     * @param params the raw tiering parameters; config provider markers are resolved here, and the
+     *     given map is not modified
+     * @param flinkConfig the Flink configuration, modified in place
+     * @param envFactory creates the execution environment from the Flink configuration
+     */
+    FlussLakeTiering(
+            Map<String, String> params,
+            org.apache.flink.configuration.Configuration flinkConfig,
+            Function<org.apache.flink.configuration.Configuration, StreamExecutionEnvironment>
+                    envFactory) {
+        Map<String, String> paramsMap = resolveConfigProviders(params);
 
         // extract fluss config
         Map<String, String> flussConfigMap = extractAndRemovePrefix(paramsMap, FLUSS_CONF_PREFIX);
@@ -97,8 +117,6 @@ public class FlussLakeTiering {
         // since committer is stateless, if tiering committer is failover, committer
         // will lost the collected committable, and will never collect all committable to do commit
         // todo: support region failover
-        org.apache.flink.configuration.Configuration flinkConfig =
-                new org.apache.flink.configuration.Configuration();
         flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
         // Configure restart strategy: the tiering job is completely stateless (offsets are
         // persisted in Fluss Server's LakeSnapshot, not in Flink checkpoint state), so it is
@@ -106,7 +124,7 @@ public class FlussLakeTiering {
         // when checkpoint is not enabled, causing the job to fail permanently on any exception.
         flinkConfig.set(RestartStrategyOptions.RESTART_STRATEGY, EXPONENTIAL_DELAY.getMainValue());
 
-        execEnv = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+        execEnv = envFactory.apply(flinkConfig);
     }
 
     /** Resolves {@code ${provider:...}} markers in all parameters before prefix extraction. */
@@ -117,6 +135,16 @@ public class FlussLakeTiering {
     }
 
     protected void run() throws Exception {
+        submit();
+    }
+
+    /**
+     * Applies the decorator plugins, builds the tiering job and submits it without waiting for its
+     * completion.
+     *
+     * @return the {@link JobClient} of the submitted tiering job
+     */
+    JobClient submit() throws Exception {
         // Load and apply all available decorator plugins
         loadAndApplyDecoratorPlugins();
 
@@ -129,6 +157,7 @@ public class FlussLakeTiering {
         System.out.printf(
                 "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
                 dataLake, jobClient.getJobID());
+        return jobClient;
     }
 
     /**
