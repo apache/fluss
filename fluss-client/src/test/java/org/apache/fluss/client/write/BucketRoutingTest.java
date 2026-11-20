@@ -30,6 +30,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -65,6 +66,8 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -74,6 +77,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -707,6 +711,153 @@ class BucketRoutingTest {
         }
     }
 
+    @Test
+    void testAppendRoutesAgainWhenLayoutIsInvalidatedBeforeRegistration() throws Exception {
+        TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
+        RecordAccumulator accumulator =
+                accumulator(ConfigOptions.NoKeyAssigner.STICKY, 512, metrics);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        TableInfo table = tableInfo(1, true, true);
+        Cluster dropped = cluster(1, true);
+        Cluster recreated = cluster(2, true, PARTITION_ID + 1);
+        List<List<Exception>> completions = new ArrayList<>();
+        for (int version = 1; version <= 3; version++) {
+            completions.add(new CopyOnWriteArrayList<>());
+        }
+        AtomicReference<Thread> appendingThread = new AtomicReference<>();
+        try {
+            // Two closed batches of the resolved layout exhaust the buffer.
+            for (int version = 1; version <= 2; version++) {
+                List<Exception> completion = completions.get(version - 1);
+                accumulator.append(
+                        record(table, WriteFormat.COMPACTED_KV, 0, version),
+                        (bucket, offset, error) -> completion.add(error),
+                        dropped);
+                accumulator.getDequeOrThrow(PATH, 0).peekLast().close();
+            }
+            Future<?> append =
+                    executor.submit(
+                            () -> {
+                                appendingThread.set(Thread.currentThread());
+                                accumulator.append(
+                                        record(table, WriteFormat.COMPACTED_KV, 0, 3),
+                                        (bucket, offset, error) -> completions.get(2).add(error),
+                                        dropped);
+                                return null;
+                            });
+            Gauge<?> waiting =
+                    (Gauge<?>) metrics.getMetrics().get(MetricNames.WRITER_BUFFER_WAITING_THREADS);
+            retry(Duration.ofSeconds(10), () -> assertThat(waiting.getValue()).isEqualTo(1));
+            WriteBatch first =
+                    accumulator
+                            .drain(dropped, Collections.singleton(1), Integer.MAX_VALUE)
+                            .get(1)
+                            .get(0)
+                            .writeBatch();
+
+            Deque<WriteBatch> deque = accumulator.getDequeOrThrow(PATH, 0);
+            synchronized (deque) {
+                // The freed memory resumes the append, which routed the record with the resolved
+                // layout. It then waits for this lock to register a new batch.
+                first.complete();
+                accumulator.deallocate(first);
+                retry(
+                        Duration.ofSeconds(10),
+                        () -> {
+                            ThreadInfo threadInfo =
+                                    ManagementFactory.getThreadMXBean()
+                                            .getThreadInfo(appendingThread.get().getId());
+                            assertThat(threadInfo.getThreadState()).isEqualTo(Thread.State.BLOCKED);
+                            assertThat(threadInfo.getLockInfo().getIdentityHashCode())
+                                    .isEqualTo(System.identityHashCode(deque));
+                        });
+                // Meanwhile, the partition is re-created with another bucket count.
+                accumulator.invalidateBucketLayout(PATH);
+                accumulator.ready(recreated);
+            }
+            append.get(10, TimeUnit.SECONDS);
+
+            assertThat(completions.get(0)).containsExactly((Exception) null);
+            assertThat(completions.get(1))
+                    .singleElement()
+                    .isInstanceOf(BucketRescaleException.class);
+            List<ReadyWriteBatch> drained =
+                    accumulator
+                            .drain(recreated, Collections.singleton(1), Integer.MAX_VALUE)
+                            .get(1);
+            assertThat(drained).hasSize(1);
+            WriteBatch batch = drained.get(0).writeBatch();
+            assertThat(batch.getBucketCount()).isEqualTo(2);
+            assertThat(readRows(batch, table, WriteFormat.COMPACTED_KV))
+                    .extracting(row -> row.getInt(1))
+                    .containsExactly(3);
+            batch.complete();
+            accumulator.deallocate(batch);
+            assertThat(completions.get(2)).containsExactly((Exception) null);
+            assertThat(accumulator.hasIncomplete()).isFalse();
+            Gauge<?> available =
+                    (Gauge<?>) metrics.getMetrics().get(MetricNames.WRITER_BUFFER_AVAILABLE_BYTES);
+            assertThat(available.getValue()).isEqualTo(512L);
+        } finally {
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
+    @Test
+    void testRoutesRecordsOfRecreatedTableWithItsBucketAssigner() throws Exception {
+        RecordAccumulator accumulator = accumulator(ConfigOptions.NoKeyAssigner.STICKY);
+        long recreatedTableId = 11;
+        TableInfo droppedTable = tableInfo(2, false, false);
+        TableInfo recreatedTable = tableInfo(recreatedTableId, 2, true, true, false);
+        Cluster recreated = cluster(recreatedTableId, 2, true, PARTITION_ID + 1, PATH);
+        CompletableFuture<Exception> droppedTableWrite = new CompletableFuture<>();
+        HashBucketAssigner assigner = new HashBucketAssigner();
+        try {
+            accumulator.append(
+                    record(droppedTable, WriteFormat.COMPACTED_LOG, 0, 1),
+                    (bucket, offset, error) -> droppedTableWrite.complete(error),
+                    cluster(2, true));
+            for (int key = 0; key < 20; key++) {
+                accumulator.append(
+                        record(recreatedTable, WriteFormat.COMPACTED_KV, key, 1),
+                        (bucket, offset, error) -> {},
+                        recreated);
+            }
+
+            accumulator.ready(recreated);
+
+            assertThat(droppedTableWrite.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(TableNotExistException.class);
+            List<Integer> keys = new ArrayList<>();
+            while (accumulator.hasUnDrained()) {
+                for (ReadyWriteBatch ready :
+                        accumulator
+                                .drain(recreated, Collections.singleton(1), Integer.MAX_VALUE)
+                                .get(1)) {
+                    for (InternalRow row :
+                            readRows(
+                                    ready.writeBatch(), recreatedTable, WriteFormat.COMPACTED_KV)) {
+                        int key = row.getInt(0);
+                        assertThat(ready.tableBucket().getBucket())
+                                .isEqualTo(assigner.assignBucket(new byte[] {(byte) key}, 2));
+                        keys.add(key);
+                    }
+                    ready.writeBatch().complete();
+                    accumulator.deallocate(ready.writeBatch());
+                }
+            }
+            assertThat(keys).hasSize(20);
+        } finally {
+            accumulator.close();
+            accumulator.abortAllBatches(new RuntimeException("test cleanup"));
+            accumulator.destroyResources();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(ints = {2, 4})
     void testResolveWaitsForTentativeAppend(int newCount) throws Exception {
@@ -1133,6 +1284,15 @@ class BucketRoutingTest {
 
     private static TableInfo tableInfo(
             int count, boolean hash, boolean primaryKey, boolean historicalPartitionEnabled) {
+        return tableInfo(10, count, hash, primaryKey, historicalPartitionEnabled);
+    }
+
+    private static TableInfo tableInfo(
+            long tableId,
+            int count,
+            boolean hash,
+            boolean primaryKey,
+            boolean historicalPartitionEnabled) {
         Schema.Builder schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -1155,7 +1315,7 @@ class BucketRoutingTest {
         }
         return TableInfo.of(
                 PATH.getTablePath(),
-                10,
+                tableId,
                 1,
                 descriptor.build(),
                 "/tmp/fluss-routing",
@@ -1174,17 +1334,26 @@ class BucketRoutingTest {
 
     private static Cluster cluster(
             int count, boolean includeCount, long partitionId, PhysicalTablePath path) {
+        return cluster(10, count, includeCount, partitionId, path);
+    }
+
+    private static Cluster cluster(
+            long tableId,
+            int count,
+            boolean includeCount,
+            long partitionId,
+            PhysicalTablePath path) {
         List<BucketLocation> locations = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             locations.add(
                     new BucketLocation(
-                            path, new TableBucket(10, partitionId, i), 1, new int[] {1}));
+                            path, new TableBucket(tableId, partitionId, i), 1, new int[] {1}));
         }
         return new Cluster(
                 Collections.singletonMap(1, NODE),
                 null,
                 Collections.singletonMap(path, locations),
-                Collections.singletonMap(path.getTablePath(), 10L),
+                Collections.singletonMap(path.getTablePath(), tableId),
                 Collections.singletonMap(path, partitionId),
                 includeCount
                         ? Collections.singletonMap(TableOrPartition.ofPartition(partitionId), count)

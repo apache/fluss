@@ -169,11 +169,20 @@ public class IdempotenceManager {
                             + " when batch sequence is not set.");
         }
         idempotenceBucketMap.get(tableBucket).addInflightBatch(batch);
+        batch.setIdempotenceBucket(tableBucket);
     }
 
     synchronized void removeInFlightBatch(ReadyWriteBatch batch) {
         if (hasInflightBatches(batch.tableBucket())) {
             idempotenceBucketMap.removeInFlightBatch(batch);
+        }
+    }
+
+    /** Stops tracking an aborted batch for the bucket that it was assigned a batch sequence for. */
+    synchronized void removeInFlightBatch(WriteBatch batch) {
+        TableBucket tableBucket = batch.idempotenceBucket();
+        if (tableBucket != null && batch.hasBatchSequence()) {
+            removeInFlightBatch(new ReadyWriteBatch(tableBucket, batch));
         }
     }
 

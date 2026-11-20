@@ -26,6 +26,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
@@ -38,6 +39,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -122,16 +124,16 @@ public class WriterClient {
             this.accumulator =
                     new RecordAccumulator(
                             conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
-            this.sender = newSender(acks, retries);
-            this.ioThreadPool = createThreadPool();
-            ioThreadPool.submit(sender);
-
             this.dynamicPartitionCreator =
                     new DynamicPartitionCreator(
                             metadataUpdater,
                             admin,
                             conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
-                            sender::recordFatalError);
+                            this::recordFatalError,
+                            this::onPartitionCreationCompleted);
+            this.sender = newSender(acks, retries);
+            this.ioThreadPool = createThreadPool();
+            ioThreadPool.submit(sender);
         } catch (Throwable t) {
             LOG.error("Failed to construct writer.", t);
             close(Duration.ofMillis(0));
@@ -373,7 +375,21 @@ public class WriterClient {
                 retries,
                 metadataUpdater,
                 idempotenceManager,
-                writerMetricGroup);
+                writerMetricGroup,
+                dynamicPartitionCreator);
+    }
+
+    // The partition creator is created before the sender that it reports creation results to.
+    // Partitions are only created by writes and the sender thread, after the sender is assigned.
+    private void recordFatalError(Throwable t) {
+        sender.recordFatalError(t);
+    }
+
+    private void onPartitionCreationCompleted(
+            PhysicalTablePath physicalTablePath,
+            long tableId,
+            @Nullable InvalidPartitionException rejection) {
+        sender.onPartitionCreationCompleted(physicalTablePath, tableId, rejection);
     }
 
     public void close(Duration timeout) {
