@@ -29,6 +29,7 @@
 //! let result = future.await?;
 //! ```
 
+mod leader_waits;
 mod lookup_client;
 mod lookup_query;
 mod lookup_queue;

@@ -58,6 +58,8 @@ struct Lookuper;
 struct PrefixLookuper;
 struct PendingLookup;
 struct PendingPrefixLookup;
+struct LookupCompletion;
+struct PrefixLookupCompletion;
 struct ScanResultInner;
 struct GenericRowInner;
 struct LookupResultInner;
@@ -72,13 +74,16 @@ enum class FfiPredicateLeafFunction : int32_t;
 /// Named constants for Fluss API error codes.
 ///
 /// Server API errors have error_code > 0 or == -1.
-/// Client-side errors have error_code == CLIENT_ERROR (-2).
+/// Client-side errors have error_code == CLIENT_ERROR (-2), except for
+/// admission failures reported as QUEUE_FULL (-3).
 /// These constants match the Rust core FlussError enum and are stable across protocol versions.
 /// New server error codes work automatically (error_code is a raw int, not a closed enum) —
 /// these constants are convenience names, not an exhaustive list.
 struct ErrorCode {
     /// Client-side error (not from server API protocol). Check error_message for details.
     static constexpr int CLIENT_ERROR = -2;
+    /// The client-side asynchronous lookup capacity is full.
+    static constexpr int QUEUE_FULL = -3;
     /// No error.
     static constexpr int NONE = 0;
     /// The server experienced an unexpected error when processing the request.
@@ -234,7 +239,7 @@ struct ErrorCode {
 
     /// Returns true if retrying the request may succeed. Mirrors Java's RetriableException hierarchy.
     static constexpr bool IsRetriable(int32_t code) {
-        return code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
+        return code == QUEUE_FULL || code == NETWORK_EXCEPTION || code == CORRUPT_MESSAGE ||
                code == SCHEMA_NOT_EXIST || code == LOG_STORAGE_EXCEPTION ||
                code == KV_STORAGE_EXCEPTION || code == NOT_LEADER_OR_FOLLOWER ||
                code == CORRUPT_RECORD_EXCEPTION ||
@@ -242,6 +247,7 @@ struct ErrorCode {
                code == STORAGE_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION ||
                code == NOT_ENOUGH_REPLICAS_EXCEPTION || code == LEADER_NOT_AVAILABLE_EXCEPTION ||
+               code == NOT_COORDINATOR_LEADER_EXCEPTION ||
                code == STORAGE_BACKPRESSURE_EXCEPTION || code == DISK_WRITE_LOCKED ||
                code == HISTORICAL_PARTITION_THROTTLED;
     }
@@ -567,7 +573,7 @@ struct Result {
 
     /// Returns true if retrying the request may succeed. Does not guarantee that a failed
     /// write had no effect or that application resubmission is duplicate-safe.
-    /// Client-side errors always return false.
+    /// Client-side errors return false, except QUEUE_FULL.
     bool IsRetriable() const { return ErrorCode::IsRetriable(error_code); }
 };
 
@@ -1401,6 +1407,8 @@ class ArrowRecordBatch {
     // timestamp, which is the case for a limit scan because it merges several
     // log batches into one Arrow batch.
     static constexpr int64_t NO_COMMIT_TIMESTAMP = -1;
+    // No single source schema ID, including results of a limit scan.
+    static constexpr int32_t NO_SCHEMA_ID = -1;
 
     std::shared_ptr<arrow::RecordBatch> GetArrowRecordBatch() const { return batch_; }
 
@@ -1417,13 +1425,16 @@ class ArrowRecordBatch {
     int64_t GetLastOffset() const;
     // Epoch milliseconds, or NO_COMMIT_TIMESTAMP when unavailable.
     int64_t GetCommitTimestamp() const;
+    // Source log batch schema ID, or NO_SCHEMA_ID when unavailable.
+    int32_t GetSchemaId() const;
 
    private:
     friend class LogScanner;
     friend struct detail::ArrowBatchImporter;
     explicit ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                               int64_t partition_id, int32_t bucket_id,
-                              int64_t base_offset, int64_t commit_timestamp) noexcept;
+                              int64_t base_offset, int64_t commit_timestamp,
+                              int32_t schema_id) noexcept;
 
     std::shared_ptr<arrow::RecordBatch> batch_{nullptr};
 
@@ -1434,6 +1445,7 @@ class ArrowRecordBatch {
     // Defaults to the sentinel so any future construction path that forgets to
     // set it reports "unknown" rather than an arbitrary value.
     int64_t commit_timestamp_{NO_COMMIT_TIMESTAMP};
+    int32_t schema_id_{NO_SCHEMA_ID};
 };
 
 struct ArrowRecordBatches {
@@ -1639,12 +1651,16 @@ struct Configuration {
     int32_t writer_dynamic_batch_size_min{256 * 1024};
     // Bucket assigner for tables without bucket keys: "sticky" or "round_robin"
     std::string writer_bucket_no_key_assigner{"sticky"};
+    // Create a missing partition on write; if false, such writes fail with PARTITION_NOT_EXISTS
+    bool writer_dynamic_create_partition_enabled{true};
     // Number of remote log batches to prefetch during scanning
     size_t scanner_remote_log_prefetch_num{4};
     // Number of threads for downloading remote log data
     size_t remote_file_download_thread_num{3};
     // Remote log read concurrency within one file (streaming read path)
     size_t scanner_remote_log_read_concurrency{4};
+    // Parent directory for downloaded remote logs; empty uses the OS temporary directory plus `/fluss`
+    std::string scanner_io_tmp_dir;
     // Maximum number of records returned in a single call to Poll() for LogScanner
     size_t scanner_log_max_poll_records{500};
     // Maximum bytes per fetch response for LogScanner (16 MB)
@@ -1655,6 +1671,8 @@ struct Configuration {
     int32_t scanner_log_fetch_wait_max_time_ms{500};
     // Maximum bytes per fetch response per bucket for LogScanner (1 MB)
     int32_t scanner_log_fetch_max_bytes_for_bucket{1024 * 1024};
+    // Whether to check the CRC of fetched log batches
+    bool scanner_log_check_crc{true};
     int64_t writer_batch_timeout_ms{100};
     // Whether to enable idempotent writes
     bool writer_enable_idempotence{true};
@@ -1673,8 +1691,12 @@ struct Configuration {
     uint64_t writer_retry_backoff_ms{100};
     // Maximum writer retry backoff (ms) after exponential growth
     uint64_t writer_retry_max_backoff_ms{1000};
-    // Connect timeout in milliseconds for TCP transport connect
+    // Connection establishment timeout in milliseconds, including TCP connect,
+    // API negotiation and SASL authentication
     uint64_t connect_timeout_ms{15000};
+    // Close cached connections without reads or writes for this long (ms), failing the requests
+    // still waiting on them with a retriable error. 0 disables closing idle connections
+    uint64_t connection_max_idle_time_ms{600000};
     // Security protocol: "PLAINTEXT" (default, no auth) or "sasl" (SASL auth)
     std::string security_protocol{"PLAINTEXT"};
     // SASL mechanism (only "PLAIN" is supported)
@@ -1683,16 +1705,28 @@ struct Configuration {
     std::string security_sasl_username;
     // SASL password (required when security_protocol is "sasl")
     std::string security_sasl_password;
-    // Maximum number of pending lookup operations
+    // Capacity of the send queue; new lookups wait when it is full.
+    // Each bucket also holds up to this many lookups while waiting for a leader.
+    // Additional lookups for that bucket fail immediately with a buffer exhaustion error
     size_t lookup_queue_size{25600};
+    // Maximum number of async lookups per lookuper not yet returned by Poll
+    size_t lookup_max_pending_operations{25600};
     // Maximum batch size of merging lookup operations to one lookup request
     size_t lookup_max_batch_size{128};
     // Maximum time to wait for the lookup batch to fill (in milliseconds)
     uint64_t lookup_batch_timeout_ms{100};
     // Maximum number of unacknowledged lookup requests
     size_t lookup_max_inflight_requests{128};
-    // Maximum number of lookup retries
+    // Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's
+    // leader is not a retry, so this does not bound how long a lookup waits for one
     int32_t lookup_max_retries{std::numeric_limits<int32_t>::max()};
+    // Base delay (ms) before resending a lookup that failed with a retriable error, growing per
+    // retry of that lookup, and before refreshing a bucket without a known leader again, growing
+    // per refresh of that bucket and shared by its lookups
+    uint64_t lookup_retry_backoff_ms{100};
+    // Cap (ms) for the delays of lookup_retry_backoff_ms after exponential growth, before +/-20%
+    // jitter; must be >= lookup_retry_backoff_ms
+    uint64_t lookup_retry_max_backoff_ms{1000};
 };
 
 class Connection {
@@ -1984,6 +2018,7 @@ class WriteResult {
 
     /// Wait for server acknowledgment of the write.
     /// For fire-and-forget, simply let the WriteResult go out of scope.
+    /// Flush() doesn't return the error of such a write.
     Result Wait();
 
    private:
@@ -2022,6 +2057,8 @@ class AppendWriter {
     /// Like the callback Append overload, but notifies once for the entire batch.
     Result AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch,
                             WriteCallback callback);
+    /// Waits for all queued writes. The error of a failed write goes only to its
+    /// WriteResult or callback.
     Result Flush();
 
    private:
@@ -2068,6 +2105,8 @@ class UpsertWriter {
     Result Delete(const GenericRow& row, WriteResult& out);
     /// Like the callback Upsert overload, but deletes a row by primary key.
     Result Delete(const GenericRow& row, WriteCallback callback);
+    /// Waits for all queued writes. The error of a failed write goes only to its
+    /// WriteResult or callback.
     Result Flush();
 
    private:
@@ -2149,6 +2188,32 @@ class PendingPrefixLookup {
     ffi::PendingPrefixLookup* pending_{nullptr};
 };
 
+struct LookupCompletion {
+    LookupCompletion() = default;
+    ~LookupCompletion();
+    LookupCompletion(LookupCompletion&&) noexcept;
+    LookupCompletion& operator=(LookupCompletion&&) noexcept;
+    LookupCompletion(const LookupCompletion&) = delete;
+    LookupCompletion& operator=(const LookupCompletion&) = delete;
+
+    uint64_t request_id{0};
+    Result result;
+    LookupResult lookup;
+};
+
+struct PrefixLookupCompletion {
+    PrefixLookupCompletion() = default;
+    ~PrefixLookupCompletion();
+    PrefixLookupCompletion(PrefixLookupCompletion&&) noexcept;
+    PrefixLookupCompletion& operator=(PrefixLookupCompletion&&) noexcept;
+    PrefixLookupCompletion(const PrefixLookupCompletion&) = delete;
+    PrefixLookupCompletion& operator=(const PrefixLookupCompletion&) = delete;
+
+    uint64_t request_id{0};
+    Result result;
+    PrefixLookupResult lookup;
+};
+
 class Lookuper {
    public:
     Lookuper() noexcept;
@@ -2169,6 +2234,16 @@ class Lookuper {
     /// Starts the lookup without blocking; `out` waits for its row. Lookups started this way
     /// share batches too, so one thread can keep many in flight.
     Result Lookup(const GenericRow& pk_row, PendingLookup& out) const;
+
+    /// Starts a lookup and reports its completion through Poll(). The request ID is returned
+    /// unchanged in the corresponding LookupCompletion.
+    Result LookupAsync(const GenericRow& pk_row, uint64_t request_id) const;
+
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to `max_results` completions already available. Replaces `out`. A timeout is
+    /// successful and leaves unfinished lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out,
+                size_t max_results = 1024) const;
 
    private:
     friend class Table;
@@ -2197,6 +2272,16 @@ class PrefixLookuper {
 
     /// Starts the lookup without blocking, like Lookuper::Lookup(pk_row, PendingLookup&).
     Result PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const;
+
+    /// Starts a prefix lookup and reports its completion through Poll(). The request ID is
+    /// returned unchanged in the corresponding PrefixLookupCompletion.
+    Result PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const;
+
+    /// Waits up to `timeout_ms` (including lock acquisition) for one completion, then drains
+    /// up to `max_results` completions already available. Replaces `out`. A timeout is
+    /// successful and leaves unfinished lookups active.
+    Result Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out,
+                size_t max_results = 1024) const;
 
    private:
     friend class Table;

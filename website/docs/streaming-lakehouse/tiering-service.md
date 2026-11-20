@@ -83,6 +83,7 @@ The following `--lake.tiering.*` options are set when starting the tiering job:
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
 | `lake.tiering.partition.mark-done.enabled` | Boolean | false | Enable [partition mark-done](#partition-mark-done) using the actual lake table's options |
 | `lake.tiering.io.tmp.dirs` | String | Flink temporary directories | Local directories used for temporary I/O files. If not configured, a `fluss` child directory under each Flink temporary directory is used. Separate multiple directories with commas or the system path separator |
+| `lake.tiering.commit-thread-num` | Integer | 2 | Number of threads used to commit tables concurrently. Must be positive |
 
 ### Table-Level Options
 

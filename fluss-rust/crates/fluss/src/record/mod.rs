@@ -141,18 +141,42 @@ impl ScanRecord {
 }
 
 pub struct ScanRecords {
+    consumed_up_to_offsets: HashMap<TableBucket, i64>,
     records: HashMap<TableBucket, Vec<ScanRecord>>,
 }
 
 impl ScanRecords {
     pub fn empty() -> Self {
-        Self {
-            records: HashMap::new(),
-        }
+        Self::new(HashMap::new())
     }
 
     pub fn new(records: HashMap<TableBucket, Vec<ScanRecord>>) -> Self {
-        Self { records }
+        Self {
+            records,
+            consumed_up_to_offsets: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn add_fetched(
+        &mut self,
+        bucket: &TableBucket,
+        records: Vec<ScanRecord>,
+        end: Option<i64>,
+    ) {
+        if let Some(end) = end {
+            self.consumed_up_to_offsets.insert(bucket.clone(), end);
+        }
+        if end.is_some() || !records.is_empty() {
+            self.records
+                .entry(bucket.clone())
+                .or_default()
+                .extend(records);
+        }
+    }
+
+    /// Exclusive offset consumed by this poll, including batches that returned no rows.
+    pub fn consumed_up_to_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.consumed_up_to_offsets.get(bucket).copied()
     }
 
     pub fn records(&self, scan_bucket: &TableBucket) -> &[ScanRecord] {
@@ -163,6 +187,7 @@ impl ScanRecords {
         self.records.values().map(|v| v.len()).sum()
     }
 
+    /// A poll that advanced a bucket without returning any rows is not empty.
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
@@ -180,6 +205,10 @@ impl ScanRecords {
 /// commit timestamp, mirroring the `-1` sentinel of [`ScanRecord::timestamp`].
 pub const NO_COMMIT_TIMESTAMP: i64 = -1;
 
+/// Reported by [`ScanBatch::schema_id`] when no single source log batch schema
+/// is associated with the batch, including batches produced by a limit scan.
+pub const NO_SCHEMA_ID: i32 = -1;
+
 /// A batch of records with metadata about bucket and offsets.
 ///
 /// This is the batch-level equivalent of [`ScanRecord`], providing efficient
@@ -187,6 +216,7 @@ pub const NO_COMMIT_TIMESTAMP: i64 = -1;
 /// needed for tracking consumption progress.
 #[derive(Debug, Clone)]
 pub struct ScanBatch {
+    pub(crate) change_types: Option<Vec<ChangeType>>,
     /// The bucket this batch belongs to
     bucket: TableBucket,
     /// The Arrow RecordBatch containing the data
@@ -196,6 +226,8 @@ pub struct ScanBatch {
     /// Server-side commit timestamp in milliseconds since epoch, or
     /// [`NO_COMMIT_TIMESTAMP`] when unavailable.
     commit_timestamp: i64,
+    /// Schema ID from the source log batch header, or [`NO_SCHEMA_ID`].
+    schema_id: i32,
 }
 
 impl ScanBatch {
@@ -204,7 +236,9 @@ impl ScanBatch {
             bucket,
             batch,
             base_offset,
+            change_types: None,
             commit_timestamp: NO_COMMIT_TIMESTAMP,
+            schema_id: NO_SCHEMA_ID,
         }
     }
 
@@ -213,6 +247,32 @@ impl ScanBatch {
     pub fn with_commit_timestamp(mut self, commit_timestamp: i64) -> Self {
         self.commit_timestamp = commit_timestamp;
         self
+    }
+
+    /// Attaches the schema ID from the source log batch header.
+    pub fn with_schema_id(mut self, schema_id: i32) -> Self {
+        self.schema_id = schema_id;
+        self
+    }
+
+    /// Returns the source log batch schema ID, even after projection or schema
+    /// alignment. This does not identify the output Arrow schema.
+    /// Returns [`NO_SCHEMA_ID`] when no single source schema is associated with
+    /// the batch, including a limit scan that can combine multiple log batches.
+    pub fn schema_id(&self) -> i32 {
+        self.schema_id
+    }
+
+    /// Row-aligned change types for a primary-key changelog; absent for append-only batches.
+    pub fn change_types(&self) -> Option<&[ChangeType]> {
+        self.change_types.as_deref()
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.batch = self.batch.slice(0, len);
+        if let Some(types) = &mut self.change_types {
+            types.truncate(len);
+        }
     }
 
     pub fn bucket(&self) -> &TableBucket {
@@ -346,10 +406,14 @@ mod tests {
         assert_eq!(scan_batch.num_records(), 3);
         assert_eq!(scan_batch.last_offset(), 102);
         assert_eq!(scan_batch.commit_timestamp(), NO_COMMIT_TIMESTAMP);
+        assert_eq!(scan_batch.schema_id(), NO_SCHEMA_ID);
 
         let timestamped = ScanBatch::new(bucket.clone(), scan_batch.batch().clone(), 100)
-            .with_commit_timestamp(1234);
+            .with_commit_timestamp(1234)
+            .with_schema_id(7);
         assert_eq!(timestamped.commit_timestamp(), 1234);
+        assert_eq!(timestamped.schema_id(), 7);
+        assert_eq!(timestamped.clone().schema_id(), 7);
 
         // Empty batch -> last_offset = base_offset - 1
         let empty_batch = RecordBatch::new_empty(schema);

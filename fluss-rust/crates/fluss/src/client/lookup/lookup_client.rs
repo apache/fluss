@@ -68,6 +68,8 @@ impl LookupClient {
         let batch_timeout_ms = config.lookup_batch_timeout_ms;
         let max_inflight = config.lookup_max_inflight_requests;
         let max_retries = config.lookup_max_retries;
+        let retry_backoff_ms = config.lookup_retry_backoff_ms;
+        let retry_max_backoff_ms = config.lookup_retry_max_backoff_ms;
 
         // Create queue and channels
         let cluster_rx = metadata.subscribe_cluster_changes();
@@ -83,7 +85,10 @@ impl LookupClient {
             queue,
             re_enqueue_tx,
             max_inflight,
+            queue_size,
             max_retries,
+            retry_backoff_ms,
+            retry_max_backoff_ms,
             shutdown_rx,
         );
 
@@ -125,9 +130,8 @@ impl LookupClient {
         key_bytes: Bytes,
     ) -> Result<Option<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(Error::UnexpectedError {
-                message: "Lookup client is closed".to_string(),
-                source: None,
+            return Err(Error::LookupClosed {
+                message: "no new lookups are accepted".to_string(),
             });
         }
 
@@ -142,9 +146,8 @@ impl LookupClient {
 
         self.enqueue(query).await?;
 
-        result_rx.await.map_err(|_| Error::UnexpectedError {
-            message: "Lookup result channel closed".to_string(),
-            source: None,
+        result_rx.await.map_err(|_| Error::LookupClosed {
+            message: "the lookup sender stopped before the lookup completed".to_string(),
         })?
     }
 
@@ -172,9 +175,8 @@ impl LookupClient {
         key_bytes: Bytes,
     ) -> Result<Vec<Vec<u8>>> {
         if self.closed.load(Ordering::Acquire) {
-            return Err(Error::UnexpectedError {
-                message: "Lookup client is closed".to_string(),
-                source: None,
+            return Err(Error::LookupClosed {
+                message: "no new lookups are accepted".to_string(),
             });
         }
 
@@ -189,9 +191,8 @@ impl LookupClient {
 
         self.enqueue(query).await?;
 
-        result_rx.await.map_err(|_| Error::UnexpectedError {
-            message: "Lookup result channel closed".to_string(),
-            source: None,
+        result_rx.await.map_err(|_| Error::LookupClosed {
+            message: "the lookup sender stopped before the lookup completed".to_string(),
         })?
     }
 
@@ -204,9 +205,8 @@ impl LookupClient {
                 failed_query.table_bucket(),
                 failed_query.key().len()
             );
-            Error::UnexpectedError {
-                message: "Failed to queue lookup: channel closed".to_string(),
-                source: None,
+            Error::LookupClosed {
+                message: "the lookup sender has stopped".to_string(),
             }
         })
     }
@@ -252,5 +252,44 @@ impl Drop for LookupClient {
         if let Some(handle) = self.sender_handle.take() {
             handle.abort();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::build_cluster_arc_with_port;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn a_pending_lookup_fails_with_lookup_closed_once_the_sender_stops() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = u32::from(listener.local_addr().unwrap().port());
+        let table_path = TablePath::new("db", "tbl");
+        let metadata = Metadata::new_for_test(build_cluster_arc_with_port(&table_path, 1, 1, port));
+        let config = Config {
+            lookup_batch_timeout_ms: 0,
+            ..Default::default()
+        };
+        let client = LookupClient::new(&config, Arc::new(metadata));
+        let lookup = client.lookup(
+            table_path,
+            TableBucket::new(1, 0),
+            1,
+            Bytes::from_static(b"key"),
+        );
+        tokio::pin!(lookup);
+        let _connection = tokio::select! {
+            result = &mut lookup => panic!("the lookup completed without an answer: {result:?}"),
+            accepted = listener.accept() => accepted.unwrap(),
+        };
+
+        client.sender_handle.as_ref().unwrap().abort();
+
+        let error = tokio::time::timeout(Duration::from_secs(10), lookup)
+            .await
+            .expect("the lookup completed")
+            .unwrap_err();
+        assert!(matches!(error, Error::LookupClosed { .. }), "{error}");
     }
 }

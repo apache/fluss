@@ -23,6 +23,7 @@ import org.apache.fluss.types.DataTypeRoot;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 
@@ -40,6 +41,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public enum AggFunctionType {
     // Numeric aggregation
     SUM,
+    COUNT,
     PRODUCT,
     MAX,
     MIN,
@@ -58,9 +60,17 @@ public enum AggFunctionType {
     BOOL_AND,
     BOOL_OR,
 
+    // Collection aggregation
+    COLLECT,
+    MERGE_MAP,
+
     // Roaring bitmap aggregation
     RBM32,
     RBM64,
+
+    // Apache DataSketches aggregation
+    HLL_SKETCH,
+    KLL_DOUBLE_SKETCH,
 
     // Array aggregation
     LAST_N;
@@ -95,6 +105,9 @@ public enum AggFunctionType {
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
             };
 
+    /** Parameter name for the distinct flag used in array aggregations. */
+    public static final String PARAM_DISTINCT = "distinct";
+
     /**
      * Returns the set of supported parameter names for this aggregation function.
      *
@@ -106,8 +119,11 @@ public enum AggFunctionType {
             case STRING_AGG:
                 // LISTAGG and STRING_AGG support optional "delimiter" parameter
                 return Collections.singleton(PARAM_DELIMITER);
+            case COLLECT:
+                return Collections.singleton(PARAM_DISTINCT);
             case LAST_N:
-                return Collections.singleton(PARAM_SIZE);
+                return Collections.unmodifiableSet(
+                        new HashSet<>(Arrays.asList(PARAM_SIZE, PARAM_DISTINCT)));
             default:
                 // All other functions do not accept parameters
                 return Collections.emptySet();
@@ -136,14 +152,21 @@ public enum AggFunctionType {
      */
     public DataTypeRoot[] getSupportedDataTypeRoots() {
         switch (this) {
+            case COUNT:
+                return new DataTypeRoot[] {DataTypeRoot.BIGINT};
             case BOOL_AND:
             case BOOL_OR:
                 return new DataTypeRoot[] {DataTypeRoot.BOOLEAN};
             case RBM32:
             case RBM64:
+            case HLL_SKETCH:
+            case KLL_DOUBLE_SKETCH:
                 return new DataTypeRoot[] {DataTypeRoot.BYTES};
             case LAST_N:
+            case COLLECT:
                 return new DataTypeRoot[] {DataTypeRoot.ARRAY};
+            case MERGE_MAP:
+                return new DataTypeRoot[] {DataTypeRoot.MAP};
             case LISTAGG:
             case STRING_AGG:
                 return new DataTypeRoot[] {DataTypeRoot.STRING, DataTypeRoot.CHAR};
@@ -200,18 +223,30 @@ public enum AggFunctionType {
                     }
                 }
                 break;
+            case COLLECT:
             case LAST_N:
-                int size;
-                try {
-                    size = Integer.parseInt(parameterValue);
-                } catch (NumberFormatException e) {
-                    size = -1;
-                }
-                if (size <= 0) {
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Parameter '%s' for aggregation function '%s' must be a positive integer, but was '%s'",
-                                    parameterName, this, parameterValue));
+                if (PARAM_DISTINCT.equals(parameterName)) {
+                    if (parameterValue == null
+                            || (!parameterValue.equalsIgnoreCase("true")
+                                    && !parameterValue.equalsIgnoreCase("false"))) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Parameter '%s' for aggregation function '%s' must be 'true' or 'false'",
+                                        parameterName, this));
+                    }
+                } else if (AggFunctions.PARAM_SIZE.equals(parameterName)) {
+                    int size;
+                    try {
+                        size = Integer.parseInt(parameterValue);
+                    } catch (NumberFormatException e) {
+                        size = -1;
+                    }
+                    if (size <= 0) {
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Parameter '%s' for aggregation function '%s' must be a positive integer, but was '%s'",
+                                        parameterName, this, parameterValue));
+                    }
                 }
                 break;
             default:

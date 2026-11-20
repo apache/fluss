@@ -30,7 +30,10 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Benchao Li           | ByteDance     | [@libenchao](https://github.com/libenchao)                 | [libenchao](https://people.apache.org/committer-index.html#libenchao)         | Committer             |
 | Cheng Wang           | Tencent       | [@xx789633](https://github.com/xx789633)                   | [chengwang](https://people.apache.org/committer-index.html#chengwang)         | Committer             |
 | Cheng Zhou           | Taobao        | [@zcoo](https://github.com/zcoo)                           | [zcoo](https://people.apache.org/committer-index.html#zcoo)                   | Committer             |
+| Fei Han              | JD.com        | [@fhan688](https://github.com/fhan688)                     | [fhan688](https://people.apache.org/committer-index.html#fhan688)             | Committer             |
 | Feng Wang            | Alibaba Cloud | [@wangfengpro](https://github.com/wangfengpro)             | [fengwang](https://people.apache.org/committer-index.html#fengwang)           | Committer             |
+| Junbo Wang           | Alibaba Cloud | [@beryllw](https://github.com/beryllw)                     | [beryllwang](https://people.apache.org/committer-index.html#beryllwang)       | Committer             |
+| Junfan Zhang         | iQIYI         | [@zuston](https://github.com/zuston)                       | [zuston](https://people.apache.org/committer-index.html#zuston)               | Committer             |
 | Leonard Xu           | Alibaba Cloud | [@leonardBang](https://github.com/leonardBang)             | [leonard](https://people.apache.org/committer-index.html#leonard)             | Committer             |
 | Liebing Yu           | Taobao        | [@LiebingYu](https://github.com/LiebingYu)                 | [liebing](https://people.apache.org/committer-index.html#liebing)             | Committer             |
 | Yang Wang            | Alibaba Cloud | [@platinumhamburg](https://github.com/platinumhamburg)     | [yangwang](https://people.apache.org/committer-index.html#yangwang)           | Committer             |

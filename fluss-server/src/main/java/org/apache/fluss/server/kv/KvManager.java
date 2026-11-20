@@ -38,6 +38,7 @@ import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -142,6 +143,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
     private final Map<TableBucket, Object> kvLocks = new ConcurrentHashMap<>();
+
+    private final RocksDBStatisticsRegistry statisticsRegistry = new RocksDBStatisticsRegistry();
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
@@ -583,6 +586,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     sharedRocksDBRateLimiter,
                                     sharedBlockCache,
                                     sharedWriteBufferManager,
+                                    statisticsRegistry,
                                     kvFlushScheduler,
                                     flushCompleteListener,
                                     autoIncrementManager,
@@ -616,6 +620,17 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         FileUtils.deleteDirectoryQuietly(tabletDir);
         createTabletDirectory(tabletDir);
         return tabletDir;
+    }
+
+    // TODO: Move ownership and cleanup of these shared resources to TabletServer.
+    /** Returns the shared Arrow allocator; callers must not close it. */
+    public BufferAllocator getArrowBufferAllocator() {
+        return arrowBufferAllocator;
+    }
+
+    /** Returns the shared memory segment pool; callers must not close it. */
+    public LazyMemorySegmentPool getMemorySegmentPool() {
+        return memorySegmentPool;
     }
 
     public Optional<KvTablet> getKv(TableBucket tableBucket) {
@@ -745,6 +760,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         sharedRocksDBRateLimiter,
                         sharedBlockCache,
                         sharedWriteBufferManager,
+                        statisticsRegistry,
                         kvFlushScheduler,
                         flushCompleteListener,
                         autoIncrementManager,

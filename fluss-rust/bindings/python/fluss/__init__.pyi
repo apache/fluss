@@ -110,6 +110,14 @@ class RecordBatch:
         is the case for a limit scan that merges several log batches.
         """
         ...
+    @property
+    def schema_id(self) -> int:
+        """Source log batch schema ID, before projection or schema alignment.
+
+        This does not identify the output Arrow schema. `NO_SCHEMA_ID` is
+        returned when there is no single source schema, including limit scans.
+        """
+        ...
     def __str__(self) -> str: ...
     def __repr__(self) -> str: ...
 
@@ -190,6 +198,10 @@ class Config:
     @writer_bucket_no_key_assigner.setter
     def writer_bucket_no_key_assigner(self, value: str) -> None: ...
     @property
+    def writer_dynamic_create_partition_enabled(self) -> bool: ...
+    @writer_dynamic_create_partition_enabled.setter
+    def writer_dynamic_create_partition_enabled(self, enabled: bool) -> None: ...
+    @property
     def scanner_remote_log_prefetch_num(self) -> int: ...
     @scanner_remote_log_prefetch_num.setter
     def scanner_remote_log_prefetch_num(self, num: int) -> None: ...
@@ -201,6 +213,10 @@ class Config:
     def scanner_remote_log_read_concurrency(self) -> int: ...
     @scanner_remote_log_read_concurrency.setter
     def scanner_remote_log_read_concurrency(self, num: int) -> None: ...
+    @property
+    def scanner_io_tmp_dir(self) -> Optional[str]: ...
+    @scanner_io_tmp_dir.setter
+    def scanner_io_tmp_dir(self, path: Optional[str]) -> None: ...
     @property
     def scanner_log_max_poll_records(self) -> int: ...
     @scanner_log_max_poll_records.setter
@@ -222,6 +238,10 @@ class Config:
     @scanner_log_fetch_max_bytes_for_bucket.setter
     def scanner_log_fetch_max_bytes_for_bucket(self, bytes: int) -> None: ...
     @property
+    def scanner_log_check_crc(self) -> bool: ...
+    @scanner_log_check_crc.setter
+    def scanner_log_check_crc(self, enabled: bool) -> None: ...
+    @property
     def lookup_queue_size(self) -> int: ...
     @lookup_queue_size.setter
     def lookup_queue_size(self, value: int) -> None: ...
@@ -241,6 +261,14 @@ class Config:
     def lookup_max_retries(self) -> int: ...
     @lookup_max_retries.setter
     def lookup_max_retries(self, value: int) -> None: ...
+    @property
+    def lookup_retry_backoff_ms(self) -> int: ...
+    @lookup_retry_backoff_ms.setter
+    def lookup_retry_backoff_ms(self, backoff: int) -> None: ...
+    @property
+    def lookup_retry_max_backoff_ms(self) -> int: ...
+    @lookup_retry_max_backoff_ms.setter
+    def lookup_retry_max_backoff_ms(self, backoff: int) -> None: ...
     @property
     def writer_batch_timeout_ms(self) -> int: ...
     @writer_batch_timeout_ms.setter
@@ -277,6 +305,10 @@ class Config:
     def connect_timeout_ms(self) -> int: ...
     @connect_timeout_ms.setter
     def connect_timeout_ms(self, timeout: int) -> None: ...
+    @property
+    def connection_max_idle_time_ms(self) -> int: ...
+    @connection_max_idle_time_ms.setter
+    def connection_max_idle_time_ms(self, max_idle_time: int) -> None: ...
     @property
     def security_protocol(self) -> str: ...
     @security_protocol.setter
@@ -894,20 +926,26 @@ class AppendWriter:
     def write_arrow(self, table: pa.Table) -> None:
         """Write a PyArrow Table (one batch at a time).
 
-        For a partitioned table, every batch must contain rows of a single
-        partition (see write_arrow_batch()).
+        Rows are routed to their respective partitions within each batch.
+        No write handles are returned and flush() doesn't raise write errors, so
+        use write_arrow_batch() and wait on its handle when a failed write must
+        be noticed.
         """
         ...
     def write_arrow_batch(self, batch: pa.RecordBatch) -> WriteResultHandle:
         """Write a PyArrow RecordBatch.
 
-        For a partitioned table the partition is derived from the first row, so
-        all rows must belong to the same partition. Rows are distributed across
-        buckets by their bucket key automatically.
+        Rows are routed to their respective partitions and distributed across
+        buckets by their bucket key when configured.
         """
         ...
     def write_pandas(self, df: pd.DataFrame) -> None: ...
-    async def flush(self) -> None: ...
+    async def flush(self) -> None:
+        """Flush all pending writes to the server.
+
+        Doesn't raise the error of a failed write, wait on its handle for that.
+        """
+        ...
     async def __aenter__(self) -> AppendWriter:
         """
         Enter the async context manager.
@@ -961,7 +999,10 @@ class UpsertWriter:
         """
         ...
     async def flush(self) -> None:
-        """Flush all pending upsert/delete operations to the server."""
+        """Flush all pending upsert/delete operations to the server.
+
+        Doesn't raise the error of a failed write, wait on its handle for that.
+        """
         ...
     async def __aenter__(self) -> UpsertWriter:
         """
@@ -989,7 +1030,11 @@ class UpsertWriter:
 
 @final
 class WriteResultHandle:
-    """Handle for a pending write (append/upsert/delete). Ignore for fire-and-forget, or await handle.wait() for ack."""
+    """Handle for a pending write (append/upsert/delete). Ignore for fire-and-forget, or await handle.wait() for ack.
+
+    flush() doesn't raise the error of a failed write, so an ignored handle
+    means the failure goes unnoticed.
+    """
 
     async def wait(self) -> None:
         """Wait for server acknowledgment of this write."""
@@ -1506,5 +1551,8 @@ EARLIEST_OFFSET: int
 # Reported by `RecordBatch.commit_timestamp` when the batch carries no single
 # commit timestamp, for example a limit scan that merges several log batches (-1)
 NO_COMMIT_TIMESTAMP: int
+
+# No single source log batch schema ID, including limit scan results.
+NO_SCHEMA_ID: int
 
 __version__: str

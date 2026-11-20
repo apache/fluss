@@ -21,12 +21,15 @@
 //! coerced to the declared type of its column, since the server reads the log
 //! unfiltered when a literal type root does not match the field's.
 
+use super::coercion::{
+    compound_name, float32, float64, integer_in_range, integer_value, mismatch, rescale,
+    unsupported_column, validate_leaf,
+};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
 use crate::metadata::{DataField, DataType, RowType, UNASSIGNED_FIELD_ID};
 use crate::predicate::{CompoundFunction, LeafFunction, Literal, Predicate};
 use crate::proto::{PbCompoundPredicate, PbLeafPredicate, PbLiteralValue, PbPredicate};
-use crate::row::Decimal;
 
 /// Wire codes for `PbPredicate.type`.
 const PREDICATE_TYPE_LEAF: i32 = 0;
@@ -132,17 +135,7 @@ pub(crate) fn to_pb_predicate(predicate: &Predicate, row_type: &RowType) -> Resu
 }
 
 fn resolve_field<'a>(row_type: &'a RowType, name: &str) -> Result<&'a DataField> {
-    let field = row_type
-        .fields()
-        .iter()
-        .find(|field| field.name() == name)
-        .ok_or_else(|| IllegalArgument {
-            message: format!(
-                "filter column '{}' does not exist in the table schema, available columns: {:?}",
-                name,
-                row_type.get_field_names()
-            ),
-        })?;
+    let (_, field) = super::coercion::resolve_field(row_type, name)?;
 
     // The server resolves the column by field id, so an unassigned one would be
     // unresolvable there.
@@ -152,52 +145,6 @@ fn resolve_field<'a>(row_type: &'a RowType, name: &str) -> Result<&'a DataField>
         });
     }
     Ok(field)
-}
-
-/// Checks the literal count and kind a function requires, so that a predicate
-/// the server could only evaluate to garbage is rejected before it is sent.
-fn validate_leaf(function: LeafFunction, field: &DataField, literals: &[Literal]) -> Result<()> {
-    let expected = match function {
-        // `IN`/`NOT IN` accept any count: empty ones match nothing/everything.
-        LeafFunction::In | LeafFunction::NotIn => return Ok(()),
-        LeafFunction::IsNull | LeafFunction::IsNotNull => 0,
-        _ => 1,
-    };
-    if literals.len() != expected {
-        return Err(IllegalArgument {
-            message: format!(
-                "{function:?} on column '{}' expects {expected} literal(s), got {}",
-                field.name(),
-                literals.len()
-            ),
-        });
-    }
-
-    // A null literal is only meaningful to `IN`/`NOT IN`, which skip it; every
-    // other function compares against it and the server errors out.
-    if literals.first() == Some(&Literal::Null) {
-        return Err(IllegalArgument {
-            message: format!(
-                "{function:?} on column '{}' cannot take a null literal, use is_null()/is_not_null()",
-                field.name()
-            ),
-        });
-    }
-
-    if matches!(
-        function,
-        LeafFunction::StartsWith | LeafFunction::EndsWith | LeafFunction::Contains
-    ) && !matches!(field.data_type(), DataType::Char(_) | DataType::String(_))
-    {
-        return Err(IllegalArgument {
-            message: format!(
-                "{function:?} requires a character string column, but column '{}' is {}",
-                field.name(),
-                field.data_type()
-            ),
-        });
-    }
-    Ok(())
 }
 
 fn to_pb_literal(field: &DataField, literal: &Literal) -> Result<PbLiteralValue> {
@@ -280,116 +227,142 @@ fn to_pb_literal(field: &DataField, literal: &Literal) -> Result<PbLiteralValue>
     Ok(pb)
 }
 
-/// Reads an integer literal of any width, so that a column can accept the one
-/// Rust inferred for it.
-fn integer_value(field: &DataField, literal: &Literal) -> Result<i64> {
-    match literal {
-        Literal::Int8(value) => Ok(*value as i64),
-        Literal::Int16(value) => Ok(*value as i64),
-        Literal::Int32(value) => Ok(*value as i64),
-        Literal::Int64(value) => Ok(*value),
-        _ => Err(mismatch(field, literal)),
+impl Predicate {
+    /// Encodes an exact predicate using stable field IDs from the full source schema.
+    /// Unlike conservative scan pushdown, this preserves every condition and rejects
+    /// literals that the wire representation cannot express exactly.
+    pub fn to_protobuf(&self, row_type: &RowType) -> Result<PbPredicate> {
+        to_pb_predicate(self, row_type)
+    }
+
+    /// Decodes a predicate against its captured schema, rejecting unknown operations
+    /// and mismatched literal types. This does not select server pushdown capabilities.
+    pub fn from_protobuf(pb: &PbPredicate, row_type: &RowType) -> Result<Self> {
+        let predicate = from_pb_predicate(pb, row_type)?;
+        super::BoundPredicate::bind(Some(&predicate), row_type)?;
+        Ok(predicate)
     }
 }
 
-/// Reads an integer literal the column's type must hold, where `max` is its
-/// upper bound and `-max - 1` its lower one.
-fn integer_in_range(field: &DataField, literal: &Literal, max: i64) -> Result<i64> {
-    let value = integer_value(field, literal)?;
-    if value > max || value < -max - 1 {
-        return Err(IllegalArgument {
-            message: format!(
-                "filter literal {value} is out of range for column '{}' of type {}",
-                field.name(),
-                field.data_type()
-            ),
-        });
-    }
-    Ok(value)
-}
-
-fn float32(field: &DataField, literal: &Literal) -> Result<f32> {
-    if let Literal::Float32(value) = literal {
-        return Ok(*value);
-    }
-    let value = float64(field, literal)?;
-    let narrowed = value as f32;
-    if narrowed as f64 != value && !value.is_nan() {
-        return Err(inexact(field, value));
-    }
-    Ok(narrowed)
-}
-
-fn float64(field: &DataField, literal: &Literal) -> Result<f64> {
-    match literal {
-        Literal::Float64(value) => Ok(*value),
-        Literal::Float32(value) => Ok(*value as f64),
-        Literal::Int8(_) | Literal::Int16(_) | Literal::Int32(_) | Literal::Int64(_) => {
-            let value = integer_value(field, literal)?;
-            let widened = value as f64;
-            if widened as i64 != value {
-                return Err(inexact(field, widened));
+fn from_pb_predicate(pb: &PbPredicate, row_type: &RowType) -> Result<Predicate> {
+    let invalid = || IllegalArgument {
+        message: "invalid protobuf predicate".into(),
+    };
+    let predicate = match (pb.r#type, &pb.leaf, &pb.compound) {
+        (0, Some(leaf), None) => {
+            let field = row_type
+                .fields()
+                .iter()
+                .find(|f| f.field_id() == leaf.field_id)
+                .ok_or_else(invalid)?;
+            let functions = [
+                LeafFunction::Equal,
+                LeafFunction::NotEqual,
+                LeafFunction::LessThan,
+                LeafFunction::LessOrEqual,
+                LeafFunction::GreaterThan,
+                LeafFunction::GreaterOrEqual,
+                LeafFunction::IsNull,
+                LeafFunction::IsNotNull,
+                LeafFunction::StartsWith,
+                LeafFunction::Contains,
+                LeafFunction::EndsWith,
+                LeafFunction::In,
+                LeafFunction::NotIn,
+            ];
+            Predicate::Leaf {
+                field: field.name().into(),
+                function: *functions.get(leaf.function as usize).ok_or_else(invalid)?,
+                literals: leaf
+                    .literals
+                    .iter()
+                    .map(|value| from_pb_literal(field, value))
+                    .collect::<Result<_>>()?,
             }
-            Ok(widened)
         }
-        _ => Err(mismatch(field, literal)),
-    }
+        (1, None, Some(compound)) => Predicate::Compound {
+            function: match compound.function {
+                0 => CompoundFunction::And,
+                1 => CompoundFunction::Or,
+                _ => return Err(invalid()),
+            },
+            children: compound
+                .children
+                .iter()
+                .map(|child| from_pb_predicate(child, row_type))
+                .collect::<Result<_>>()?,
+        },
+        _ => return Err(invalid()),
+    };
+    Ok(predicate)
 }
 
-/// Rejects a conversion that would move the comparison bound, since the server
-/// prunes batches by that bound and a shifted one drops matching rows.
-fn inexact(field: &DataField, value: f64) -> crate::error::Error {
-    IllegalArgument {
-        message: format!(
-            "filter literal {value} cannot be represented exactly by column '{}' of type {}",
-            field.name(),
-            field.data_type()
+fn from_pb_literal(field: &DataField, value: &PbLiteralValue) -> Result<Literal> {
+    use crate::row::{Decimal, TimestampLtz, TimestampNtz};
+    let invalid = || IllegalArgument {
+        message: format!("invalid protobuf literal for '{}'", field.name()),
+    };
+    if value.literal_type != literal_type_code(field)? {
+        return Err(invalid());
+    }
+    if value.is_null {
+        return Ok(Literal::Null);
+    }
+    Ok(match field.data_type() {
+        DataType::Boolean(_) => Literal::Bool(value.boolean_value.ok_or_else(invalid)?),
+        DataType::TinyInt(_) => Literal::Int8(
+            value
+                .int_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
         ),
-    }
-}
-
-fn rescale(field: &DataField, value: &Decimal, precision: u32, scale: u32) -> Result<Decimal> {
-    let big_decimal = value.to_big_decimal();
-    let rescaled = Decimal::from_big_decimal(big_decimal.clone(), precision, scale)?;
-    // `from_big_decimal` rounds, which would move a comparison bound; only an
-    // exact change of scale is safe.
-    if rescaled.to_big_decimal() != big_decimal {
-        return Err(IllegalArgument {
-            message: format!(
-                "filter literal {big_decimal} does not fit column '{}' of type {}",
-                field.name(),
-                field.data_type()
-            ),
-        });
-    }
-    Ok(rescaled)
-}
-
-fn mismatch(field: &DataField, literal: &Literal) -> crate::error::Error {
-    IllegalArgument {
-        message: format!(
-            "filter literal {literal:?} does not match column '{}' of type {}",
-            field.name(),
-            field.data_type()
+        DataType::SmallInt(_) => Literal::Int16(
+            value
+                .int_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
         ),
-    }
-}
-
-fn unsupported_column(field: &DataField) -> crate::error::Error {
-    IllegalArgument {
-        message: format!(
-            "filter on column '{}' of type {} is not supported",
-            field.name(),
-            field.data_type()
+        DataType::Int(_) => Literal::Int32(value.int_value.ok_or_else(invalid)?),
+        DataType::BigInt(_) => Literal::Int64(value.bigint_value.ok_or_else(invalid)?),
+        DataType::Float(_) => Literal::Float32(value.float_value.ok_or_else(invalid)?),
+        DataType::Double(_) => Literal::Float64(value.double_value.ok_or_else(invalid)?),
+        DataType::Char(_) | DataType::String(_) => {
+            Literal::String(value.string_value.clone().ok_or_else(invalid)?)
+        }
+        DataType::Binary(_) | DataType::Bytes(_) => {
+            Literal::Bytes(value.binary_value.clone().ok_or_else(invalid)?)
+        }
+        DataType::Decimal(ty) => {
+            Literal::Decimal(match (&value.decimal_bytes, value.decimal_value) {
+                (Some(bytes), None) => {
+                    Decimal::from_unscaled_bytes(bytes, ty.precision(), ty.scale())?
+                }
+                (None, Some(number)) => {
+                    Decimal::from_unscaled_long(number, ty.precision(), ty.scale())?
+                }
+                _ => return Err(invalid()),
+            })
+        }
+        DataType::Date(_) => Literal::Date(
+            value
+                .bigint_value
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
         ),
-    }
-}
-
-fn compound_name(function: CompoundFunction) -> &'static str {
-    match function {
-        CompoundFunction::And => "AND",
-        CompoundFunction::Or => "OR",
-    }
+        DataType::Time(_) => Literal::Time(value.int_value.ok_or_else(invalid)?),
+        DataType::Timestamp(_) => Literal::TimestampNtz(TimestampNtz::from_millis_nanos(
+            value.timestamp_millis_value.ok_or_else(invalid)?,
+            value.timestamp_nano_of_millis_value.unwrap_or(0),
+        )?),
+        DataType::TimestampLTz(_) => Literal::TimestampLtz(TimestampLtz::from_millis_nanos(
+            value.timestamp_millis_value.ok_or_else(invalid)?,
+            value.timestamp_nano_of_millis_value.unwrap_or(0),
+        )?),
+        _ => return Err(unsupported_column(field)),
+    })
 }
 
 #[cfg(test)]
@@ -400,8 +373,8 @@ mod tests {
         DoubleType, FloatType, IntType, RowType, SmallIntType, StringType, TimeType,
         TimestampLTzType, TimestampType, TinyIntType,
     };
-    use crate::predicate::col;
-    use crate::row::{TimestampLtz, TimestampNtz};
+    use crate::predicate::{Literal, col};
+    use crate::row::{Decimal, TimestampLtz, TimestampNtz};
     use bigdecimal::BigDecimal;
     use std::str::FromStr;
 
@@ -412,7 +385,10 @@ mod tests {
 
     /// Encodes a single-leaf predicate over one column and returns its literal.
     fn encode_literal(data_type: DataType, predicate: Predicate) -> Result<PbLiteralValue> {
-        let pb = to_pb_predicate(&predicate, &row_type_of(data_type))?;
+        let row_type = row_type_of(data_type);
+        let pb = to_pb_predicate(&predicate, &row_type)?;
+        let decoded = Predicate::from_protobuf(&pb, &row_type)?;
+        assert_eq!(decoded.to_protobuf(&row_type)?, pb);
         Ok(pb.leaf.unwrap().literals.into_iter().next().unwrap())
     }
 
@@ -476,6 +452,11 @@ mod tests {
         )
         .unwrap();
 
+        let decoded = Predicate::from_protobuf(&pb, &row_type).unwrap();
+        assert_eq!(decoded.to_protobuf(&row_type).unwrap(), pb);
+        let mut unknown = pb.clone();
+        unknown.compound.as_mut().unwrap().function = 99;
+        assert!(Predicate::from_protobuf(&unknown, &row_type).is_err());
         assert_eq!(pb.r#type, PREDICATE_TYPE_COMPOUND);
         assert!(pb.leaf.is_none());
         let or = pb.compound.unwrap();
@@ -566,21 +547,21 @@ mod tests {
     fn encodes_both_timestamp_kinds() {
         let ntz = encode_literal(
             DataType::Timestamp(TimestampType::new(6).unwrap()),
-            col("c").eq(TimestampNtz::from_millis_nanos(1_700_000_000_000, 123_456).unwrap()),
+            col("c").eq(TimestampNtz::from_millis_nanos(1_700_000_000_000, 123_000).unwrap()),
         )
         .unwrap();
         assert_eq!(ntz.literal_type, 12);
         assert_eq!(ntz.timestamp_millis_value, Some(1_700_000_000_000));
-        assert_eq!(ntz.timestamp_nano_of_millis_value, Some(123_456));
+        assert_eq!(ntz.timestamp_nano_of_millis_value, Some(123_000));
 
         let ltz = encode_literal(
             DataType::TimestampLTz(TimestampLTzType::new(6).unwrap()),
-            col("c").eq(TimestampLtz::from_millis_nanos(1_700_000_000_000, 123_456).unwrap()),
+            col("c").eq(TimestampLtz::from_millis_nanos(1_700_000_000_000, 123_000).unwrap()),
         )
         .unwrap();
         assert_eq!(ltz.literal_type, 13);
         assert_eq!(ltz.timestamp_millis_value, Some(1_700_000_000_000));
-        assert_eq!(ltz.timestamp_nano_of_millis_value, Some(123_456));
+        assert_eq!(ltz.timestamp_nano_of_millis_value, Some(123_000));
     }
 
     #[test]
@@ -680,9 +661,15 @@ mod tests {
             None,
         )]);
 
-        let error = to_pb_predicate(&col("c").eq(1i32), &row_type).unwrap_err();
-
-        assert!(error.to_string().contains("no schema field id"));
+        for predicate in [
+            col("c").eq(1i32),
+            col("c").eq(1i32).and(col("missing").eq(2i32)),
+        ] {
+            // Preserve the encoder's leaf-first validation order instead of
+            // binding the entire expression before checking protocol field IDs.
+            let error = to_pb_predicate(&predicate, &row_type).unwrap_err();
+            assert!(error.to_string().contains("no schema field id"));
+        }
     }
 
     #[test]
@@ -728,8 +715,10 @@ mod tests {
             DataType::Double(DoubleType::new()),
             DataType::Float(FloatType::new()),
         ] {
-            let error = encode_literal(data_type, col("c").eq(too_precise)).unwrap_err();
-            assert!(error.to_string().contains("cannot be represented exactly"));
+            for value in [too_precise, i64::MAX] {
+                let error = encode_literal(data_type.clone(), col("c").eq(value)).unwrap_err();
+                assert!(error.to_string().contains("cannot be represented exactly"));
+            }
         }
     }
 

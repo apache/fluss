@@ -46,7 +46,8 @@ defmodule Fluss.UpsertWriter do
       Fluss.UpsertWriter.delete(writer, [1])
 
   Writes are queued and return a `Fluss.WriteHandle` — drop it for fire-and-forget, or
-  `Fluss.WriteHandle.wait/1` for a per-record ack. `flush/1` waits for all queued writes.
+  `Fluss.WriteHandle.wait/1` for a per-record ack. `flush/1` waits for all queued writes
+  but doesn't return the error of a failed one.
   When the write buffer is full, a write waits for room, up to the writer buffer wait
   timeout in `Fluss.Config` (no limit by default).
   """

@@ -42,6 +42,7 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.lake.source.TestingLakeSource;
 import org.apache.fluss.lake.source.TestingLakeSplit;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -50,6 +51,7 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -69,6 +71,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -90,7 +93,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testCheckpointHybridSnapshotFinishedBeforeFirstLogRecord() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_checkpoint_hybrid_snapshot_finished");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_checkpoint_hybrid_snapshot_finished");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -212,7 +216,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testCheckpointLakeSplitFinishedBeforeFirstLogRecord() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_checkpoint_lake_split_finished");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_checkpoint_lake_split_finished");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -270,6 +275,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
             assertThat(checkpoint).hasSize(1);
             checkpointSplit = (LakeSnapshotAndFlussLogSplit) checkpoint.get(0);
             assertThat(checkpointSplit.isLakeSplitFinished()).isTrue();
+            // the finished lake splits are never read again, so they are not checkpointed
+            assertThat(checkpointSplit.getLakeSplits()).isNull();
             assertThat(checkpointSplit.getStartingOffset()).isEqualTo(startingOffset);
             assertThat(checkpointSplit.getRecordsToSkip()).isEqualTo(1L);
             assertThat(checkpointSplit.getCurrentLakeSplitIndex()).isZero();
@@ -320,9 +327,126 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     }
 
     @Test
+    void testRestoreHybridLakeSplitAcrossBusinessPartitions() throws Exception {
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_restore_multi_partition_lake_split");
+        // Model the historical bucket's shared log with one physical bucket. Its lake baseline
+        // contains separate splits for two business partitions, with overlapping primary-key IDs.
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("dt", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .primaryKey("id", "dt")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor);
+        RowType rowType = tableDescriptor.getSchema().getRowType();
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        List<InternalRow> baseline =
+                Arrays.asList(
+                        row(1, "20240101", "Alice"),
+                        row(2, "20240101", "Bob"),
+                        row(1, "20240102", "Carol"),
+                        row(2, "20240102", "Dave"),
+                        row(3, "20240102", "Eve"));
+        Map<String, List<LogRecord>> lakeRecords = new HashMap<>();
+        long startingOffset = 0;
+        for (InternalRow record : baseline) {
+            UpsertResult result = upsert(tablePath, record);
+            assertThat(result.getBucket()).isEqualTo(tableBucket);
+            startingOffset = result.getLogEndOffset();
+            lakeRecords
+                    .computeIfAbsent(record.getString(1).toString(), ignored -> new ArrayList<>())
+                    .add(new GenericRecord(-1L, -1L, ChangeType.INSERT, record));
+        }
+        TestingLakeSource lakeSource =
+                new TestingLakeSource() {
+                    @Override
+                    public RecordReader createRecordReader(ReaderContext<LakeSplit> context) {
+                        List<LogRecord> records =
+                                lakeRecords.get(context.lakeSplit().partition().get(0));
+                        return () -> CloseableIterator.wrap(records.iterator());
+                    }
+                };
+        LakeSnapshotAndFlussLogSplit split =
+                new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        null,
+                        Arrays.asList(
+                                new TestingLakeSplit(0, Collections.singletonList("20240101")),
+                                new TestingLakeSplit(0, Collections.singletonList("20240102"))),
+                        startingOffset,
+                        LogSplit.NO_STOPPING_OFFSET);
+
+        TestingReaderOutput<RowData> output = new TestingReaderOutput<>();
+        SourceSplitSerializer serializer = new SourceSplitSerializer(lakeSource);
+        SourceSplitBase restoredSplit;
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        clientConf, tablePath, rowType, new TestingReaderContext(), lakeSource)) {
+            reader.addSplits(Collections.singletonList(split));
+            // Finish the first business partition and emit only the first row of the second.
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(output);
+                        assertThat(output.getEmittedRecords()).hasSize(3);
+                    });
+            assertThat(output.getEmittedRecords())
+                    .extracting(Object::toString)
+                    .containsExactly(
+                            "+I(1,20240101,Alice)", "+I(2,20240101,Bob)", "+I(1,20240102,Carol)");
+            List<SourceSplitBase> checkpoint = reader.snapshotState(1L);
+            assertThat(checkpoint).hasSize(1);
+            LakeSnapshotAndFlussLogSplit checkpointSplit =
+                    (LakeSnapshotAndFlussLogSplit) checkpoint.get(0);
+            assertThat(checkpointSplit.isLakeSplitFinished()).isFalse();
+            assertThat(checkpointSplit.getStartingOffset()).isEqualTo(startingOffset);
+            // Include the real serializer so both business partitions and the resume position
+            // must survive checkpointing, rather than reusing the in-memory split.
+            restoredSplit =
+                    serializer.deserialize(
+                            serializer.getVersion(), serializer.serialize(checkpointSplit));
+        }
+
+        // Change rows whose baseline has not been emitted yet. Recovery must finish the lake
+        // baseline before emitting these updates from the shared log, without replaying its seeds.
+        upsert(tablePath, row(2, "20240102", "Dave-updated"));
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.delete(row(3, "20240102", "Eve")).get();
+        }
+        TestingReaderOutput<RowData> restoredOutput = new TestingReaderOutput<>();
+        try (FlinkSourceReader<RowData> reader =
+                createReader(
+                        clientConf, tablePath, rowType, new TestingReaderContext(), lakeSource)) {
+            reader.addSplits(Collections.singletonList(restoredSplit));
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> {
+                        reader.pollNext(restoredOutput);
+                        assertThat(restoredOutput.getEmittedRecords()).hasSize(5);
+                    });
+            assertThat(restoredOutput.getEmittedRecords())
+                    .extracting(Object::toString)
+                    .containsExactly(
+                            "+I(2,20240102,Dave)",
+                            "+I(3,20240102,Eve)",
+                            "-U(2,20240102,Dave)",
+                            "+U(2,20240102,Dave-updated)",
+                            "-D(3,20240102,Eve)");
+        }
+    }
+
+    @Test
     void testRestorePartiallyConsumedLakeSnapshotSplit() throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_DB, "test_restore_partially_consumed_lake_snapshot_split");
+                tableNames.tablePath(
+                        DEFAULT_DB, "test_restore_partially_consumed_lake_snapshot_split");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, tableDescriptor);
@@ -397,7 +521,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testHandlePartitionsRemovedEvent() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_partitioned_table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test_partitioned_table");
 
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
@@ -496,7 +620,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     @Test
     void testPendingRecordsMetricAfterFetcherRecreation() throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
+                tableNames.tablePath(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
 

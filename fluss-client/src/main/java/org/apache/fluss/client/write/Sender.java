@@ -22,6 +22,8 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
@@ -49,6 +51,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -169,9 +172,9 @@ public class Sender implements Runnable {
                     "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
 
             // okay we stopped accepting requests but there may still be requests in the accumulator
-            // or waiting for acknowledgment, wait until these are completed.
-            // TODO Check the in flight request count in the accumulator.
-            while (!forceClose && ((accumulator.hasUnDrained()))) {
+            // or waiting for acknowledgment, wait until these are completed. Checking incomplete
+            // rather than undrained batches keeps sending retries of in-flight batches.
+            while (!forceClose && accumulator.hasIncomplete()) {
                 try {
                     runOnce();
                 } catch (Exception e) {
@@ -186,13 +189,21 @@ public class Sender implements Runnable {
                 Throwable t = fatalError.get();
                 if (t != null) {
                     maybeAbortBatches(t);
+                } else if (forceClose) {
+                    // Nothing sends or retries after force close, so fail the remaining writes.
+                    if (accumulator.hasIncomplete()) {
+                        LOG.warn(
+                                "Failing incomplete write batches since the writer was force closed.");
+                    }
+                    abortAllBatches(
+                            new FlussRuntimeException(
+                                    "Writer was force closed before the write completed."));
                 }
             } finally {
                 destroyResources();
             }
         }
 
-        // TODO if force close failed, add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
     }
 
@@ -342,11 +353,15 @@ public class Sender implements Runnable {
     }
 
     private void maybeAbortBatches(Throwable t) {
+        if (accumulator.hasIncomplete()) {
+            LOG.error("Aborting write batches due to fatal error", t);
+        }
+        abortAllBatches(ExceptionUtils.toException(t));
+    }
+
+    private void abortAllBatches(Exception reason) {
         try {
-            if (accumulator.hasIncomplete()) {
-                LOG.error("Aborting write batches due to fatal error", t);
-                accumulator.abortAllBatches(ExceptionUtils.toException(t));
-            }
+            accumulator.abortAllBatches(reason);
         } finally {
             synchronized (inFlightBatchesLock) {
                 inFlightBatches.clear();
@@ -386,6 +401,11 @@ public class Sender implements Runnable {
     private void maybeRemoveAndDeallocateBatch(ReadyWriteBatch readyWriteBatch) {
         maybeRemoveFromInflightBatches(readyWriteBatch);
         accumulator.deallocate(readyWriteBatch.writeBatch());
+        // The shutdown loop may be waiting for the next ready check with nothing left to send, so
+        // wake it up to exit once the last batch completes instead of after the batch timeout.
+        if (!running && !accumulator.hasIncomplete()) {
+            wakeup();
+        }
     }
 
     private void maybeRemoveFromInflightBatches(ReadyWriteBatch batch) {
@@ -732,8 +752,9 @@ public class Sender implements Runnable {
         // Historical queues use the original path as their accumulator key, so capture the actual
         // RPC target before any retry handling.
         PhysicalTablePath writeTargetPath = writeBatch.writeTargetPath();
-        if (error.exception() instanceof StorageBackpressureException) {
-            // Hard rejection: the storage engine reached its slowdown trigger and rejected the
+        if (error.exception() instanceof StorageBackpressureException
+                || error.exception() instanceof HistoricalPartitionThrottledException) {
+            // Hard rejection: the storage engine or historical request queue rejected the
             // write. Map it to full pressure (internal hard-rejection value 1.0f) so the bucket is
             // stalled for the configured max throttle window before the standard retry path
             // re-enqueues the batch.
@@ -852,6 +873,8 @@ public class Sender implements Runnable {
             if (!accumulator.isHistoricalPartitionEnabled(targetPath.getTablePath())) {
                 continue;
             }
+            metadataUpdater.invalidPhysicalTableBucketAndPartitionMeta(
+                    Collections.singleton(targetPath));
             try {
                 metadataUpdater.checkAndUpdatePartitionMetadata(targetPath);
             } catch (Exception e) {
@@ -1000,13 +1023,13 @@ public class Sender implements Runnable {
                         });
     }
 
-    /** Closes the sender without sending out any pending messages. */
+    /** Closes the sender without sending out pending messages, failing their writes. */
     public void forceClose() {
         forceClose = true;
         initiateClose();
     }
 
-    /** Start closing the sender (won't actually complete until all data is sent out). */
+    /** Start closing the sender (won't actually complete until all pending writes complete). */
     public void initiateClose() {
         // Ensure accumulator is closed first to guarantee that no more appends are accepted after
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.

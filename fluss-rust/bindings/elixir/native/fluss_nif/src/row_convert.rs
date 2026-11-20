@@ -398,6 +398,18 @@ pub fn term_to_column_name(term: Term<'_>) -> Result<String, String> {
     }
 }
 
+/// Core accepts a repeated column; `[0, 0]` would then expect two values for one column.
+/// Indices must be in range.
+pub fn check_distinct_columns(columns: &[Column], indices: &[usize]) -> Result<(), String> {
+    let mut seen = vec![false; columns.len()];
+    for &idx in indices {
+        if std::mem::replace(&mut seen[idx], true) {
+            return Err(format!("duplicate target column `{}`", columns[idx].name()));
+        }
+    }
+    Ok(())
+}
+
 fn target_column_names(columns: &[Column], targets: &[usize]) -> Vec<String> {
     targets
         .iter()

@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
@@ -30,6 +31,8 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +54,7 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchCollector}. */
 public class LogFetchCollectorTest {
@@ -84,6 +88,38 @@ public class LogFetchCollectorTest {
             readContext.close();
             readContext = null;
         }
+    }
+
+    @Test
+    void testFilteredRecordsRespectPollLimitAndAdvanceOffsets() throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchCollector =
+                new LogFetchCollector(
+                        logScannerStatus,
+                        new Configuration()
+                                .set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 3),
+                        new TestingMetadataUpdater(
+                                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO)));
+        CompletedFetch fetch =
+                makeCompletedFetch(
+                        bucket,
+                        FetchLogResultForBucket.records(
+                                bucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
+                        0L);
+        logFetchBuffer.add(fetch);
+        logFetchCollector.setRecordFilter((ignored, record) -> false);
+        ScanRecords first = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(first.records(bucket)).isEmpty();
+        assertThat(first.consumedUpToOffset(bucket)).isEqualTo(3L);
+        assertThat(first.hasProgress()).isTrue();
+        assertThat(logScannerStatus.getBucketOffset(bucket)).isEqualTo(3L);
+
+        logFetchCollector.setRecordFilter(null);
+        ScanRecords second = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(second.records(bucket))
+                .extracting(ScanRecord::logOffset)
+                .containsExactly(3L, 4L, 5L);
+        assertThat(second.consumedUpToOffset(bucket)).isEqualTo(6L);
     }
 
     @Test
@@ -268,6 +304,52 @@ public class LogFetchCollectorTest {
         // Empty record list, but bucket exposed via buckets() with an advanced consumedUpToOffset.
         assertThat(scanRecords.buckets()).contains(tb);
         assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
+    }
+
+    @Test
+    void testCollectFetchSkipsLeaderNotAvailable() throws Exception {
+        TableBucket failedBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket healthyBucket = new TableBucket(DATA1_TABLE_ID, 1);
+        CompletedFetch failedFetch =
+                makeCompletedFetch(
+                        failedBucket,
+                        FetchLogResultForBucket.error(
+                                failedBucket,
+                                new ApiError(
+                                        Errors.LEADER_NOT_AVAILABLE_EXCEPTION, "mock fetch error")),
+                        0L);
+        CompletedFetch healthyFetch =
+                makeCompletedFetch(
+                        healthyBucket,
+                        FetchLogResultForBucket.records(
+                                healthyBucket, genMemoryLogRecordsByObject(DATA1), 10L, -1L, -1L),
+                        0L);
+        logFetchBuffer.add(failedFetch);
+        logFetchBuffer.add(healthyFetch);
+
+        ScanRecords scanRecords = logFetchCollector.collectFetch(logFetchBuffer);
+
+        assertThat(scanRecords.buckets()).containsExactly(healthyBucket);
+        assertThat(scanRecords.records(healthyBucket)).hasSize(10);
+        assertThat(logFetchBuffer.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testCollectFetchFailsOnInvalidBucketRouting() {
+        // The bucket count of a table or partition never changes, so a routing mismatch is a
+        // contract violation rather than stale metadata, and must not be retried silently.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        logFetchBuffer.add(
+                makeCompletedFetch(
+                        tb,
+                        FetchLogResultForBucket.error(
+                                tb,
+                                new ApiError(Errors.INVALID_BUCKET_ROUTING, "mock fetch error")),
+                        0L));
+
+        assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
+                .isInstanceOf(FetchException.class)
+                .hasMessageContaining("INVALID_BUCKET_ROUTING");
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

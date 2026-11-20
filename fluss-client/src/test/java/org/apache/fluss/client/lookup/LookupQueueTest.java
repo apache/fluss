@@ -19,6 +19,7 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.Test;
 
@@ -116,6 +117,44 @@ class LookupQueueTest {
 
         assertThat(queue.drain()).hasSize(1);
         assertThat(queue.hasUnDrained()).isFalse();
+    }
+
+    @Test
+    void testDrainHoldsReEnqueuedLookupUntilItsRetryTime() throws Exception {
+        Configuration conf = new Configuration();
+        conf.setString(CLIENT_LOOKUP_BATCH_TIMEOUT.key(), "1ms");
+        ManualClock clock = new ManualClock(1_000);
+        LookupQueue queue = new LookupQueue(conf, clock);
+
+        LookupQuery lookup =
+                new LookupQuery(DATA1_TABLE_PATH_PK, new TableBucket(1, 1), new byte[] {0});
+        lookup.setNextRetryTimeMs(1_100);
+        queue.reEnqueue(lookup);
+
+        // The retry time is checked against the queue's clock, not the wall clock.
+        clock.advanceTime(99, TimeUnit.MILLISECONDS);
+        assertThat(queue.drain()).isEmpty();
+        assertThat(queue.getReEnqueuedLookupQueue()).containsExactly(lookup);
+
+        clock.advanceTime(1, TimeUnit.MILLISECONDS);
+        assertThat(queue.drain()).containsExactly(lookup);
+        assertThat(queue.hasUnDrained()).isFalse();
+    }
+
+    @Test
+    void testAppendOnDrainingThreadDoesNotWaitForSpace() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(CLIENT_LOOKUP_QUEUE_SIZE, 2);
+        conf.setString(CLIENT_LOOKUP_BATCH_TIMEOUT.key(), "1ms");
+        LookupQueue queue = new LookupQueue(conf);
+
+        // Draining makes this thread the draining thread, like the sender thread. Its lookups,
+        // e.g. from completion callbacks, don't wait for space, as only it drains the queue.
+        assertThat(queue.drain()).isEmpty();
+        appendLookups(queue, 3);
+        assertThat(queue.getLookupQueue()).hasSize(2);
+        assertThat(queue.getReEnqueuedLookupQueue()).hasSize(1);
+        assertThat(queue.drainAll()).hasSize(3);
     }
 
     private static void appendLookups(LookupQueue queue, int count) {

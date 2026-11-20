@@ -573,7 +573,8 @@ public final class KvWriteProcessor {
                                 Integer.MAX_VALUE,
                                 rowType,
                                 arrowCompressionInfo),
-                        memorySegmentPool);
+                        memorySegmentPool,
+                        false);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }

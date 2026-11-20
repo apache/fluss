@@ -495,6 +495,8 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeCatalog.Context</exclude>
                                         <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
                                         <exclude>
                                             org.apache.fluss.lake.lakestorage.LakeTableLookuper

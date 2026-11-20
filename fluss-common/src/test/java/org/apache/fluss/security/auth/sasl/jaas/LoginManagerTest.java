@@ -96,13 +96,12 @@ public class LoginManagerTest {
             assertThat(LoginManager.acquireLoginManager(jaasContext)).isEqualTo(loginManager);
         }
 
-        // Release all references and verify that new LoginManager is created on next acquire
-        for (int i = 0; i < 2; i++) {
-            // release all references
+        // Release all references and verify that a new LoginManager is created on next acquire.
+        for (int i = 0; i < acquireCount; i++) {
             loginManager.release();
-            LoginManager newLoginManager = LoginManager.acquireLoginManager(jaasContext);
-            assertThat(newLoginManager).isEqualTo(loginManager);
-            newLoginManager.release();
         }
+        LoginManager newLoginManager = LoginManager.acquireLoginManager(jaasContext);
+        assertThat(newLoginManager).isNotSameAs(loginManager);
+        newLoginManager.release();
     }
 }

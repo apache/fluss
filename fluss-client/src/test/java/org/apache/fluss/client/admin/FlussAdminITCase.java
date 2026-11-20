@@ -84,13 +84,19 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils.RestartScenario;
+import org.apache.fluss.server.testutils.TestingServerRestartUtils.RestartTarget;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.annotation.Nullable;
 
@@ -129,6 +135,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 /**
  * Integration tests for {@link FlussAdmin}.
@@ -138,7 +145,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FlussAdminITCase extends ClientToServerITCaseBase {
 
-    protected static final TablePath DEFAULT_TABLE_PATH = TablePath.of("test_db", "person");
     protected static final Schema DEFAULT_SCHEMA =
             Schema.newBuilder()
                     .primaryKey("id")
@@ -158,11 +164,15 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                     .customProperty("connector", "fluss")
                     .build();
 
+    protected final TestTableNames tableNames = new TestTableNames();
+
+    protected final TablePath defaultTablePath = tableNames.tablePath("test_db", "person");
+
     @BeforeEach
     protected void setup() throws Exception {
         super.setup();
         // create a default table in fluss.
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_TABLE_DESCRIPTOR, false);
+        createTable(defaultTablePath, DEFAULT_TABLE_DESCRIPTOR, false);
     }
 
     @Test
@@ -170,8 +180,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         Admin admin1 = conn.getAdmin();
         Admin admin2 = conn.getAdmin();
         assertThat(admin1).isEqualTo(admin2);
-        TableInfo t1 = admin1.getTableInfo(DEFAULT_TABLE_PATH).get();
-        TableInfo t2 = admin2.getTableInfo(DEFAULT_TABLE_PATH).get();
+        TableInfo t1 = admin1.getTableInfo(defaultTablePath).get();
+        TableInfo t2 = admin2.getTableInfo(defaultTablePath).get();
         assertThat(t1).isEqualTo(t2);
         admin1.close();
         admin2.close();
@@ -289,14 +299,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testGetTableInfoAndSchema() throws Exception {
-        SchemaInfo schemaInfo = admin.getTableSchema(DEFAULT_TABLE_PATH).get();
+        SchemaInfo schemaInfo = admin.getTableSchema(defaultTablePath).get();
         assertThat(schemaInfo.getSchema()).isEqualTo(DEFAULT_SCHEMA);
         assertThat(schemaInfo.getSchemaId()).isEqualTo(1);
-        SchemaInfo schemaInfo2 = admin.getTableSchema(DEFAULT_TABLE_PATH, 1).get();
+        SchemaInfo schemaInfo2 = admin.getTableSchema(defaultTablePath, 1).get();
 
         // get default table.
         long timestampAfterCreate = System.currentTimeMillis();
-        TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
+        TableInfo tableInfo = admin.getTableInfo(defaultTablePath).get();
         assertThat(tableInfo.getSchemaId()).isEqualTo(schemaInfo.getSchemaId());
         TableDescriptor tableDescriptor =
                 DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3).withDataLakeFormat(PAIMON);
@@ -310,17 +320,23 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo.getCreatedTime()).isLessThan(timestampAfterCreate);
 
         // unknown table
-        assertThatThrownBy(() -> admin.getTableInfo(TablePath.of("test_db", "unknown_table")).get())
+        assertThatThrownBy(
+                        () ->
+                                admin.getTableInfo(tableNames.tablePath("test_db", "unknown_table"))
+                                        .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
         assertThatThrownBy(
-                        () -> admin.getTableSchema(TablePath.of("test_db", "unknown_table")).get())
+                        () ->
+                                admin.getTableSchema(
+                                                tableNames.tablePath("test_db", "unknown_table"))
+                                        .get())
                 .cause()
                 .isInstanceOf(SchemaNotExistException.class);
 
         // create and get a new table
         long timestampBeforeCreate = System.currentTimeMillis();
-        TablePath tablePath = TablePath.of("test_db", "table_2");
+        TablePath tablePath = tableNames.tablePath("test_db", "table_2");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
         tableInfo = admin.getTableInfo(tablePath).get();
         timestampAfterCreate = System.currentTimeMillis();
@@ -338,7 +354,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
 
         // test sensitive lake catalog properties have been removed
-        tablePath = TablePath.of("test_db", "lake_table");
+        tablePath = tableNames.tablePath("test_db", "lake_table");
         admin.createTable(
                         tablePath,
                         DEFAULT_TABLE_DESCRIPTOR.withProperties(
@@ -358,7 +374,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testAlterTableConfig() throws Exception {
         // create table
-        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        TablePath tablePath = tableNames.tablePath("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
 
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
@@ -400,21 +416,25 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(
                         () ->
                                 admin.alterTable(
-                                                TablePath.of("test_db", "alter_table_not_exist"),
+                                                tableNames.tablePath(
+                                                        "test_db", "alter_table_not_exist"),
                                                 tableChanges,
                                                 false)
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
         // should success if ignore not exist
-        admin.alterTable(TablePath.of("test_db", "alter_table_not_exist"), tableChanges, true)
+        admin.alterTable(
+                        tableNames.tablePath("test_db", "alter_table_not_exist"),
+                        tableChanges,
+                        true)
                 .get();
 
         // throw exception if database not exist
         assertThatThrownBy(
                         () ->
                                 admin.alterTable(
-                                                TablePath.of(
+                                                tableNames.tablePath(
                                                         "test_db_not_exist",
                                                         "alter_table_not_exist"),
                                                 tableChanges,
@@ -424,7 +444,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(TableNotExistException.class);
         // should success if ignore not exist
         admin.alterTable(
-                        TablePath.of("test_db_not_exist", "alter_table_not_exist"),
+                        tableNames.tablePath("test_db_not_exist", "alter_table_not_exist"),
                         tableChanges,
                         true)
                 .get();
@@ -432,7 +452,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAlterTableLogTtl() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "alter_table_log_ttl");
+        TablePath tablePath = tableNames.tablePath("test_db", "alter_table_log_ttl");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
         // verify initial value matches DEFAULT_TABLE_DESCRIPTOR (1 day)
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
@@ -470,7 +490,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAlterTableColumn() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        TablePath tablePath = tableNames.tablePath("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
 
         assertThatThrownBy(
@@ -612,7 +632,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAlterAggregationTableColumnWithAggFunction() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "alter_aggregation_table_column");
+        TablePath tablePath = tableNames.tablePath("test_db", "alter_aggregation_table_column");
         Map<String, String> properties = new HashMap<>();
         properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         TableDescriptor tableDescriptor =
@@ -657,7 +677,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAlterNonAggregationTableColumnWithAggFunction() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "alter_non_aggregation_table_column");
+        TablePath tablePath = tableNames.tablePath("test_db", "alter_non_aggregation_table_column");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
 
         assertThatThrownBy(
@@ -731,7 +751,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testCreateTableWithDeleteBehavior() {
         // Test 1: FIRST_ROW merge engine - should set delete behavior to IGNORE
-        TablePath tablePath1 = TablePath.of("fluss", "test_ignore_delete_for_first_row");
+        TablePath tablePath1 = tableNames.tablePath("fluss", "test_ignore_delete_for_first_row");
         Map<String, String> properties1 = new HashMap<>();
         properties1.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
 
@@ -748,7 +768,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo1.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
 
         // Test 2: VERSIONED merge engine - should set delete behavior to IGNORE
-        TablePath tablePath2 = TablePath.of("fluss", "test_ignore_delete_for_versioned");
+        TablePath tablePath2 = tableNames.tablePath("fluss", "test_ignore_delete_for_versioned");
         Map<String, String> properties2 = new HashMap<>();
         properties2.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
         properties2.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "age");
@@ -764,7 +784,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo2.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
 
         // Test 2.5: AGGREGATION merge engine - should set delete behavior to IGNORE
-        TablePath tablePathAggregate = TablePath.of("fluss", "test_ignore_delete_for_aggregate");
+        TablePath tablePathAggregate =
+                tableNames.tablePath("fluss", "test_ignore_delete_for_aggregate");
         Schema aggregateSchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -794,7 +815,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
         // be allowed
         TablePath tablePathAggregateAllow =
-                TablePath.of("fluss", "test_allow_delete_for_aggregate");
+                tableNames.tablePath("fluss", "test_allow_delete_for_aggregate");
         Map<String, String> propertiesAggregateAllow = new HashMap<>();
         propertiesAggregateAllow.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         propertiesAggregateAllow.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
@@ -811,7 +832,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasValue(DeleteBehavior.ALLOW);
 
         // Test 3: FIRST_ROW merge engine with delete behavior explicitly set to ALLOW
-        TablePath tablePath3 = TablePath.of("fluss", "test_allow_delete_for_first_row");
+        TablePath tablePath3 = tableNames.tablePath("fluss", "test_allow_delete_for_first_row");
         Map<String, String> properties3 = new HashMap<>();
         properties3.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
         properties3.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
@@ -828,7 +849,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
 
         // Test 4: VERSIONED merge engine with delete behavior explicitly set to ALLOW
-        TablePath tablePath4 = TablePath.of("fluss", "test_allow_delete_for_versioned");
+        TablePath tablePath4 = tableNames.tablePath("fluss", "test_allow_delete_for_versioned");
         Map<String, String> properties4 = new HashMap<>();
         properties4.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
         properties4.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "age");
@@ -846,7 +867,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
 
         // Test 5: Log table - not allow to set delete behavior
-        TablePath tablePath5 = TablePath.of("fluss", "test_set_delete_behavior_for_log_table");
+        TablePath tablePath5 =
+                tableNames.tablePath("fluss", "test_set_delete_behavior_for_log_table");
         Map<String, String> properties5 = new HashMap<>();
         properties5.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "IGNORE");
         TableDescriptor tableDescriptor5 =
@@ -863,7 +885,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCreateTableWithInvalidProperty() {
-        TablePath tablePath = TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "test_property");
+        TablePath tablePath =
+                tableNames.tablePath(defaultTablePath.getDatabaseName(), "test_property");
         TableDescriptor t1 =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
@@ -993,8 +1016,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testCreateTableWithLocalTtlAndInfiniteRemoteTtl() throws Exception {
         TablePath tablePath =
-                TablePath.of(
-                        DEFAULT_TABLE_PATH.getDatabaseName(),
+                tableNames.tablePath(
+                        defaultTablePath.getDatabaseName(),
                         "test_local_ttl_with_infinite_remote_ttl");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -1010,7 +1033,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCreateTableWithInvalidReplicationFactor() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "t1");
+        TablePath tablePath = tableNames.tablePath(defaultTablePath.getDatabaseName(), "t1");
         // set replica factor to a non positive number, should also throw exception
         TableDescriptor nonPositiveReplicaFactorTable =
                 TableDescriptor.builder()
@@ -1059,7 +1082,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // recreate the connection because the metadata of tablet server has changed
         try (Connection conn = ConnectionFactory.createConnection(clientConf);
                 Admin admin = conn.getAdmin()) {
-            TableInfo tableInfo = admin.getTableInfo(DEFAULT_TABLE_PATH).get();
+            TableInfo tableInfo = admin.getTableInfo(defaultTablePath).get();
             TableDescriptor expected =
                     DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(3).withDataLakeFormat(PAIMON);
             Map<String, String> options = new HashMap<>(expected.getProperties());
@@ -1071,17 +1094,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCreateExistedTable() throws Exception {
-        assertThatThrownBy(() -> createTable(DEFAULT_TABLE_PATH, DEFAULT_TABLE_DESCRIPTOR, false))
+        assertThatThrownBy(() -> createTable(defaultTablePath, DEFAULT_TABLE_DESCRIPTOR, false))
                 .cause()
                 .isInstanceOf(DatabaseAlreadyExistException.class);
         // no exception
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_TABLE_DESCRIPTOR, true);
+        createTable(defaultTablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // database not exists, throw exception
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
-                                                TablePath.of("unknown_db", "test"),
+                                                tableNames.tablePath("unknown_db", "test"),
                                                 DEFAULT_TABLE_DESCRIPTOR,
                                                 true)
                                         .get())
@@ -1110,23 +1133,25 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.databaseExists("test_db").get()).isFalse();
 
         // re-create.
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_TABLE_DESCRIPTOR, false);
+        createTable(defaultTablePath, DEFAULT_TABLE_DESCRIPTOR, false);
 
         // drop not existed table with ignoreIfNotExists false.
         assertThatThrownBy(
                         () ->
-                                admin.dropTable(TablePath.of("test_db", "unknown_table"), false)
+                                admin.dropTable(
+                                                tableNames.tablePath("test_db", "unknown_table"),
+                                                false)
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
 
         // drop not existed table with ignoreIfNotExists true.
-        admin.dropTable(TablePath.of("test_db", "unknown_table"), true).get();
+        admin.dropTable(tableNames.tablePath("test_db", "unknown_table"), true).get();
 
         // drop existed table.
-        assertThat(admin.tableExists(DEFAULT_TABLE_PATH).get()).isTrue();
-        admin.dropTable(DEFAULT_TABLE_PATH, true).get();
-        assertThat(admin.tableExists(DEFAULT_TABLE_PATH).get()).isFalse();
+        assertThat(admin.tableExists(defaultTablePath).get()).isTrue();
+        admin.dropTable(defaultTablePath, true).get();
+        assertThat(admin.tableExists(defaultTablePath).get()).isFalse();
     }
 
     @Test
@@ -1145,9 +1170,13 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(databaseSummaries.get("db1")).isEqualTo(0);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
-        admin.createTable(TablePath.of("db1", "table1"), DEFAULT_TABLE_DESCRIPTOR, true).get();
-        admin.createTable(TablePath.of("db1", "table2"), DEFAULT_TABLE_DESCRIPTOR, true).get();
-        assertThat(admin.listTables("db1").get()).containsExactlyInAnyOrder("table1", "table2");
+        admin.createTable(tableNames.tablePath("db1", "table1"), DEFAULT_TABLE_DESCRIPTOR, true)
+                .get();
+        admin.createTable(tableNames.tablePath("db1", "table2"), DEFAULT_TABLE_DESCRIPTOR, true)
+                .get();
+        assertThat(admin.listTables("db1").get())
+                .containsExactlyInAnyOrder(
+                        tableNames.tableName("table1"), tableNames.tableName("table2"));
         assertThat(admin.listTables("db2").get()).isEmpty();
         databaseSummaries =
                 admin.listDatabaseSummaries().get().stream()
@@ -1163,10 +1192,40 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(DatabaseNotExistException.class);
     }
 
-    @Test
-    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
-        TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testCreateTableAfterCoordinatorServerRestart(RestartScenario restartScenario)
+            throws Exception {
+        TablePath tablePath =
+                tableNames.tablePath(
+                        defaultTablePath.getDatabaseName(),
+                        "test_create_table_after_coordinator_server_restart");
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
+        if (restartScenario == RestartScenario.NEW_PORT) {
+            assertThatThrownBy(
+                            () ->
+                                    admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false)
+                                            .get())
+                    .isInstanceOf(ExecutionException.class)
+                    .hasCauseInstanceOf(NetworkException.class);
+            assertThat(zkClient.tableExist(tablePath)).isFalse();
+        }
+
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true).get();
+        assertThat(zkClient.tableExist(tablePath)).isTrue();
+    }
+
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testListPartitionInfosAfterTabletServerRestart(RestartScenario restartScenario)
+            throws Exception {
+        String dbName = defaultTablePath.getDatabaseName();
+        TablePath partitionedTablePath =
+                tableNames.tablePath(dbName, "test_retry_partitioned_table");
         admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
 
@@ -1175,12 +1234,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 admin.listPartitionInfos(partitionedTablePath).get();
         assertThat(partitionInfosBefore).isNotEmpty();
 
-        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
-        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
-            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
-            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
-        }
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.TABLET_SERVERS, restartScenario);
 
         // Second query using the same admin client should succeed after retry with metadata
         // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
@@ -1189,21 +1244,29 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
     }
 
-    @Test
-    void testKvSnapshotLeaseAfterCoordinatorServerRestart() throws Exception {
-        long tableId = admin.getTableInfo(DEFAULT_TABLE_PATH).get().getTableId();
+    @ParameterizedTest
+    @EnumSource(RestartScenario.class)
+    void testKvSnapshotLeaseAfterCoordinatorServerRestart(RestartScenario restartScenario)
+            throws Exception {
+        long tableId = admin.getTableInfo(defaultTablePath).get().getTableId();
         TableBucket tableBucket = new TableBucket(tableId, 0);
         Map<TableBucket, Long> snapshots = Collections.singletonMap(tableBucket, 0L);
-        KvSnapshotLease lease = admin.createKvSnapshotLease("test-retry-kv-snapshot-lease", 60000L);
+        KvSnapshotLease lease =
+                admin.createKvSnapshotLease(
+                        "test-retry-kv-snapshot-lease-" + restartScenario.name(), 60000L);
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
 
         // Restart the coordinator server so that the lease uses a stale cached address.
-        restartCoordinatorServer(zkClient);
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
         lease.acquireSnapshots(snapshots).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
         // Verify that release also refreshes metadata and retries against the new coordinator.
-        restartCoordinatorServer(zkClient);
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
+
         lease.releaseSnapshots(Collections.singleton(tableBucket)).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
 
@@ -1211,25 +1274,16 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         lease.acquireSnapshots(snapshots).get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isPresent();
 
-        restartCoordinatorServer(zkClient);
-        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        TestingServerRestartUtils.restartServers(
+                FLUSS_CLUSTER_EXTENSION, RestartTarget.COORDINATOR, restartScenario);
 
         lease.dropLease().get();
         assertThat(zkClient.getKvSnapshotLeaseMetadata(lease.leaseId())).isNotPresent();
     }
 
-    private void restartCoordinatorServer(ZooKeeperClient zkClient) throws Exception {
-        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
-        waitUntil(
-                () -> !zkClient.getCoordinatorLeaderAddress().isPresent(),
-                Duration.ofMinutes(1),
-                "Coordinator server node still exists in ZooKeeper");
-        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
-    }
-
     @Test
     void testListPartitionInfosByPartitionSpec() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
 
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
@@ -1244,7 +1298,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(3, "id")
                         .partitionedBy("pt", "secondary_partition")
                         .build();
-        TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
+        TablePath partitionedTablePath = tableNames.tablePath(dbName, "test_partitioned_table");
         // create table
         admin.createTable(partitionedTablePath, partitionedTable, true).get();
         // add three partitions.
@@ -1302,7 +1356,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testGetKvSnapshot() throws Exception {
         TablePath tablePath1 =
-                TablePath.of(DEFAULT_TABLE_PATH.getDatabaseName(), "test-table-snapshot");
+                tableNames.tablePath(defaultTablePath.getDatabaseName(), "test-table-snapshot");
         int bucketNum = 3;
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -1365,7 +1419,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAddAndDropPartitions() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
                         .schema(
@@ -1377,7 +1431,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(3, "id")
                         .partitionedBy("age")
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table");
+        TablePath tablePath = tableNames.tablePath(dbName, "test_add_and_drop_partitioned_table");
         admin.createTable(tablePath, partitionedTable, true).get();
         assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Collections.emptyList());
 
@@ -1410,25 +1464,31 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(
                         () ->
                                 admin.createPartition(
-                                                TablePath.of("unknown_db", "unknown_table"),
+                                                tableNames.tablePath("unknown_db", "unknown_table"),
                                                 newPartitionSpec("age", "10"),
                                                 false)
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessageContaining("Table 'unknown_db.unknown_table' does not exist.");
+                .hasMessageContaining(
+                        ("Table '"
+                                + tableNames.tablePath("unknown_db", "unknown_table").toString()
+                                + "' does not exist."));
 
         // test drop partition for a not existed table.
         assertThatThrownBy(
                         () ->
                                 admin.dropPartition(
-                                                TablePath.of("unknown_db", "unknown_table"),
+                                                tableNames.tablePath("unknown_db", "unknown_table"),
                                                 newPartitionSpec("age", "10"),
                                                 false)
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessageContaining("Table 'unknown_db.unknown_table' does not exist.");
+                .hasMessageContaining(
+                        ("Table '"
+                                + tableNames.tablePath("unknown_db", "unknown_table").toString()
+                                + "' does not exist."));
 
         // test create partition already exists with ignoreIfNotExists = false.
         assertThatThrownBy(
@@ -1438,8 +1498,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(PartitionAlreadyExistsException.class)
-                .hasMessageContaining(
-                        "Partition 'age=11' already exists for table test_db.test_add_and_drop_partitioned_table");
+                .hasMessageContaining("Partition 'age=11' already exists for table " + tablePath);
 
         // test drop partition not-exists with ignoreIfNotExists = false.
         assertThatThrownBy(
@@ -1448,8 +1507,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
-                .hasMessageContaining(
-                        "Partition 'age=13' does not exist for table test_db.test_add_and_drop_partitioned_table");
+                .hasMessageContaining("Partition 'age=13' does not exist for table " + tablePath);
 
         // test create partition with illegal value.
         assertThatThrownBy(
@@ -1473,12 +1531,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
                         "PartitionSpec PartitionSpec{{name=10}} does not contain "
-                                + "partition key 'age' for partitioned table test_db.test_add_and_drop_partitioned_table.");
+                                + "partition key 'age' for partitioned table "
+                                + tablePath
+                                + ".");
     }
 
     @Test
     void testAddAndDropPartitionsForAutoPartitionedTable() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
                         .schema(
@@ -1494,7 +1554,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table_1");
+        TablePath tablePath = tableNames.tablePath(dbName, "test_add_and_drop_partitioned_table_1");
         admin.createTable(tablePath, partitionedTable, true).get();
         // wait all auto partitions created.
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
@@ -1534,7 +1594,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTimeFormatOptionForAutoPartitionedTable() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
 
         TableDescriptor nonDayTable =
                 TableDescriptor.builder()
@@ -1554,7 +1614,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
-                                                TablePath.of(
+                                                tableNames.tablePath(
                                                         dbName,
                                                         "test_invalid_auto_partition_day_format_non_day"),
                                                 nonDayTable,
@@ -1578,7 +1638,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
                         .build();
         admin.createTable(
-                        TablePath.of(dbName, "test_auto_partition_time_format_disabled"),
+                        tableNames.tablePath(dbName, "test_auto_partition_time_format_disabled"),
                         disabledAutoPartitionTable,
                         false)
                 .get();
@@ -1600,7 +1660,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
-                                                TablePath.of(
+                                                tableNames.tablePath(
                                                         dbName,
                                                         "test_invalid_auto_partition_day_format_date_key"),
                                                 datePartitionKeyWithCompactDayFormat,
@@ -1629,7 +1689,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
-                                                TablePath.of(
+                                                tableNames.tablePath(
                                                         dbName,
                                                         "test_invalid_auto_partition_month_unit_date_key"),
                                                 datePartitionKeyWithMonthUnit,
@@ -1656,7 +1716,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 AutoPartitionTimeUnit.DAY)
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT, "yyyy-MM-dd")
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_invalid_auto_partition_day_format_alter");
+        TablePath tablePath =
+                tableNames.tablePath(dbName, "test_invalid_auto_partition_day_format_alter");
         admin.createTable(tablePath, validDashedDayFormatTable, false).get();
 
         assertThatThrownBy(
@@ -1708,7 +1769,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 AutoPartitionTimeUnit.DAY)
                         .build();
         TablePath disabledDateDayTablePath =
-                TablePath.of(dbName, "test_invalid_auto_partition_day_format_enable");
+                tableNames.tablePath(dbName, "test_invalid_auto_partition_day_format_enable");
         admin.createTable(disabledDateDayTablePath, disabledDateDayTable, false).get();
 
         assertThatThrownBy(
@@ -1732,7 +1793,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCreateInvalidPartitionForAutoPartitionedTable() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
         // numToRetain defaults to 7; with DAY unit, anything older than (today - 7 days) is
         // out-of-date.
         TableDescriptor partitionedTable =
@@ -1750,7 +1811,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.DAY)
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_create_invalid_partition_auto_table");
+        TablePath tablePath =
+                tableNames.tablePath(dbName, "test_create_invalid_partition_auto_table");
         admin.createTable(tablePath, partitionedTable, true).get();
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 
@@ -1811,23 +1873,23 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                             false)
                     .get();
             newAdmin.createTable(
-                            TablePath.of(dbName, "test_table_1"),
+                            tableNames.tablePath(dbName, "test_table_1"),
                             TableDescriptor.builder().schema(Schema.newBuilder().build()).build(),
                             false)
                     .get();
             assertThat(newAdmin.getDatabaseInfo(dbName).get().getDatabaseName()).isEqualTo(dbName);
             assertThat(
-                            newAdmin.getTableInfo(TablePath.of(dbName, "test_table_1"))
+                            newAdmin.getTableInfo(tableNames.tablePath(dbName, "test_table_1"))
                                     .get()
                                     .getTablePath()
                                     .getTableName())
-                    .isEqualTo("test_table_1");
+                    .isEqualTo(tableNames.tableName("test_table_1"));
         }
     }
 
     @Test
     void testAddTooManyPartitions() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
                         .schema(
@@ -1839,7 +1901,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(3, "id")
                         .partitionedBy("age")
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_add_too_many_partitioned_table");
+        TablePath tablePath = tableNames.tablePath(dbName, "test_add_too_many_partitioned_table");
         admin.createTable(tablePath, partitionedTable, true).get();
 
         // add 10 partitions.
@@ -1889,7 +1951,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         "test-warehouse",
                                         AlterConfigOpType.SET)))
                 .get();
-        TablePath tablePath = TablePath.of("test_db", "test_table");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_table");
         createTable(
                 tablePath,
                 TableDescriptor.builder()
@@ -2036,7 +2098,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         int tableCount = 6;
         Map<String, Integer> dirUsageCount = new HashMap<>();
         for (int i = 0; i < tableCount; i++) {
-            TablePath tablePath = TablePath.of("test_db", "dynamic_rr_table_" + i);
+            TablePath tablePath = tableNames.tablePath("test_db", "dynamic_rr_table_" + i);
             createTable(
                     tablePath,
                     TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(1, "id").build(),
@@ -2130,7 +2192,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     public void testBucketLimitForPartitionedTableAppliesPerPartition() throws Exception {
         // Already set low maximum bucket limit to 30 for this test in ClientToServerITCaseBase
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
                         .schema(
@@ -2142,7 +2204,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(10, "id") // 10 buckets per partition
                         .partitionedBy("age")
                         .build();
-        TablePath tablePath = TablePath.of(dbName, "test_add_too_many_buckets_table");
+        TablePath tablePath = tableNames.tablePath(dbName, "test_add_too_many_buckets_table");
         admin.createTable(tablePath, partitionedTable, true).get();
 
         // Add 4 partitions. The total bucket count is 40, which is above the configured limit,
@@ -2165,7 +2227,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .partitionedBy("age")
                         .build();
         TablePath tooManyBucketsTablePath =
-                TablePath.of(dbName, "test_too_many_buckets_partitioned");
+                tableNames.tablePath(dbName, "test_too_many_buckets_partitioned");
 
         assertThatThrownBy(
                         () ->
@@ -2182,7 +2244,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     public void testBucketLimitForNonPartitionedTable() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
 
         TableDescriptor maxBucketsNonPartitionedTable =
                 TableDescriptor.builder()
@@ -2194,7 +2256,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .build())
                         .distributedBy(30, "id")
                         .build();
-        TablePath maxBucketsTablePath = TablePath.of(dbName, "test_max_buckets_non_partitioned");
+        TablePath maxBucketsTablePath =
+                tableNames.tablePath(dbName, "test_max_buckets_non_partitioned");
 
         admin.createTable(maxBucketsTablePath, maxBucketsNonPartitionedTable, false).get();
 
@@ -2209,7 +2272,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(31, "id")
                         .build();
         TablePath tooManyBucketsTablePath =
-                TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+                tableNames.tablePath(dbName, "test_too_many_buckets_non_partitioned");
 
         assertThatThrownBy(
                         () ->
@@ -2237,7 +2300,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         ConnectionFactory.createConnection(defaultLimitCluster.getClientConfig());
                 Admin defaultLimitAdmin = connection.getAdmin()) {
             String dbName = "test_default_bucket_limit_db";
-            TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_by_default");
+            TablePath tablePath = tableNames.tablePath(dbName, "test_too_many_buckets_by_default");
             TableDescriptor nonPartitionedTable =
                     TableDescriptor.builder()
                             .schema(
@@ -2266,7 +2329,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     /** Test that creating a table with system columns throws InvalidTableException. */
     @Test
     public void testSystemsColumns() throws Exception {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        String dbName = defaultTablePath.getDatabaseName();
 
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -2281,7 +2344,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .build())
                         .build();
 
-        TablePath tablePath = TablePath.of(dbName, "test_system_columns");
+        TablePath tablePath = tableNames.tablePath(dbName, "test_system_columns");
 
         // Creating this table should throw InvalidTableException
         assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
@@ -2306,7 +2369,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .distributedBy(1)
                         .build();
 
-        TablePath changelogTablePath = TablePath.of(dbName, "test_changelog_columns");
+        TablePath changelogTablePath = tableNames.tablePath(dbName, "test_changelog_columns");
 
         assertThatThrownBy(
                         () ->
@@ -2341,6 +2404,11 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(zkClient.getServerTags().get().getServerTags())
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        // describeCluster reports the same tags, and no tag for server 2
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .containsOnly(
+                        entry(0, ServerTag.PERMANENT_OFFLINE),
+                        entry(1, ServerTag.PERMANENT_OFFLINE));
 
         // 3.add different server tag for server 0,2. error will be thrown and tag for 2 will not be
         // added.
@@ -2360,6 +2428,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(serverTags)
                 .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .isEqualTo(serverTags);
 
         // 4.remove server tag for server 100
         admin.removeServerTag(Collections.singletonList(100), ServerTag.PERMANENT_OFFLINE).get();
@@ -2377,6 +2447,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
         assertThat(zkClient.getServerTags()).isNotPresent();
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .isEmpty();
 
         // restore after test, or else will influence other tests
         coordinatorContext.addLiveTabletServer(tmpServerInfo);
@@ -2395,12 +2467,23 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining(
                         "Server tag PERMANENT_OFFLINE not exists for server 2, the current "
                                 + "server tag of this server is TEMPORARY_OFFLINE.");
+        assertThat(serverTagsOf(admin.describeCluster().get().getTabletServers().values()))
+                .containsOnly(entry(2, ServerTag.TEMPORARY_OFFLINE));
+        // clear server tag
+        admin.removeServerTag(Collections.singletonList(2), ServerTag.TEMPORARY_OFFLINE).get();
+    }
+
+    /** Returns the server tags of the tagged server nodes by server id. */
+    private static Map<Integer, ServerTag> serverTagsOf(Collection<ServerNode> serverNodes) {
+        return serverNodes.stream()
+                .filter(node -> node.serverTag() != null)
+                .collect(Collectors.toMap(ServerNode::id, ServerNode::serverTag));
     }
 
     @Test
     void testAlterTableTieredLogLocalSegments() throws Exception {
         // 1. Create table with default config = 2
-        TablePath tablePath = TablePath.of("test_db", "test_alter_tiered_segments");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_alter_tiered_segments");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
@@ -2471,7 +2554,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAlterTableLocalLogTtl() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "test_alter_local_log_ttl");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_alter_local_log_ttl");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
@@ -2517,8 +2600,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     public void testCreateTableWithInvalidAggFunctionDataType() throws Exception {
         TablePath tablePath =
-                TablePath.of(
-                        DEFAULT_TABLE_PATH.getDatabaseName(),
+                tableNames.tablePath(
+                        defaultTablePath.getDatabaseName(),
                         "test_invalid_data_type_for_aggfunction");
         Map<String, String> propertiesAggregate = new HashMap<>();
         propertiesAggregate.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
@@ -2557,7 +2640,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .build();
 
         // Test 1: Aggregate + WAL should be rejected
-        TablePath tablePath1 = TablePath.of("fluss", "test_aggregate_wal_changelog_rejected");
+        TablePath tablePath1 =
+                tableNames.tablePath("fluss", "test_aggregate_wal_changelog_rejected");
         Map<String, String> properties1 = new HashMap<>();
         properties1.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         properties1.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
@@ -2576,7 +2660,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "Please set 'table.changelog.image' to 'FULL' or remove the setting.");
 
         // Test 2: Aggregate + FULL should be allowed
-        TablePath tablePath2 = TablePath.of("fluss", "test_aggregate_full_changelog_allowed");
+        TablePath tablePath2 =
+                tableNames.tablePath("fluss", "test_aggregate_full_changelog_allowed");
         Map<String, String> properties2 = new HashMap<>();
         properties2.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         properties2.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "FULL");
@@ -2590,7 +2675,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.tableExists(tablePath2).get()).isTrue();
 
         // Test 3: Aggregate + default (no explicit changelog image) should be allowed
-        TablePath tablePath3 = TablePath.of("fluss", "test_aggregate_default_changelog_allowed");
+        TablePath tablePath3 =
+                tableNames.tablePath("fluss", "test_aggregate_default_changelog_allowed");
         Map<String, String> properties3 = new HashMap<>();
         properties3.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
         // No explicit changelog image setting - defaults to FULL
@@ -2604,7 +2690,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.tableExists(tablePath3).get()).isTrue();
 
         // Test 4: WAL + no merge engine should be allowed
-        TablePath tablePath4 = TablePath.of("fluss", "test_wal_no_merge_engine_allowed");
+        TablePath tablePath4 = tableNames.tablePath("fluss", "test_wal_no_merge_engine_allowed");
         Map<String, String> properties4 = new HashMap<>();
         properties4.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
         // No merge engine setting
@@ -2618,7 +2704,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.tableExists(tablePath4).get()).isTrue();
 
         // Test 5: FIRST_ROW + WAL should be allowed
-        TablePath tablePath5 = TablePath.of("fluss", "test_first_row_wal_changelog_allowed");
+        TablePath tablePath5 =
+                tableNames.tablePath("fluss", "test_first_row_wal_changelog_allowed");
         Map<String, String> properties5 = new HashMap<>();
         properties5.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
         properties5.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
@@ -2632,7 +2719,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(admin.tableExists(tablePath5).get()).isTrue();
 
         // Test 6: VERSIONED + WAL should be allowed
-        TablePath tablePath6 = TablePath.of("fluss", "test_versioned_wal_changelog_allowed");
+        TablePath tablePath6 =
+                tableNames.tablePath("fluss", "test_versioned_wal_changelog_allowed");
         Map<String, String> properties6 = new HashMap<>();
         properties6.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
         properties6.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "age");
@@ -2649,7 +2737,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // Finish leader initialization before teardown deletes the schemas needed by KV recovery.
         for (TablePath tablePath :
                 Arrays.asList(
-                        DEFAULT_TABLE_PATH,
+                        defaultTablePath,
                         tablePath2,
                         tablePath3,
                         tablePath4,
@@ -2668,7 +2756,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testGetTableStatsForPrimaryKeyTableWithFailover() throws Exception {
         // Create a primary key table
-        TablePath tablePath = TablePath.of("test_db", "test_pk_table_stats");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_pk_table_stats");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
         long tableId = createTable(tablePath, tableDescriptor, true);
@@ -2734,7 +2822,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("age", DataTypes.INT())
                         .build();
-        TablePath tablePath = TablePath.of("test_db", "test_log_table_stats");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_log_table_stats");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(logTableSchema).distributedBy(3).build();
         long tableId = createTable(tablePath, tableDescriptor, true);
@@ -2765,7 +2853,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .column("name", DataTypes.STRING())
                         .column("dt", DataTypes.STRING())
                         .build();
-        TablePath tablePath = TablePath.of("test_db", "test_partitioned_table_stats");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_partitioned_table_stats");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(partitionedSchema)
@@ -2808,7 +2896,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testGetTableStatsForWalChangelogModeTable() throws Exception {
         // Create a primary key table with WAL changelog mode (row count disabled)
-        TablePath tablePath = TablePath.of("test_db", "test_wal_changelog_table_stats");
+        TablePath tablePath = tableNames.tablePath("test_db", "test_wal_changelog_table_stats");
         Map<String, String> properties = new HashMap<>();
         properties.put(ConfigOptions.TABLE_CHANGELOG_IMAGE.key(), "WAL");
         TableDescriptor tableDescriptor =
@@ -2838,7 +2926,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     @Test
     void testKvSnapshotLeaseForLogTable() throws Exception {
         // Create a log table (without primary key)
-        TablePath logTablePath = TablePath.of("test_db", "test_log_table_kv_lease");
+        TablePath logTablePath = tableNames.tablePath("test_db", "test_log_table_kv_lease");
         Schema logSchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -2915,7 +3003,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
     @Test
     void testClusterHealthDuringRollingUpgrade() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "health_test_table");
+        TablePath tablePath = tableNames.tablePath("test_db", "health_test_table");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
         long tableId = createTable(tablePath, tableDescriptor, true);

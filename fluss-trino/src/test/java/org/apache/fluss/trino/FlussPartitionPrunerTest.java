@@ -42,6 +42,7 @@ import java.util.Optional;
 import java.util.stream.Stream;
 
 import static io.airlift.slice.Slices.utf8Slice;
+import static io.airlift.slice.Slices.wrappedBuffer;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.CharType.createCharType;
@@ -71,6 +72,16 @@ final class FlussPartitionPrunerTest {
     @MethodSource("unsupportedValues")
     void testUnsupportedTypesAndMismatchedDomains(DataType type, Domain domain) {
         assertThat(extractValue(type, domain)).isEmpty();
+    }
+
+    @Test
+    void testMalformedUtf8DoesNotPrune() {
+        assertThat(
+                        extractValue(
+                                DataTypes.STRING(),
+                                Domain.singleValue(
+                                        VARCHAR, wrappedBuffer(new byte[] {(byte) 0xc3, 0x28}))))
+                .isEmpty();
     }
 
     @Test

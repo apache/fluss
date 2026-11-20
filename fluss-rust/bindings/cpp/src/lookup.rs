@@ -26,12 +26,75 @@ use fluss as fcore;
 use fluss::metadata::TableInfo;
 use fluss::row::GenericRow;
 use fluss::rpc::FlussError as CoreFlussError;
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::{Notify, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 
 use crate::{
     CLIENT_ERROR_CODE, GenericRowInner, LookupResultInner, Lookuper, PrefixLookupResultInner,
-    PrefixLookuper, RUNTIME, client_err_ptr, err_from_core_error, ffi, ok_ptr, types,
+    PrefixLookuper, QUEUE_FULL_ERROR_CODE, RUNTIME, client_err_ptr, err_from_core_error, ffi,
+    ok_ptr, types,
 };
+
+enum PollOutcome<T> {
+    Completion(T),
+    Empty,
+    Closed,
+}
+
+fn poll_receiver<T>(
+    receiver: &tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<T>>,
+    timeout_ms: i64,
+    idle: &Notify,
+    nothing_pending: impl Fn() -> bool,
+) -> PollOutcome<T>
+where
+    T: Send + 'static,
+{
+    RUNTIME.block_on(async {
+        if timeout_ms == 0 {
+            let Ok(mut receiver) = receiver.try_lock() else {
+                return PollOutcome::Empty;
+            };
+            return match receiver.try_recv() {
+                Ok(completion) => PollOutcome::Completion(completion),
+                Err(TryRecvError::Empty) => PollOutcome::Empty,
+                Err(TryRecvError::Disconnected) => PollOutcome::Closed,
+            };
+        }
+
+        let wait = async {
+            loop {
+                // Enabled before the check, so a notify right after it is not missed.
+                let notified = idle.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if timeout_ms < 0 && nothing_pending() {
+                    return PollOutcome::Empty;
+                }
+                let next = async {
+                    let mut receiver = receiver.lock().await;
+                    receiver.recv().await
+                };
+                tokio::select! {
+                    completion = next => {
+                        return match completion {
+                            Some(completion) => PollOutcome::Completion(completion),
+                            None => PollOutcome::Closed,
+                        };
+                    }
+                    _ = &mut notified => {}
+                }
+            }
+        };
+        if timeout_ms < 0 {
+            return wait.await;
+        }
+        tokio::time::timeout(Duration::from_millis(timeout_ms as u64), wait)
+            .await
+            .unwrap_or(PollOutcome::Empty)
+    })
+}
 
 /// A lookup result for C++, or the error in its place.
 trait Outcome: Send + 'static {
@@ -107,6 +170,43 @@ pub struct PendingLookup(Pending<Box<LookupResultInner>>);
 
 pub struct PendingPrefixLookup(Pending<Box<PrefixLookupResultInner>>);
 
+pub struct LookupCompletion {
+    request_id: u64,
+    result: Option<Box<LookupResultInner>>,
+    /// Released by poll, so unpolled results count toward the capacity.
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+pub struct PrefixLookupCompletion {
+    request_id: u64,
+    result: Option<Box<PrefixLookupResultInner>>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl LookupCompletion {
+    pub(crate) fn lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn lookup_completion_take_result(&mut self) -> Box<LookupResultInner> {
+        self.result
+            .take()
+            .expect("lookup completion result already taken")
+    }
+}
+
+impl PrefixLookupCompletion {
+    pub(crate) fn prefix_lookup_completion_request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    pub(crate) fn prefix_lookup_completion_take_result(&mut self) -> Box<PrefixLookupResultInner> {
+        self.result
+            .take()
+            .expect("prefix lookup completion result already taken")
+    }
+}
+
 impl PendingLookup {
     pub(crate) fn lookup_wait(&mut self, timeout_ms: i64) -> Box<LookupResultInner> {
         self.0.wait(timeout_ms)
@@ -143,13 +243,29 @@ pub(crate) unsafe fn delete_pending_prefix_lookup(pending: *mut PendingPrefixLoo
     }
 }
 
+pub(crate) unsafe fn delete_lookup_completion(completion: *mut LookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
+        }
+    }
+}
+
+pub(crate) unsafe fn delete_prefix_lookup_completion(completion: *mut PrefixLookupCompletion) {
+    if !completion.is_null() {
+        unsafe {
+            drop(Box::from_raw(completion));
+        }
+    }
+}
+
 impl Lookuper {
     /// The lookup key: the primary-key values, dense as the core key encoder
     /// expects them, and owned, so a lookup can outlive the C++ row.
     fn key(&self, pk_row: &GenericRowInner) -> Result<GenericRow<'static>, String> {
         let schema = self.table_info.get_schema();
         let pk_indices = schema.primary_key_indexes();
-        types::resolve_dense_row_types(&pk_row.row, Some(schema), &pk_indices)
+        types::resolve_dense_lookup_key_types(&pk_row.row, schema, &pk_indices)
             .map(|row| row.into_owned().into_owned())
             .map_err(|e| e.to_string())
     }
@@ -179,6 +295,63 @@ impl Lookuper {
             Err(e) => client_err_ptr(e),
         }
     }
+
+    pub(crate) fn lookup_async_poll(
+        &self,
+        pk_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(pk_row) {
+            Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(QUEUE_FULL_ERROR_CODE, message),
+                };
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                let _enter = RUNTIME.enter();
+                let mut tasks = self.async_tasks.lock().unwrap();
+                while tasks.try_join_next().is_some() {}
+                tasks.spawn(async move {
+                    let result = to_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender.send(LookupCompletion {
+                        request_id,
+                        result: Some(result),
+                        permit: Some(permit),
+                    });
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        let nothing_pending =
+            || self.completion_permits.available_permits() == self.completion_capacity;
+        match poll_receiver(
+            &self.completion_receiver,
+            timeout_ms,
+            &self.completion_idle,
+            nothing_pending,
+        ) {
+            PollOutcome::Completion(mut completion) => {
+                completion.permit = None;
+                if nothing_pending() {
+                    self.completion_idle.notify_waiters();
+                }
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
+            }
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
+        }
+    }
 }
 
 impl PrefixLookuper {
@@ -187,7 +360,7 @@ impl PrefixLookuper {
     /// C++ row.
     fn key(&self, prefix_row: &GenericRowInner) -> Result<GenericRow<'static>, String> {
         let schema = self.table_info.get_schema();
-        types::resolve_dense_row_types(&prefix_row.row, Some(schema), &self.lookup_column_indices)
+        types::resolve_dense_lookup_key_types(&prefix_row.row, schema, &self.lookup_column_indices)
             .map(|row| row.into_owned().into_owned())
             .map_err(|e| e.to_string())
     }
@@ -218,6 +391,63 @@ impl PrefixLookuper {
                 ok_ptr(Box::into_raw(Box::new(pending)) as usize)
             }
             Err(e) => client_err_ptr(e),
+        }
+    }
+
+    pub(crate) fn prefix_lookup_async_poll(
+        &self,
+        prefix_row: &GenericRowInner,
+        request_id: u64,
+    ) -> ffi::FfiResult {
+        match self.key(prefix_row) {
+            Ok(key) => {
+                let permit = self
+                    .completion_permits
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| "Too many outstanding asynchronous lookups".to_string());
+                let permit = match permit {
+                    Ok(permit) => permit,
+                    Err(message) => return crate::err_result(QUEUE_FULL_ERROR_CODE, message),
+                };
+                let sender = self.completion_sender.clone();
+                let inner = Arc::clone(&self.inner);
+                let table_info = Arc::clone(&self.table_info);
+                let _enter = RUNTIME.enter();
+                let mut tasks = self.async_tasks.lock().unwrap();
+                while tasks.try_join_next().is_some() {}
+                tasks.spawn(async move {
+                    let result = to_prefix_lookup_result(inner.lookup(&key).await, &table_info);
+                    let _ = sender.send(PrefixLookupCompletion {
+                        request_id,
+                        result: Some(result),
+                        permit: Some(permit),
+                    });
+                });
+                crate::ok_result()
+            }
+            Err(e) => crate::err_result(CLIENT_ERROR_CODE, e),
+        }
+    }
+
+    pub(crate) fn poll_prefix_lookup(&self, timeout_ms: i64) -> ffi::FfiPtrResult {
+        let nothing_pending =
+            || self.completion_permits.available_permits() == self.completion_capacity;
+        match poll_receiver(
+            &self.completion_receiver,
+            timeout_ms,
+            &self.completion_idle,
+            nothing_pending,
+        ) {
+            PollOutcome::Completion(mut completion) => {
+                completion.permit = None;
+                if nothing_pending() {
+                    self.completion_idle.notify_waiters();
+                }
+                ok_ptr(Box::into_raw(Box::new(completion)) as usize)
+            }
+            PollOutcome::Closed => client_err_ptr("Lookup completion queue closed".to_string()),
+            PollOutcome::Empty => ok_ptr(0),
         }
     }
 }
@@ -289,4 +519,70 @@ fn to_prefix_lookup_result(
 fn core_error<T: Outcome>(e: &fcore::error::Error) -> T {
     let ffi_err = err_from_core_error(e);
     T::from_error(ffi_err.error_code, ffi_err.error_message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn poll_timeout_includes_receiver_lock() {
+        let (_, receiver) = tokio::sync::mpsc::unbounded_channel::<u8>();
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+        let locked = Arc::clone(&receiver);
+        let (locked_sender, locked_receiver) = std::sync::mpsc::channel();
+        let (release_sender, release_receiver) = tokio::sync::oneshot::channel();
+
+        RUNTIME.spawn(async move {
+            let _guard = locked.lock().await;
+            locked_sender.send(()).unwrap();
+            release_receiver.await.unwrap();
+        });
+        locked_receiver.recv().unwrap();
+
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            poll_receiver(&receiver, 25, &Notify::new(), || false),
+            PollOutcome::Empty
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        release_sender.send(()).unwrap();
+    }
+
+    #[test]
+    fn poll_forever_returns_when_another_thread_takes_the_last_completion() {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<u8>();
+        let receiver = Arc::new(tokio::sync::Mutex::new(receiver));
+        let idle = Arc::new(Notify::new());
+        let taken = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (done_sender, done_receiver) = std::sync::mpsc::channel();
+
+        for _ in 0..2 {
+            let (receiver, idle, taken) =
+                (Arc::clone(&receiver), Arc::clone(&idle), Arc::clone(&taken));
+            let done_sender = done_sender.clone();
+            std::thread::spawn(move || {
+                let nothing_pending = || taken.load(std::sync::atomic::Ordering::SeqCst);
+                let outcome = poll_receiver(&receiver, -1, &idle, nothing_pending);
+                let got_completion = matches!(outcome, PollOutcome::Completion(_));
+                if got_completion {
+                    taken.store(true, std::sync::atomic::Ordering::SeqCst);
+                    idle.notify_waiters();
+                }
+                done_sender.send(got_completion).unwrap();
+            });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        sender.send(1).unwrap();
+
+        let mut completions = 0;
+        for _ in 0..2 {
+            let got_completion = done_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("a poller waiting without limit never returned");
+            completions += usize::from(got_completion);
+        }
+        assert_eq!(completions, 1);
+    }
 }

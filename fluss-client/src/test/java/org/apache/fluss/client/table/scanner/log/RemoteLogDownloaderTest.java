@@ -93,6 +93,8 @@ class RemoteLogDownloaderTest {
 
     @Test
     void testPrefetchNum() throws Exception {
+        int prefetchNum = conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM);
+
         RemoteFileDownloader remoteFileDownloader = new RemoteFileDownloader(1);
         RemoteLogDownloader remoteLogDownloader =
                 new RemoteLogDownloader(
@@ -102,53 +104,76 @@ class RemoteLogDownloaderTest {
                         scannerMetricGroup,
                         10L);
         try {
-            // trigger auto download.
-            remoteLogDownloader.start();
-
             Path localLogDir = remoteLogDownloader.getLocalLogDir();
             TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
             List<RemoteLogSegment> remoteLogSegments =
-                    buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf, 10);
+                    buildRemoteLogSegmentList(
+                            tb, DATA1_PHYSICAL_TABLE_PATH, prefetchNum + 1, conf, 10);
             FsPath remoteLogTabletDir =
                     remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
             List<RemoteLogDownloadFuture> futures =
                     requestRemoteLogs(remoteLogDownloader, remoteLogTabletDir, remoteLogSegments);
 
-            // the first 4 segments should success.
+            // Drive the fetch loop explicitly so the background thread cannot acquire
+            // an idle prefetch permit while the permit count is being asserted.
+            for (int i = 0; i < prefetchNum; i++) {
+                remoteLogDownloader.fetchOnce();
+            }
+
+            // Only the first four segments should be downloaded.
             retry(
                     Duration.ofMinutes(1),
                     () -> {
-                        for (int i = 0; i < 4; i++) {
+                        for (int i = 0; i < prefetchNum; i++) {
                             assertThat(futures.get(i).isDone()).isTrue();
                         }
                     });
 
-            assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(4);
-            assertThat(scannerMetricGroup.remoteFetchRequestCount().getCount()).isEqualTo(4);
+            assertThat(futures.get(prefetchNum).isDone()).isFalse();
+            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch()).isEqualTo(1);
+            assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(prefetchNum);
+            assertThat(scannerMetricGroup.remoteFetchRequestCount().getCount())
+                    .isEqualTo(prefetchNum);
             assertThat(scannerMetricGroup.remoteFetchBytes().getCount())
                     .isEqualTo(
-                            remoteLogSegmentFilesLength(remoteLogSegments, remoteLogTabletDir, 4));
-            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(0);
+                            remoteLogSegmentFilesLength(
+                                    remoteLogSegments, remoteLogTabletDir, prefetchNum));
+            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isZero();
 
+            // Recycling one segment frees capacity for the fifth download.
             futures.get(0).getRecycleCallback().run();
-            // the 5th segment should success.
-            retry(Duration.ofMinutes(1), () -> assertThat(futures.get(4).isDone()).isTrue());
-            assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(4);
-            assertThat(scannerMetricGroup.remoteFetchRequestCount().getCount()).isEqualTo(5);
+            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(1);
+
+            // Fetch the segment 5.
+            remoteLogDownloader.fetchOnce();
+
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(futures.get(prefetchNum).isDone()).isTrue());
+
+            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch()).isZero();
+            assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(prefetchNum);
+            assertThat(scannerMetricGroup.remoteFetchRequestCount().getCount())
+                    .isEqualTo(prefetchNum + 1);
             assertThat(scannerMetricGroup.remoteFetchBytes().getCount())
                     .isEqualTo(
-                            remoteLogSegmentFilesLength(remoteLogSegments, remoteLogTabletDir, 5));
-            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(0);
+                            remoteLogSegmentFilesLength(
+                                    remoteLogSegments, remoteLogTabletDir, prefetchNum + 1));
+            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isZero();
 
+            // Recycling two more segments must return two permits.
             futures.get(1).getRecycleCallback().run();
             futures.get(2).getRecycleCallback().run();
             assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(2);
-            // the removal of log files are async, so we need to wait for the removal.
+
+            // Start the background thread to process asynchronous file cleanup.
+            remoteLogDownloader.start();
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(FileUtils.listDirectory(localLogDir).length).isEqualTo(2));
+                    () ->
+                            assertThat(FileUtils.listDirectory(localLogDir).length)
+                                    .isEqualTo(prefetchNum - 2));
 
-            // test cleanup
             remoteLogDownloader.close();
             assertThat(localLogDir.toFile().exists()).isFalse();
         } finally {

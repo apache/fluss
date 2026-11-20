@@ -524,6 +524,73 @@ pub fn resolve_dense_row_types<'a>(
     Ok(Cow::Owned(dense))
 }
 
+/// Resolve and strictly validate a lookup key before accepting an asynchronous
+/// request. Lookup keys cannot contain nulls or values incompatible with their
+/// schema types.
+pub fn resolve_dense_lookup_key_types<'a>(
+    row: &'a fcore::row::GenericRow<'a>,
+    schema: &fcore::metadata::Schema,
+    indices: &[usize],
+) -> Result<Cow<'a, fcore::row::GenericRow<'a>>> {
+    for (dense_idx, &schema_idx) in indices.iter().enumerate() {
+        let datum = row
+            .values
+            .get(schema_idx)
+            .ok_or_else(|| anyhow!("Lookup key field {dense_idx} is missing"))?;
+        let target = schema
+            .columns()
+            .get(schema_idx)
+            .map(|column| column.data_type())
+            .ok_or_else(|| anyhow!("Lookup key field {schema_idx} is out of range"))?;
+        validate_lookup_datum(datum, target, dense_idx)?;
+    }
+    resolve_dense_row_types(row, Some(schema), indices)
+}
+
+fn validate_lookup_datum(
+    datum: &fcore::row::Datum<'_>,
+    target: &fcore::metadata::DataType,
+    index: usize,
+) -> Result<()> {
+    let valid = match (datum, target) {
+        (Datum::Null, _) => false,
+        (Datum::Bool(_), DataType::Boolean(_)) => true,
+        (Datum::Int8(_), DataType::TinyInt(_)) => true,
+        (Datum::Int16(_), DataType::SmallInt(_)) => true,
+        (Datum::Int32(_), DataType::TinyInt(_) | DataType::SmallInt(_) | DataType::Int(_)) => true,
+        (Datum::Int64(_), DataType::BigInt(_)) => true,
+        (Datum::Float32(_), DataType::Float(_)) => true,
+        (Datum::Float64(_), DataType::Double(_)) => true,
+        (Datum::String(_), DataType::Char(_) | DataType::String(_) | DataType::Decimal(_)) => true,
+        (Datum::Blob(_), DataType::Bytes(_) | DataType::Binary(_)) => true,
+        (Datum::Decimal(_), DataType::Decimal(_)) => true,
+        (Datum::Date(_), DataType::Date(_)) => true,
+        (Datum::Time(_), DataType::Time(_)) => true,
+        (Datum::TimestampNtz(_), DataType::Timestamp(_)) => true,
+        (Datum::TimestampLtz(_), DataType::TimestampLTz(_)) => true,
+        (Datum::Array(_), DataType::Array(_)) => true,
+        (Datum::Map(_), DataType::Map(_)) => true,
+        (Datum::Row(row), DataType::Row(row_type)) => {
+            row.values.len() == row_type.fields().len()
+                && row
+                    .values
+                    .iter()
+                    .zip(row_type.fields())
+                    .all(|(value, field)| {
+                        validate_lookup_datum(value, field.data_type(), index).is_ok()
+                    })
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Lookup key field {index} has an incompatible value for type {target}"
+        ))
+    }
+}
+
 /// Whether any field of the row would be changed by `resolve_row_types`:
 /// an Int32 targeted at a narrower integer type, or a String targeted at a
 /// Decimal column (recursively through nested rows).
@@ -751,6 +818,7 @@ pub fn core_scan_batches_to_ffi(
             bucket_id: batch.bucket().bucket_id(),
             base_offset: batch.base_offset(),
             commit_timestamp: batch.commit_timestamp(),
+            schema_id: batch.schema_id(),
         });
     }
 
@@ -765,6 +833,31 @@ mod tests {
     use fluss::metadata::{DataField, DataType, DataTypes, DecimalType, RowType, Schema};
     use fluss::row::{Datum, Decimal, GenericRow};
     use std::borrow::Cow;
+
+    #[test]
+    fn arrow_batch_conversion_preserves_source_schema_id() {
+        use arrow::datatypes::{DataType as ArrowType, Field, Schema as ArrowSchema};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowType::Int32,
+            true,
+        )]));
+        for schema_id in [fluss::record::NO_SCHEMA_ID, 0, i32::from(i16::MAX)] {
+            let batch = fluss::record::ScanBatch::new(
+                fluss::metadata::TableBucket::new(1, 0),
+                RecordBatch::new_empty(schema.clone()),
+                0,
+            )
+            .with_schema_id(schema_id);
+            let converted = super::core_scan_batches_to_ffi(&[batch]).unwrap();
+            assert_eq!(converted.batches[0].schema_id, schema_id);
+            let ffi_batch = &converted.batches[0];
+            crate::free_arrow_ffi_structures(ffi_batch.array_ptr, ffi_batch.schema_ptr);
+        }
+    }
 
     /// Asserts that STRING/BYTES values were resolved without copying: either
     /// the input row was returned as-is (fast path) or the resolved values

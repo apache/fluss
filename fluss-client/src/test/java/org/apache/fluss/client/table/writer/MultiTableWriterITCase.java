@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -83,11 +84,13 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
                     .column("name", DataTypes.STRING())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     // ---------------------------------------------------------------- log
 
     @Test
     void testWriteSingleLogTable() throws Exception {
-        TablePath tp = TablePath.of("test_db", "mt_w_single_log");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_single_log");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tp, descriptor, false);
@@ -113,8 +116,8 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteMultipleLogTables() throws Exception {
-        TablePath tp1 = TablePath.of("test_db", "mt_w_multi_log1");
-        TablePath tp2 = TablePath.of("test_db", "mt_w_multi_log2");
+        TablePath tp1 = tableNames.tablePath("test_db", "mt_w_multi_log1");
+        TablePath tp2 = tableNames.tablePath("test_db", "mt_w_multi_log2");
         long id1 =
                 createTable(
                         tp1,
@@ -157,7 +160,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteSinglePkTableUpsertAndDelete() throws Exception {
-        TablePath tp = TablePath.of("test_db", "mt_w_pk");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_pk");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tp, descriptor, false);
@@ -195,8 +198,8 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteMixedLogAndPkTables() throws Exception {
-        TablePath logTp = TablePath.of("test_db", "mt_w_mix_log");
-        TablePath pkTp = TablePath.of("test_db", "mt_w_mix_pk");
+        TablePath logTp = tableNames.tablePath("test_db", "mt_w_mix_log");
+        TablePath pkTp = tableNames.tablePath("test_db", "mt_w_mix_pk");
         long logId =
                 createTable(
                         logTp,
@@ -236,7 +239,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWritePartitionedTable() throws Exception {
-        TablePath tp = TablePath.of("test_db", "mt_w_part");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_part");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -294,8 +297,8 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testCdcMirrorScanThenWrite() throws Exception {
-        TablePath src = TablePath.of("test_db", "mt_w_cdc_src");
-        TablePath dst = TablePath.of("test_db", "mt_w_cdc_dst");
+        TablePath src = tableNames.tablePath("test_db", "mt_w_cdc_src");
+        TablePath dst = tableNames.tablePath("test_db", "mt_w_cdc_dst");
         long srcId =
                 createTable(
                         src,
@@ -352,7 +355,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testWriteUnknownTableFailsFuture() throws Exception {
-        TablePath unknown = TablePath.of("test_db", "mt_w_unknown_table");
+        TablePath unknown = tableNames.tablePath("test_db", "mt_w_unknown_table");
         try (MultiTableWriter writer = conn.getMultiTable().newMultiTableWrite().createWriter()) {
             assertThatThrownBy(
                             () ->
@@ -362,15 +365,20 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
                                             .get())
                     .isInstanceOf(ExecutionException.class)
                     .rootCause()
-                    .hasMessageContaining("Table 'test_db.mt_w_unknown_table' does not exist.");
+                    .hasMessageContaining(
+                            ("Table '"
+                                    + tableNames
+                                            .tablePath("test_db", "mt_w_unknown_table")
+                                            .toString()
+                                    + "' does not exist."));
         }
     }
 
     @Test
     void testOperationIncompatibleWithTableKind() throws Exception {
         // DELETE on a log table must fail (log tables only accept APPEND).
-        TablePath logTp = TablePath.of("test_db", "mt_w_bad_ct_log");
-        TablePath pkTp = TablePath.of("test_db", "mt_w_bad_ct_pk");
+        TablePath logTp = tableNames.tablePath("test_db", "mt_w_bad_ct_log");
+        TablePath pkTp = tableNames.tablePath("test_db", "mt_w_bad_ct_pk");
         long logId =
                 createTable(
                         logTp,
@@ -414,7 +422,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testFlushAndClose() throws Exception {
-        TablePath tp = TablePath.of("test_db", "mt_w_flush_close");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_flush_close");
         long tableId =
                 createTable(
                         tp,
@@ -445,7 +453,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // encoder, and a record tagged with the post-alter schemaId triggers a metadata
         // refresh + encoder rebuild so both batches end up readable with their original
         // shapes.
-        TablePath tp = TablePath.of("test_db", "mt_w_add_column");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_add_column");
         long tableId =
                 createTable(
                         tp,
@@ -527,7 +535,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
     void testWritersAreIsolatedAcrossWriterClients() throws Exception {
         // Each MultiTableWriter owns a dedicated WriterClient, so an outstanding batch of one
         // writer neither fails another writer's schema-bumped write nor is flushed by it.
-        TablePath tp = TablePath.of("test_db", "mt_w_isolated_writer_clients");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_isolated_writer_clients");
         long tableId =
                 createTable(
                         tp,
@@ -592,7 +600,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // previous schema's records are still buffered, the old-schema batch is closed and a new
         // schema-specific batch is rolled automatically, so no explicit flush() is required at
         // the schema boundary.
-        TablePath tp = TablePath.of("test_db", "mt_w_schema_switch_roll");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_schema_switch_roll");
         long tableId =
                 createTable(
                         tp,
@@ -643,7 +651,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // Regression test: consecutive records carrying the same historical schemaId must reuse
         // the cached encoding state &mdash; a single schema fetch, no per-row metadata refresh and
         // no per-row flush &mdash; so historical CDC records still batch normally.
-        TablePath tp = TablePath.of("test_db", "mt_w_hist_no_per_row_refresh");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_hist_no_per_row_refresh");
         long tableId =
                 createTable(
                         tp,
@@ -751,7 +759,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // table metadata and rebuilds encoders against the latest schema. If after the
         // refresh the record's schemaId is still ahead of the server's schemaId (i.e., the
         // caller is referencing a future / unknown schema), the write must fail.
-        TablePath tp = TablePath.of("test_db", "mt_w_bad_schema_id");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_bad_schema_id");
         long tableId =
                 createTable(
                         tp,
@@ -785,7 +793,7 @@ class MultiTableWriterITCase extends ClientToServerITCaseBase {
         // than
         // the cached-latest fast path used by testWriteAfterAddColumn (which writes old rows BEFORE
         // the alter, while the cached latest still IS the old schema).
-        TablePath tp = TablePath.of("test_db", "mt_w_historical_schema");
+        TablePath tp = tableNames.tablePath("test_db", "mt_w_historical_schema");
         long tableId =
                 createTable(
                         tp,

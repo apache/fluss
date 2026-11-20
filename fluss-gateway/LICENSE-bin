@@ -221,6 +221,7 @@ anstyle@1.0.14
 anstyle-parse@1.0.0
 anstyle-query@1.1.5
 anyhow@1.0.104
+arc-swap@1.9.3
 arrow@59.2.0
 arrow-arith@59.2.0
 arrow-array@59.2.0

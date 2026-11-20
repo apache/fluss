@@ -22,6 +22,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
+import org.apache.fluss.rocksdb.RocksIteratorWrapper;
 import org.apache.fluss.server.kv.KvCloseMode;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.IOUtils;
@@ -35,6 +36,7 @@ import io.github.fluss_contrib.rocksdb.RocksDB;
 import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
 import io.github.fluss_contrib.rocksdb.Slice;
+import io.github.fluss_contrib.rocksdb.Snapshot;
 import io.github.fluss_contrib.rocksdb.Statistics;
 import io.github.fluss_contrib.rocksdb.WriteOptions;
 import org.slf4j.Logger;
@@ -210,25 +212,171 @@ public class RocksDBKv implements AutoCloseable {
         }
     }
 
-    public List<byte[]> prefixLookup(byte[] prefixKey) {
-        List<byte[]> pkList = new ArrayList<>();
-        byte[] upperBound = prefixUpperBound(prefixKey);
-        // The bound must outlive both the read options and the iterator that reference it.
-        try (Slice upperBoundSlice = upperBound == null ? null : new Slice(upperBound);
-                ReadOptions readOptions = new ReadOptions().setTotalOrderSeek(true)) {
-            if (upperBoundSlice != null) {
-                readOptions.setIterateUpperBound(upperBoundSlice);
+    /**
+     * Fixes a multi-get read view. The caller must serialize creation with tablet mutations and
+     * close, and close the returned lookup after use.
+     */
+    public MultiGetLookup openMultiGet() throws IOException {
+        ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
+        Snapshot snapshot = null;
+        ReadOptions readOptions = null;
+        try {
+            snapshot = db.getSnapshot();
+            readOptions = new ReadOptions();
+            readOptions.setSnapshot(snapshot);
+            return new MultiGetLookup(db, snapshot, readOptions, lease);
+        } catch (Throwable t) {
+            try {
+                closeMultiGet(db, snapshot, readOptions, lease);
+            } catch (Throwable closeFailure) {
+                t.addSuppressed(closeFailure);
             }
-            try (RocksIterator iterator = db.newIterator(defaultColumnFamilyHandle, readOptions)) {
-                iterator.seek(prefixKey);
-                while (iterator.isValid()) {
-                    pkList.add(iterator.value());
-                    iterator.next();
-                }
+            throw t;
+        }
+    }
+
+    /** A single-owner multi-get view with a lease on its RocksDB instance. */
+    public static class MultiGetLookup implements AutoCloseable {
+        private final RocksDB db;
+        private final Snapshot snapshot;
+        private final ReadOptions readOptions;
+        private final ResourceGuard.Lease lease;
+        private boolean closed;
+
+        private MultiGetLookup(
+                RocksDB db, Snapshot snapshot, ReadOptions readOptions, ResourceGuard.Lease lease) {
+            this.db = db;
+            this.snapshot = snapshot;
+            this.readOptions = readOptions;
+            this.lease = lease;
+        }
+
+        /** Reads keys in input order from the view fixed when this lookup was opened. */
+        public List<byte[]> read(List<byte[]> keys) throws IOException {
+            if (closed) {
+                throw new IOException("Multi-get lookup is closed.");
+            }
+            try {
+                return db.multiGetAsList(readOptions, keys);
+            } catch (RocksDBException e) {
+                throw new IOException("Fail to get keys.", e);
             }
         }
 
-        return pkList;
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                closeMultiGet(db, snapshot, readOptions, lease);
+            }
+        }
+    }
+
+    private static void closeMultiGet(
+            RocksDB db,
+            @Nullable Snapshot snapshot,
+            @Nullable ReadOptions readOptions,
+            ResourceGuard.Lease lease) {
+        try {
+            IOUtils.closeQuietly(readOptions);
+            if (snapshot != null) {
+                try {
+                    db.releaseSnapshot(snapshot);
+                } finally {
+                    snapshot.close();
+                }
+            }
+        } finally {
+            lease.close();
+        }
+    }
+
+    /**
+     * Fixes a prefix lookup's read view without seeking. The caller must serialize creation with
+     * tablet mutations and close, and must close the returned lookup after use.
+     */
+    public PrefixLookup openPrefixLookup(byte[] prefixKey) throws IOException {
+        ResourceGuard.Lease lease = rocksDBResourceGuard.acquireResource();
+        Slice upperBoundSlice = null;
+        ReadOptions readOptions = null;
+        RocksIterator iterator = null;
+        try {
+            byte[] upperBound = prefixUpperBound(prefixKey);
+            if (upperBound != null) {
+                upperBoundSlice = new Slice(upperBound);
+            }
+            readOptions = new ReadOptions().setTotalOrderSeek(true);
+            if (upperBoundSlice != null) {
+                readOptions.setIterateUpperBound(upperBoundSlice);
+            }
+            iterator = db.newIterator(defaultColumnFamilyHandle, readOptions);
+            return new PrefixLookup(
+                    prefixKey.clone(), iterator, readOptions, upperBoundSlice, lease);
+        } catch (Throwable t) {
+            IOUtils.closeQuietly(iterator);
+            IOUtils.closeQuietly(readOptions);
+            IOUtils.closeQuietly(upperBoundSlice);
+            lease.close();
+            throw t;
+        }
+    }
+
+    /**
+     * A single-owner prefix read with a fixed iterator view and a lease on its RocksDB instance.
+     */
+    public static class PrefixLookup implements AutoCloseable {
+        private final byte[] prefixKey;
+        private final RocksIteratorWrapper iterator;
+        private final ReadOptions readOptions;
+        // The upper bound must outlive the iterator and read options that reference it.
+        @Nullable private final Slice upperBoundSlice;
+        private final ResourceGuard.Lease lease;
+        private boolean closed;
+
+        private PrefixLookup(
+                byte[] prefixKey,
+                RocksIterator iterator,
+                ReadOptions readOptions,
+                @Nullable Slice upperBoundSlice,
+                ResourceGuard.Lease lease) {
+            this.prefixKey = prefixKey;
+            this.iterator = new RocksIteratorWrapper(iterator);
+            this.readOptions = readOptions;
+            this.upperBoundSlice = upperBoundSlice;
+            this.lease = lease;
+        }
+
+        /** Seeks and collects values from the view fixed when this lookup was opened. */
+        public List<byte[]> readAll() throws IOException {
+            if (closed) {
+                throw new IOException("Prefix lookup is closed.");
+            }
+            List<byte[]> values = new ArrayList<>();
+            try {
+                iterator.seek(prefixKey);
+                while (iterator.isValid()) {
+                    values.add(iterator.value());
+                    iterator.next();
+                }
+            } catch (RuntimeException e) {
+                if (e.getCause() instanceof RocksDBException) {
+                    throw new IOException("Failed to iterate prefix lookup.", e.getCause());
+                }
+                throw e;
+            }
+            return values;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                IOUtils.closeQuietly(iterator);
+                IOUtils.closeQuietly(readOptions);
+                IOUtils.closeQuietly(upperBoundSlice);
+                lease.close();
+            }
+        }
     }
 
     public List<byte[]> limitScan(Integer limit) {

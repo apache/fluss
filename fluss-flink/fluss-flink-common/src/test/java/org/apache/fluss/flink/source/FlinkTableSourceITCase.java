@@ -28,10 +28,13 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -116,6 +119,12 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final String scopedCombinedFiltersTable =
+            tableNames.tableName("combined_filters_table");
+    private final String scopedWatermarkUpdates = tableNames.tableName("watermark_updates");
+
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
     protected static Connection conn;
@@ -226,7 +235,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"ARROW", "INDEXED"})
     void testAppendTableProjectPushDown(String logFormat) throws Exception {
-        String tableName = "append_table_project_push_down_" + logFormat;
+        String tableName = tableNames.tableName("append_table_project_push_down_" + logFormat);
         tEnv.executeSql(
                 String.format(
                         "create table %s (a int, b varchar, c bigint, d int, e int, f bigint) with"
@@ -276,7 +285,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     void testTableProjectPushDown(String mode) throws Exception {
         boolean isPkTable = mode.startsWith("PK");
         boolean testPkLog = mode.equals("PK_LOG");
-        String tableName = "table_" + mode;
+        String tableName = tableNames.tableName("table_" + mode);
         String pkDDL = isPkTable ? ", primary key (a) not enforced" : "";
         tEnv.executeSql(
                 String.format(
@@ -336,6 +345,98 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         int expectRecords = expected.size();
         List<String> actual = collectRowsWithTimeout(rowIter, expectRecords);
         assertThat(actual).containsExactlyElementsOf(expected);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ARROW", "COMPACTED"})
+    void testSkipUpdatesToNonProjectedColumns(String logFormat) throws Exception {
+        String tableName = tableNames.tableName("projected_updates");
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (a INT PRIMARY KEY NOT ENFORCED, b MAP<BYTES, INT>, c INT) WITH ("
+                        + "'bucket.num' = '1', 'table.log.format' = '"
+                        + logFormat
+                        + "')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        GenericMap oneEntry = GenericMap.of(new byte[] {1}, 10);
+        GenericMap twoEntries = GenericMap.of(new byte[] {1}, 10, new byte[] {2}, 20);
+        writeRows(
+                conn,
+                tablePath,
+                Arrays.asList(
+                        row(1, oneEntry, 10),
+                        row(1, oneEntry, 20),
+                        row(1, null, 30),
+                        row(1, null, 40),
+                        row(1, twoEntries, 50),
+                        row(1, twoEntries, 60)),
+                false);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.delete(row(1, twoEntries, 60));
+            writer.flush();
+        }
+        try (CloseableIterator<Row> rows =
+                tEnv.executeSql(
+                                "SELECT CARDINALITY(b), a FROM "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                        + "'scan.bounded.mode' = 'latest-offset', "
+                                        + "'scan.filter-unchanged-row.enabled' = 'true', "
+                                        + "'client.scanner.log.max-poll-records' = '1') */")
+                        .collect()) {
+            assertThat(collectBatchRows(rows))
+                    .containsExactly(
+                            "+I[1, 1]",
+                            "-U[1, 1]",
+                            "+U[null, 1]",
+                            "-U[null, 1]",
+                            "+U[2, 1]",
+                            "-D[2, 1]");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedUpdatesWithPushedDownWatermark(boolean skipUnchangedUpdates)
+            throws Exception {
+        tEnv.executeSql(
+                ("CREATE TABLE "
+                        + scopedWatermarkUpdates
+                        + " (id INT PRIMARY KEY NOT ENFORCED, ts TIMESTAMP(3), "
+                        + "v INT, WATERMARK FOR ts AS ts) WITH ('bucket.num' = '1')"));
+        LocalDateTime ts = LocalDateTime.of(2025, 1, 1, 12, 0);
+        TimestampNtz timestamp = TimestampNtz.fromLocalDateTime(ts);
+        writeRows(
+                conn,
+                TablePath.of(DEFAULT_DB, scopedWatermarkUpdates),
+                Arrays.asList(
+                        row(1, timestamp, 10),
+                        row(1, timestamp, 20),
+                        row(1, TimestampNtz.fromLocalDateTime(ts.plusMinutes(1)), 20)),
+                false);
+        String query =
+                ("SELECT id, ts FROM "
+                                + scopedWatermarkUpdates
+                                + " /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                                + "'scan.bounded.mode' = 'latest-offset'")
+                        + (skipUnchangedUpdates
+                                ? ", 'scan.filter-unchanged-row.enabled' = 'true'"
+                                : "")
+                        + ") */";
+        assertThat(tEnv.explainSql(query)).contains("watermark=[");
+        List<String> expected = new ArrayList<>();
+        expected.add("+I[1, " + ts + "]");
+        if (!skipUnchangedUpdates) {
+            expected.add("-U[1, " + ts + "]");
+            expected.add("+U[1, " + ts + "]");
+        }
+        expected.add("-U[1, " + ts + "]");
+        expected.add("+U[1, " + ts.plusMinutes(1) + "]");
+        try (CloseableIterator<Row> rows = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rows)).containsExactlyElementsOf(expected);
+        }
     }
 
     @Test
@@ -442,7 +543,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testReadLogTableWithDifferentScanStartupMode(boolean isPartitioned) throws Exception {
-        String tableName = "tab1_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName("tab1_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String partitionName = null;
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         if (!isPartitioned) {
@@ -577,7 +679,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     void testReadKvTableWithEarliestAndTimestampScanStartupMode(String mode, boolean isPartitioned)
             throws Exception {
         long timestamp = CLOCK.milliseconds();
-        String tableName = mode + "_test_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        mode + "_test_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         String partitionName = null;
         if (!isPartitioned) {
@@ -644,7 +748,9 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testReadPrimaryKeyPartitionedTable(boolean isAutoPartition) throws Exception {
-        String tableName = "read_primary_key_partitioned_table" + (isAutoPartition ? "_auto" : "");
+        String tableName =
+                tableNames.tableName(
+                        "read_primary_key_partitioned_table" + (isAutoPartition ? "_auto" : ""));
         String createTableDdl;
         if (isAutoPartition) {
             createTableDdl =
@@ -1240,17 +1346,173 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
+    @ParameterizedTest
+    @MethodSource("lookupArgs")
+    void testPrefixLookupWithMultipleKeys(Caching caching, boolean async) throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        caching,
+                        async,
+                        new String[] {"name", "address", "id"},
+                        new String[] {"name"},
+                        null);
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, b, h.address FROM src JOIN %s FOR SYSTEM_TIME AS OF src.proc as h"
+                                + " ON src.b = h.name AND h.address = CONCAT('address', CAST(src.a AS STRING))",
+                        dim);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected = Arrays.asList("+I[1, name1, address1]", "+I[2, name2, address2]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
     @Test
-    void testLookupFullCacheThrowException() {
+    @MultiVersionTest
+    void testLookupFullCacheWithoutCustomShuffleFailsPlanning() {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
         tEnv.executeSql(
-                "create table lookup_join_throw_table"
-                        + " (a int not null primary key not enforced, b varchar)"
-                        + " with ('lookup.cache' = 'FULL')");
-        // should throw exception
-        assertThatThrownBy(() -> tEnv.executeSql("select * from lookup_join_throw_table"))
-                .cause()
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("Full lookup caching is not supported yet.");
+                "CREATE TABLE lookup_full_without_shuffle ("
+                        + " id INT NOT NULL, name STRING, PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '4', 'bucket.key' = 'id',"
+                        + " 'lookup.cache' = 'FULL')");
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromElements(Row.of(1)).returns(probeType).setParallelism(1);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        "SELECT src.id, dim.name FROM lookup_full_probe AS src "
+                                                + "JOIN lookup_full_without_shuffle "
+                                                + "FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                                + "ON src.id = dim.id"))
+                .hasStackTraceContaining("preferCustomShuffle=true");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testLookupFullCacheWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 40;
+        String dim = "lookup_full_dim";
+        // Prune the middle column to exercise projection before converting lookup results.
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, unused_payload STRING, name STRING,"
+                                + " PRIMARY KEY (id) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "unused-" + id, "name" + id));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
+    }
+
+    /** Full cache with a prefix lookup: join only on the bucket key of a composite primary key. */
+    @Test
+    @MultiVersionTest
+    void testLookupFullCachePrefixLookupWithBucketShuffle() throws Exception {
+        assumeThat(supportsLookupCustomShuffle()).isTrue();
+        int bucketCount = 3;
+        int parallelism = 4;
+        int numRows = 20;
+        String dim = "lookup_full_prefix_dim";
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TABLE %s ("
+                                + " id INT NOT NULL, name STRING, PRIMARY KEY (id, name) NOT ENFORCED"
+                                + ") WITH ('bucket.num' = '%d', 'bucket.key' = 'id',"
+                                + " 'lookup.cache' = 'FULL', 'lookup.async' = 'false')",
+                        dim, bucketCount));
+        // two rows share the same bucket-key prefix (id) within the primary key (id, name)
+        try (Table dimTable = conn.getTable(TablePath.of(DEFAULT_DB, dim))) {
+            UpsertWriter writer = dimTable.newUpsert().createWriter();
+            for (int id = 0; id < numRows; id++) {
+                writer.upsert(row(id, "name" + id + "_a"));
+                writer.upsert(row(id, "name" + id + "_b"));
+            }
+            writer.flush();
+        }
+
+        RowTypeInfo probeType =
+                new RowTypeInfo(new TypeInformation[] {Types.INT}, new String[] {"id"});
+        DataStream<Row> probeStream =
+                execEnv.fromSequence(0, numRows - 1)
+                        .setParallelism(parallelism)
+                        .map(id -> Row.of(id.intValue()))
+                        .returns(probeType)
+                        .setParallelism(parallelism);
+        Schema probeSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .columnByExpression("proc", "PROCTIME()")
+                        .build();
+        tEnv.createTemporaryView(
+                "lookup_full_prefix_probe", tEnv.fromDataStream(probeStream, probeSchema));
+
+        // join only on the bucket-key prefix (id): every probe row matches two dim rows
+        String query =
+                String.format(
+                        "SELECT /*+ LOOKUP('table' = 'dim', 'shuffle' = 'true') */ "
+                                + "src.id, dim.name FROM lookup_full_prefix_probe AS src "
+                                + "JOIN %s FOR SYSTEM_TIME AS OF src.proc AS dim "
+                                + "ON src.id = dim.id",
+                        dim);
+        assertThat(tEnv.explainSql(query)).contains("shuffle=[true]");
+
+        List<String> expected = new ArrayList<>();
+        for (int id = 0; id < numRows; id++) {
+            expected.add("+I[" + id + ", name" + id + "_a]");
+            expected.add("+I[" + id + ", name" + id + "_b]");
+        }
+        assertResultsIgnoreOrder(tEnv.executeSql(query).collect(), expected, true);
     }
 
     @ParameterizedTest
@@ -1536,11 +1798,13 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @Test
     void testStreamingReadWithCombinedFilters1() throws Exception {
         tEnv.executeSql(
-                "create table combined_filters_table"
-                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+                ("create table "
+                        + scopedCombinedFiltersTable
+                        + ""
+                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) "));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, scopedCombinedFiltersTable);
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2025)"));
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2026)"));
 
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues1 = new ArrayList<>();
@@ -1566,34 +1830,46 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d % 200 = 0"));
         assertThat(plan)
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
 
         // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d % 200 = 0"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues1, true);
 
         plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d = 200");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d = 200"));
         assertThat(plan)
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
 
         // test column filter, partition filter and flink runtime filter
         rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d = 200")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d = 200"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues2, true);
@@ -1620,12 +1896,14 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     @Test
     void testStreamingReadNonPKTableWithCombinedFilters() throws Exception {
         tEnv.executeSql(
-                "create table combined_filters_table"
+                ("create table "
+                        + scopedCombinedFiltersTable
+                        + ""
                         + " (a int not null, b varchar, c string, d int) partitioned by (c)"
-                        + " with ('table.statistics.columns' = 'd')");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
-        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+                        + " with ('table.statistics.columns' = 'd')"));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, scopedCombinedFiltersTable);
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2025)"));
+        tEnv.executeSql(("alter table " + scopedCombinedFiltersTable + " add partition (c=2026)"));
 
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
@@ -1647,21 +1925,27 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
 
         String plan =
                 tEnv.explainSql(
-                        "select a,c,d from combined_filters_table where c ='2025' and d > 200");
+                        ("select a,c,d from "
+                                + scopedCombinedFiltersTable
+                                + " where c ='2025' and d > 200"));
 
         // assert both partition filter and record batch filter are pushed down
         assertThat(withLowerCaseAnd(plan))
                 .contains(
-                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                        ("TableSourceScan(table=[[testcatalog, defaultdb, "
+                                + scopedCombinedFiltersTable
+                                + ", "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), >(d, 200))], "
-                                + "project=[a, c, d]]], fields=[a, c, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])"));
         // assert predicates are still retained in the Calc operator (FLINK-38635 safety net)
         assertThat(plan).contains("where=");
 
         // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
-                                "select a,c,d from combined_filters_table where c ='2025' and d > 200;")
+                                ("select a,c,d from "
+                                        + scopedCombinedFiltersTable
+                                        + " where c ='2025' and d > 200;"))
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);

@@ -28,6 +28,9 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
 import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -41,8 +44,12 @@ import org.apache.fluss.utils.NetUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import javax.annotation.Nullable;
+
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.utils.NetUtils.getAvailablePort;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,17 +93,51 @@ public class SaslAuthenticationITCase {
     }
 
     @Test
-    void testClientLackMechanism() {
-        String jaasClientInfo =
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"wrong-secret\";";
+    void testClientLackMechanism() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
         clientConfig.setString("client.security.sasl.mechanism", "FAKE");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
-                .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Unable to find a matching SASL mechanism for FAKE");
+        clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
+
+        CompletableFuture<Void> allowApiVersionsResponse = new CompletableFuture<>();
+        TestingAuthenticateGatewayService service =
+                new TestingAuthenticateGatewayService() {
+                    @Override
+                    public CompletableFuture<ApiVersionsResponse> apiVersions(
+                            ApiVersionsRequest request) {
+                        return allowApiVersionsResponse.thenCompose(
+                                ignored -> super.apiVersions(request));
+                    }
+                };
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                getDefaultServerConfig(),
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup));
+                NettyClient nettyClient =
+                        new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
+            CompletableFuture<ApiMessage> response =
+                    nettyClient.sendRequest(serverNode, ApiKeys.LIST_TABLES, request);
+
+            // Keep the request pending until authentication initialization can begin.
+            assertThat(response).isNotDone();
+            allowApiVersionsResponse.complete(null);
+            assertThatThrownBy(response::get)
+                    .isInstanceOf(ExecutionException.class)
+                    .cause()
+                    .isExactlyInstanceOf(AuthenticationException.class)
+                    .hasMessage("Unable to find a matching SASL mechanism for FAKE");
+        }
     }
 
     @Test
@@ -105,7 +146,7 @@ public class SaslAuthenticationITCase {
                 "org.apache.fluss.security.auth.sasl.jaas.FakeLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "FAKE");
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
                 .isExactlyInstanceOf(AuthenticationException.class)
@@ -115,16 +156,17 @@ public class SaslAuthenticationITCase {
 
     @Test
     void testClientMechanismNotMatchServer() {
-        String jaasClientInfo =
-                " org.apache.fluss.security.auth.sasl.jaas.DigestLoginModule required username=\"admin\" password=\"wrong-secret\";";
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
-        clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
-        clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
-        assertThatThrownBy(() -> testAuthentication(clientConfig))
+        clientConfig.setString("client.security.sasl.mechanism", "PLAIN");
+        clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
+        Configuration serverConfig = getDefaultServerConfig();
+        serverConfig.setString("security.sasl.enabled.mechanisms", "FAKE");
+        assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
+                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessageContaining(
-                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
+                        "SASL server enables [FAKE] while protocol of client is 'PLAIN'");
     }
 
     @Test
@@ -346,6 +388,74 @@ public class SaslAuthenticationITCase {
     }
 
     @Test
+    void testProxyGrantUsesTheAcceptingListenerAfterCredentialRotation() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setString(
+                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:SASL,GATEWAY:SASL");
+        configuration.set(
+                ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG,
+                Collections.singletonList("PLAIN"));
+        configuration.setString(
+                ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "proxy:gateway-password");
+        configuration.setString(
+                "security.sasl.listener.name.client.plain.jaas.config",
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_proxy=\"client-password\";");
+        configuration.setString(
+                "security.sasl.listener.name.gateway.plain.proxy-users", "proxy:bob; alice");
+        configuration.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        try (NetUtils.Port gatewayPort = getAvailablePort();
+                NetUtils.Port clientPort = getAvailablePort();
+                NettyServer server =
+                        new NettyServer(
+                                configuration,
+                                Arrays.asList(
+                                        new Endpoint("localhost", gatewayPort.getPort(), "GATEWAY"),
+                                        new Endpoint("localhost", clientPort.getPort(), "CLIENT")),
+                                new TestingAuthenticateGatewayService(),
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            server.start();
+            ServerNode gatewayNode =
+                    new ServerNode(1, "localhost", gatewayPort.getPort(), ServerType.TABLET_SERVER);
+            ServerNode clientNode =
+                    new ServerNode(2, "localhost", clientPort.getPort(), ServerType.TABLET_SERVER);
+
+            try (NettyClient client = createSaslClient("proxy", "client-password");
+                    NettyClient clientProxy =
+                            createSaslClient("proxy", "client-password", "alice");
+                    NettyClient gatewayProxy =
+                            createSaslClient("proxy", "gateway-password", "alice")) {
+                verifyListTables(client, clientNode);
+                assertThatThrownBy(() -> verifyListTables(clientProxy, clientNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("is not allowed to act as 'alice'");
+                verifyListTables(gatewayProxy, gatewayNode);
+            }
+
+            Configuration updatedCredentials = new Configuration();
+            updatedCredentials.setString(
+                    ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "proxy:rotated-password");
+            ServerReconfigurable reconfigurable = server.getServerReconfigurables().get(0);
+            reconfigurable.validate(updatedCredentials);
+            reconfigurable.reconfigure(updatedCredentials);
+
+            try (NettyClient oldProxy = createSaslClient("proxy", "gateway-password", "alice");
+                    NettyClient rotatedProxy =
+                            createSaslClient("proxy", "rotated-password", "alice")) {
+                assertThatThrownBy(() -> verifyListTables(oldProxy, gatewayNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+                verifyListTables(rotatedProxy, gatewayNode);
+            }
+        }
+    }
+
+    @Test
     void testValidateRejectsInvalidUsernameCharacters() throws Exception {
         Configuration serverConfig = new Configuration();
         serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
@@ -475,11 +585,19 @@ public class SaslAuthenticationITCase {
     }
 
     private NettyClient createSaslClient(String username, String password) {
+        return createSaslClient(username, password, null);
+    }
+
+    private NettyClient createSaslClient(
+            String username, String password, @Nullable String authorizationId) {
         Configuration clientConfig = new Configuration();
         clientConfig.setString("client.security.protocol", "sasl");
         clientConfig.setString("client.security.sasl.mechanism", "plain");
         clientConfig.setString("client.security.sasl.username", username);
         clientConfig.setString("client.security.sasl.password", password);
+        if (authorizationId != null) {
+            clientConfig.set(ConfigOptions.CLIENT_SASL_AUTHORIZATION_ID, authorizationId);
+        }
         return new NettyClient(clientConfig, TestingClientMetricGroup.newInstance());
     }
 

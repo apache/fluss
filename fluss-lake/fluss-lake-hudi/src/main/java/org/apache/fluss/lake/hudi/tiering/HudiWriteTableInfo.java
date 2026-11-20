@@ -140,7 +140,10 @@ public class HudiWriteTableInfo implements AutoCloseable {
             HoodieEngineContext engineContext =
                     new HoodieLocalEngineContext(metaClient.getStorageConf());
             HoodieFlinkWriteClient writeClient =
-                    new HoodieFlinkWriteClient<>(HoodieFlinkEngineContext.DEFAULT, writeConfig);
+                    new HoodieFlinkWriteClient<>(
+                            new HoodieFlinkEngineContext(
+                                    HadoopConfigurations.getHadoopConf(flinkConfig)),
+                            writeConfig);
             Schema avroSchema = Schema.parse(writeConfig.getSchema());
             RowType rowType =
                     (RowType) AvroSchemaConverter.convertToDataType(avroSchema).getLogicalType();

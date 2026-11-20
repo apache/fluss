@@ -101,7 +101,7 @@ class KafkaTableSchemaTest {
                                         .build(),
                                 format)
                         .build(),
-                "nullable fields");
+                "NOT NULL");
         for (int mask = 0; mask < 16; mask++) {
             Schema.Builder schema = Schema.newBuilder().column("_kafka_value", valueType);
             if ((mask & 1) != 0) {
@@ -396,11 +396,10 @@ class KafkaTableSchemaTest {
                         DataTypes.ARRAY(DataTypes.STRING()),
                         DataTypes.MAP(DataTypes.INT(), DataTypes.BYTES()),
                         DataTypes.MAP(DataTypes.STRING(), DataTypes.STRING()))) {
-            assertInvalid(withSystem("_kafka_headers", invalid), "MAP<STRING, BYTES>");
+            assertInvalid(withSystem("_kafka_headers", invalid), "_kafka_headers must be MAP");
         }
-        assertInvalid(withSystem("_kafka_rescue", DataTypes.INT()), "nullable STRING");
-        assertInvalid(
-                withSystem("_kafka_rescue", DataTypes.STRING().copy(false)), "nullable STRING");
+        assertInvalid(withSystem("_kafka_rescue", DataTypes.INT()), "_kafka_rescue must be STRING");
+        assertInvalid(withSystem("_kafka_rescue", DataTypes.STRING().copy(false)), "_kafka_rescue");
     }
 
     @Test
@@ -415,7 +414,7 @@ class KafkaTableSchemaTest {
                 withSystem(
                         "_kafka_headers",
                         DataTypes.MAP(DataTypes.STRING(), DataTypes.BYTES().copy(false))),
-                "_kafka_headers<value>");
+                "_kafka_headers");
         assertInvalid(withSystem("_kafka_metadata", metadataType().copy(false)), "_kafka_metadata");
         for (int i = 0; i < metadataType().getFieldCount(); i++) {
             RowType.Builder metadata = RowType.builder();
@@ -424,9 +423,7 @@ class KafkaTableSchemaTest {
                         metadataType().getFields().get(j).getName(),
                         metadataType().getTypeAt(j).copy(i != j));
             }
-            assertInvalid(
-                    withSystem("_kafka_metadata", metadata.build()),
-                    "_kafka_metadata." + metadataType().getFields().get(i).getName());
+            assertInvalid(withSystem("_kafka_metadata", metadata.build()), "_kafka_metadata");
         }
     }
 
@@ -494,6 +491,35 @@ class KafkaTableSchemaTest {
     }
 
     @Test
+    void testMetadataIgnoresFieldIdsAndComments() {
+        RowType metadata =
+                DataTypes.ROW(
+                        DataTypes.FIELD(
+                                "timestamp", DataTypes.TIMESTAMP_LTZ(3), "Record timestamp", 10),
+                        DataTypes.FIELD("timestamp_type", DataTypes.INT(), "Timestamp type", 20),
+                        DataTypes.FIELD("partition", DataTypes.INT(), "Requested partition", 30));
+        TableDescriptor table = withSystem("_kafka_metadata", metadata);
+
+        KafkaTableSchema resolved = KafkaTableSchema.resolve(table);
+
+        assertThat(resolved.rowType().getTypeAt(resolved.metadataPosition())).isEqualTo(metadata);
+        assertThat(resolved.rowType()).isEqualTo(table.getSchema().getRowType());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2})
+    void testMetadataRejectsRenamedFields(int renamedField) {
+        RowType expected = metadataType();
+        RowType.Builder renamed = RowType.builder();
+        for (int i = 0; i < expected.getFieldCount(); i++) {
+            String name = expected.getFields().get(i).getName();
+            renamed.field(i == renamedField ? "renamed_" + name : name, expected.getTypeAt(i));
+        }
+        assertInvalid(
+                withSystem("_kafka_metadata", renamed.build()), "_kafka_metadata must be ROW");
+    }
+
+    @Test
     void testMetadataRejectsInvalidStructureAndOffsetField() {
         for (DataType invalid :
                 Arrays.asList(
@@ -523,16 +549,14 @@ class KafkaTableSchemaTest {
                                 DataTypes.FIELD("timestamp_type", DataTypes.INT()),
                                 DataTypes.FIELD("partition", DataTypes.BIGINT())),
                         DataTypes.ROW(
-                                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
                                 DataTypes.FIELD("partition", DataTypes.INT()),
+                                DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
                                 DataTypes.FIELD("timestamp_type", DataTypes.INT())),
                         DataTypes.ROW(
                                 DataTypes.FIELD("timestamp", DataTypes.TIMESTAMP_LTZ(3)),
-                                DataTypes.FIELD("timestamp_type", DataTypes.INT()),
-                                DataTypes.FIELD("bucket", DataTypes.INT())))) {
-            assertInvalid(
-                    withSystem("_kafka_metadata", invalid),
-                    "ROW<timestamp TIMESTAMP_LTZ(3), timestamp_type INT, partition INT>");
+                                DataTypes.FIELD("partition", DataTypes.INT()),
+                                DataTypes.FIELD("timestamp_type", DataTypes.INT())))) {
+            assertInvalid(withSystem("_kafka_metadata", invalid), "_kafka_metadata must be ROW");
         }
     }
 

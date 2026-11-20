@@ -53,6 +53,17 @@ class LakeTableUtilTest {
         String databaseNameKey = ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
         String tableNameKey = ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
 
+        assertThat(LakeTableUtil.getLakeTablePathOptionKey(TableChange.set(databaseNameKey, "db")))
+                .contains(databaseNameKey);
+        assertThat(LakeTableUtil.getLakeTablePathOptionKey(TableChange.reset(tableNameKey)))
+                .contains(tableNameKey);
+        assertThat(
+                        LakeTableUtil.getLakeTablePathOptionKey(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")))
+                .isEmpty();
+        assertThat(LakeTableUtil.getLakeTablePathOptionKey(TableChange.dropColumn("c1"))).isEmpty();
+
         assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.set(databaseNameKey, "db")))
                 .isTrue();
         assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.reset(databaseNameKey)))

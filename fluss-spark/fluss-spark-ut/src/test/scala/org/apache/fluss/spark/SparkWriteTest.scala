@@ -41,14 +41,15 @@ class SparkWriteTest extends FlussSparkTestBase {
   import SparkWriteTest._
 
   test("Fluss Write: all data types") {
-    val tablePath = createTablePath("test_all_data_types")
+    val tableName = scopedTableName("test_all_data_types")
+    val tablePath = createTablePath(tableName)
     val tableDescriptor: TableDescriptor = TableDescriptor.builder
       .schema(Schema.newBuilder().fromRowType(FLUSS_ROWTYPE).build)
       .build()
     createFlussTable(tablePath, tableDescriptor)
 
     spark.sql(s"""
-                 |INSERT INTO $DEFAULT_DATABASE.test_all_data_types
+                 |INSERT INTO $DEFAULT_DATABASE.$tableName
                  |VALUES (
                  |  true, 1, 10, 100, 1000L, 12.3F, 45.6D,
                  |  1234567.89, 12345678900987654321.12,
@@ -92,11 +93,12 @@ class SparkWriteTest extends FlussSparkTestBase {
   }
 
   test("Fluss Write: log table") {
-    val tablePath = createTablePath(logTableName)
+    val tableName = scopedTableName(logTableName)
+    val tablePath = createTablePath(tableName)
     createFlussTable(tablePath, logTableDescriptor)
 
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$logTableName VALUES
+           |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
            |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
            |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
            |(1000L, 25L, 605, "addr5")
@@ -117,7 +119,8 @@ class SparkWriteTest extends FlussSparkTestBase {
   }
 
   test("Fluss Write: upsert table") {
-    val tablePath = createTablePath(pkTableName)
+    val tableName = scopedTableName(pkTableName)
+    val tablePath = createTablePath(tableName)
     createFlussTable(tablePath, pkTableDescriptor)
     val table = loadFlussTable(tablePath)
     val logScanner = table.newScan.createLogScanner
@@ -125,7 +128,7 @@ class SparkWriteTest extends FlussSparkTestBase {
 
     // insert data
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName VALUES
+           |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
            |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
            |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
            |(1000L, 25L, 605, "addr5")
@@ -144,7 +147,7 @@ class SparkWriteTest extends FlussSparkTestBase {
 
     // update data
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName
+           |INSERT INTO $DEFAULT_DATABASE.$tableName
            |VALUES (800L, 230L, 603, "addr3"), (900L, 240L, 604, "addr4")
            |""".stripMargin)
 

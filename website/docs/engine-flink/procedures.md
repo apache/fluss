@@ -38,7 +38,7 @@ CALL [catalog_name.]sys.add_acl(
 
 **Parameters:**
 
-- `resource` (required): The resource to grant permissions on. Can be `'CLUSTER'` for cluster-level permissions or a specific resource name (e.g., database or table name).
+- `resource` (required): The resource to grant permissions on. Use `cluster`, `database:<database_name>`, `table:<database_name>.<table_name>`, or `group:<group_id>`. Legacy forms such as `cluster.<database_name>` remain supported. A concrete group ID uses the same naming rules as a table name: 1–200 ASCII letters, digits, underscores, or hyphens, and must not start with `__`.
 - `permission` (required): The permission type to grant. Valid values are `'ALLOW'` or `'DENY'`.
 - `principal` (required): The principal to grant permissions to, in the format `'Type:Name'` (e.g., `'User:Alice'`).
 - `operation` (required): The operation type to grant. Valid values include `'READ'`, `'WRITE'`, `'CREATE'`, `'DELETE'`, `'ALTER'`, `'DESCRIBE'`, `'CLUSTER_ACTION'`, `'IDEMPOTENT_WRITE'`.
@@ -61,7 +61,7 @@ CALL sys.add_acl(
 
 -- Grant write permission to user Bob from a specific host
 CALL sys.add_acl(
-  resource => 'my_database.my_table',
+  resource => 'table:my_database.my_table',
   permission => 'ALLOW',
   principal => 'User:Bob',
   operation => 'WRITE',
@@ -512,6 +512,41 @@ CALL sys.remove_server_tag_by_rack('rack-0', 'PERMANENT_OFFLINE');
 
 -- Remove TEMPORARY_OFFLINE tag from all TabletServers in rack-0 and rack-1
 CALL sys.remove_server_tag_by_rack('rack-0,rack-1', 'TEMPORARY_OFFLINE');
+```
+
+### list_server_tag
+
+List the server tags currently assigned to live TabletServers in the cluster. This procedure is useful for inspecting the current tagging status of TabletServers before or after rebalance operations.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.list_server_tag()
+```
+
+**Parameters:**
+
+This procedure takes no parameters.
+
+**Returns:** A table with the following columns:
+- `server_id` (INT): The ID of the TabletServer.
+- `rack` (STRING): The rack of the TabletServer.
+- `server_tag` (STRING): The tag assigned to the TabletServer (e.g., `PERMANENT_OFFLINE`, `TEMPORARY_OFFLINE`).
+
+**Important Notes:**
+
+- Only live TabletServers that have a tag assigned are included in the result. If no TabletServer has a tag, an empty result is returned.
+- The caller must have `DESCRIBE` permission on the cluster.
+- The tags are read from the Coordinator through `Admin.describeCluster()`. This requires Fluss 1.1 or later; older clusters fail with `UnsupportedVersionException`.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- List all server tags
+CALL sys.list_server_tag();
 ```
 
 ### rebalance

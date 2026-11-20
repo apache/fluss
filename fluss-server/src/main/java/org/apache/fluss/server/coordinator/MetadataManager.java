@@ -59,6 +59,7 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
@@ -79,10 +80,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -99,6 +103,10 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
+    // Auto partitioning and DDL share this manager. Keep table identity validation and
+    // partition registration atomic with table deletion, including cascading database drops.
+    private final Lock partitionRegistrationLock = new ReentrantLock();
 
     public static final Set<String> SENSITIVE_TABLE_OPTIONS = new HashSet<>();
 
@@ -343,6 +351,12 @@ public class MetadataManager {
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException {
+        inLock(
+                partitionRegistrationLock,
+                () -> dropDatabaseLocked(name, ignoreIfNotExists, cascade));
+    }
+
+    private void dropDatabaseLocked(String name, boolean ignoreIfNotExists, boolean cascade) {
         if (CoordinatorServer.DEFAULT_DATABASE.equals(name)) {
             throw new UnsupportedOperationException(
                     "Cannot drop the default database '"
@@ -364,6 +378,10 @@ public class MetadataManager {
 
     public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
             throws TableNotExistException {
+        inLock(partitionRegistrationLock, () -> dropTableLocked(tablePath, ignoreIfNotExists));
+    }
+
+    private void dropTableLocked(TablePath tablePath, boolean ignoreIfNotExists) {
         if (!tableExists(tablePath)) {
             if (ignoreIfNotExists) {
                 return;
@@ -862,7 +880,7 @@ public class MetadataManager {
             // enable datalake for the table. NOTE: this may have external (lake catalog) side
             // effects and is therefore NOT safe to auto-retry.
             preAlterTableProperties(
-                    tablePath, tableDescriptor, newDescriptor, tableChanges, flussPrincipal);
+                    tablePath, tableInfo, newDescriptor, tableChanges, flussPrincipal);
 
             TableRegistration updatedTableRegistration =
                     tableReg.newProperties(
@@ -947,24 +965,27 @@ public class MetadataManager {
 
     private void preAlterTableProperties(
             TablePath tablePath,
-            TableDescriptor tableDescriptor,
+            TableInfo tableInfo,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             FlussPrincipal flussPrincipal) {
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
         TablePath currentLakeTablePath =
                 LakeTableUtil.resolveLakeTablePath(
                         tablePath, Configuration.fromMap(tableDescriptor.getProperties()));
-        LakeCatalog.Context lakeCatalogContext =
-                new CoordinatorService.DefaultLakeCatalogContext(
-                        false,
-                        currentLakeTablePath,
-                        flussPrincipal,
-                        tableDescriptor,
-                        newDescriptor);
         LakeCatalog lakeCatalog =
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         boolean enablingDataLake =
                 isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
+        Long currentLakeSnapshotId = enablingDataLake ? getCurrentLakeSnapshotId(tableInfo) : null;
+        LakeCatalog.Context lakeCatalogContext =
+                new CoordinatorService.DefaultLakeCatalogContext(
+                        false,
+                        currentLakeTablePath,
+                        currentLakeSnapshotId,
+                        flussPrincipal,
+                        tableDescriptor,
+                        newDescriptor);
         TablePath lakeTablePath = currentLakeTablePath;
         List<TableChange> lakeTableChanges = tableChanges;
 
@@ -1020,6 +1041,21 @@ public class MetadataManager {
                             e);
                 }
             }
+        }
+    }
+
+    @Nullable
+    private Long getCurrentLakeSnapshotId(TableInfo tableInfo) {
+        try {
+            return zookeeperClient
+                    .getLakeTableSnapshot(tableInfo.getTableId(), null)
+                    .map(LakeTableSnapshot::getSnapshotId)
+                    .orElse(null);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to read the registered lake snapshot for table "
+                            + tableInfo.getTablePath(),
+                    e);
         }
     }
 
@@ -1130,6 +1166,8 @@ public class MetadataManager {
                                         .getLakeCatalogContainer()
                                         .getDefaultTableLakeOptions()));
             }
+        } catch (TableNotExistException e) {
+            throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get tables '%s'.", tablePaths), e);
@@ -1148,6 +1186,23 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    /**
+     * Returns the ZK registrations of the given partitions of a table, read in one batch.
+     * Partitions that are not registered are absent from the result.
+     */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
+            TablePath tablePath, Collection<String> partitionNames) {
+        try {
+            return zookeeperClient.getPartitionRegistrations(tablePath, partitionNames);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to get partitions %s of table '%s'.",
+                            partitionNames, tablePath),
+                    e);
+        }
     }
 
     /**
@@ -1230,6 +1285,34 @@ public class MetadataManager {
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists,
             int bucketCount) {
+        inLock(
+                partitionRegistrationLock,
+                () ->
+                        createPartitionLocked(
+                                tablePath,
+                                tableId,
+                                remoteDataDir,
+                                partitionAssignment,
+                                partition,
+                                ignoreIfExists,
+                                bucketCount));
+    }
+
+    private void createPartitionLocked(
+            TablePath tablePath,
+            long tableId,
+            String remoteDataDir,
+            PartitionAssignment partitionAssignment,
+            ResolvedPartitionSpec partition,
+            boolean ignoreIfExists,
+            int bucketCount) {
+        // A delayed task must not register partitions under a replacement table, even if
+        // ignoreIfExists is true and the new table already has a partition with this name.
+        if (getTableRegistration(tablePath).tableId != tableId) {
+            throw new TableNotExistException(
+                    String.format("Table '%s' with id %s does not exist.", tablePath, tableId));
+        }
+
         String partitionName = partition.getPartitionName();
         Optional<PartitionRegistration> optionalPartitionRegistration =
                 getOptionalPartitionRegistration(tablePath, partitionName);

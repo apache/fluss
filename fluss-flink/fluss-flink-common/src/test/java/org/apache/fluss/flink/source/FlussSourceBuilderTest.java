@@ -47,7 +47,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     public void setup() throws Exception {
         bootstrapServers = conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
 
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        createTable(defaultTablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
     }
 
     @Test
@@ -57,7 +57,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -95,7 +95,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setStoppingOffsets(OffsetsInitializer.latest())
                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -113,7 +113,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setBatch()
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -126,7 +126,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
     @Test
     public void testBatchAndStoppingOffsetsAreOrderIndependent() throws Exception {
-        TablePath logTablePath = TablePath.of(DEFAULT_DB, "batch-with-stopping-offsets");
+        TablePath logTablePath = tableNames.tablePath(DEFAULT_DB, "batch-with-stopping-offsets");
         createTable(logTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
 
         FlussSource<TestRecord> batchThenStopping =
@@ -165,7 +165,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                                 FlussSource.<TestRecord>builder()
                                         .setBootstrapServers(bootstrapServers)
                                         .setDatabase(DEFAULT_DB)
-                                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                        .setTable(defaultTablePath.getTableName())
                                         .setBatch()
                                         .setStoppingOffsets(OffsetsInitializer.latest())
                                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -179,7 +179,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                                 FlussSource.<TestRecord>builder()
                                         .setBootstrapServers(bootstrapServers)
                                         .setDatabase(DEFAULT_DB)
-                                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                        .setTable(defaultTablePath.getTableName())
                                         .setBatch()
                                         .setStartingOffsets(OffsetsInitializer.earliest())
                                         .setStoppingOffsets(OffsetsInitializer.latest())
@@ -196,7 +196,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setBounded()
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -214,7 +214,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 () ->
                         FlussSource.<TestRecord>builder()
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -234,7 +234,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers("")
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -253,7 +253,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 () ->
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -273,7 +273,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
                                 .setDatabase("")
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -331,7 +331,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -347,7 +347,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -364,7 +364,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(10000L)
                                 .build();
@@ -382,7 +382,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -400,7 +400,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())

@@ -37,6 +37,7 @@ import javax.annotation.Nullable;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.ToLongFunction;
 
 /**
  * Collects and provides access to RocksDB statistics for a single KvTablet.
@@ -71,6 +72,24 @@ public class RocksDBStatistics implements AutoCloseable {
         this.resourceGuard = resourceGuard;
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
         this.blockCache = blockCache;
+    }
+
+    /**
+     * Collects a metric while keeping this RocksDB instance and its statistics alive.
+     *
+     * <p>The collector may retain the statistics identity for deduplication, but must only access
+     * the native statistics during the call. Returns zero if statistics are unavailable or
+     * collection fails.
+     */
+    public long collectStatistics(ToLongFunction<Statistics> collector) {
+        try (ResourceGuard.Lease lease = resourceGuard.acquireResource()) {
+            if (statistics != null) {
+                return collector.applyAsLong(statistics);
+            }
+        } catch (Exception e) {
+            LOG.debug("Failed to collect RocksDB statistics (possibly closed or unavailable)", e);
+        }
+        return 0L;
     }
 
     // ==================== Ticker-based Metrics ====================
@@ -440,7 +459,7 @@ public class RocksDBStatistics implements AutoCloseable {
 
     @Override
     public void close() {
-        // No resources to clean up, statistics are managed by TableMetricGroup
+        // The RocksDB resource container owns the statistics reference.
         LOG.debug("RocksDB statistics accessor closed");
     }
 }

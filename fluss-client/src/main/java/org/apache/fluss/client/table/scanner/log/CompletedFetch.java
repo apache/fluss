@@ -38,11 +38,14 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.Predicate;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -79,6 +82,7 @@ public abstract class CompletedFetch {
     private long nextFetchOffset;
     private boolean isConsumed = false;
     private boolean initialized = false;
+    private int lastFetchRecordCount;
 
     public CompletedFetch(
             TableBucket tableBucket,
@@ -209,6 +213,15 @@ public abstract class CompletedFetch {
      * @return {@link ScanRecord scan records}
      */
     public List<ScanRecord> fetchRecords(int maxRecords) {
+        return fetchRecords(maxRecords, null);
+    }
+
+    int lastFetchRecordCount() {
+        return lastFetchRecordCount;
+    }
+
+    List<ScanRecord> fetchRecords(int maxRecords, @Nullable Predicate<LogRecord> recordFilter) {
+        lastFetchRecordCount = 0;
         if (corruptLastRecord) {
             throw new FetchException(
                     "Received exception when fetching the next record from "
@@ -224,7 +237,7 @@ public abstract class CompletedFetch {
         List<ScanRecord> scanRecords = new ArrayList<>();
         try {
             for (int i = 0; i < maxRecords; i++) {
-                fetchRecord(scanRecords);
+                fetchRecord(scanRecords, recordFilter);
                 if (lastRecord == null) {
                     break;
                 }
@@ -237,7 +250,7 @@ public abstract class CompletedFetch {
             // BinlogRowConverter) from seeing an orphaned -U when records from multiple
             // buckets are interleaved across polls.
             if (lastRecord != null && lastRecord.getChangeType() == ChangeType.UPDATE_BEFORE) {
-                fetchRecord(scanRecords);
+                fetchRecord(scanRecords, recordFilter);
             }
         } catch (Exception e) {
             cachedRecordException = e;
@@ -253,7 +266,9 @@ public abstract class CompletedFetch {
         return scanRecords;
     }
 
-    private void fetchRecord(List<ScanRecord> scanRecords) throws Exception {
+    private void fetchRecord(
+            List<ScanRecord> scanRecords, @Nullable Predicate<LogRecord> recordFilter)
+            throws Exception {
         // Only move to next record if there was no exception in the last fetch.
         if (cachedRecordException == null) {
             corruptLastRecord = true;
@@ -265,8 +280,11 @@ public abstract class CompletedFetch {
             return;
         }
 
-        ScanRecord record = toScanRecord(lastRecord);
-        scanRecords.add(record);
+        if (recordFilter == null || recordFilter.test(lastRecord)) {
+            ScanRecord record = toScanRecord(lastRecord);
+            scanRecords.add(record);
+        }
+        lastFetchRecordCount++;
         recordsRead++;
         // Per-record offset is a best-effort value; the authoritative offset
         // comes from the batch's nextLogOffset once the batch is fully consumed.

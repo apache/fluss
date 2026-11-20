@@ -21,6 +21,7 @@ import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
+import org.apache.flink.api.common.operators.MailboxExecutor;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperator;
@@ -49,9 +50,18 @@ public class TieringCommitOperatorFactory<WriteResult, Committable>
     public <T extends StreamOperator<CommittableMessage<Committable>>> T createStreamOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters) {
 
+        MailboxExecutor mailboxExecutor =
+                parameters
+                        .getContainingTask()
+                        .getMailboxExecutorFactory()
+                        .createExecutor(parameters.getStreamConfig().getChainIndex());
         TieringCommitOperator<WriteResult, Committable> commitOperator =
                 new TieringCommitOperator<>(
-                        parameters, flussConfig, lakeTieringConfig, lakeTieringFactory);
+                        parameters,
+                        mailboxExecutor,
+                        flussConfig,
+                        lakeTieringConfig,
+                        lakeTieringFactory);
 
         @SuppressWarnings("unchecked")
         final T castedOperator = (T) commitOperator;

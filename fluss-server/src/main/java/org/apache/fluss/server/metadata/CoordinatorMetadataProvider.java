@@ -78,9 +78,14 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
             return Optional.empty();
         }
         TableInfo tableInfo = ctx.getTableInfoById(tableId);
+        Map<Integer, List<Integer>> assignment = ctx.getTableAssignment(tableId);
+        if (!tableInfo.isPartitioned()
+                && !isCompleteAssignment(assignment, tableInfo.getNumBuckets())) {
+            return Optional.empty();
+        }
 
         List<BucketMetadata> bucketMetadataList =
-                getBucketMetadataFromContext(ctx, tableId, null, ctx.getTableAssignment(tableId));
+                getBucketMetadataFromContext(ctx, tableId, null, assignment);
         return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
     }
 
@@ -98,24 +103,34 @@ public class CoordinatorMetadataProvider extends ZkBasedMetadataProvider {
             return Optional.empty();
         }
         long partitionId = partitionIdOpt.get();
+        Map<Integer, List<Integer>> assignment =
+                ctx.getPartitionAssignment(new TablePartition(tableId, partitionId));
+        Integer count = ctx.getPartitionBucketCount(new TablePartition(tableId, partitionId));
+        if (count == null || !isCompleteAssignment(assignment, count)) {
+            return Optional.empty();
+        }
         List<BucketMetadata> bucketMetadataList =
-                getBucketMetadataFromContext(
-                        ctx,
-                        tableId,
-                        partitionId,
-                        ctx.getPartitionAssignment(new TablePartition(tableId, partitionId)));
+                getBucketMetadataFromContext(ctx, tableId, partitionId, assignment);
         return Optional.of(
                 new PartitionMetadata(
-                        tableId,
-                        partitionName,
-                        partitionId,
-                        bucketMetadataList,
-                        bucketMetadataList.size()));
+                        tableId, partitionName, partitionId, bucketMetadataList, count));
     }
 
     @Override
     public Optional<PhysicalTablePath> getPhysicalTablePathFromCache(long partitionId) {
         return ctx.getPhysicalTablePath(partitionId);
+    }
+
+    private static boolean isCompleteAssignment(Map<Integer, List<Integer>> assignment, int count) {
+        if (count <= 0 || assignment.size() != count) {
+            return false;
+        }
+        for (int bucket : assignment.keySet()) {
+            if (bucket < 0 || bucket >= count) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**

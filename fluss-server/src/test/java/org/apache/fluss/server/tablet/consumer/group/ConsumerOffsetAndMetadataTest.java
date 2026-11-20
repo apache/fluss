@@ -17,7 +17,11 @@
 
 package org.apache.fluss.server.tablet.consumer.group;
 
+import org.apache.fluss.row.BinaryString;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,11 +29,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ConsumerOffsetAndMetadataTest {
 
     @Test
-    void testNullMetadataIsNormalized() {
-        ConsumerOffsetAndMetadata offsetAndMetadata = new ConsumerOffsetAndMetadata(10L, null);
+    void testOmittedAndEmptyMetadata() {
+        ConsumerOffsetAndMetadata omitted = new ConsumerOffsetAndMetadata(10L, null);
+        ConsumerOffsetAndMetadata empty = new ConsumerOffsetAndMetadata(10L, "");
 
-        assertThat(offsetAndMetadata.getMetadata())
-                .isEqualTo(ConsumerOffsetAndMetadata.EMPTY_METADATA);
+        assertThat(omitted.getMetadata()).isNull();
+        assertThat(empty.getMetadata()).isEqualTo(BinaryString.EMPTY_UTF8);
+        assertThat(omitted).isNotEqualTo(empty);
+        ConsumerOffsetAndMetadata otherOmitted = new ConsumerOffsetAndMetadata(10L, null);
+        assertThat(omitted).isEqualTo(otherOmitted).hasSameHashCodeAs(otherOmitted);
+        assertThat(omitted.isMetadataSizeValid(0)).isTrue();
+        assertThat(empty.isMetadataSizeValid(0)).isTrue();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"abcd,4", "中,3", "😀,4"})
+    void testMetadataSizeIsMeasuredInUtf8Bytes(String metadata, int bytes) {
+        ConsumerOffsetAndMetadata value = new ConsumerOffsetAndMetadata(10L, metadata);
+        assertThat(value.isMetadataSizeValid(bytes)).isTrue();
+        assertThat(value.isMetadataSizeValid(bytes - 1)).isFalse();
     }
 
     @Test
@@ -44,8 +62,7 @@ class ConsumerOffsetAndMetadataTest {
 
     @Test
     void testNegativeOffsetIsAllowedForInternalSentinels() {
-        ConsumerOffsetAndMetadata offsetAndMetadata =
-                new ConsumerOffsetAndMetadata(-1L, ConsumerOffsetAndMetadata.EMPTY_METADATA);
+        ConsumerOffsetAndMetadata offsetAndMetadata = new ConsumerOffsetAndMetadata(-1L, null);
 
         assertThat(offsetAndMetadata.getOffset()).isEqualTo(-1L);
     }

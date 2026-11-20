@@ -54,6 +54,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -92,6 +93,7 @@ public final class KvBatchScanner implements BatchScanner {
     @Nullable private CompletableFuture<ScanKvResponse> inFlight;
 
     private int callSeqId = 0;
+    @Nullable private Long snapshotLogOffset;
     private int openRetries = 0;
     private boolean drained = false;
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -154,6 +156,10 @@ public final class KvBatchScanner implements BatchScanner {
                 scannerId = response.getScannerId();
             }
 
+            if (callSeqId == 0 && response.hasLogOffset()) {
+                snapshotLogOffset = response.getLogOffset();
+            }
+
             boolean hasMore = response.hasHasMoreResults() && response.isHasMoreResults();
             if (hasMore) {
                 sendContinuation();
@@ -169,6 +175,21 @@ public final class KvBatchScanner implements BatchScanner {
             // getRecords() copies the data, so returned rows no longer reference this buffer.
             releaseResponse(response);
         }
+    }
+
+    /**
+     * Returns the exclusive log offset captured when the server opened the RocksDB snapshot backing
+     * this scanner.
+     *
+     * <p>The offset is available for empty buckets as well as non-empty buckets. Changelog
+     * consumption starting from this offset covers writes that occur after the captured snapshot.
+     * The result is empty until the first successful scan response has been received, or if that
+     * response does not contain the snapshot offset.
+     */
+    public OptionalLong getSnapshotLogOffset() {
+        return snapshotLogOffset == null
+                ? OptionalLong.empty()
+                : OptionalLong.of(snapshotLogOffset);
     }
 
     @Override

@@ -157,9 +157,9 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
     void testDeltaJoin() throws Exception {
         // disable cache to get stable results with updating
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
-        String leftTableName = "left_table";
-        String rightTableName = "right_table";
-        String sinkTableName = "sink_table";
+        String leftTableName = tableNames.tableName("left_table");
+        String rightTableName = tableNames.tableName("right_table");
+        String sinkTableName = tableNames.tableName("sink_table");
 
         createSource(
                 leftTableName,
@@ -233,9 +233,9 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
     void testDeltaJoinOnPrimaryKey() throws Exception {
         // disable cache to get stable results with updating
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_DELTA_JOIN_CACHE_ENABLED, false);
-        String leftTableName = "left_table";
-        String rightTableName = "right_table";
-        String sinkTableName = "sink_table";
+        String leftTableName = tableNames.tableName("left_table");
+        String rightTableName = tableNames.tableName("right_table");
+        String sinkTableName = tableNames.tableName("sink_table");
 
         createSource(
                 leftTableName,
@@ -307,7 +307,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithCalc() throws Exception {
-        String leftTableName = "left_table_proj";
+        String leftTableName = tableNames.tableName("left_table_proj");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -324,7 +324,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_proj";
+        String rightTableName = tableNames.tableName("right_table_proj");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -341,7 +341,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table_proj";
+        String sinkTableName = tableNames.tableName("sink_table_proj");
         createSink(sinkTableName, "a1 int, c1 bigint, d1 int, a2 int", "c1, d1");
 
         String sql =
@@ -367,7 +367,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithAppendOnlySourceAndCalc() throws Exception {
-        String leftTableName = "left_table_proj";
+        String leftTableName = tableNames.tableName("left_table_proj");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -384,7 +384,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_proj";
+        String rightTableName = tableNames.tableName("right_table_proj");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -401,7 +401,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table_proj";
+        String sinkTableName = tableNames.tableName("sink_table_proj");
         createSink(sinkTableName, "a1 int, c1 bigint, a2 int", "c1");
 
         String sql =
@@ -422,7 +422,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWhenFilterOnNonUpsertKeys() {
-        String leftTableName = "left_table_force_fail";
+        String leftTableName = tableNames.tableName("left_table_force_fail");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -431,7 +431,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_force_fail";
+        String rightTableName = tableNames.tableName("right_table_force_fail");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -440,7 +440,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "sink_table_force_fail";
+        String sinkTableName = tableNames.tableName("sink_table_force_fail");
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -471,7 +471,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithNonEquiConditionOnUpsertKeys() throws Exception {
-        String leftTableName = "left_table_nonequi_upsert";
+        String leftTableName = tableNames.tableName("left_table_nonequi_upsert");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -492,7 +492,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_nonequi_upsert";
+        String rightTableName = tableNames.tableName("right_table_nonequi_upsert");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -513,7 +513,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table_nonequi_upsert";
+        String sinkTableName = tableNames.tableName("sink_table_nonequi_upsert");
         createSink(sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int", "c1, d1, e1");
 
         String sql =
@@ -540,7 +540,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithAppendOnlySourceAndNonEquiCondition() throws Exception {
-        String leftTableName = "left_table_nonequi_insert";
+        String leftTableName = tableNames.tableName("left_table_nonequi_insert");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -557,7 +557,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_nonequi_insert";
+        String rightTableName = tableNames.tableName("right_table_nonequi_insert");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -574,7 +574,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table_nonequi_insert";
+        String sinkTableName = tableNames.tableName("sink_table_nonequi_insert");
         createSink(
                 sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int, e2 bigint", "c1, d1");
 
@@ -613,7 +613,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithLookupCache() throws Exception {
-        String leftTableName = "left_table_cache";
+        String leftTableName = tableNames.tableName("left_table_cache");
         createSource(
                 leftTableName,
                 "a1 int, c1 bigint, d1 int",
@@ -624,7 +624,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         List<InternalRow> rows1 = Collections.singletonList(row(1, 100L, 1));
         writeRows(conn, TablePath.of(DEFAULT_DB, leftTableName), rows1, false);
 
-        String rightTableName = "right_table_cache";
+        String rightTableName = tableNames.tableName("right_table_cache");
         createSource(
                 rightTableName,
                 "a2 int, c2 bigint, d2 int",
@@ -641,7 +641,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         List<InternalRow> rows2 = Collections.singletonList(row(1, 100L, 1));
         writeRows(conn, TablePath.of(DEFAULT_DB, rightTableName), rows2, false);
 
-        String sinkTableName = "sink_table_cache";
+        String sinkTableName = tableNames.tableName("sink_table_cache");
         createSink(sinkTableName, "a1 int, c1 bigint, d1 int, a2 int", "c1, d1");
 
         String sql =
@@ -663,7 +663,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithPartitionedTable() throws Exception {
-        String leftTableName = "left_table_partitioned";
+        String leftTableName = tableNames.tableName("left_table_partitioned");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, pt1 varchar",
@@ -687,7 +687,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                         row(4, "v4", 400L, 4000, leftPartition2));
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_partitioned";
+        String rightTableName = tableNames.tableName("right_table_partitioned");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, pt2 varchar",
@@ -709,7 +709,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                         row(4, "v4", 400L, 3000, rightPartition2));
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table";
+        String sinkTableName = tableNames.tableName("sink_table");
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, pt1 varchar, b2 varchar",
@@ -741,7 +741,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWhenSourceHasDelete() {
-        String leftTableName = "left_table_delete_force";
+        String leftTableName = tableNames.tableName("left_table_delete_force");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -750,7 +750,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 null);
 
-        String rightTableName = "right_table_delete_force";
+        String rightTableName = tableNames.tableName("right_table_delete_force");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -759,7 +759,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 null);
 
-        String sinkTableName = "sink_table_delete_force";
+        String sinkTableName = tableNames.tableName("sink_table_delete_force");
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -777,7 +777,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithJoinKeyExceedsPrimaryKey() {
-        String leftTableName = "left_table_exceed_pk";
+        String leftTableName = tableNames.tableName("left_table_exceed_pk");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -786,7 +786,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_exceed_pk";
+        String rightTableName = tableNames.tableName("right_table_exceed_pk");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -795,7 +795,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "sink_table_exceed_pk";
+        String sinkTableName = tableNames.tableName("sink_table_exceed_pk");
         createSink(
                 sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int, e2 bigint", "c1, d1");
 
@@ -811,7 +811,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinWithAppendOnlySourceAndJoinKeyExceedsPrimaryKey() throws Exception {
-        String leftTableName = "left_table_exceed_pk";
+        String leftTableName = tableNames.tableName("left_table_exceed_pk");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -825,7 +825,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
-        String rightTableName = "right_table_exceed_pk";
+        String rightTableName = tableNames.tableName("right_table_exceed_pk");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -839,7 +839,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
         writeRows(conn, rightTablePath, rows2, false);
 
-        String sinkTableName = "sink_table_exceed_pk";
+        String sinkTableName = tableNames.tableName("sink_table_exceed_pk");
         createSink(
                 sinkTableName, "a1 int, c1 bigint, d1 int, e1 bigint, a2 int, e2 bigint", "c1, d1");
 
@@ -871,7 +871,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWhenJoinKeyNotContainIndex() {
-        String leftTableName = "left_table_no_idx_force";
+        String leftTableName = tableNames.tableName("left_table_no_idx_force");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -880,7 +880,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_no_idx_force";
+        String rightTableName = tableNames.tableName("right_table_no_idx_force");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -889,7 +889,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "sink_table_no_idx_force";
+        String sinkTableName = tableNames.tableName("sink_table_no_idx_force");
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -907,7 +907,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithOuterJoin() {
-        String leftTableName = "left_table_outer_fail";
+        String leftTableName = tableNames.tableName("left_table_outer_fail");
         createSource(
                 leftTableName,
                 "a1 int, c1 bigint, d1 int",
@@ -916,7 +916,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_outer_fail";
+        String rightTableName = tableNames.tableName("right_table_outer_fail");
         createSource(
                 rightTableName,
                 "a2 int, c2 bigint, d2 int",
@@ -925,7 +925,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "sink_table_outer_fail";
+        String sinkTableName = tableNames.tableName("sink_table_outer_fail");
         createSink(sinkTableName, "a1 int, c1 bigint, a2 int", "c1");
 
         // Test LEFT JOIN
@@ -961,7 +961,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithCascadeJoin() {
-        String table1 = "cascade_table1";
+        String table1 = tableNames.tableName("cascade_table1");
         createSource(
                 table1,
                 "a1 int, c1 bigint, d1 int",
@@ -970,7 +970,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String table2 = "cascade_table2";
+        String table2 = tableNames.tableName("cascade_table2");
         createSource(
                 table2,
                 "a2 int, c2 bigint, d2 int",
@@ -979,7 +979,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String table3 = "cascade_table3";
+        String table3 = tableNames.tableName("cascade_table3");
         createSource(
                 table3,
                 "a3 int, c3 bigint, d3 int",
@@ -988,7 +988,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "cascade_sink";
+        String sinkTableName = tableNames.tableName("cascade_sink");
         createSink(
                 sinkTableName,
                 "a1 int, c1 bigint, a2 int, c2 bigint, a3 int, c3 bigint",
@@ -1011,7 +1011,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
     void testDeltaJoinFailsWithSinkMaterializer() {
         // With CDC sources, when sink PK doesn't match upstream update key,
         // Flink would insert SinkUpsertMaterializer which prevents delta join
-        String leftTableName = "left_table_materializer";
+        String leftTableName = tableNames.tableName("left_table_materializer");
         createSource(
                 leftTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint",
@@ -1020,7 +1020,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_materializer";
+        String rightTableName = tableNames.tableName("right_table_materializer");
         createSource(
                 rightTableName,
                 "a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -1032,7 +1032,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
         // Sink PK (a1, a2) doesn't match upstream update key (c1, d1, c2, d2)
         // TODO: this depends on Fluss supports MVCC/point-in-time lookup to support change upsert
         //  keys
-        String sinkTableName = "sink_table_materializer";
+        String sinkTableName = tableNames.tableName("sink_table_materializer");
         createSink(
                 sinkTableName,
                 "a1 int, b1 varchar, c1 bigint, d1 int, e1 bigint, a2 int, b2 varchar, c2 bigint, d2 int, e2 bigint",
@@ -1050,7 +1050,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
 
     @Test
     void testDeltaJoinFailsWithNonDeterministicFunctions() {
-        String leftTableName = "left_table_nondeterministic";
+        String leftTableName = tableNames.tableName("left_table_nondeterministic");
         createSource(
                 leftTableName,
                 "a1 int, c1 bigint, d1 int",
@@ -1059,7 +1059,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String rightTableName = "right_table_nondeterministic";
+        String rightTableName = tableNames.tableName("right_table_nondeterministic");
         createSource(
                 rightTableName,
                 "a2 int, c2 bigint, d2 int",
@@ -1068,7 +1068,7 @@ public class Flink22DeltaJoinITCase extends FlinkTestBase {
                 null,
                 ImmutableMap.of("table.delete.behavior", "IGNORE"));
 
-        String sinkTableName = "sink_table_nondeterministic";
+        String sinkTableName = tableNames.tableName("sink_table_nondeterministic");
         // TODO this should be supported in Flink in future for non-deterministic functions before
         //  sinking
         createSink(sinkTableName, "c1 bigint, d1 bigint, rand_val double", "c1");

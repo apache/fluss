@@ -1,0 +1,36 @@
+################################################################################
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+################################################################################
+
+remote.data.dir: s3://fluss/remote-data
+s3.endpoint: http://rustfs:9000
+s3.access-key: rustfsadmin
+s3.secret-key: rustfsadmin
+s3.region: us-east-1
+s3.path-style-access: true
+s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
+s3.assumed.role.sts.endpoint: http://rustfs:9000
+
+datalake.enabled: true
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: s3://fluss/paimon
+datalake.paimon.s3.endpoint: http://rustfs:9000
+datalake.paimon.s3.access-key: rustfsadmin
+datalake.paimon.s3.secret-key: rustfsadmin
+datalake.paimon.s3.path.style.access: true
+fluss.tiering.poll.table.interval: 1s

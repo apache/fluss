@@ -17,7 +17,12 @@
 
 package org.apache.fluss.server.metadata;
 
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -30,9 +35,55 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CoordinatorMetadataProviderTest {
+
+    @Test
+    void testPartialAssignmentDoesNotOverrideRegisteredPartitionCount() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableInfo tableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_INFO.getTablePath(),
+                        DATA1_TABLE_INFO.getTableId(),
+                        0,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DATA1_TABLE_INFO.getRemoteDataDir(),
+                        0,
+                        0);
+        long tableId = tableInfo.getTableId();
+        PhysicalTablePath path = PhysicalTablePath.of(tableInfo.getTablePath(), "p");
+        context.putTableInfo(tableInfo);
+        context.putTablePath(tableId, path.getTablePath());
+        context.putPartition(
+                12,
+                path,
+                new PartitionInfo(
+                        12,
+                        ResolvedPartitionSpec.fromPartitionName(tableInfo.getPartitionKeys(), "p"),
+                        tableInfo.getRemoteDataDir(),
+                        3));
+        TablePartition partition = new TablePartition(tableId, 12L);
+        context.putPartitionBucketCount(partition, 3);
+        context.updateBucketReplicaAssignment(
+                new TableBucket(tableId, 12L, 0), Collections.singletonList(1));
+        CoordinatorMetadataProvider provider = new CoordinatorMetadataProvider(null, null, context);
+        assertThat(provider.getPartitionMetadataFromCache(path)).isEmpty();
+        for (int bucket = 1; bucket < 3; bucket++) {
+            context.updateBucketReplicaAssignment(
+                    new TableBucket(tableId, 12L, bucket), Collections.singletonList(1));
+        }
+        assertThat(provider.getPartitionMetadataFromCache(path))
+                .hasValueSatisfying(
+                        metadata -> {
+                            assertThat(metadata.getBucketCount()).isEqualTo(3);
+                            assertThat(metadata.getBucketMetadataList()).hasSize(3);
+                        });
+        context.removePartition(partition);
+        assertThat(context.getPartitionBucketCount(partition)).isNull();
+    }
 
     @Test
     void testBuildsAuthoritativeBucketMetadataFromSingleLeaderAndIsrState() {

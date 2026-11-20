@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.writer;
 
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
@@ -45,9 +46,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
-
-    // same to primaryKeyEncoder if the bucket key is the same to the primary key
-    private final KeyEncoder bucketKeyEncoder;
+    private final BucketCalculator bucketCalculator;
 
     private final KvFormat kvFormat;
     private final WriteFormat writeFormat;
@@ -87,13 +86,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         tableInfo.getPhysicalPrimaryKeys(),
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
-        this.bucketKeyEncoder =
-                KeyEncoder.ofBucketKeyEncoder(
-                        tableInfo.getRowType(),
-                        tableInfo.getBucketKeys(),
-                        tableInfo.getTableConfig(),
-                        tableInfo.isDefaultBucketKey(),
-                        primaryKeyEncoder);
+        this.bucketCalculator = BucketCalculator.forPrimaryKeyRow(tableInfo, primaryKeyEncoder);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
@@ -177,8 +170,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
-        byte[] bucketKey =
-                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
+        byte[] bucketKey = bucketCalculator.encodeKey(row, key);
         WriteRecord record =
                 WriteRecord.forUpsert(
                         tableInfo,
@@ -203,8 +195,7 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
-        byte[] bucketKey =
-                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
+        byte[] bucketKey = bucketCalculator.encodeKey(row, key);
         WriteRecord record =
                 WriteRecord.forDelete(
                         tableInfo,

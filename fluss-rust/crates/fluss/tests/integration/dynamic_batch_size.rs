@@ -130,11 +130,15 @@ mod dynamic_batch_size_test {
         // Write many tiny rows — each well below 50% of the batch size so
         // the estimator shrinks the target toward min after each drain.
         let row_count = 200usize;
+        let mut acks = Vec::new();
         for i in 0..row_count {
             let row = make_row(i as i32, "x");
-            writer.append(&row).expect("Failed to append row");
+            acks.push(writer.append(&row).expect("Failed to append row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         // Verify the estimator actually shrunk toward min, not just that flush succeeded.
         let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
@@ -180,11 +184,15 @@ mod dynamic_batch_size_test {
 
         // Phase 1: shrink — many tiny rows drive the target toward min.
         let small_count = 100usize;
+        let mut acks = Vec::new();
         for i in 0..small_count {
             let row = make_row(i as i32, "small");
-            writer.append(&row).expect("Failed to append small row");
+            acks.push(writer.append(&row).expect("Failed to append small row"));
         }
         writer.flush().await.expect("Failed to flush phase 1");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
 
@@ -201,11 +209,15 @@ mod dynamic_batch_size_test {
         // estimator back up toward max after it has been shrunk.
         let large_payload = "A".repeat(200 * 1024); // ~200 KB
         let large_count = 5usize;
+        let mut acks = Vec::new();
         for i in 0..large_count {
             let row = make_row((small_count + i) as i32, &large_payload);
-            writer.append(&row).expect("Failed to append large row");
+            acks.push(writer.append(&row).expect("Failed to append large row"));
         }
         writer.flush().await.expect("Failed to flush phase 2");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let estimated_after_grow = connection
             .estimated_batch_size_for_table(&physical_path)
@@ -257,11 +269,15 @@ mod dynamic_batch_size_test {
             .expect("Failed to create writer");
 
         let row_count = 100usize;
+        let mut acks = Vec::new();
         for i in 0..row_count {
             let row = make_row(i as i32, "static");
-            writer.append(&row).expect("Failed to append row");
+            acks.push(writer.append(&row).expect("Failed to append row"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let records = read_back_records(&connection, &table_path, row_count).await;
         assert_eq!(
@@ -315,18 +331,24 @@ mod dynamic_batch_size_test {
         for task_id in 0..tasks_count {
             let writer_clone = Arc::clone(&writer);
             let handle = tokio::spawn(async move {
+                let mut acks = Vec::new();
                 for i in 0..rows_per_task {
                     let row = make_row((task_id * rows_per_task + i) as i32, "concurrent");
-                    writer_clone.append(&row).expect("Failed to append");
+                    acks.push(writer_clone.append(&row).expect("Failed to append"));
                 }
+                acks
             });
             handles.push(handle);
         }
 
+        let mut acks = Vec::new();
         for handle in handles {
-            handle.await.expect("Task panicked");
+            acks.extend(handle.await.expect("Task panicked"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("append ack");
+        }
 
         let total = tasks_count * rows_per_task;
         let records = read_back_records(&connection, &table_path, total).await;

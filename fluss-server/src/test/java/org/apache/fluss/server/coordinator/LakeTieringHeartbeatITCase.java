@@ -33,6 +33,7 @@ import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -65,6 +66,8 @@ class LakeTieringHeartbeatITCase {
                     .build();
 
     private static CoordinatorGateway coordinatorGateway;
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     private static Map<String, String> getDataLakeFormat() {
         Map<String, String> datalakeFormat = new HashMap<>();
@@ -309,7 +312,8 @@ class LakeTieringHeartbeatITCase {
         assertThat(pbLakeTieringTableInfo.getTieringEpoch()).isEqualTo(expectTieringEpoch);
         PbTablePath pbTablePath = pbLakeTieringTableInfo.getTablePath();
         assertThat(pbTablePath.getDatabaseName()).isEqualTo("fluss");
-        assertThat(pbTablePath.getTableName()).isEqualTo("test_lake_table_" + expectTableId);
+        assertThat(pbTablePath.getTableName())
+                .isEqualTo(tableNames.tableName("test_lake_table_" + expectTableId));
     }
 
     private void createLakeTables(int tableCount) throws Exception {
@@ -322,7 +326,7 @@ class LakeTieringHeartbeatITCase {
                             .property(
                                     ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(100))
                             .build();
-            TablePath tablePath = TablePath.of("fluss", "test_lake_table_" + i);
+            TablePath tablePath = tableNames.tablePath("fluss", "test_lake_table_" + i);
             // create the table
             adminGateway
                     .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))

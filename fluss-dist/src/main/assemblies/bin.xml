@@ -71,6 +71,13 @@
             <fileMode>0644</fileMode>
         </file>
 
+        <file>
+            <source>../fluss-kafka/target/fluss-kafka-${project.version}.jar</source>
+            <outputDirectory>lib/</outputDirectory>
+            <destName>fluss-kafka-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <!-- copy the config file -->
         <file>
             <source>src/main/resources/server.yaml</source>

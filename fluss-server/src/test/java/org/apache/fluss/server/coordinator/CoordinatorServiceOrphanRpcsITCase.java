@@ -39,9 +39,10 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
@@ -64,7 +65,6 @@ class CoordinatorServiceOrphanRpcsITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
-    private static final TablePath PK_TABLE_PATH = TablePath.of("orphan_rpc_test_db", "pk_table");
     private static final TableDescriptor PK_TABLE_DESCRIPTOR =
             TableDescriptor.builder()
                     .schema(
@@ -80,14 +80,18 @@ class CoordinatorServiceOrphanRpcsITCase {
 
     private static final int MAX_SNAPSHOTS_TO_RETAIN = 2;
 
-    private static long pkTableId;
+    private long pkTableId;
     @TempDir static Path tempDir;
 
-    @BeforeAll
-    static void setupTables() throws Exception {
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final TablePath pkTablePath = tableNames.tablePath("orphan_rpc_test_db", "pk_table");
+
+    @BeforeEach
+    void setupTables() throws Exception {
         pkTableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, PK_TABLE_PATH, PK_TABLE_DESCRIPTOR);
+                        FLUSS_CLUSTER_EXTENSION, pkTablePath, PK_TABLE_DESCRIPTOR);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(pkTableId);
     }
 
@@ -136,7 +140,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 0);
         CompletedSnapshotStore store = createTestStore(snapshot -> false);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), null, 0);
         }
         injectStore(tb, store);
 
@@ -161,7 +165,7 @@ class CoordinatorServiceOrphanRpcsITCase {
         TableBucket tb = new TableBucket(pkTableId, 1);
         CompletedSnapshotStore store = createTestStore(snapshot -> snapshot.getSnapshotID() == 1L);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
-            store.add(createMinimalSnapshot(tb, snapId));
+            store.add(createMinimalSnapshot(tb, snapId), null, 0);
         }
         injectStore(tb, store);
 
@@ -195,7 +199,7 @@ class CoordinatorServiceOrphanRpcsITCase {
     // -------------------------------------------------------------------------
 
     private CompletedSnapshotStore createTestStore(
-            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) throws Exception {
         return new CompletedSnapshotStore(
                 MAX_SNAPSHOTS_TO_RETAIN,
                 new SharedKvFileRegistry(),
@@ -231,10 +235,22 @@ class CoordinatorServiceOrphanRpcsITCase {
     private static class NoOpSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
         @Override
+        public Optional<CompletedSnapshotHandle> getRecoverySnapshot(TableBucket bucket) {
+            return Optional.empty();
+        }
+
+        @Override
         public void add(
                 TableBucket tableBucket,
                 long snapshotId,
                 CompletedSnapshotHandle completedSnapshotHandle) {}
+
+        @Override
+        public void updateRecoverySnapshot(
+                TableBucket bucket,
+                long snapshotId,
+                Long previousSnapshotId,
+                int expectedLeaderEpoch) {}
 
         @Override
         public void remove(TableBucket tableBucket, long snapshotId) {}

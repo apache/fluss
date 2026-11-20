@@ -100,7 +100,7 @@ For primary key tables, changelogs are also generated in the Paimon format, enab
 
 ### Configure a Custom Paimon Table Path
 
-To use a different database or table name for the Paimon table, set the following options when creating the Fluss table. These options are currently supported only for Paimon and map the Fluss table to the physical Paimon database and table name; they do not rename the Fluss table:
+To use a different database or table name for the Paimon table, set the following options when creating the Fluss table. These options map the Fluss table to the physical Paimon database and table name; they do not rename the Fluss table:
 
 ```sql
 'table.datalake.database-name' = 'paimon_database',

@@ -203,6 +203,12 @@ class AggregateRowMergerTest {
         // First row: id=1, count=10, total=100.0
         BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, 10L, 100.0});
 
+        BinaryValue first = partialMerger.merge(null, toBinaryValue(row1));
+        assertThat(first.row.getInt(0)).isEqualTo(1);
+        assertThat(first.row.getLong(1)).isEqualTo(10L);
+        assertThat(first.row.isNullAt(2)).isTrue();
+        assertThat(partialMerger.delete(first)).isNull();
+
         // Second row (partial): id=1, count=5, total=50.0
         // Only count should be aggregated (10 + 5 = 15)
         // total should remain unchanged (100.0)
@@ -1006,6 +1012,35 @@ class AggregateRowMergerTest {
             // Non-target column should be kept
             assertThat(deleted.row.getString(3).toString()).isEqualTo("keep_me");
         }
+    }
+
+    @Test
+    void testDistinctLastNOnFirstWriteAndPartialUpdates() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column(
+                                "events",
+                                DataTypes.ARRAY(DataTypes.BIGINT()),
+                                AggFunctions.LAST_N(3, true))
+                        .column("other", DataTypes.INT(), AggFunctions.LAST_VALUE())
+                        .primaryKey("id")
+                        .build();
+        AggregateRowMerger merger = createMerger(schema, new TableConfig(new Configuration()));
+        RowMerger partial = merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+        BinaryValue first =
+                merger.merge(
+                        null,
+                        toBinaryValue(
+                                compactedRow(rowType, new Object[] {1, longs(1, 2, 3, 3), 7})));
+        assertThat(first.row.getArray(1).toLongArray()).containsExactly(1L, 2L, 3L);
+        BinaryValue next =
+                partial.merge(
+                        first,
+                        toBinaryValue(compactedRow(rowType, new Object[] {1, longs(2), 99})));
+        assertThat(next.row.getArray(1).toLongArray()).containsExactly(1L, 3L, 2L);
+        assertThat(next.row.getInt(2)).isEqualTo(7);
     }
 
     @Test

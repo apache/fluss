@@ -101,7 +101,9 @@ public class ControlRequestSendThread extends ShutdownableThread {
         this.queueTimeMsHistogram =
                 metricGroup.histogram(
                         MetricNames.SENDER_QUEUE_TIME_MS,
-                        new DescriptiveStatisticsHistogram(HISTOGRAM_WINDOW_SIZE));
+                        new DescriptiveStatisticsHistogram(
+                                HISTOGRAM_WINDOW_SIZE,
+                                DescriptiveStatisticsHistogram.DEFAULT_MAX_AGE));
         this.retryCount = metricGroup.counter(MetricNames.SENDER_RETRY_COUNT);
         this.staleDropCount = metricGroup.counter(MetricNames.SENDER_STALE_DROP_COUNT);
         this.aliveFlag = new AtomicInteger(0);

@@ -199,6 +199,32 @@ public class IndexedLogWriteBatchTest {
         }
     }
 
+    @Test
+    void testInCallbackIsRestoredAfterNestedCallback() throws Exception {
+        IndexedLogWriteBatch outer = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 0));
+        IndexedLogWriteBatch inner = createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, 1));
+        List<Boolean> inCallback = new ArrayList<>();
+        assertThat(
+                        inner.tryAppend(
+                                createWriteRecord(),
+                                (bucket, offset, exception) ->
+                                        inCallback.add(WriteBatch.isInCallback())))
+                .isTrue();
+        assertThat(
+                        outer.tryAppend(
+                                createWriteRecord(),
+                                (bucket, offset, exception) -> {
+                                    inner.complete();
+                                    inCallback.add(WriteBatch.isInCallback());
+                                }))
+                .isTrue();
+
+        assertThat(outer.complete()).isTrue();
+
+        assertThat(inCallback).containsExactly(true, true);
+        assertThat(WriteBatch.isInCallback()).isFalse();
+    }
+
     private WriteRecord createWriteRecord() {
         return WriteRecord.forIndexedAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }

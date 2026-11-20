@@ -20,6 +20,7 @@ import org.apache.fluss.record.send.ByteBufWritableOutput;
 
 import io.protostuff.parser.Field;
 import io.protostuff.parser.Message;
+import io.protostuff.parser.MessageField;
 
 import java.io.PrintWriter;
 import java.util.ArrayList;
@@ -39,6 +40,7 @@ public class ProtobufMessage {
     private final List<ProtobufField> fields;
     private final List<ProtobufMessage> nestedMessages;
     private final boolean hasErrorFields;
+    private final boolean hasReachableErrorFields;
 
     public ProtobufMessage(Message message, boolean isNested) {
         this.message = message;
@@ -54,6 +56,7 @@ public class ProtobufMessage {
 
         this.fields = new ArrayList<>();
         this.hasErrorFields = hasErrorFields(message);
+        this.hasReachableErrorFields = ErrorCodeFieldFinder.hasErrorFields(message);
         for (int i = 0; i < message.getFields().size(); i++) {
             Field<?> field = message.getFields().get(i);
             boolean isErrorField =
@@ -96,6 +99,7 @@ public class ProtobufMessage {
         generateZeroCopySerialize(w);
         generateTotalSize(w);
         generateZeroCopySize(w);
+        generateCollectErrorCounts(w);
         generateParseFrom(w);
         generateIsLazilyParsed(w);
         generateGetParsedByteBuf(w);
@@ -123,6 +127,50 @@ public class ProtobufMessage {
         w.println("        private ByteBuf _parsedBuffer;\n");
         w.println("    }");
         w.println();
+    }
+
+    private void generateCollectErrorCounts(PrintWriter w) {
+        if (!hasReachableErrorFields) {
+            return;
+        }
+
+        w.println();
+        w.println("        @Override");
+        w.println("        public void collectErrorCounts(Map<Integer, Integer> errorCounts) {");
+        if (hasErrorFields) {
+            w.println("            if (hasErrorCode()) {");
+            w.println("                int errorCode = getErrorCode();");
+            w.println("                Integer errorCount = errorCounts.get(errorCode);");
+            w.println(
+                    "                errorCounts.put(errorCode, errorCount == null ? 1 : errorCount + 1);");
+            w.println("            }");
+        }
+        for (Field<?> field : message.getFields()) {
+            if (!(field instanceof MessageField)
+                    || !ErrorCodeFieldFinder.hasErrorFields(((MessageField) field).getMessage())) {
+                continue;
+            }
+
+            String fieldName = ProtoGenUtil.camelCase(field.getName());
+            if (field.isRepeated()) {
+                String pluralName = ProtoGenUtil.plural(fieldName);
+                String singularName = ProtoGenUtil.singular(fieldName);
+                w.format(
+                        "            for (int i = 0; i < %s(); i++) {\n",
+                        ProtoGenUtil.camelCase("get", pluralName, "count"));
+                w.format(
+                        "                %s(i).collectErrorCounts(errorCounts);\n",
+                        ProtoGenUtil.camelCase("get", singularName, "at"));
+                w.println("            }");
+            } else {
+                w.format("            if (%s()) {\n", ProtoGenUtil.camelCase("has", fieldName));
+                w.format(
+                        "                %s().collectErrorCounts(errorCounts);\n",
+                        ProtoGenUtil.camelCase("get", field.getName()));
+                w.println("            }");
+            }
+        }
+        w.println("        }");
     }
 
     private void generateParseFrom(PrintWriter w) {
@@ -348,7 +396,7 @@ public class ProtobufMessage {
         return false;
     }
 
-    private static boolean hasErrorFields(Message message) {
+    static boolean hasErrorFields(Message message) {
         boolean findErrorCode = false;
         boolean findErrorMessage = false;
         for (Field<?> field : message.getFields()) {
@@ -361,7 +409,7 @@ public class ProtobufMessage {
         return findErrorCode && findErrorMessage;
     }
 
-    private static boolean isErrorCodeField(Field<?> field) {
+    static boolean isErrorCodeField(Field<?> field) {
         return field.getName().equals("error_code")
                 && field.getJavaType().equals("int")
                 && !field.isRepeated();

@@ -85,6 +85,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -2211,6 +2212,34 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testTableDeletionDoesNotOverwriteOnlineReplicaTableInfo() {
+        makeLogTableAsLeader(0);
+        Replica replica = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        TableInfo original = replica.getTableInfo();
+        TableInfo marker =
+                TableInfo.of(
+                        original.getTablePath(),
+                        original.getTableId(),
+                        0,
+                        TableDescriptor.builder()
+                                .schema(Schema.newBuilder().build())
+                                .distributedBy(0)
+                                .build(),
+                        "",
+                        -1L,
+                        -1L);
+        replicaManager.maybeUpdateMetadataCache(
+                INITIAL_COORDINATOR_EPOCH,
+                new ClusterMetadata(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(
+                                new TableMetadata(marker, Collections.emptyList(), true)),
+                        Collections.emptyList()));
+        assertThat(replica.getTableInfo()).isEqualTo(original);
+    }
+
+    @Test
     void testUpdateMetadata() throws Exception {
         // check the server metadata before update.
         TablePath nonePartitionTablePath = TablePath.of("test_db_1", "test_update_metadata_table");
@@ -2314,10 +2343,18 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         PartitionMetadata partitionMetadata1 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName1, partitionId1, Collections.emptyList());
+                        partitionTableId,
+                        partitionName1,
+                        partitionId1,
+                        Collections.emptyList(),
+                        null);
         PartitionMetadata partitionMetadata2 =
                 new PartitionMetadata(
-                        partitionTableId, partitionName2, partitionId2, Collections.emptyList());
+                        partitionTableId,
+                        partitionName2,
+                        partitionId2,
+                        Collections.emptyList(),
+                        null);
         replicaManager.maybeUpdateMetadataCache(
                 2,
                 buildClusterMetadata(
@@ -2340,20 +2377,33 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
+        // register partitions to zk.
+        for (PartitionMetadata partitionMetadata :
+                Arrays.asList(partitionMetadata1, partitionMetadata2)) {
+            zkClient.registerPartitionAssignmentAndMetadata(
+                    partitionMetadata.getPartitionId(),
+                    partitionMetadata.getPartitionName(),
+                    new PartitionAssignment(partitionTableId, Collections.emptyMap()),
+                    DEFAULT_REMOTE_DATA_DIR,
+                    partitionTablePath,
+                    partitionTableId,
+                    0);
+        }
 
         expectedCoordinatorServer.put(
                 "INTERNAL", new ServerNode(0, "localhost", 1235, ServerType.COORDINATOR));
         expectedTablePathById.put(nonePartitionTableId, nonePartitionTablePath);
         expectedTablePathById.put(partitionTableId, partitionTablePath);
 
-        expectedTableMetadataById.put(nonePartitionTablePath, tableMetadata1);
+        // Identity-only updates do not make the routing metadata ready.
+        expectedTableMetadataById.put(nonePartitionTablePath, null);
         expectedTableMetadataById.put(partitionTablePath, tableMetadata2);
 
         expectedPartitionNameById.put(partitionId1, partitionName1);
         expectedPartitionNameById.put(partitionId2, partitionName2);
 
-        expectedPartitionMetadataById.put(physicalTablePath1, partitionMetadata1);
-        expectedPartitionMetadataById.put(physicalTablePath2, partitionMetadata2);
+        expectedPartitionMetadataById.put(physicalTablePath1, null);
+        expectedPartitionMetadataById.put(physicalTablePath2, null);
 
         assertUpdateMetadataEquals(
                 expectedCoordinatorServer,
@@ -2405,7 +2455,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         partitionTableId,
                                         partitionName1,
                                         DELETED_PARTITION_ID, // mark as deleted.
-                                        Collections.emptyList()))));
+                                        Collections.emptyList(),
+                                        null))));
         expectedPartitionNameById.put(partitionId1, null);
         expectedPartitionMetadataById.put(physicalTablePath1, null);
         assertUpdateMetadataEquals(

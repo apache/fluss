@@ -35,6 +35,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
@@ -66,6 +67,8 @@ public class ReplicaDeletionRecoveryITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private ZooKeeperClient zkClient;
     private CoordinatorGateway coordinatorGateway;
 
@@ -89,7 +92,7 @@ public class ReplicaDeletionRecoveryITCase {
     void testResumeTableDeletionAfterTabletServerRestart() throws Exception {
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
-        TablePath tablePath = TablePath.of("test_db_replica_deletion", "test_orphan_table");
+        TablePath tablePath = tableNames.tablePath("test_db_replica_deletion", "test_orphan_table");
         long tableId =
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
@@ -144,7 +147,8 @@ public class ReplicaDeletionRecoveryITCase {
     void testResumePartitionDeletionAfterTabletServerRestart() throws Exception {
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
-        TablePath tablePath = TablePath.of("test_db_replica_deletion", "test_orphan_partition");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_replica_deletion", "test_orphan_partition");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(

@@ -69,7 +69,7 @@ public class CompletedSnapshotStoreManager {
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
             makeZookeeperCompletedSnapshotHandleStore;
-    private final SnapshotInUseChecker snapshotInUseChecker;
+    private final SnapshotInUseChecker snapshotLeaseChecker;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
@@ -77,14 +77,14 @@ public class CompletedSnapshotStoreManager {
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
                 ZooKeeperCompletedSnapshotHandleStore::new,
                 coordinatorMetricGroup,
-                snapshotInUseChecker);
+                snapshotLeaseChecker);
     }
 
     @VisibleForTesting
@@ -95,14 +95,14 @@ public class CompletedSnapshotStoreManager {
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
                     makeZookeeperCompletedSnapshotHandleStore,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new ConcurrentHashMap<>();
         this.ioExecutor = ioExecutor;
-        this.snapshotInUseChecker = snapshotInUseChecker;
+        this.snapshotLeaseChecker = snapshotLeaseChecker;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
 
@@ -240,7 +240,7 @@ public class CompletedSnapshotStoreManager {
                 retrievedSnapshots,
                 completedSnapshotHandleStore,
                 ioExecutor,
-                snapshotInUseChecker);
+                snapshotLeaseChecker);
     }
 
     /**

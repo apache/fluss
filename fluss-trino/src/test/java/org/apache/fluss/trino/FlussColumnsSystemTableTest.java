@@ -28,16 +28,16 @@ import org.junit.jupiter.api.Test;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.VarcharType.VARCHAR;
+import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.apache.fluss.trino.TestingFlussMetadata.usersTable;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 /** Tests the public system-table schema and rows returned through the Trino cursor. */
 final class FlussColumnsSystemTableTest {
     private final FlussColumnsSystemTable table =
             new FlussColumnsSystemTable(
                     new SchemaTableName("sales", "users$columns"), usersTable());
-    private final ConnectorSession session = mock(ConnectorSession.class);
+    private final ConnectorSession session = SESSION;
 
     @Test
     void testSystemTableMetadata() {

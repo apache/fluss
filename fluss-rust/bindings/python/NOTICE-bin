@@ -16,7 +16,7 @@ Copyright 2023-2024 The Apache Software Foundation
 
 --------------------------------------------------------------------------------
 
-The following notice applies to: arrow-arith@59.0.0, arrow-array@59.0.0, arrow-buffer@59.0.0, arrow-cast@59.0.0, arrow-csv@59.0.0, arrow-data@59.0.0, arrow-ipc@59.0.0, arrow-json@59.0.0, arrow-ord@59.0.0, arrow-row@59.0.0, arrow-schema@59.0.0, arrow-select@59.0.0, arrow-string@59.0.0, arrow@59.0.0
+The following notice applies to: arrow-arith@59.3.3, arrow-array@59.3.3, arrow-buffer@59.3.3, arrow-cast@59.3.3, arrow-csv@59.0.0, arrow-data@59.3.3, arrow-ipc@59.3.3, arrow-json@59.3.3, arrow-ord@59.3.3, arrow-row@59.3.3, arrow-schema@59.3.3, arrow-select@59.3.3, arrow-string@59.3.3, arrow@59.0.0
 
 Apache Arrow
 Copyright 2016-2026 The Apache Software Foundation

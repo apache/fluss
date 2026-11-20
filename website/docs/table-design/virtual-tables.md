@@ -14,10 +14,13 @@ Fluss supports the following virtual table types:
 |---------------|--------|-----------------------------------------------------------|------------------|
 | [Changelog](#changelog-table) | `$changelog` | Provides access to the raw changelog stream with metadata | Primary Key Tables, Log Tables |
 | [Binlog](#binlog-table) | `$binlog` | Provides binlog format with before/after metadata         | Primary Key Tables only |
+| [Buckets](#buckets-table) | `$buckets` | Provides replica placement and leader/ISR metadata        | Primary Key Tables, Log Tables |
 
 ## Flink Runtime Modes
 
 Both `$changelog` and `$binlog` can be queried in Flink streaming or batch runtime.
+The `$buckets` table always returns a bounded metadata snapshot, including when the Flink runtime
+mode is streaming.
 
 | Runtime Mode | Behavior |
 |--------------|----------|
@@ -51,6 +54,41 @@ LIMIT 100;
 :::warning
 On Flink 1.18, a predicate on `_commit_timestamp` (or on any other `TIMESTAMP_LTZ` column) returns wrong results when the session time zone is not UTC. Flink 1.18 rebuilds such a predicate using the session time zone instead of UTC after the filter is pushed into the source, which shifts the literal by the zone offset and typically makes the query return no rows. This is [FLINK-35318](https://issues.apache.org/jira/browse/FLINK-35318), fixed in Flink 1.19.2 and 1.20.0 and never backported to 1.18. On Flink 1.18, either avoid `TIMESTAMP_LTZ` predicates or set `table.local-time-zone` to `UTC`.
 :::
+
+## Buckets Table
+
+The `$buckets` virtual table provides read-only access to the current replica placement and
+leader/ISR state of every bucket belonging to a table. Append `$buckets` to the base table name:
+
+```sql title="Flink SQL"
+SELECT * FROM orders$buckets;
+```
+
+### Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `table_path` | STRING NOT NULL | The base table path |
+| `table_id` | BIGINT NOT NULL | The unique table ID |
+| `partition_id` | BIGINT | The partition ID, or `NULL` for a non-partitioned table |
+| `partition_name` | STRING | The partition name, or `NULL` for a non-partitioned table |
+| `bucket_id` | INT NOT NULL | The bucket ID |
+| `leader_id` | INT | The leader TabletServer ID, or `NULL` if no leader is elected |
+| `leader_epoch` | INT | The leader epoch, or `NULL` if no leader is elected |
+| `bucket_epoch` | INT | The generation of the leader/ISR state; `NULL` indicates legacy metadata and `-1` indicates no leader/ISR state |
+| `replicas` | ARRAY&lt;INT NOT NULL&gt; NOT NULL | Replica TabletServer IDs |
+| `isr` | ARRAY&lt;INT NOT NULL&gt; NOT NULL | In-sync replica TabletServer IDs |
+
+For a partitioned table, use normal SQL predicates to select the required partitions or buckets:
+
+```sql title="Flink SQL"
+SELECT partition_name, bucket_id, leader_id, replicas, isr
+FROM orders$buckets
+WHERE partition_name = 'cn$2026-09-16';
+```
+
+The current implementation obtains the complete bucket metadata snapshot before Flink evaluates
+the predicate. Predicate pushdown for large partitioned tables is not supported yet.
 
 ## Changelog Table
 

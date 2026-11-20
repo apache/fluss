@@ -129,6 +129,9 @@ pub struct RecordBatch {
     /// Server-side commit timestamp in epoch milliseconds, or -1 if unavailable.
     #[pyo3(get)]
     commit_timestamp: i64,
+    /// Source log batch schema ID, or -1 when there is no single source schema.
+    #[pyo3(get)]
+    schema_id: i32,
 }
 
 #[pymethods]
@@ -146,11 +149,12 @@ impl RecordBatch {
 
     fn __str__(&self) -> String {
         format!(
-            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, rows={})",
+            "RecordBatch(bucket={}, base_offset={}, last_offset={}, commit_timestamp={}, schema_id={}, rows={})",
             self.bucket.__str__(),
             self.base_offset,
             self.last_offset,
             self.commit_timestamp,
+            self.schema_id,
             self.batch.num_rows()
         )
     }
@@ -164,11 +168,13 @@ impl RecordBatch {
     /// Create a RecordBatch from core ScanBatch
     pub fn from_scan_batch(scan_batch: fcore::record::ScanBatch) -> Self {
         let commit_timestamp = scan_batch.commit_timestamp();
+        let schema_id = scan_batch.schema_id();
         RecordBatch {
             bucket: TableBucket::from_core(scan_batch.bucket().clone()),
             base_offset: scan_batch.base_offset(),
             last_offset: scan_batch.last_offset(),
             commit_timestamp,
+            schema_id,
             batch: Arc::new(scan_batch.into_batch()),
         }
     }
@@ -1088,10 +1094,12 @@ pub struct AppendWriter {
 
 #[pymethods]
 impl AppendWriter {
-    /// Write Arrow table data (fire-and-forget, use flush() to ensure delivery).
+    /// Write Arrow table data (fire-and-forget).
     ///
-    /// For a partitioned table, every batch must contain rows of a single partition
-    /// (see `write_arrow_batch`).
+    /// No write handles are returned and flush() doesn't raise write errors, so use
+    /// write_arrow_batch() and wait on its handle when a failed write must be noticed.
+    ///
+    /// Rows are routed to their respective partitions within each batch.
     pub fn write_arrow(&self, py: Python, table: Py<PyAny>) -> PyResult<()> {
         // Convert Arrow Table to batches and write each batch
         let batches = table.call_method0(py, "to_batches")?;
@@ -1106,9 +1114,8 @@ impl AppendWriter {
 
     /// Write Arrow batch data.
     ///
-    /// For a partitioned table the partition is derived from the first row, so all
-    /// rows must belong to the same partition. Rows are distributed across buckets
-    /// by their bucket key automatically.
+    /// Rows are routed to their respective partitions and distributed across buckets
+    /// by their bucket key when configured.
     ///
     /// Returns:
     ///     WriteResultHandle that can be ignored (fire-and-forget) or
@@ -1171,7 +1178,9 @@ impl AppendWriter {
         self.write_arrow(py, pa_table.into())
     }
 
-    /// Flush any pending data
+    /// Flush any pending data.
+    ///
+    /// Doesn't raise the error of a failed write, wait on its handle for that.
     pub fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         future_into_py(py, async move {
@@ -3045,5 +3054,29 @@ mod tests {
 
         // Negative with sub-millisecond part
         assert_eq!(nanos_to_millis_and_submillis(-500_000), (-1, 500_000));
+    }
+    #[test]
+    fn record_batch_conversion_preserves_source_schema_id() {
+        use arrow::datatypes::{DataType as ArrowType, Field, Schema as ArrowSchema};
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            ArrowType::Int32,
+            true,
+        )]));
+        for schema_id in [fcore::record::NO_SCHEMA_ID, 0, i32::from(i16::MAX)] {
+            let batch = fcore::record::ScanBatch::new(
+                fcore::metadata::TableBucket::new(1, 0),
+                ArrowRecordBatch::new_empty(schema.clone()),
+                0,
+            )
+            .with_schema_id(schema_id);
+            let converted = RecordBatch::from_scan_batch(batch);
+            assert_eq!(converted.schema_id, schema_id);
+            assert!(
+                converted
+                    .__str__()
+                    .contains(&format!("schema_id={schema_id}"))
+            );
+        }
     }
 }

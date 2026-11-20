@@ -38,6 +38,7 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -68,6 +69,8 @@ class DiskWriteBackoffITCase {
                     .setClusterConf(clusterConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @CsvSource({"false,false", "true,false", "false,true"})
     void testDiskProtectionBackoffAndRecovery(boolean kv, boolean closeWhileLocked)
@@ -79,7 +82,7 @@ class DiskWriteBackoffITCase {
         TestingWriterMetricGroup metrics = TestingWriterMetricGroup.newInstance();
         ReplicaManager replicas = CLUSTER.getTabletServers().iterator().next().getReplicaManager();
         TablePath path =
-                TablePath.of(
+                tableNames.tablePath(
                         "disk_backoff",
                         closeWhileLocked ? "close_table" : kv ? "kv_table" : "log_table");
         try (Connection connection = ConnectionFactory.createConnection(conf);

@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -75,6 +76,7 @@ public class KvSnapshotLeaseMetadataManagerTest {
 
     @AfterEach
     void afterEach() {
+        TestFileSystem.failNextCreates(0);
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
     }
 
@@ -248,6 +250,47 @@ public class KvSnapshotLeaseMetadataManagerTest {
         assertThat(newFile.getFileSystem().exists(newFile)).isTrue();
         // The new file should be different from the old one (different UUID).
         assertThat(newFile).isNotEqualTo(originalFile);
+    }
+
+    @Test
+    void testRegisterLeaseRetriesTransientWriteFailures() throws Exception {
+        KvSnapshotLeaseMetadataManager manager =
+                new KvSnapshotLeaseMetadataManager(zookeeperClient, "test://" + tempDir);
+        Map<Long, KvSnapshotTableLease> tableLeases = new HashMap<>();
+        tableLeases.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L}));
+        KvSnapshotLeaseHandler lease = new KvSnapshotLeaseHandler(1000L, tableLeases);
+
+        // fewer failures than attempts: the retry absorbs them.
+        TestFileSystem.failNextCreates(2);
+        manager.registerLease("leaseId1", lease);
+
+        assertThat(manager.getLease("leaseId1")).hasValue(lease);
+        assertRemoteFsAndZkEquals("leaseId1", lease);
+    }
+
+    @Test
+    void testRegisterLeaseFailsWhenWriteRetriesExhausted() throws Exception {
+        KvSnapshotLeaseMetadataManager manager =
+                new KvSnapshotLeaseMetadataManager(zookeeperClient, "test://" + tempDir);
+        Map<Long, KvSnapshotTableLease> tableLeases = new HashMap<>();
+        tableLeases.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L}));
+
+        TestFileSystem.failNextCreates(3);
+        assertThatThrownBy(
+                        () ->
+                                manager.registerLease(
+                                        "leaseId1", new KvSnapshotLeaseHandler(1000L, tableLeases)))
+                .hasMessageContaining("failed after 3 attempts")
+                .rootCause()
+                .hasMessageStartingWith("Injected create failure");
+
+        assertThat(zookeeperClient.getKvSnapshotLeaseMetadata("leaseId1")).isEmpty();
+        Path table1Dir = tempDir.resolve("lease/kv-snapshot/leaseId1/1");
+        if (Files.exists(table1Dir)) {
+            try (Stream<Path> files = Files.list(table1Dir)) {
+                assertThat(files.filter(p -> p.toString().endsWith(".metadata"))).isEmpty();
+            }
+        }
     }
 
     private void assertRemoteFsAndZkEquals(String leaseId, KvSnapshotLeaseHandler expectedLease)

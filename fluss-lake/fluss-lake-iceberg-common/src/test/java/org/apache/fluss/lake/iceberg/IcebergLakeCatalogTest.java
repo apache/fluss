@@ -808,6 +808,77 @@ class IcebergLakeCatalogTest {
     }
 
     @Test
+    void testAlterRejectsNameMappingOptionAfterLakeTableCreated() {
+        String database = "test_reject_name_mapping_db";
+        String tableName = "test_reject_name_mapping_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath,
+                                        Collections.singletonList(
+                                                TableChange.set(
+                                                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME
+                                                                .key(),
+                                                        "another_db")),
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key())
+                .hasMessageContaining("after the Iceberg table has been created");
+
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath,
+                                        Collections.singletonList(
+                                                TableChange.reset(
+                                                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME
+                                                                .key())),
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
+    }
+
+    @Test
+    void testCreateTableRejectsRebindAfterLakeTableCreated() {
+        String database = "test_rebind_db";
+        String currentTableName = "current_lake_table";
+        createLogTable(database, currentTableName);
+
+        TablePath targetPath = TablePath.of(database, "target_lake_table");
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.createTable(
+                                        targetPath,
+                                        getTableDescriptor(FLUSS_SCHEMA),
+                                        TestingLakeCatalogContext.withCurrentLakeTablePath(
+                                                TablePath.of(database, currentTableName))))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("can only be altered before the Iceberg table is created");
+    }
+
+    @Test
+    void testCreateTableAllowsCustomLakePathWhenLakeTableNotCreated() {
+        String database = "test_custom_path_db";
+        TablePath targetPath = TablePath.of(database, "target_lake_table");
+        // The current mapping still points at a path that has no physical Iceberg table yet, so
+        // configuring a custom path while enabling lake storage for the first time is allowed.
+        flussIcebergCatalog.createTable(
+                targetPath,
+                getTableDescriptor(FLUSS_SCHEMA),
+                TestingLakeCatalogContext.withCurrentLakeTablePath(
+                        TablePath.of(database, "never_created_table")));
+
+        Table created =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, "target_lake_table"));
+        assertThat(created).isNotNull();
+    }
+
+    @Test
     void testAlterTableAddColumnWhenIcebergSchemaNotMatch() {
         String database = "test_alter_add_col_schema_mismatch_db";
         String tableName = "test_alter_add_col_schema_mismatch_table";

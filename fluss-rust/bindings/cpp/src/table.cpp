@@ -37,6 +37,15 @@
 
 namespace fluss {
 
+LookupCompletion::~LookupCompletion() = default;
+LookupCompletion::LookupCompletion(LookupCompletion&&) noexcept = default;
+LookupCompletion& LookupCompletion::operator=(LookupCompletion&&) noexcept = default;
+
+PrefixLookupCompletion::~PrefixLookupCompletion() = default;
+PrefixLookupCompletion::PrefixLookupCompletion(PrefixLookupCompletion&&) noexcept = default;
+PrefixLookupCompletion& PrefixLookupCompletion::operator=(PrefixLookupCompletion&&) noexcept =
+    default;
+
 static constexpr int kSecondsPerDay = 24 * 60 * 60;
 
 static std::time_t timegm_utc(std::tm* tm) {
@@ -2015,6 +2024,48 @@ Result Lookuper::Lookup(const GenericRow& pk_row, PendingLookup& out) const {
     return result;
 }
 
+Result Lookuper::LookupAsync(const GenericRow& pk_row, uint64_t request_id) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
+    }
+    if (!pk_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    return utils::from_ffi_result(lookuper_->lookup_async_poll(*pk_row.inner_, request_id));
+}
+
+Result Lookuper::Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out,
+                      size_t max_results) const {
+    if (!Available()) {
+        return utils::make_client_error("Lookuper not available");
+    }
+    if (max_results == 0) {
+        return utils::make_client_error("Poll max_results must be greater than zero");
+    }
+    out.clear();
+    auto poll = [&](int64_t wait_ms) { return lookuper_->poll_lookup(wait_ms); };
+    while (out.size() < max_results) {
+        auto ffi_result = poll(out.empty() ? timeout_ms : 0);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (ffi_result.ptr == 0) {
+            break;
+        }
+        auto completion = utils::ptr_from_ffi<ffi::LookupCompletion>(ffi_result);
+        if (!completion) {
+            break;
+        }
+        LookupCompletion item;
+        item.request_id = completion->lookup_completion_request_id();
+        item.result = item.lookup.Adopt(completion->lookup_completion_take_result().into_raw());
+        ffi::delete_lookup_completion(completion);
+        out.push_back(std::move(item));
+    }
+    return {};
+}
+
 // ============================================================================
 // PendingLookup
 // ============================================================================
@@ -2120,6 +2171,49 @@ Result PrefixLookuper::PrefixLookup(const GenericRow& prefix_row, PendingPrefixL
         out = PendingPrefixLookup(utils::ptr_from_ffi<ffi::PendingPrefixLookup>(ffi_result));
     }
     return result;
+}
+
+Result PrefixLookuper::PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (!prefix_row.Available()) {
+        return utils::make_client_error("GenericRow not available");
+    }
+    return utils::from_ffi_result(
+        lookuper_->prefix_lookup_async_poll(*prefix_row.inner_, request_id));
+}
+
+Result PrefixLookuper::Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out,
+                            size_t max_results) const {
+    if (!Available()) {
+        return utils::make_client_error("PrefixLookuper not available");
+    }
+    if (max_results == 0) {
+        return utils::make_client_error("Poll max_results must be greater than zero");
+    }
+    out.clear();
+    while (out.size() < max_results) {
+        auto ffi_result = lookuper_->poll_prefix_lookup(out.empty() ? timeout_ms : 0);
+        auto result = utils::from_ffi_result(ffi_result.result);
+        if (!result.Ok()) {
+            return result;
+        }
+        if (ffi_result.ptr == 0) {
+            break;
+        }
+        auto completion = utils::ptr_from_ffi<ffi::PrefixLookupCompletion>(ffi_result);
+        if (!completion) {
+            break;
+        }
+        PrefixLookupCompletion item;
+        item.request_id = completion->prefix_lookup_completion_request_id();
+        item.result =
+            item.lookup.Adopt(completion->prefix_lookup_completion_take_result().into_raw());
+        ffi::delete_prefix_lookup_completion(completion);
+        out.push_back(std::move(item));
+    }
+    return {};
 }
 
 Result PrefixLookupResult::Adopt(ffi::PrefixLookupResultInner* inner) {
@@ -2325,13 +2419,15 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,
-                                   int64_t base_offset, int64_t commit_timestamp) noexcept
+                                   int64_t base_offset, int64_t commit_timestamp,
+                                   int32_t schema_id) noexcept
     : batch_(std::move(batch)),
       table_id_(table_id),
       partition_id_(partition_id),
       bucket_id_(bucket_id),
       base_offset_(base_offset),
-      commit_timestamp_(commit_timestamp) {}
+      commit_timestamp_(commit_timestamp),
+      schema_id_(schema_id) {}
 
 bool ArrowRecordBatch::Available() const { return batch_ != nullptr; }
 
@@ -2370,6 +2466,11 @@ int64_t ArrowRecordBatch::GetCommitTimestamp() const {
     return this->commit_timestamp_;
 }
 
+int32_t ArrowRecordBatch::GetSchemaId() const {
+    if (!Available()) return NO_SCHEMA_ID;
+    return this->schema_id_;
+}
+
 namespace detail {
 // Imports FFI Arrow batches (C Data Interface) into C++ ArrowRecordBatch
 // wrappers. A friend of ArrowRecordBatch so it can build the wrapper's private
@@ -2395,7 +2496,8 @@ struct ArrowBatchImporter {
             }
             out.batches.push_back(std::unique_ptr<ArrowRecordBatch>(new ArrowRecordBatch(
                 import_result.ValueOrDie(), ffi_batch.table_id, ffi_batch.partition_id,
-                ffi_batch.bucket_id, ffi_batch.base_offset, ffi_batch.commit_timestamp)));
+                ffi_batch.bucket_id, ffi_batch.base_offset, ffi_batch.commit_timestamp,
+                ffi_batch.schema_id)));
         }
         return utils::make_ok();
     }

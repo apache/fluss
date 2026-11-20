@@ -99,6 +99,53 @@ public class DefaultCompletedFetchTest {
     }
 
     @ParameterizedTest
+    @MethodSource("typeAndMagic")
+    void testFilteredRecordsKeepSelectedRowsAfterFetchIsDrained(LogFormat format, byte magic)
+            throws Exception {
+        tableInfo =
+                TableInfo.of(
+                        DATA2_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        DEFAULT_SCHEMA_ID,
+                        TableDescriptor.builder()
+                                .schema(DATA2_TABLE_INFO.getSchema())
+                                .distributedBy(3)
+                                .logFormat(format)
+                                .build(),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        0L,
+                        0L);
+        TableBucket bucket = new TableBucket(DATA2_TABLE_ID, 0);
+        DefaultCompletedFetch fetch =
+                makeCompletedFetch(
+                        bucket,
+                        FetchLogResultForBucket.records(
+                                bucket,
+                                createMemoryLogRecords(DATA2, format, magic),
+                                10L,
+                                -1L,
+                                -1L),
+                        0L);
+        List<ScanRecord> selected = fetch.fetchRecords(10, record -> record.logOffset() % 2 == 0);
+        assertThat(selected).extracting(ScanRecord::logOffset).containsExactly(0L, 2L, 4L, 6L, 8L);
+        List<ScanRecord> expected =
+                makeCompletedFetch(
+                                bucket,
+                                FetchLogResultForBucket.records(
+                                        bucket,
+                                        createMemoryLogRecords(DATA2, format, magic),
+                                        10L,
+                                        -1L,
+                                        -1L),
+                                0L)
+                        .fetchRecords(10);
+        fetch.drain();
+        for (int i = 0; i < selected.size(); i++) {
+            assertThat(selected.get(i)).isEqualTo(expected.get(i * 2));
+        }
+    }
+
+    @ParameterizedTest
     @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
     void testSimple(byte recordBatchMagic) throws Exception {
         long fetchOffset = 0L;

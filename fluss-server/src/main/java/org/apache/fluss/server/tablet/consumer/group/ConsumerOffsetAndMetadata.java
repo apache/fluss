@@ -18,8 +18,11 @@
 package org.apache.fluss.server.tablet.consumer.group;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.BinaryString;
 
 import javax.annotation.Nullable;
+
+import java.util.Objects;
 
 /**
  * A committed consumer offset with its user metadata (FIP-53). Stored as the value part of a
@@ -28,16 +31,14 @@ import javax.annotation.Nullable;
 @Internal
 public final class ConsumerOffsetAndMetadata {
 
-    /** Canonical representation of absent user metadata. */
-    public static final String EMPTY_METADATA = "";
-
     private final long offset;
-    private final String metadata;
+    @Nullable private final BinaryString metadata;
 
-    /** Creates a committed consumer offset and normalizes null metadata to an empty string. */
+    /** Creates a committed offset with optional UTF-8 metadata. */
     public ConsumerOffsetAndMetadata(long offset, @Nullable String metadata) {
         this.offset = offset;
-        this.metadata = metadata == null ? EMPTY_METADATA : metadata;
+        this.metadata =
+                "".equals(metadata) ? BinaryString.EMPTY_UTF8 : BinaryString.fromString(metadata);
     }
 
     /** Returns the committed offset. */
@@ -45,9 +46,14 @@ public final class ConsumerOffsetAndMetadata {
         return offset;
     }
 
-    /** Returns the normalized, non-null metadata. */
-    public String getMetadata() {
+    /** Returns the UTF-8 metadata, or null if it was omitted from the request. */
+    @Nullable
+    public BinaryString getMetadata() {
         return metadata;
+    }
+
+    boolean isMetadataSizeValid(long maxBytes) {
+        return metadata == null || metadata.getSizeInBytes() <= maxBytes;
     }
 
     @Override
@@ -59,13 +65,13 @@ public final class ConsumerOffsetAndMetadata {
             return false;
         }
         ConsumerOffsetAndMetadata that = (ConsumerOffsetAndMetadata) o;
-        return offset == that.offset && metadata.equals(that.metadata);
+        return offset == that.offset && Objects.equals(metadata, that.metadata);
     }
 
     @Override
     public int hashCode() {
         int result = Long.hashCode(offset);
-        return 31 * result + metadata.hashCode();
+        return 31 * result + Objects.hashCode(metadata);
     }
 
     @Override

@@ -35,6 +35,8 @@ public final class KafkaTopicMapper {
 
     // ASCII "Fluss" followed by zero bytes. A dedicated namespace avoids Kafka-reserved UUIDs.
     private static final long TOPIC_ID_NAMESPACE = 0x466c757373000000L;
+    // ASCII "FlussA": distinguishes default-database aliases from canonical topic names.
+    private static final long DEFAULT_DATABASE_TOPIC_ID_NAMESPACE = 0x466c757373410000L;
 
     private final String defaultDatabase;
 
@@ -104,16 +106,29 @@ public final class KafkaTopicMapper {
                         topicName.substring(0, separator), topicName.substring(separator + 1)));
     }
 
-    /** Maps a Fluss table ID to a stable Kafka topic ID. */
+    /** Maps a Fluss table ID to the canonical name's stable Kafka topic ID. */
     public Uuid toTopicId(long tableId) {
         checkArgument(tableId >= 0, "Table ID must be non-negative, but was %s.", tableId);
         return new Uuid(TOPIC_ID_NAMESPACE, tableId);
     }
 
+    /**
+     * Maps a Fluss table ID to the default-database alias's stable Kafka topic ID.
+     *
+     * <p>The wire ID must differ from the canonical name's ID because Kafka clients maintain a
+     * one-to-one ID-to-name map. It must also change on recreation so a client can accept a new
+     * table's lower leader epoch without first observing a missing-topic response.
+     */
+    public Uuid toAliasTopicId(long tableId) {
+        checkArgument(tableId >= 0, "Table ID must be non-negative, but was %s.", tableId);
+        return new Uuid(DEFAULT_DATABASE_TOPIC_ID_NAMESPACE, tableId);
+    }
+
     /** Returns whether a Kafka topic ID can represent a Fluss table ID. */
     public boolean isMappedTopicId(Uuid topicId) {
         return topicId != null
-                && topicId.getMostSignificantBits() == TOPIC_ID_NAMESPACE
+                && (topicId.getMostSignificantBits() == TOPIC_ID_NAMESPACE
+                        || topicId.getMostSignificantBits() == DEFAULT_DATABASE_TOPIC_ID_NAMESPACE)
                 && topicId.getLeastSignificantBits() >= 0L;
     }
 

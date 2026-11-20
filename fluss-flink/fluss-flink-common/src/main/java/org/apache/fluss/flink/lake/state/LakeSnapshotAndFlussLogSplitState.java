@@ -62,9 +62,7 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
 
     @Override
     public SourceSplitBase toSourceSplit() {
-        return split.updateWithCurrentLakeSplitIndex(currentLakeSplitIndex)
-                .updateWithRecordsToSkip(recordsToSkip)
-                .updateWithStartingOffset(nextLogOffset)
-                .updateWithLakeSplitFinished(isLakeSplitFinished);
+        return split.copyWithPosition(
+                recordsToSkip, currentLakeSplitIndex, nextLogOffset, isLakeSplitFinished);
     }
 }

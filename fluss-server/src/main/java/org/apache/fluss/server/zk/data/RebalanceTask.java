@@ -24,10 +24,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * The generated rebalance task for this cluster.
@@ -45,6 +48,12 @@ public class RebalanceTask {
     /** The rebalance status for the overall rebalance. */
     private final RebalanceStatus rebalanceStatus;
 
+    /** Whether cancellation has been requested and unfinished tasks should only be drained. */
+    private final boolean cancelRequested;
+
+    /** Buckets that were explicitly canceled before the task reached its final status. */
+    private final Set<TableBucket> canceledBuckets;
+
     /** A mapping from tableBucket to RebalancePlanForBuckets of none-partitioned table. */
     private final Map<Long, List<RebalancePlanForBucket>> planForBuckets;
 
@@ -56,8 +65,27 @@ public class RebalanceTask {
             String rebalanceId,
             RebalanceStatus rebalanceStatus,
             Map<TableBucket, RebalancePlanForBucket> bucketPlan) {
+        this(rebalanceId, rebalanceStatus, bucketPlan, false);
+    }
+
+    public RebalanceTask(
+            String rebalanceId,
+            RebalanceStatus rebalanceStatus,
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan,
+            boolean cancelRequested) {
+        this(rebalanceId, rebalanceStatus, bucketPlan, cancelRequested, Collections.emptySet());
+    }
+
+    public RebalanceTask(
+            String rebalanceId,
+            RebalanceStatus rebalanceStatus,
+            Map<TableBucket, RebalancePlanForBucket> bucketPlan,
+            boolean cancelRequested,
+            Set<TableBucket> canceledBuckets) {
         this.rebalanceId = rebalanceId;
         this.rebalanceStatus = rebalanceStatus;
+        this.cancelRequested = cancelRequested;
+        this.canceledBuckets = new HashSet<>(canceledBuckets);
         this.planForBuckets = new HashMap<>();
         this.planForBucketsOfPartitionedTable = new HashMap<>();
 
@@ -84,6 +112,14 @@ public class RebalanceTask {
 
     public RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
+    }
+
+    public boolean isCancelRequested() {
+        return cancelRequested;
+    }
+
+    public Set<TableBucket> getCanceledBuckets() {
+        return Collections.unmodifiableSet(canceledBuckets);
     }
 
     public Map<Long, List<RebalancePlanForBucket>> getPlanForBuckets() {
@@ -121,6 +157,10 @@ public class RebalanceTask {
                 + rebalanceId
                 + ", rebalanceStatus="
                 + rebalanceStatus
+                + ", cancelRequested="
+                + cancelRequested
+                + ", canceledBuckets="
+                + canceledBuckets
                 + ", planForBuckets="
                 + planForBuckets
                 + ", planForBucketsOfPartitionedTable="
@@ -138,8 +178,10 @@ public class RebalanceTask {
         }
 
         RebalanceTask that = (RebalanceTask) o;
-        return rebalanceStatus == that.rebalanceStatus
+        return cancelRequested == that.cancelRequested
+                && rebalanceStatus == that.rebalanceStatus
                 && Objects.equals(rebalanceId, that.rebalanceId)
+                && Objects.equals(canceledBuckets, that.canceledBuckets)
                 && Objects.equals(planForBuckets, that.planForBuckets)
                 && Objects.equals(
                         planForBucketsOfPartitionedTable, that.planForBucketsOfPartitionedTable);
@@ -148,6 +190,11 @@ public class RebalanceTask {
     @Override
     public int hashCode() {
         return Objects.hash(
-                rebalanceId, rebalanceStatus, planForBuckets, planForBucketsOfPartitionedTable);
+                rebalanceId,
+                rebalanceStatus,
+                cancelRequested,
+                canceledBuckets,
+                planForBuckets,
+                planForBucketsOfPartitionedTable);
     }
 }

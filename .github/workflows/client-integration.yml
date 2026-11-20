@@ -27,14 +27,17 @@ on:
   push:
     branches:
       - main
+    # Covers every input of the server image key, so main saves a new image
+    # whenever the key changes.
     paths:
-      - 'fluss-rpc/src/main/proto/**'
+      - 'fluss-rpc/**'
       - 'fluss-server/**'
       - 'fluss-common/**'
       - 'fluss-dist/**'
       - 'LICENSE-bin'
       - 'NOTICE-bin'
       - 'docker/fluss/**'
+      - 'pom.xml'
       - 'fluss-rust/crates/**'
       - 'fluss-rust/bindings/**'
       - 'fluss-rust/Cargo.toml'
@@ -59,24 +62,30 @@ on:
       - 'fluss-gateway/**'
       - '.github/workflows/client-integration.yml'
   workflow_dispatch:
+  schedule:
+    - cron: '0 20 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
+# At peak hours ubuntu-latest jobs wait over an hour, while jobs on an explicit
+# label start within minutes. So jobs here name a label directly.
 jobs:
   # Decide which client suites to run, mirroring the per-binding scoping the
   # standalone fluss-rust repo had: a client suite runs only when its own
   # sources, the core fluss-rs crate, or the server/proto changed. On non-PR
-  # events (push to main, manual) everything runs.
+  # events (push to main, manual) everything runs. It only needs git and grep,
+  # so the small ubuntu-slim runner is enough.
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
       cpp: ${{ steps.filter.outputs.cpp }}
       elixir: ${{ steps.filter.outputs.elixir }}
       gateway: ${{ steps.filter.outputs.gateway }}
+      runner: ${{ steps.filter.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -102,7 +111,11 @@ jobs:
           has '^fluss-gateway/' && gateway=true || true
           # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own sources changed
           gate() { if [ "$all" = true ] || [ "$core" = true ] || [ "$protocol" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
+          # Runs on arm64, whose queue stays short at peak hours. Main uses the same
+          # arch, so PRs restore its caches. x86 runs nightly.
+          if [ "${{ github.event_name }}" = "schedule" ]; then runner=ubuntu-24.04; else runner=ubuntu-24.04-arm; fi
           {
+            echo "runner=$runner"
             echo "rust=$(gate false)"
             echo "python=$(gate $py)"
             echo "cpp=$(gate $cpp)"
@@ -111,29 +124,34 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   # Build the server image from THIS source tree once; cache it on server/proto
-  # hashes so client-only PRs restore it instead of rebuilding. The saved image
-  # is uploaded as an artifact and loaded by every client integration job.
+  # hashes so client-only PRs restore it instead of rebuilding. The key also
+  # holds the CPU architecture, because the nightly run uses x86, and leaves
+  # out tests, which the image doesn't contain. Only main saves it: a PR's
+  # image is rarely restored, as its next push changes the key.
+  # The image is uploaded as an artifact and loaded by every client
+  # integration job.
   build-server-image:
     needs: detect-changes
     if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true' || needs.detect-changes.outputs.gateway == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Cache server image
+      - name: Restore server image
         id: image-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: /tmp/fluss-dev.tar
-          key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'LICENSE-bin', 'NOTICE-bin', 'docker/fluss/**', 'pom.xml') }}
+          key: fluss-dev-image-${{ runner.arch }}-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'LICENSE-bin', 'NOTICE-bin', 'docker/fluss/**', 'pom.xml', '!**/src/test/**') }}
 
+      # The nightly x86 run skips the Maven cache: only the next nightly would restore it.
       - name: Set up JDK 17
         if: steps.image-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@v5
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: maven
+          cache: ${{ github.event_name != 'schedule' && 'maven' || '' }}
 
       - name: Build server image (fluss:dev) from source
         if: steps.image-cache.outputs.cache-hit != 'true'
@@ -149,6 +167,13 @@ jobs:
             -c 'test -s /opt/fluss/LICENSE && test -s /opt/fluss/NOTICE'
           docker save fluss:dev -o /tmp/fluss-dev.tar
 
+      - name: Save server image
+        if: steps.image-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/fluss-dev.tar
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
+
       - name: Upload server image
         uses: actions/upload-artifact@v4
         with:
@@ -160,7 +185,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.rust == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -175,12 +200,26 @@ jobs:
           path: /tmp
       - name: Load server image
         run: docker load -i /tmp/fluss-dev.tar
+      - name: Install RocksDB build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Integration tests
-        run: cargo test --features integration_tests --test test_fluss -p fluss-rs
+        run: cargo test --features integration_tests,kv-snapshot --test test_fluss -p fluss-rs
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+      - name: UnionRead integration tests
+        run: cargo test --locked -p fluss-lake --features integration_tests --test test_prepare --test test_union_read
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+      # Needs crate-private APIs, so it lives in the library rather than in test_fluss.
+      - name: Lookup failover integration test
+        run: cargo test --features integration_tests --lib -p fluss-rs client::lookup::lookup_sender::tests::integration
         env:
           RUST_LOG: DEBUG
           RUST_BACKTRACE: full
@@ -189,7 +228,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.gateway == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-gateway
@@ -209,6 +248,7 @@ jobs:
           workspaces: |
             fluss-gateway
             fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build Fluss test cluster helper
         run: cargo build --locked --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
       - name: Integration Test
@@ -224,7 +264,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     strategy:
       matrix:
         python: ["3.9", "3.10", "3.11", "3.12"]
@@ -249,10 +289,13 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
       - name: Build Python bindings
@@ -288,7 +331,7 @@ jobs:
     needs: [detect-changes]
     if: needs.detect-changes.outputs.python == 'true'
     timeout-minutes: 30
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -300,10 +343,13 @@ jobs:
           python-version: "3.12"
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          save-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Build Python bindings
         working-directory: fluss-rust/bindings/python
         run: |
@@ -320,7 +366,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.cpp == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -347,6 +393,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - name: Build fluss-test-cluster binary
@@ -363,6 +410,8 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           cmake --build build --parallel
           sccache --show-stats
+      - name: Run fluss-cpp Rust unit tests
+        run: cargo test -p fluss-cpp --lib
       - name: Run C++ integration tests (parallel)
         working-directory: fluss-rust/bindings/cpp
         run: cd build && ctest -j$(nproc) --output-on-failure --timeout 300
@@ -374,7 +423,7 @@ jobs:
     needs: [detect-changes, build-server-image]
     if: needs.detect-changes.outputs.elixir == 'true'
     timeout-minutes: 60
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.detect-changes.outputs.runner }}
     defaults:
       run:
         working-directory: fluss-rust
@@ -402,6 +451,7 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - name: Cache Mix deps
         uses: actions/cache@v4
         with:

@@ -31,7 +31,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("c2", :string)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -75,7 +75,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("name", :string)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -118,7 +118,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("h_bool", :boolean)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -179,7 +179,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("point", {:row, [{"x", :int}, {"y", :int}]})
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -224,7 +224,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("data", {:array, {:map, :string, inner_row}})
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -267,7 +267,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("row_with_null", {:row, [{"x", :int}, {"y", :int}]})
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -315,7 +315,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("val", :string)
 
       descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 3)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -349,12 +349,12 @@ defmodule Fluss.Integration.LogTableTest do
   describe "admin operations" do
     test "create and drop database", %{admin: admin} do
       db_name = "ex_test_db_#{:rand.uniform(100_000)}"
-      :ok = Fluss.Admin.create_database(admin, db_name)
+      :ok = Fluss.Admin.create_database(admin, db_name, Fluss.DatabaseDescriptor.new())
 
       {:ok, databases} = Fluss.Admin.list_databases(admin)
       assert db_name in databases
 
-      :ok = Fluss.Admin.drop_database(admin, db_name, true)
+      :ok = Fluss.Admin.drop_database(admin, db_name, ignore_if_not_exists: true)
     end
 
     test "list tables", %{admin: admin} do
@@ -366,7 +366,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("id", :int)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       {:ok, tables} = Fluss.Admin.list_tables(admin, @database)
       assert table_name in tables
@@ -384,7 +384,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("name", :string)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       assert Fluss.Table.has_primary_key?(table) == false
@@ -404,7 +404,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("id", :int)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -440,7 +440,7 @@ defmodule Fluss.Integration.LogTableTest do
         |> Fluss.Schema.column("batch", :string)
 
       descriptor = Fluss.TableDescriptor.new!(schema)
-      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
       table = Fluss.Table.get!(conn, @database, table_name)
       writer = Fluss.AppendWriter.new!(table)
@@ -577,7 +577,7 @@ defmodule Fluss.Integration.LogTableTest do
 
     # One bucket so scan_all can read everything from bucket 0.
     descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 1)
-    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+    :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor)
 
     Fluss.Table.get!(conn, @database, table_name)
   end
@@ -626,6 +626,6 @@ defmodule Fluss.Integration.LogTableTest do
   end
 
   defp cleanup_table(admin, table_name) do
-    Fluss.Admin.drop_table(admin, @database, table_name, true)
+    Fluss.Admin.drop_table(admin, @database, table_name, ignore_if_not_exists: true)
   end
 end

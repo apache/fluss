@@ -158,6 +158,8 @@ public class TestingLakeTieringFactory
 
         @Nullable private LakeCommitResult commitResult;
 
+        @Nullable private IOException commitFailure;
+
         public TestingLakeCommitter() {
             this(null);
         }
@@ -189,6 +191,9 @@ public class TestingLakeTieringFactory
         @Override
         public LakeCommitResult commit(TestingCommittable committable, CommitContext context)
                 throws IOException {
+            if (commitFailure != null) {
+                throw commitFailure;
+            }
             return commitResult != null
                     ? commitResult
                     : LakeCommitResult.committedIsReadable(++currentSnapshot);
@@ -211,6 +216,11 @@ public class TestingLakeTieringFactory
         /** Overrides the commit result, or restores the default when null. */
         public void setCommitResult(@Nullable LakeCommitResult commitResult) {
             this.commitResult = commitResult;
+        }
+
+        /** Makes every commit fail with the given exception, or succeed again when null. */
+        public void setCommitFailure(@Nullable IOException commitFailure) {
+            this.commitFailure = commitFailure;
         }
 
         public int getMarkDonePreparations() {

@@ -31,13 +31,20 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.BucketRescaleException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -46,6 +53,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -55,7 +63,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeMetadataRequest;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -74,13 +84,111 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     private static final int RECORDS_PER_PARTITION = 12;
     private static final List<String> OLD_NEW_PARTITIONS = Arrays.asList("old", "new");
 
+    private final TestTableNames tableNames = new TestTableNames();
+
+    @Test
+    void testCoordinatorReloadsLegacyPartitionCountAtEpochZero() throws Exception {
+        TablePath path = tableNames.tablePath("test_db_1", "legacy_restart_counts");
+        createPartitionedTable(path, logSchema());
+        admin.createPartition(path, newPartitionSpec("c", "old"), false).get();
+        TableInfo tableInfo = admin.getTableInfo(path).get();
+        assertThat(tableInfo.getBucketCountEpoch()).isZero();
+        PartitionInfo partition = admin.listPartitionInfos(path).get().get(0);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        String registration =
+                String.format(
+                        "{\"version\":1,\"table_id\":%d,\"partition_id\":%d}",
+                        tableInfo.getTableId(), partition.getPartitionId());
+        zkClient.getCuratorClient()
+                .setData()
+                .forPath(
+                        PartitionZNode.path(path, partition.getPartitionName()),
+                        registration.getBytes(StandardCharsets.UTF_8));
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+
+        AccessContextEvent<Integer> event =
+                new AccessContextEvent<>(
+                        context ->
+                                context.getPartitionBucketCount(
+                                        new TablePartition(
+                                                tableInfo.getTableId(),
+                                                partition.getPartitionId())));
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(event);
+        assertThat(event.getResultFuture().get(30, TimeUnit.SECONDS)).isEqualTo(OLD_BUCKET_NUM);
+
+        MetadataResponse response =
+                FLUSS_CLUSTER_EXTENSION
+                        .newCoordinatorClient()
+                        .metadata(
+                                makeMetadataRequest(
+                                        null,
+                                        Collections.singleton(
+                                                PhysicalTablePath.of(
+                                                        path, partition.getPartitionName())),
+                                        null))
+                        .get(30, TimeUnit.SECONDS);
+        assertThat(response.getPartitionMetadatasList())
+                .singleElement()
+                .satisfies(
+                        metadata -> {
+                            assertThat(metadata.getPartitionId())
+                                    .isEqualTo(partition.getPartitionId());
+                            assertThat(metadata.hasBucketCount()).isTrue();
+                            assertThat(metadata.getBucketCount()).isEqualTo(OLD_BUCKET_NUM);
+                        });
+    }
+
+    @Test
+    void testCoordinatorReloadsRegisteredPartitionCountsAfterRescale() throws Exception {
+        TablePath path = tableNames.tablePath("test_db_1", "rescale_restart_counts");
+        createPartitionedTable(path, logSchema());
+        List<PartitionInfo> partitions = setupOldNewPartitions(path);
+        long tableId = admin.getTableInfo(path).get().getTableId();
+        assertCoordinatorPartitionCounts(tableId, partitions);
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        assertCoordinatorPartitionCounts(tableId, partitions);
+    }
+
+    private static void assertCoordinatorPartitionCounts(
+            long tableId, List<PartitionInfo> partitions) throws Exception {
+        AccessContextEvent<Map<String, Integer>> event =
+                new AccessContextEvent<>(
+                        context -> {
+                            Map<String, Integer> counts = new HashMap<>();
+                            for (PartitionInfo partition : partitions) {
+                                counts.put(
+                                        partition.getPartitionName(),
+                                        context.getPartitionBucketCount(
+                                                new TablePartition(
+                                                        tableId, partition.getPartitionId())));
+                            }
+                            return counts;
+                        });
+        FLUSS_CLUSTER_EXTENSION
+                .getCoordinatorServer()
+                .getCoordinatorEventProcessor()
+                .getCoordinatorEventManager()
+                .put(event);
+        assertThat(event.getResultFuture().get(30, TimeUnit.SECONDS))
+                .containsEntry("old", OLD_BUCKET_NUM)
+                .containsEntry("new", NEW_BUCKET_NUM);
+    }
+
     @Test
     void testLogTableReadWriteAcrossRescale() throws Exception {
         // Write records to partitions with different bucket counts (old partition keeps
         // OLD_BUCKET_NUM, new partition uses NEW_BUCKET_NUM). Routing by the wrong (table-level)
         // count would miss rows when reading back each partition's own bucket range.
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_log_table");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_log_table");
         Schema schema = logSchema();
         createPartitionedTable(tablePath, schema);
         List<PartitionInfo> partitionInfos = setupOldNewPartitions(tablePath);
@@ -109,7 +217,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPkTableReadPathsAcrossRescale() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_pk_read_paths");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_pk_read_paths");
         Schema schema = pkSchema("a", "c");
         createPartitionedTable(tablePath, schema);
         List<PartitionInfo> partitionInfos = setupOldNewPartitions(tablePath);
@@ -190,7 +298,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         // SET ('bucket.num' = currentValue) does not change the bucket layout, so it must not
         // advance bucketCountEpoch: legacy-client routing and historical lookup both read
         // epoch > 0 as evidence that mixed bucket layouts may exist.
-        TablePath tablePath = TablePath.of("test_db_1", "test_same_value_bucket_num_alter");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_same_value_bucket_num_alter");
         createPartitionedTable(tablePath, logSchema());
 
         TableInfo before = admin.getTableInfo(tablePath).get();
@@ -221,7 +329,8 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
 
     @Test
     void testBucketCountChangeCannotBeMixedWithPropertyChange() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_mixed_bucket_and_property_alter");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_mixed_bucket_and_property_alter");
         createPartitionedTable(tablePath, logSchema());
 
         assertThatThrownBy(
@@ -249,7 +358,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_dynamic_create");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_dynamic_create");
         Schema schema = logSchema();
         createPartitionedTable(tablePath, schema);
         alterBucketNum(tablePath, NEW_BUCKET_NUM);
@@ -293,7 +402,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
 
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_stale_handle");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_stale_handle");
         Schema schema = pkSchema("a", "c");
         createPartitionedTable(tablePath, schema);
 
@@ -337,7 +446,7 @@ class PartitionBucketCountRescaleITCase extends ClientToServerITCaseBase {
     void testPrefixLookupAcrossPartitionsWithDifferentBucketCounts() throws Exception {
         // Prefix lookup must resolve the bucket with the correct per-partition count; a mismatch
         // would query the wrong bucket and miss rows.
-        TablePath tablePath = TablePath.of("test_db_1", "test_rescale_prefix_lookup");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_rescale_prefix_lookup");
         Schema schema = pkSchema("a", "b", "c");
         createPartitionedTable(tablePath, schema, "a");
         setupOldNewPartitions(tablePath);

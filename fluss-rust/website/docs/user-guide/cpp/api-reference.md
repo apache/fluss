@@ -29,15 +29,23 @@ Complete API reference for the Fluss C++ client.
 | `writer_buffer_wait_timeout_ms`       | `uint64_t`    | `UINT64_MAX`        | Maximum wait in ms for Rust write-buffer capacity; also provides a shared budget for callback-capacity and buffer waits. `UINT64_MAX` waits indefinitely |
 | `writer_kv_backpressure_max_throttle_ms` | `uint64_t`  | `3000`               | Maximum per-bucket KV backpressure throttle in milliseconds                             |
 | `writer_bucket_no_key_assigner`       | `std::string` | `"sticky"`           | Bucket assignment strategy for tables without bucket keys: `"sticky"` or `"round_robin"` |
+| `writer_dynamic_create_partition_enabled` | `bool`    | `true`               | Create a partition that a write targets but that does not exist yet. When `false`, such writes fail with `PARTITION_NOT_EXISTS` |
 | `scanner_remote_log_prefetch_num`     | `size_t`      | `4`                  | Number of remote log segments to prefetch                                                |
 | `remote_file_download_thread_num`     | `size_t`      | `3`                  | Number of threads for remote log downloads                                               |
 | `scanner_remote_log_read_concurrency` | `size_t`      | `4`                  | Streaming read concurrency within a remote log file                                      |
+| `scanner_io_tmp_dir`                  | `std::string` | `""`                 | Parent for remote log downloads; empty uses the OS temporary directory plus `/fluss`                  |
 | `scanner_log_max_poll_records`        | `size_t`      | `500`                | Maximum number of records returned in a single Poll()                                    |
 | `scanner_log_fetch_max_bytes`         | `int32_t`     | `16777216` (16 MB)   | Maximum bytes per fetch response for LogScanner                                          |
 | `scanner_log_fetch_min_bytes`         | `int32_t`     | `1`                  | Minimum bytes the server must accumulate before returning a fetch response               |
 | `scanner_log_fetch_wait_max_time_ms`  | `int32_t`     | `500`                | Maximum time (ms) the server may wait to satisfy min-bytes                               |
 | `scanner_log_fetch_max_bytes_for_bucket`| `int32_t`   | `1048576` (1 MB)     | Maximum bytes per fetch response per bucket for LogScanner                               |
-| `connect_timeout_ms`                  | `uint64_t`    | `15000`              | TCP connect timeout in milliseconds                                                      |
+| `scanner_log_check_crc`               | `bool`        | `true`               | Check the CRC of fetched log batches, so a corrupted batch fails the scan. Batches the server projected are not checked |
+| `lookup_queue_size`                   | `size_t`      | `25600`              | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
+| `lookup_max_retries`                  | `int32_t`     | `INT32_MAX`          | Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's leader is not a retry, so this is not a lookup timeout |
+| `lookup_retry_backoff_ms`             | `uint64_t`    | `100`                | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling with each retry of that lookup; also before a bucket without a known leader is refreshed again, doubling with each refresh of that bucket and shared by its lookups. ±20% jitter; `0` resends and refreshes immediately |
+| `lookup_retry_max_backoff_ms`         | `uint64_t`    | `1000`               | Cap in ms for the lookup retry delay and the refresh delay of a bucket without a known leader, applied before jitter; must be >= `lookup_retry_backoff_ms` |
+| `connect_timeout_ms`                  | `uint64_t`    | `15000`              | Connection establishment timeout in milliseconds, including TCP connect, API negotiation and SASL authentication |
+| `connection_max_idle_time_ms`         | `uint64_t`    | `600000` (10 min)    | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `std::string` | `"PLAINTEXT"`        | `"PLAINTEXT"` (default) or `"sasl"` for SASL auth                                        |
 | `security_sasl_mechanism`             | `std::string` | `"PLAIN"`            | SASL mechanism (only `"PLAIN"` is supported)                                             |
 | `security_sasl_username`              | `std::string` | (empty)              | SASL username (required when protocol is `"sasl"`)                                       |
@@ -196,7 +204,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch) -> Result` | Append a batch (fire-and-forget) |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteResult& out) -> Result` | Append a batch with write acknowledgment |
 | `AppendArrowBatch(const std::shared_ptr<arrow::RecordBatch>& batch, WriteCallback callback) -> Result` | Append a batch with one completion notification |
-| `Flush() -> Result`                                         | Flush all pending writes               |
+| `Flush() -> Result`                                         | Flush all pending writes, without returning the errors of failed writes |
 
 ## `UpsertWriter`
 
@@ -208,7 +216,7 @@ are retained. Filters apply to Arrow log scans and are rejected by `CreateBucket
 | `Delete(const GenericRow& row) -> Result`                   | Delete a row by primary key (fire-and-forget) |
 | `Delete(const GenericRow& row, WriteResult& out) -> Result` | Delete a row with write acknowledgment        |
 | `Delete(const GenericRow& row, WriteCallback callback) -> Result` | Delete a row with completion notification |
-| `Flush() -> Result`                                         | Flush all pending operations                  |
+| `Flush() -> Result`                                         | Flush all pending operations, without returning the errors of failed ones |
 
 ## `WriteResult`
 
@@ -536,6 +544,8 @@ Performs point lookups by primary key. Obtained from `TableLookup::CreateLookupe
 |---------------------------------------------------------------------|-----------------------------|
 | `Lookup(const GenericRow& pk_row, LookupResult& out) const -> Result` | Lookup a row by primary key |
 | `Lookup(const GenericRow& pk_row, PendingLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its row |
+| `LookupAsync(const GenericRow& pk_row, uint64_t request_id) const -> Result` | Start a lookup and associate it with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<LookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed lookups in completion order |
 
 Each blocking lookup waits for its batch, up to `lookup_batch_timeout_ms`. To look up many keys from one thread, start them all, then wait for each:
 
@@ -553,6 +563,61 @@ for (auto& lookup : pending) {
     }
 }
 ```
+
+For fan-out workloads, use `LookupAsync` and `Poll` instead of retaining one
+pending handle per key:
+
+```cpp
+size_t next = 0;
+size_t submitted = 0;
+std::vector<fluss::LookupCompletion> completed;
+while (next < keys.size() || submitted != 0) {
+    while (next < keys.size()) {
+        auto result = lookuper.LookupAsync(keys[next], next);
+        if (result.Ok()) {
+            ++next;
+            ++submitted;
+        } else if (result.error_code == fluss::ErrorCode::QUEUE_FULL) {
+            break;  // Poll before retrying this key.
+        } else {
+            // Handle an invalid key or another submission error.
+            ++next;
+        }
+    }
+    if (submitted == 0) {
+        continue;
+    }
+    if (!lookuper.Poll(1000, completed, 128).Ok()) {
+        // Handle a polling error.
+    }
+    submitted -= completed.size();
+    for (const auto& completion : completed) {
+        if (completion.result.Ok() && completion.lookup.Found()) {
+            // Match the result with completion.request_id.
+        }
+    }
+}
+```
+
+The number of outstanding asynchronous requests per lookuper is controlled by
+`Configuration::lookup_max_pending_operations`; the core lookup batching queue
+is configured independently by `lookup_queue_size`. If async capacity is reached,
+`LookupAsync` returns `QUEUE_FULL`; poll completed requests before retrying the
+submission. A finished lookup counts toward this limit until `Poll` returns it.
+`Poll` replaces `out`, accepts a caller-selected batch limit, and includes lock
+acquisition in its timeout.
+
+`Poll` waits for at most `timeout_ms` for the first completion and then drains
+already completed lookups. A timeout is not an error and does not cancel
+unfinished lookups. Each `LookupCompletion` contains the caller-supplied
+`request_id`, a per-lookup `result`, and the `lookup` result. The completion
+queue is owned by the lookuper and is safe to use from multiple threads.
+`Poll(-1, out)` returns an empty result once no asynchronous lookup is
+outstanding, also when another thread polled the last one. Destroying a
+lookuper aborts its in-flight asynchronous tasks. A lookup that never
+completes, for example on a dropped table, holds its slot until the lookuper
+is destroyed. Key conversion and validation happen at submission time, before
+capacity is reserved.
 
 ## `PendingLookup`
 
@@ -572,6 +637,13 @@ Performs prefix (bucket-key) lookups, returning all rows whose primary key start
 |---------------------------------------------------------------------------------------|-----------------------------------------------|
 | `PrefixLookup(const GenericRow& prefix_row, PrefixLookupResult& out) const -> Result` | Look up all rows matching the prefix columns  |
 | `PrefixLookup(const GenericRow& prefix_row, PendingPrefixLookup& out) const -> Result` | Start a lookup without blocking; `out` waits for its rows |
+| `PrefixLookupAsync(const GenericRow& prefix_row, uint64_t request_id) const -> Result` | Start a prefix lookup with an application request ID |
+| `Poll(int64_t timeout_ms, std::vector<PrefixLookupCompletion>& out, size_t max_results = 1024) const -> Result` | Collect completed prefix lookups in completion order |
+
+`PrefixLookupAsync` and `PrefixLookuper::Poll` have the same timeout and
+completion-order semantics as the point-lookup polling API. Each
+`PrefixLookupCompletion` contains the request ID, per-lookup status, and a
+`PrefixLookupResult`.
 
 ## `LogScanner`
 
@@ -918,10 +990,16 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | `GetBaseOffset() -> int64_t`                                   | First record offset                  |
 | `GetLastOffset() -> int64_t`                                   | Last record offset                   |
 | `GetCommitTimestamp() -> int64_t`                              | Commit time in epoch milliseconds    |
+| `GetSchemaId() -> int32_t`                                     | Schema ID from the source log batch |
 
 `GetCommitTimestamp()` returns `ArrowRecordBatch::NO_COMMIT_TIMESTAMP` (`-1`)
 when the batch carries no single timestamp, which is the case for a limit scan
 because it merges several log batches into one Arrow batch.
+
+`GetSchemaId()` returns the ID of the schema the log batch was written with. It can
+differ from the schema of the batch's columns, because the scanner aligns every batch
+to the table schema it was created with. It returns `ArrowRecordBatch::NO_SCHEMA_ID`
+(`-1`) for a limit scan, which merges several log batches into one.
 
 ## `ArrowRecordBatches`
 

@@ -30,17 +30,6 @@
     <artifactId>fluss-lake-iceberg-1.12</artifactId>
     <name>Apache Fluss : Lake : Iceberg 1.12</name>
 
-    <!--
-        The opt-in Iceberg 1.12 lake plugin. Iceberg 1.11+ is built for Java 17, so this module is
-        compiled with a JDK 17 toolchain and tested on JDK 17, while Maven itself and the rest of the
-        build stay on JDK 11. Fluss's own classes still target Java 11 bytecode: the plugin entry
-        point can then be loaded on an older JVM and fail with a clear message instead of an
-        UnsupportedClassVersionError.
-
-        Both Iceberg plugins register the "iceberg" lake format, so only one of them can be loaded.
-        The binary distribution ships this plugin in opt/iceberg-1.12/, outside of plugins/.
-    -->
-
     <properties>
         <iceberg.version>1.12.0</iceberg.version>
         <!-- The Jackson version of Iceberg 1.12.0, instead of the root jackson-bom. -->
@@ -117,6 +106,19 @@
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-bundled-guava</artifactId>
             <version>${iceberg.version}</version>
+        </dependency>
+
+        <!--
+            The HTTP client 5.6 of Iceberg 1.12 decodes zstd and other encodings with the bundled
+            commons-compress, which needs commons-io (e.g. ZstdCompressorInputStream). The
+            commons-io of commons-compress is dropped by the commons-io exclusion on hadoop-common,
+            which is where the bundled commons-compress version is resolved from, so add it back
+            with the version commons-compress 1.26.1 is built against.
+        -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>2.15.1</version>
         </dependency>
 
         <dependency>

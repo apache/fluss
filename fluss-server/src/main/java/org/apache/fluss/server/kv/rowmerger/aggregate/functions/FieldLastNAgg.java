@@ -18,9 +18,15 @@
 
 package org.apache.fluss.server.kv.rowmerger.aggregate.functions;
 
+import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.array.BinaryArraySplicer;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.utils.ArrayDistinctCollector;
 import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataType;
+
+import javax.annotation.Nullable;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -30,6 +36,9 @@ public class FieldLastNAgg extends FieldAggregator {
     private static final long serialVersionUID = 1L;
 
     private final int size;
+    private final ArrayDistinctCollector distinctCollector;
+    private final DataType elementType;
+    private final boolean spliceable;
     private final InternalArray.ElementGetter elementGetter;
 
     /**
@@ -39,10 +48,24 @@ public class FieldLastNAgg extends FieldAggregator {
      * @param size the number of elements to keep, must be positive
      */
     public FieldLastNAgg(ArrayType dataType, int size) {
+        this(dataType, size, false);
+    }
+
+    /**
+     * Creates a LAST_N aggregator with optional deduplication by last occurrence.
+     *
+     * @param dataType the array type
+     * @param size the positive maximum number of elements
+     * @param distinct whether to keep only distinct elements
+     */
+    public FieldLastNAgg(ArrayType dataType, int size, boolean distinct) {
         super(dataType);
         checkArgument(size > 0, "size must be positive, but was %s", size);
         this.size = size;
-        this.elementGetter = InternalArray.createElementGetter(dataType.getElementType());
+        this.elementType = dataType.getElementType();
+        this.spliceable = BinaryArraySplicer.supports(elementType);
+        this.elementGetter = InternalArray.createElementGetter(elementType);
+        this.distinctCollector = distinct ? new ArrayDistinctCollector(elementType) : null;
     }
 
     @Override
@@ -52,6 +75,9 @@ public class FieldLastNAgg extends FieldAggregator {
         }
         InternalArray older = (InternalArray) accumulator;
         InternalArray newer = (InternalArray) inputField;
+        if (distinctCollector != null) {
+            return distinct(older, newer);
+        }
         if (older != null && newer.size() == 0) {
             return accumulator;
         }
@@ -61,6 +87,9 @@ public class FieldLastNAgg extends FieldAggregator {
         int olderSize = older == null ? 0 : older.size();
         int total = olderSize + newer.size();
         int skip = Math.max(0, total - size);
+        if (spliceable && BinaryArraySplicer.canSplice(older, newer)) {
+            return splice((BinaryArray) older, olderSize, (BinaryArray) newer, skip);
+        }
         Object[] result = new Object[total - skip];
         for (int i = skip; i < total; i++) {
             result[i - skip] =
@@ -69,6 +98,35 @@ public class FieldLastNAgg extends FieldAggregator {
                             : elementGetter.getElementOrNull(newer, i - olderSize);
         }
         return new GenericArray(result);
+    }
+
+    private InternalArray distinct(@Nullable InternalArray older, InternalArray newer) {
+        ArrayDistinctCollector.Accumulator elements = distinctCollector.newAccumulator();
+        collectDistinct(elements, newer);
+        collectDistinct(elements, older);
+        return elements.toReversedArray();
+    }
+
+    private void collectDistinct(
+            ArrayDistinctCollector.Accumulator elements, @Nullable InternalArray source) {
+        if (source == null) {
+            return;
+        }
+        for (int i = source.size() - 1; i >= 0 && elements.size() < size; i--) {
+            elements.add(source, i);
+        }
+    }
+
+    /** Copies the kept elements as bytes, without reading each one. */
+    private BinaryArray splice(
+            @Nullable BinaryArray older, int olderSize, BinaryArray newer, int skip) {
+        BinaryArraySplicer splicer = new BinaryArraySplicer(elementType);
+        int skipOlder = Math.min(skip, olderSize);
+        if (older != null) {
+            splicer.append(older, skipOlder, olderSize - skipOlder);
+        }
+        int skipNewer = skip - skipOlder;
+        return splicer.append(newer, skipNewer, newer.size() - skipNewer).build();
     }
 
     @Override

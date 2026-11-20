@@ -32,9 +32,10 @@ on:
       - 'fluss-rust/website/**'
       - '.github/workflows/rust-docs-check.yml'
 
+# Runs on arm64, whose queue stays short at peak hours.
 jobs:
   check-documentation:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     defaults:
       run:
         working-directory: fluss-rust/website

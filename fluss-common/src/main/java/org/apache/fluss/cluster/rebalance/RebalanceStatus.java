@@ -38,7 +38,7 @@ public enum RebalanceStatus {
     TIMEOUT(5);
 
     public static final Set<RebalanceStatus> FINAL_STATUSES =
-            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED, TIMEOUT));
+            new HashSet<>(Arrays.asList(COMPLETED, CANCELED, FAILED));
 
     private final int code;
 

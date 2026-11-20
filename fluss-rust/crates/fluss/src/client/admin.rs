@@ -1037,11 +1037,7 @@ mod tests {
         Cluster::new(
             None,
             servers,
-            HashMap::from([(physical_path, locations.clone())]),
-            locations
-                .into_iter()
-                .map(|location| (location.table_bucket.clone(), location))
-                .collect(),
+            HashMap::from([(physical_path, locations)]),
             HashMap::from([(table_path.clone(), TABLE_ID)]),
             HashMap::from([(
                 table_path.clone(),

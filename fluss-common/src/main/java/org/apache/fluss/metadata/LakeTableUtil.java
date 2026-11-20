@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.ReadableConfig;
 
+import java.util.Optional;
+
 /** Utility methods for resolving external lake table metadata. */
 @Internal
 public final class LakeTableUtil {
@@ -41,17 +43,25 @@ public final class LakeTableUtil {
         return TablePath.of(lakeDatabaseName, lakeTableName);
     }
 
-    /** Returns whether the table change affects the resolved lake table path. */
-    public static boolean isLakeTablePathChange(TableChange tableChange) {
+    /** Returns the changed lake table path option key, if present. */
+    public static Optional<String> getLakeTablePathOptionKey(TableChange tableChange) {
         String optionKey;
         if (tableChange instanceof TableChange.SetOption) {
             optionKey = ((TableChange.SetOption) tableChange).getKey();
         } else if (tableChange instanceof TableChange.ResetOption) {
             optionKey = ((TableChange.ResetOption) tableChange).getKey();
         } else {
-            return false;
+            return Optional.empty();
         }
-        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
-                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey);
+        if (ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
+                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey)) {
+            return Optional.of(optionKey);
+        }
+        return Optional.empty();
+    }
+
+    /** Returns whether the table change affects the resolved lake table path. */
+    public static boolean isLakeTablePathChange(TableChange tableChange) {
+        return getLakeTablePathOptionKey(tableChange).isPresent();
     }
 }

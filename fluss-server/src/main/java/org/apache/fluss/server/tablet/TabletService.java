@@ -20,6 +20,7 @@ package org.apache.fluss.server.tablet;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -28,6 +29,7 @@ import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -93,6 +95,7 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
@@ -121,10 +124,15 @@ import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
+import org.apache.fluss.server.metadata.MetadataView;
+import org.apache.fluss.server.metadata.MetadataViewProvider;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerGroupManager;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
+import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
@@ -132,7 +140,9 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -149,10 +159,14 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLooku
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
+import static org.apache.fluss.security.acl.OperationType.DROP;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -164,6 +178,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilter
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitConsumerOffsetsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetTableStatsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeInitWriterResponse;
@@ -182,7 +197,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDa
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
 
 /** An RPC Gateway service for tablet server. */
-public final class TabletService extends RpcServiceBase implements TabletServerGateway {
+public final class TabletService extends RpcServiceBase
+        implements TabletServerGateway, MetadataViewProvider {
 
     private final String serviceName;
     private final ReplicaManager replicaManager;
@@ -192,6 +208,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
     private final ExecutorService replicaStateChangeExecutor;
+    private final ConsumerGroupManager groupManager;
 
     public TabletService(
             int serverId,
@@ -206,7 +223,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ExecutorService replicaStateChangeExecutor,
             ScannerManager scannerManager,
             CoordinatorGateway coordinatorGateway,
-            String interListenerName) {
+            String interListenerName,
+            ConsumerOffsetTableConfig offsetsConfig) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -224,6 +242,27 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.coordinatorGateway = coordinatorGateway;
         this.interListenerName = interListenerName;
         this.replicaStateChangeExecutor = replicaStateChangeExecutor;
+        this.groupManager =
+                new ConsumerGroupManager(
+                        serverId,
+                        replicaManager,
+                        offsetsConfig,
+                        zkClient,
+                        metadataManager,
+                        metadataCache,
+                        metadataFunctionProvider,
+                        coordinatorGateway,
+                        ioExecutor);
+    }
+
+    /** Returns the local replica manager used by protocol plugins. */
+    public ReplicaManager getReplicaManager() {
+        return replicaManager;
+    }
+
+    /** Returns the shared TabletServer metadata cache. */
+    public TabletServerMetadataCache getMetadataCache() {
+        return metadataCache;
     }
 
     @Override
@@ -623,6 +662,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     }
 
     @Override
+    public MetadataView getMetadataView(Session session) {
+        return metadataCache.getMetadataView(
+                session.getListenerName(),
+                path -> isTableMetadataAuthorized(session, authorizer, path));
+    }
+
+    @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
         MetadataResponse metadataResponse =
                 processMetadataRequest(
@@ -647,6 +693,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 response,
                 result -> {
                     replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, clusterMetadata);
+                    groupManager.onTableMetadataUpdate(clusterMetadata.getTableMetadataList());
                     result.complete(new UpdateMetadataResponse());
                 });
     }
@@ -770,55 +817,166 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
             FindConsumerGroupOwnerRequest request) {
-        CompletableFuture<FindConsumerGroupOwnerResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("findConsumerGroupOwner is not supported yet"));
-        return response;
+        // Copy request/session values before returning: the request buffer is released after this
+        // method and the current session is bound to the RPC worker thread.
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        final String listenerName = currentListenerName();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+        }
+
+        return groupManager
+                .findOwner(groupId, listenerName)
+                .thenApply(ServerRpcMessageUtils::makeFindConsumerGroupOwnerResponse);
     }
 
     @Override
     public CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
             CommitConsumerOffsetsRequest request) {
-        CompletableFuture<CommitConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("commitConsumerOffsets is not supported yet"));
-        return response;
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), READ, Resource.group(groupId));
+        }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final Map<TableBucket, ConsumerOffsetAndMetadata> offsets =
+                decodeCommitConsumerOffsetsRequest(request);
+        if (offsets.isEmpty()) {
+            return CompletableFuture.completedFuture(
+                    makeCommitConsumerOffsetsResponse(Collections.emptyMap()));
+        }
+
+        // The session is bound to the RPC thread; authorize all sources before starting any write.
+        if (authorizer != null) {
+            offsets.keySet().stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(READ, tableId));
+        }
+
+        return groupManager
+                .handleCommitConsumerOffsets(groupId, offsetsReplica, offsets)
+                .thenApply(ServerRpcMessageUtils::makeCommitConsumerOffsetsResponse);
     }
 
     @Override
     public CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
             GetConsumerOffsetsRequest request) {
-        CompletableFuture<GetConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("getConsumerOffsets is not supported yet"));
-        return response;
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), DESCRIBE, Resource.group(groupId));
+        }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeGetConsumerOffsetsRequest(request);
+
+        if (requestedBuckets != null && requestedBuckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new GetConsumerOffsetsResponse());
+        }
+
+        // The session is bound to the RPC thread; authorize all requested sources before reading.
+        if (authorizer != null && requestedBuckets != null) {
+            requestedBuckets.stream()
+                    .map(TableBucket::getTableId)
+                    .distinct()
+                    .forEach(tableId -> authorizeTable(DESCRIBE, tableId));
+        }
+
+        return groupManager
+                .handleGetConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(
+                        offsets ->
+                                requestedBuckets == null
+                                        ? filterOffsetsByAuthorizedTables(offsets)
+                                        : offsets)
+                .thenApply(ServerRpcMessageUtils::makeGetConsumerOffsetsResponse);
+    }
+
+    /**
+     * Filters all-offset results to source tables the current caller can describe. Unauthorized
+     * tables are omitted rather than causing the whole request to fail, so callers with partial
+     * table visibility still receive their authorized offsets.
+     */
+    private Map<TableBucket, ConsumerOffsetAndMetadata> filterOffsetsByAuthorizedTables(
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        if (authorizer == null) {
+            return offsets;
+        }
+
+        Set<Long> authorizedTableIds = filterAuthorizedTables(offsets.keySet(), DESCRIBE);
+        Map<TableBucket, ConsumerOffsetAndMetadata> visibleOffsets = new HashMap<>();
+        for (Map.Entry<TableBucket, ConsumerOffsetAndMetadata> entry : offsets.entrySet()) {
+            if (authorizedTableIds.contains(entry.getKey().getTableId())) {
+                visibleOffsets.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return visibleOffsets;
     }
 
     @Override
     public CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
             DeleteConsumerOffsetsRequest request) {
-        CompletableFuture<DeleteConsumerOffsetsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("deleteConsumerOffsets is not supported yet"));
-        return response;
+        final GroupId groupId = GroupId.of(request.getGroupId());
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.group(groupId));
+        }
+        final Replica offsetsReplica = groupManager.validateGroupId(groupId);
+        final List<TableBucket> requestedBuckets = decodeDeleteConsumerOffsetsRequest(request);
+        if (requestedBuckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new DeleteConsumerOffsetsResponse());
+        }
+
+        return groupManager
+                .handleDeleteConsumerOffsets(groupId, offsetsReplica, requestedBuckets)
+                .thenApply(ServerRpcMessageUtils::makeDeleteConsumerOffsetsResponse);
     }
 
     @Override
     public CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
             ListConsumerGroupsRequest request) {
-        CompletableFuture<ListConsumerGroupsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("listConsumerGroups is not supported yet"));
-        return response;
+        List<String> groupIds = groupManager.handleListConsumerGroups();
+        if (authorizer != null) {
+            List<Resource> resources =
+                    groupIds.stream().map(Resource::group).collect(Collectors.toList());
+            groupIds =
+                    authorizer.filterByAuthorized(currentSession(), DESCRIBE, resources).stream()
+                            .map(Resource::getName)
+                            .collect(Collectors.toList());
+        }
+        return CompletableFuture.completedFuture(
+                ServerRpcMessageUtils.makeListConsumerGroupsResponse(groupIds));
     }
 
     @Override
     public CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
             DeleteConsumerGroupsRequest request) {
-        CompletableFuture<DeleteConsumerGroupsResponse> response = new CompletableFuture<>();
-        response.completeExceptionally(
-                new UnsupportedOperationException("deleteConsumerGroups is not supported yet"));
-        return response;
+        List<GroupId> groupIds = new ArrayList<>();
+        for (String groupId : request.getGroupsList()) {
+            groupIds.add(GroupId.of(groupId));
+        }
+        if (new HashSet<>(groupIds).size() != groupIds.size()) {
+            CompletableFuture<DeleteConsumerGroupsResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new InvalidRequestException(
+                            "DeleteConsumerGroups request contains duplicate group IDs"));
+            return failed;
+        }
+        if (groupIds.isEmpty()) {
+            return CompletableFuture.completedFuture(new DeleteConsumerGroupsResponse());
+        }
+
+        if (authorizer != null) {
+            for (GroupId groupId : groupIds) {
+                authorizer.authorize(currentSession(), DROP, Resource.group(groupId));
+            }
+        }
+
+        final Map<GroupId, Replica> offsetsReplicasByGroup = new HashMap<>();
+        for (GroupId groupId : groupIds) {
+            offsetsReplicasByGroup.put(groupId, groupManager.validateGroupId(groupId));
+        }
+
+        return groupManager
+                .handleDeleteConsumerGroups(offsetsReplicasByGroup)
+                .thenApply(ServerRpcMessageUtils::makeDeleteConsumerGroupsResponse);
     }
 
     @Override

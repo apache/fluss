@@ -26,6 +26,8 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.NettyMetrics;
 import org.apache.fluss.rpc.netty.NettyUtils;
+import org.apache.fluss.rpc.netty.ssl.SslConfig;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
@@ -33,14 +35,17 @@ import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -59,6 +64,13 @@ public final class NettyClient implements RpcClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(NettyClient.class);
 
+    /**
+     * How long a connection that closed with an authentication failure stays in place before the
+     * next request reconnects.
+     */
+    // TODO: replace the fixed hold with a reconnect backoff.
+    private static final long AUTHENTICATION_FAILURE_BACKOFF_MS = 1000L;
+
     /** Netty's Bootstrap. */
     private final Bootstrap bootstrap;
 
@@ -66,31 +78,44 @@ public final class NettyClient implements RpcClient {
     private final EventLoopGroup eventGroup;
 
     /**
-     * Managed connections to Netty servers. The key is the server uid (e.g., "cs-2", "ts-3"), the
-     * value is the connection.
+     * Managed connections to Netty servers. Connections are identified by server uid, host and
+     * port.
      */
-    private final Map<String, ServerConnection> connections;
+    private final Map<ConnectionKey, ServerConnection> connections;
 
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
 
+    /**
+     * Shared by every connection of this client; {@code null} when {@code
+     * client.security.ssl.enabled} is false.
+     */
+    @Nullable private final SslContext sslContext;
+
+    @Nullable private final String endpointIdentificationAlgorithm;
+
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
         this.connections = new ConcurrentHashMap<>();
-
-        // build bootstrap
-        this.eventGroup =
-                NettyUtils.newEventLoopGroup(
-                        conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS),
-                        "fluss-netty-client");
+        this.clientMetricGroup = clientMetricGroup;
+        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
+        SslConfig sslConfig = SslConfig.fromClientConfig(conf).orElse(null);
+        this.sslContext =
+                sslConfig == null ? null : SslContextFactory.createClientSslContext(sslConfig);
+        this.endpointIdentificationAlgorithm =
+                sslConfig == null ? null : sslConfig.endpointIdentificationAlgorithm();
+        int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS);
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         boolean preferHeap =
                 conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST);
+
+        // build bootstrap
+        this.eventGroup = NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-client");
         PooledByteBufAllocator allocator = PooledByteBufAllocator.DEFAULT;
         this.bootstrap =
                 new Bootstrap()
@@ -101,8 +126,6 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
-        this.clientMetricGroup = clientMetricGroup;
-        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
@@ -120,37 +143,70 @@ public final class NettyClient implements RpcClient {
     }
 
     /**
-     * Disconnects the connection to the given server node, if there is one. Any inflight/pending
-     * requests for this connection will receive disconnections.
+     * Disconnects the connection to the given server endpoint, if there is one. Any
+     * inflight/pending requests for this connection will receive disconnections.
+     *
+     * @param node The server node to disconnect
+     * @return A future completed after logical disconnection and request notification; physical
+     *     channel closure and resource cleanup may finish later
+     */
+    @Override
+    public CompletableFuture<Void> disconnect(ServerNode node) {
+        LOG.debug("Disconnecting from server {}.", node);
+        checkArgument(!isClosed, "Netty client is closed.");
+
+        ServerConnection connection = connections.remove(ConnectionKey.from(node));
+
+        if (connection == null) {
+            return FutureUtils.completedVoidFuture();
+        }
+
+        return connection.close();
+    }
+
+    /**
+     * Disconnects all connections associated with the given logical server uid. Any
+     * inflight/pending requests for these connections will receive disconnections.
      *
      * @param serverUid The uid of the server node
-     * @return A future that completes when the connection is fully closed
+     * @return A future completed after logical disconnection and request notification for the
+     *     matching connections; physical channel closure and resource cleanup may finish later
      */
     @Override
     public CompletableFuture<Void> disconnect(String serverUid) {
         LOG.debug("Disconnecting from server {}.", serverUid);
         checkArgument(!isClosed, "Netty client is closed.");
-        ServerConnection connection = connections.remove(serverUid);
-        if (connection != null) {
-            return connection.close();
+
+        List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
+
+        for (Map.Entry<ConnectionKey, ServerConnection> entry : connections.entrySet()) {
+            if (entry.getKey().belongsTo(serverUid)
+                    && connections.remove(entry.getKey(), entry.getValue())) {
+                shutdownFutures.add(entry.getValue().close());
+            }
         }
-        return FutureUtils.completedVoidFuture();
+
+        if (shutdownFutures.isEmpty()) {
+            return FutureUtils.completedVoidFuture();
+        }
+
+        return CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]));
     }
 
     /**
-     * Check if we are currently ready to send another request to the given server but don't attempt
-     * to connect if we aren't.
+     * Check if we are currently ready to send another request to the given server endpoint but
+     * don't attempt to connect if we aren't.
      *
-     * @return true if the node is ready
+     * @param node The server node to check
+     * @return true if the connection to the node is ready
      */
     @Override
-    public boolean isReady(String serverUid) {
+    public boolean isReady(ServerNode node) {
         checkArgument(!isClosed, "Netty client is closed.");
-        ServerConnection connection = connections.get(serverUid);
-        if (connection == null) {
-            return false;
-        }
-        return connection.isReady();
+
+        ServerConnection connection = connections.get(ConnectionKey.from(node));
+
+        return connection != null && connection.isReady();
     }
 
     /** Send an RPC request to the given server and return a future for the response. */
@@ -166,37 +222,134 @@ public final class NettyClient implements RpcClient {
         try {
             isClosed = true;
             final List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-            for (Map.Entry<String, ServerConnection> conn : connections.entrySet()) {
+            for (Map.Entry<ConnectionKey, ServerConnection> conn : connections.entrySet()) {
                 if (connections.remove(conn.getKey(), conn.getValue())) {
                     shutdownFutures.add(conn.getValue().close());
                 }
             }
-            shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
-            CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
-                    .get(10, TimeUnit.SECONDS);
+            try {
+                CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
+                        .get(10, TimeUnit.SECONDS);
+            } finally {
+                // Shut down the event loop only after the connections are closed, as it
+                // terminates without a quiet period. It is shut down even if closing a
+                // connection failed or timed out.
+                NettyUtils.shutdownGroup(eventGroup).get(10, TimeUnit.SECONDS);
+            }
             LOG.info("Netty client was shutdown successfully.");
         } catch (Exception e) {
             LOG.warn("Netty client shutdown failed: ", e);
         }
     }
 
-    private ServerConnection getOrCreateConnection(ServerNode node) {
-        String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
-                            node,
-                            clientMetricGroup,
-                            authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con));
-                });
+    @VisibleForTesting
+    ServerConnection getOrCreateConnection(ServerNode node) {
+        ConnectionKey connectionKey = ConnectionKey.from(node);
+        ServerConnection connection =
+                connections.computeIfAbsent(
+                        connectionKey,
+                        ignored -> {
+                            LOG.debug("Creating connection to server {}.", node);
+                            return new ServerConnection(
+                                    bootstrap,
+                                    node,
+                                    clientMetricGroup,
+                                    authenticatorSupplier.get(),
+                                    sslContext,
+                                    endpointIdentificationAlgorithm,
+                                    // A synchronous failure must not update this map recursively.
+                                    (con, cause) -> {
+                                        Runnable remove =
+                                                () -> connections.remove(connectionKey, con);
+                                        if (ServerConnection.isAuthenticationFailure(cause)) {
+                                            // Keep the closed connection for a while so that
+                                            // requests fail at once with its cause instead of
+                                            // reconnecting and repeating the TLS handshake and
+                                            // the failing authentication on every request.
+                                            eventGroup.schedule(
+                                                    remove,
+                                                    AUTHENTICATION_FAILURE_BACKOFF_MS,
+                                                    TimeUnit.MILLISECONDS);
+                                        } else {
+                                            eventGroup.execute(remove);
+                                        }
+                                    });
+                        });
+        // close() may have run before the connection was added and missed it. Its event loop is
+        // then terminated, so the connection would never connect and its requests would never
+        // complete. Close it here, so they fail instead. isClosed is volatile: either this check
+        // sees the client closed, or close() sees the connection.
+        if (isClosed) {
+            connections.remove(connectionKey, connection);
+            connection.close();
+        }
+        return connection;
     }
 
     @VisibleForTesting
-    Map<String, ServerConnection> connections() {
-        return connections;
+    Collection<ServerConnection> connections() {
+        return connections.values();
+    }
+
+    /**
+     * Identifies a physical connection by server UID, host, and port.
+     *
+     * <p>Multiple endpoints for the same logical server may coexist. ServerNode does not provide an
+     * epoch or version, so the transport cannot determine which endpoint is newer when callers hold
+     * different metadata snapshots.
+     *
+     * <p>Replacing an existing connection whenever another endpoint is requested could disrupt
+     * in-flight requests and cause repeated connection replacement.
+     *
+     * <p>When enabled, {@code netty.connection.max-idle-time} (10 minutes by default) closes idle
+     * connections, and the close callback removes their cached entries. During rolling upgrades,
+     * old and new endpoints may temporarily occupy separate connections.
+     */
+    private static final class ConnectionKey {
+
+        private final String serverUid;
+        private final String host;
+        private final int port;
+
+        private ConnectionKey(String serverUid, String host, int port) {
+            this.serverUid = serverUid;
+            this.host = host;
+            this.port = port;
+        }
+
+        private static ConnectionKey from(ServerNode node) {
+            return new ConnectionKey(node.uid(), node.host(), node.port());
+        }
+
+        private boolean belongsTo(String serverUid) {
+            return this.serverUid.equals(serverUid);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+
+            if (!(o instanceof ConnectionKey)) {
+                return false;
+            }
+
+            ConnectionKey that = (ConnectionKey) o;
+            return port == that.port && serverUid.equals(that.serverUid) && host.equals(that.host);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = serverUid.hashCode();
+            result = 31 * result + host.hashCode();
+            result = 31 * result + port;
+            return result;
+        }
+    }
+
+    @VisibleForTesting
+    Bootstrap bootstrap() {
+        return bootstrap;
     }
 }

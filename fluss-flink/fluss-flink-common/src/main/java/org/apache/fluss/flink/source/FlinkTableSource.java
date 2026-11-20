@@ -28,8 +28,10 @@ import org.apache.fluss.flink.adapter.SupportsLookupCustomShuffleAdapter.InputDa
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
+import org.apache.fluss.flink.source.lookup.FlinkFullCacheLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlussLookupInputPartitioner;
+import org.apache.fluss.flink.source.lookup.FullCacheLookupInputPartitioner;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
@@ -75,6 +77,7 @@ import org.apache.flink.table.connector.source.abilities.SupportsRowLevelModific
 import org.apache.flink.table.connector.source.abilities.SupportsWatermarkPushDown;
 import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
+import org.apache.flink.table.connector.source.lookup.LookupOptions;
 import org.apache.flink.table.connector.source.lookup.PartialCachingAsyncLookupProvider;
 import org.apache.flink.table.connector.source.lookup.PartialCachingLookupProvider;
 import org.apache.flink.table.connector.source.lookup.cache.LookupCache;
@@ -142,6 +145,7 @@ public class FlinkTableSource
     private final boolean lookupAsync;
     private final boolean insertIfNotExists;
     @Nullable private final LookupCache cache;
+    private final LookupOptions.LookupCacheType lookupCacheType;
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final int splitPerAssignmentBatchSize;
@@ -174,6 +178,7 @@ public class FlinkTableSource
     private final Map<String, String> tableOptions;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
+    @Nullable private List<ResolvedExpression> deferredLakeFilters;
     @Nullable private Predicate logRecordBatchFilter;
 
     /** Watermark strategy that is pushed down by the Flink optimizer. */
@@ -289,6 +294,52 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                boundedOptions,
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                cache == null
+                        ? LookupOptions.LookupCacheType.NONE
+                        : LookupOptions.LookupCacheType.PARTIAL,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            FlinkConnectorOptionsUtils.BoundedOptions boundedOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            LookupOptions.LookupCacheType lookupCacheType,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -303,6 +354,7 @@ public class FlinkTableSource
         this.lookupAsync = lookupAsync;
         this.insertIfNotExists = insertIfNotExists;
         this.cache = cache;
+        this.lookupCacheType = checkNotNull(lookupCacheType, "lookupCacheType must not be null");
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
@@ -310,7 +362,9 @@ public class FlinkTableSource
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
-        if (isDataLakeEnabled) {
+        // A FULL lookup reads Fluss snapshots and logs, without requiring a lake reader plugin.
+        // Defer creating the lake source until this instance is actually used for a full scan.
+        if (isDataLakeEnabled && lookupCacheType != LookupOptions.LookupCacheType.FULL) {
             this.lakeSource =
                     checkNotNull(
                             createLakeSource(tablePath, tableOptions),
@@ -337,6 +391,7 @@ public class FlinkTableSource
         this.lookupAsync = source.lookupAsync;
         this.insertIfNotExists = source.insertIfNotExists;
         this.cache = source.cache;
+        this.lookupCacheType = source.lookupCacheType;
         this.scanPartitionDiscoveryIntervalMs = source.scanPartitionDiscoveryIntervalMs;
         this.splitPerAssignmentBatchSize = source.splitPerAssignmentBatchSize;
         this.isDataLakeEnabled = source.isDataLakeEnabled;
@@ -354,6 +409,10 @@ public class FlinkTableSource
         this.partitionFilters = source.partitionFilters;
         this.tableOptions = new HashMap<>(source.tableOptions);
         this.lakeSource = source.lakeSource == null ? null : source.lakeSource.copy();
+        this.deferredLakeFilters =
+                source.deferredLakeFilters == null
+                        ? null
+                        : new ArrayList<>(source.deferredLakeFilters);
         this.logRecordBatchFilter = source.logRecordBatchFilter;
         this.watermarkStrategy = source.watermarkStrategy;
     }
@@ -478,9 +537,10 @@ public class FlinkTableSource
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
-                // when it's full mode and lake source is not null,
-                // enable lake source as the historical data
-                enableLakeSource = lakeSource != null;
+                enableLakeSource = isDataLakeEnabled;
+                if (enableLakeSource) {
+                    initializeLakeSource();
+                }
                 break;
             case TIMESTAMP:
                 offsetsInitializer =
@@ -556,6 +616,27 @@ public class FlinkTableSource
         }
     }
 
+    private void initializeLakeSource() {
+        if (lakeSource != null) {
+            return;
+        }
+        lakeSource =
+                checkNotNull(
+                        createLakeSource(tablePath, tableOptions),
+                        "LakeSource must not be null if enable datalake");
+        if (projectedFields != null) {
+            lakeSource.withProject(
+                    Arrays.stream(projectedFields)
+                            .mapToObj(field -> new int[] {field})
+                            .toArray(int[][]::new));
+        }
+        if (deferredLakeFilters != null) {
+            // The planner kept these as remaining filters; applying them in the lake is also safe.
+            pushdownLakeFilters(deferredLakeFilters, new ArrayList<>());
+            deferredLakeFilters = null;
+        }
+    }
+
     /** Creates the stopping offsets initializer from the configured bounded options. */
     private OffsetsInitializer createStoppingOffsetsInitializer() {
         if (boundedOptions.getBoundedMode() != FlinkConnectorOptions.ScanBoundedMode.UNBOUNDED) {
@@ -598,6 +679,10 @@ public class FlinkTableSource
 
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
+        if (lookupCacheType == LookupOptions.LookupCacheType.FULL) {
+            this.lookupInputPartitioner = null;
+            validateFullCacheLookup(context);
+        }
         LookupNormalizer lookupNormalizer =
                 LookupNormalizer.validateAndCreateLookupNormalizer(
                         context.getKeys(),
@@ -606,6 +691,22 @@ public class FlinkTableSource
                         partitionKeyIndexes,
                         tableOutputType,
                         projectedFields);
+        if (lookupCacheType == LookupOptions.LookupCacheType.FULL) {
+            int numBuckets = getResolvedNumBuckets();
+            FlussLookupInputPartitioner bucketPartitioner =
+                    createLookupInputPartitioner(lookupNormalizer);
+            this.lookupInputPartitioner =
+                    new FullCacheLookupInputPartitioner(bucketPartitioner, numBuckets);
+            return LookupFunctionProvider.of(
+                    new FlinkFullCacheLookupFunction(
+                            flussConfig,
+                            tablePath,
+                            tableOutputType,
+                            lookupNormalizer,
+                            projectedFields,
+                            numBuckets,
+                            org.apache.flink.configuration.Configuration.fromMap(tableOptions)));
+        }
         this.lookupInputPartitioner = createLookupInputPartitioner(lookupNormalizer);
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
@@ -638,20 +739,45 @@ public class FlinkTableSource
         }
     }
 
+    private void validateFullCacheLookup(LookupContext context) {
+        if (!streaming
+                || primaryKeyIndexes.length == 0
+                || bucketKeyIndexes.length == 0
+                || partitionKeyIndexes.length != 0
+                || tableConfig.getKvTTL().isPresent()
+                || insertIfNotExists) {
+            throw new UnsupportedOperationException(
+                    "Bucket-sharded full lookup cache requires a streaming, non-partitioned primary key table "
+                            + "with bucket keys, without row TTL or lookup.insert-if-not-exists. "
+                            + "Partitioned tables are not yet supported: dynamic partition discovery, "
+                            + "bootstrap and removal require additional lifecycle management.");
+        }
+        if (!preferCustomShuffle(context)) {
+            throw new UnsupportedOperationException(
+                    "Bucket-sharded full lookup cache requires custom bucket shuffle "
+                            + "(preferCustomShuffle=true). Each subtask caches only its assigned buckets, "
+                            + "so enable LOOKUP('table' = '<alias>', 'shuffle' = 'true') "
+                            + "to route each lookup to a subtask holding its bucket.");
+        }
+    }
+
+    private int getResolvedNumBuckets() {
+        return checkNotNull(
+                org.apache.flink.configuration.Configuration.fromMap(tableOptions)
+                        .get(FlinkConnectorOptions.BUCKET_NUMBER),
+                "The resolved table option '%s' must be present for bucket shuffle.",
+                FlinkConnectorOptions.BUCKET_NUMBER.key());
+    }
+
     @Nullable
-    private InputDataPartitionerAdapter createLookupInputPartitioner(
+    private FlussLookupInputPartitioner createLookupInputPartitioner(
             LookupNormalizer lookupNormalizer) {
         if (bucketKeyIndexes.length == 0) {
             return null;
         }
 
         // Fluss Catalog exposes the resolved bucket count through FlinkConversions.toFlinkTable.
-        int numBuckets =
-                checkNotNull(
-                        org.apache.flink.configuration.Configuration.fromMap(tableOptions)
-                                .get(FlinkConnectorOptions.BUCKET_NUMBER),
-                        "The resolved table option '%s' must be present for bucket shuffle.",
-                        FlinkConnectorOptions.BUCKET_NUMBER.key());
+        int numBuckets = getResolvedNumBuckets();
         org.apache.flink.table.types.logical.RowType lookupKeyType =
                 FlinkUtils.projectRowType(tableOutputType, lookupNormalizer.getLookupKeyIndexes());
         List<String> fieldNames = tableOutputType.getFieldNames();
@@ -785,6 +911,9 @@ public class FlinkTableSource
             // Lake pushdown only contributes extra accepted filters; see
             // pushdownLakeFilters(...) for why remainingFilters must stay unchanged.
             pushdownLakeFilters(filters, acceptedFilters);
+        } else if (isDataLakeEnabled) {
+            // Projection and filters may be pushed before the planner chooses lookup versus scan.
+            deferredLakeFilters = new ArrayList<>(filters);
         }
 
         // FLINK-38635 We cannot determine whether this source will ultimately be used as a

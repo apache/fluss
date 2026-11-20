@@ -126,7 +126,7 @@ except fluss.FlussError as e:
 
 ### Partition Not Found
 
-Writing to a partitioned table before creating partitions.
+Dropping a partition that doesn't exist, writing to one when `writer.dynamic-create-partition.enabled` is `false`, or a write already sent to a partition that was dropped meanwhile.
 
 ```python
 try:

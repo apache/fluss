@@ -21,12 +21,19 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
-import org.apache.fluss.metrics.groups.MetricGroup;
-import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -73,17 +80,119 @@ class FlussProtocolPluginTest {
                 .isInstanceOf(AuthorizationException.class);
     }
 
+    @Test
+    void testTlsListenerWithoutKeystoreFailsSetup() {
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), TestSslUtils.TLS_LISTENER);
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_KEYSTORE_PATH.key());
+    }
+
+    @Test
+    void testUnknownTlsListenerFailsSetup(@TempDir Path tempDir) throws Exception {
+        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(
+                conf, TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert), null);
+        // a typo must not leave the intended listener on plaintext.
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), "CLIENTS");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("[CLIENTS]")
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key());
+    }
+
+    @Test
+    void testTlsInternalListenerWithClientTlsPassesSetup(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+
+        assertThatCode(() -> tlsPlugin().setup(conf)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testTlsInternalListenerWithoutClientTlsFailsSetup(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED.key() + "' is false");
+    }
+
+    @Test
+    void testClientTlsWithPlaintextInternalListenerFailsSetup() {
+        // no server TLS configuration at all, but servers would connect to each other over TLS.
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener 'INTERNAL'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_ENABLED.key() + "' is true");
+    }
+
+    @Test
+    void testMisspelledInternalTlsListenerReportsTypo(@TempDir Path tempDir) throws Exception {
+        Configuration conf = tlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+        // the typo, not the TLS mismatch it causes, is the error to report.
+        conf.setString(ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), "CLIENTS");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("[CLIENTS]")
+                .hasMessageNotContaining(ConfigOptions.CLIENT_SSL_ENABLED.key());
+    }
+
+    private static Configuration tlsOnInternalListener(Path tempDir) throws Exception {
+        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(
+                conf, TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert), null);
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, TestSslUtils.TLS_LISTENER);
+        return conf;
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "CLIENT, CLIENT:SASL, operator:alice; ;bob, Empty proxy target",
+        "CLIENT, CLIENT:PLAINTEXT, operator:alice, matching SASL listener",
+        "OTHER, 'OTHER:SASL,CLIENT:SASL', operator:alice, found 0",
+        "CLIENT, client:SASL, operator:alice, found 0",
+        "'CLIENT,client', 'CLIENT:SASL,client:SASL', operator:alice, found 2"
+    })
+    void testRejectInvalidProxyGrantsAtStartup(
+            String listeners, String protocols, String grants, String error) {
+        Configuration configuration = new Configuration();
+        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), protocols);
+        String proxyUsersKey = "security.sasl.listener.name.client.plain.proxy-users";
+        configuration.setString(proxyUsersKey, grants);
+        FlussProtocolPlugin plugin =
+                new FlussProtocolPlugin(
+                        ServerType.COORDINATOR, Arrays.asList(listeners.split(",")));
+        assertThatThrownBy(() -> plugin.setup(configuration))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(error)
+                .hasMessageContaining(proxyUsersKey);
+    }
+
+    private static FlussProtocolPlugin tlsPlugin() {
+        return new FlussProtocolPlugin(
+                ServerType.COORDINATOR, Arrays.asList(TestSslUtils.TLS_LISTENER, "INTERNAL"));
+    }
+
     private static FlussProtocolPlugin createPlugin(boolean principalIgnoreCase) {
         Configuration configuration = credentials("root:root-pass,operator:operator-pass");
         configuration.set(ConfigOptions.SUPER_USERS, "User:root");
         configuration.set(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, principalIgnoreCase);
 
-        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         FlussProtocolPlugin plugin =
-                new FlussProtocolPlugin(
-                        ServerType.COORDINATOR,
-                        Collections.emptyList(),
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+                new FlussProtocolPlugin(ServerType.COORDINATOR, Collections.emptyList());
         plugin.setup(configuration);
         return plugin;
     }

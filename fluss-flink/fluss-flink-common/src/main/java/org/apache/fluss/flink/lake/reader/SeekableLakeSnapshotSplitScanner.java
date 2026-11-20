@@ -82,6 +82,11 @@ public class SeekableLakeSnapshotSplitScanner implements BatchScanner {
     }
 
     private void updateCurrentIterator() throws IOException {
+        // close the iterator of the lake split moved past: an emitted batch is closed by the
+        // reader, but an empty split or one skipped on restore is only ever closed here
+        if (currentLakeRecordIterator != null) {
+            currentLakeRecordIterator.close();
+        }
         if (lakeSplits.size() <= nextLakeSplitIndex) {
             currentLakeRecordIterator = null;
         } else {

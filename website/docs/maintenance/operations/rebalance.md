@@ -132,12 +132,40 @@ Optional<RebalanceProgress> latestProgress = admin.listRebalanceProgress(null).g
 Rebalance statuses:
 - **NOT_STARTED**: The rebalance has been created but not yet started
 - **REBALANCING**: The rebalance is currently in progress
-- **COMPLETED**: The rebalance has successfully completed
-- **FAILED**: The rebalance has failed
+- **COMPLETED**: The rebalance has successfully completed, or its table/partition was deleted while the task was pending or being reconciled
+- **FAILED**: The rebalance has failed, for example because a bucket migration was given up on after its target servers stayed unavailable for too long. The affected buckets may be left with an intermediate assignment. A subsequent rebalance uses the table's configured replication factor to plan the target assignment and removes excess intermediate replicas during execution. Unavailable servers are included as sources to evacuate, not as destinations for new replicas
 - **CANCELED**: The rebalance has been canceled
-- **TIMEOUT**: The rebalance task timed out (e.g., ISR could not converge within the timeout period)
+- **TIMEOUT**: The normal execution slot was released after the timeout, but the task remains non-final. The coordinator retries the current migration phase idempotently, with a growing backoff, until the task reaches `COMPLETED` or `FAILED`. Only a bounded number of timed-out tasks is tracked at the same time, so a rebalance stops admitting new bucket migrations while too many tasks are still being reconciled
 
-### 4. Cancel Rebalance (If Needed)
+When a bucket migration changes both its replicas and its leader, completion requires the planned leader to acknowledge the final state. This also applies after coordinator recovery. If the planned leader is temporarily offline or has not caught up, the migration waits for it and remains subject to the timeout and recovery limits below.
+
+#### Timeout and Recovery Settings
+
+Configure the following coordinator options in `server.yaml` to match your cluster's recovery objectives and resource capacity. The values below are the defaults. Restart the coordinator servers after changing these settings.
+
+```yaml
+coordinator.rebalance.target-unavailable-timeout: 30 min
+coordinator.rebalance.no-progress-timeout: 24 h
+coordinator.rebalance.max-tracked-timed-out-tasks: 8
+```
+
+- `target-unavailable-timeout`: A timed-out bucket migration is marked `FAILED` after its target tablet servers remain unavailable without observed bucket-state progress for this duration. Progress or all target servers becoming live resets the timer.
+- `no-progress-timeout`: A timed-out bucket migration is marked `FAILED` after this duration without observed bucket-state progress, even when its target servers are live. Progress resets the timer, so this is not a limit on the total migration duration. Either timeout can cause a migration to fail.
+- `max-tracked-timed-out-tasks`: New bucket migrations stop being admitted when this many timed-out migrations remain non-final. Admission resumes when a tracked migration reaches a final status. A higher limit allows more migrations to remain active and increases coordinator and ZooKeeper work.
+
+Only target-relevant assignment, leader, and ISR changes count as observed progress. Changes involving only replicas that are being removed do not reset either progress timer.
+
+Both durations must be at least `1 ms` and fit in a signed 64-bit millisecond value; the task limit must be at least `1`. Invalid values prevent coordinator initialization. Timeouts are evaluated during periodic reconciliation, so the transition to `FAILED` can occur after the configured duration has elapsed.
+
+### 4. Control Rebalance Speed
+
+The coordinator controls rebalance parallelism with `coordinator.rebalance.max-inflight-tasks`, which limits how many bucket-level rebalance tasks can run at the same time. The default value is `1`, which keeps rebalance conservative.
+
+Increase the value to speed up rebalance when the cluster has enough network, disk, and TabletServer capacity. Decrease the value to reduce the number of simultaneous bucket movements. The value must be at least `1`. A new value is used the next time the coordinator admits pending work; lowering it does not cancel tasks that are already running.
+
+This option can be updated dynamically through cluster configuration updates. See [Updating Cluster Configs](updating-configs.md#updating-cluster-configs) for the Java and Flink SQL APIs.
+
+### 5. Cancel Rebalance (If Needed)
 
 Cancel an ongoing rebalance operation if necessary:
 
@@ -152,9 +180,10 @@ admin.cancelRebalance(null).get();
 **Important Notes:**
 - Only rebalance operations in `NOT_STARTED` or `REBALANCING` status can be canceled
 - Already completed bucket migrations will not be rolled back
+- Bucket migrations that have not changed anything yet are canceled right away, migrations that are already under way are drained first so that no bucket is left half-migrated
 - After cancellation, the rebalance status will change to `CANCELED`
 
-### 5. Remove Server Tags (After Completion)
+### 6. Remove Server Tags (After Completion)
 
 After rebalance completes and maintenance is done, remove server tags to restore normal operation:
 
@@ -301,11 +330,12 @@ If `RACK_AWARE` is not placed first, replica movements generated by earlier goal
 1. **Plan Ahead**: Tag servers appropriately before triggering rebalance to guide the algorithm
 2. **Monitor Progress**: Regularly check rebalance status to ensure smooth operation
 3. **Off-Peak Hours**: Schedule rebalance operations during off-peak hours to minimize impact
-4. **Single Rebalance**: Fluss supports only one active rebalance task at a time in the cluster
-5. **Backup First**: For production environments, ensure data is backed up before major topology changes
-6. **Goal Priority**: Order rebalance goals by priority - the system attempts to achieve them in order
-7. **Server Tags**: Use `TEMPORARY_OFFLINE` for maintenance scenarios to allow buckets to return after maintenance
-8. **Rack Awareness First**: In multi-rack deployments, always place `RACK_AWARE` as the first goal
+4. **Single Rebalance**: Fluss supports only one active rebalance operation at a time in the cluster
+5. **Rebalance Parallelism**: Tune `coordinator.rebalance.max-inflight-tasks` based on cluster capacity.
+6. **Backup First**: For production environments, ensure data is backed up before major topology changes
+7. **Goal Priority**: Order rebalance goals by priority - the system attempts to achieve them in order
+8. **Server Tags**: Use `TEMPORARY_OFFLINE` for maintenance scenarios to allow buckets to return after maintenance
+9. **Rack Awareness First**: In multi-rack deployments, always place `RACK_AWARE` as the first goal
 
 ## Troubleshooting
 
@@ -322,6 +352,7 @@ If rebalance is taking longer than expected:
 - Check network bandwidth between TabletServers
 - Verify disk I/O performance on TabletServers
 - Monitor cluster load and resource utilization
+- Consider increasing `coordinator.rebalance.max-inflight-tasks` if the cluster has enough capacity
 - Consider canceling and retrying with fewer goals
 
 ### Rebalance Stuck in REBALANCING Status

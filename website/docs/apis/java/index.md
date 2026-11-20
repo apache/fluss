@@ -144,6 +144,45 @@ TableInfo tableInfo = admin.getTableInfo(tablePath).get(); // blocking call
 System.out.println(tableInfo);
 ```
 
+## Cluster Inspection
+
+Since Fluss 1.1, `Admin.describeCluster()` returns a `ClusterDescription` containing the coordinator,
+live tablet server nodes (addresses, racks, server tags and software versions), and replica loads. Both tablet server
+maps are keyed by server ID:
+
+```java
+ClusterDescription cluster = admin.describeCluster().get();
+int serverId = 1;
+ServerNode node = cluster.getTabletServers().get(serverId);
+String softwareVersion = node == null ? null : node.softwareVersion();
+TabletServerDescription load = cluster.getTabletServerLoads().get(serverId);
+boolean hasNoAssignedReplicas = load != null && load.getNumReplicas() == 0;
+```
+
+Each tablet server reports its configured `tablet-server.software-version`, or its server JAR's
+`Implementation-Version` when the option is unset or blank. For example, start one instance with
+`bin/tablet-server.sh start -Dtablet-server.software-version=1.1.0-vendor.2` to override the JAR
+version for that process. The version is `null` if unavailable
+or when an older server omits it. To track a rolling upgrade, compare each expected server ID's
+reported version with the target. Keep IDs missing from the live node map in the expected count.
+
+The load map also includes offline servers that still have assigned replicas, so a server may have
+a load entry without a live node entry. Live servers with no replicas have explicit zero counts.
+A missing load entry means statistics are unavailable; it must not be treated as proof that a
+server has been evacuated.
+
+In a high-availability deployment, `getCoordinatorStandbys()` lists the currently live standby
+coordinators, excluding the active coordinator returned by `getCoordinatorServer()`. A standby is
+listed while it is registered with the cluster, which does not guarantee that it is ready to take
+over leadership. Coordinators have no numeric server ID, so `ServerNode.id()` is not meaningful
+for them.
+
+This API requires `DESCRIBE` permission on the cluster and refreshes metadata and retries once on
+retriable failures, including coordinator address changes. Servers that do not support it return
+`UnsupportedVersionException`. For basic discovery, `Admin.getServerNodes()` continues to return
+the coordinator and live tablet servers without requiring cluster `DESCRIBE` permission; it does
+not include server tags, software versions or replica loads.
+
 ## Table Statistics
 
 The Admin API provides the `getTableStats` method to retrieve statistics about a table, such as the current row count.

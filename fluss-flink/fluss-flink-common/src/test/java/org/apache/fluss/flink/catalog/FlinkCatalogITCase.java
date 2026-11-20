@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.DataTypes;
@@ -50,6 +51,7 @@ import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
+import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
@@ -78,6 +80,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -114,6 +117,10 @@ abstract class FlinkCatalogITCase {
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static FlinkCatalog catalog;
+
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final String scopedAppendOnlyTable = tableNames.tableName("append_only_table");
 
     protected TableEnvironment tEnv;
 
@@ -316,7 +323,7 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterPartitionedTableBucketCount() throws Exception {
-        String tableName = "test_alter_partitioned_table_bucket_count";
+        String tableName = tableNames.tableName("test_alter_partitioned_table_bucket_count");
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tableName);
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         tEnv.executeSql(
@@ -357,11 +364,13 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterTableSchema() throws Exception {
-        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "append_only_table");
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, scopedAppendOnlyTable);
         tEnv.executeSql(
-                        "create table append_only_table(a int, b STRING) with ('bucket.num' = '10')")
+                        ("create table "
+                                + scopedAppendOnlyTable
+                                + "(a int, b STRING) with ('bucket.num' = '10')"))
                 .await();
-        tEnv.executeSql("alter table append_only_table add c int").await();
+        tEnv.executeSql(("alter table " + scopedAppendOnlyTable + " add c int")).await();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
 
         Schema.Builder schemaBuilder = Schema.newBuilder();
@@ -392,13 +401,16 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testCreateNoPkTable() throws Exception {
-        tEnv.executeSql("create table append_only_table(a int, b int) with ('bucket.num' = '10')");
+        tEnv.executeSql(
+                ("create table "
+                        + scopedAppendOnlyTable
+                        + "(a int, b int) with ('bucket.num' = '10')"));
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.INT());
         addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table =
-                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "append_only_table"));
+                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, scopedAppendOnlyTable));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "10");
@@ -874,7 +886,7 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testAlterTableWatermark() throws Exception {
-        String tableName = "test_watermark_table";
+        String tableName = tableNames.tableName("test_watermark_table");
         ObjectPath tablePath = new ObjectPath(DEFAULT_DB, tableName);
 
         // 1. create table without watermark
@@ -1336,6 +1348,123 @@ abstract class FlinkCatalogITCase {
                                         new ObjectPath(DEFAULT_DB, "log_table_for_binlog$binlog")))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("only supported for primary key tables");
+    }
+
+    @Test
+    @MultiVersionTest
+    void testBucketsVirtualTable() throws Exception {
+        String tableName = tableNames.tableName("table_for_buckets");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        ObjectPath bucketsPath =
+                new ObjectPath(DEFAULT_DB, tableName + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
+        tEnv.executeSql(
+                "CREATE TABLE " + tableName + " (id INT, name STRING) WITH ('bucket.num' = '2')");
+        long tableId = catalog.admin.getTableInfo(tablePath).get().getTableId();
+
+        CatalogTable bucketsTable = (CatalogTable) catalog.getTable(bucketsPath);
+        Schema expectedSchema =
+                Schema.newBuilder()
+                        .column("table_path", DataTypes.STRING().notNull())
+                        .column("table_id", DataTypes.BIGINT().notNull())
+                        .column("partition_id", DataTypes.BIGINT())
+                        .column("partition_name", DataTypes.STRING())
+                        .column("bucket_id", DataTypes.INT().notNull())
+                        .column("leader_id", DataTypes.INT())
+                        .column("leader_epoch", DataTypes.INT())
+                        .column("bucket_epoch", DataTypes.INT())
+                        .column("replicas", DataTypes.ARRAY(DataTypes.INT().notNull()).notNull())
+                        .column("isr", DataTypes.ARRAY(DataTypes.INT().notNull()).notNull())
+                        .build();
+        assertThat(bucketsTable.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        assertThat(bucketsTable.getPartitionKeys()).isEmpty();
+        assertThat(catalog.tableExists(bucketsPath)).isTrue();
+        assertThat(collectRows("DESCRIBE " + tableName + FlinkCatalog.BUCKETS_TABLE_SUFFIX))
+                .extracting(row -> row.getField(0))
+                .containsExactly(
+                        "table_path",
+                        "table_id",
+                        "partition_id",
+                        "partition_name",
+                        "bucket_id",
+                        "leader_id",
+                        "leader_epoch",
+                        "bucket_epoch",
+                        "replicas",
+                        "isr");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<Row> rows =
+                            collectRows(
+                                    "SELECT table_path, table_id, partition_id, partition_name, "
+                                            + "bucket_id, leader_id, leader_epoch, bucket_epoch, "
+                                            + "replicas, isr FROM "
+                                            + tableName
+                                            + FlinkCatalog.BUCKETS_TABLE_SUFFIX);
+                    assertThat(rows).hasSize(2);
+                    assertThat(rows)
+                            .extracting(row -> row.getField(0))
+                            .containsOnly(tablePath.toString());
+                    assertThat(rows).extracting(row -> row.getField(1)).containsOnly(tableId);
+                    assertThat(rows).extracting(row -> row.getField(2)).containsOnlyNulls();
+                    assertThat(rows).extracting(row -> row.getField(3)).containsOnlyNulls();
+                    assertThat(rows)
+                            .extracting(row -> row.getField(4))
+                            .containsExactlyInAnyOrder(0, 1);
+                    assertThat(rows)
+                            .allSatisfy(
+                                    row -> {
+                                        assertThat(row.getField(8)).isNotNull();
+                                        assertThat(row.getField(9)).isNotNull();
+                                    });
+                });
+
+        String partitionedTableName = tableNames.tableName("partitioned_table_for_buckets");
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + partitionedTableName
+                        + " (id INT, region STRING, dt STRING) "
+                        + "PARTITIONED BY (region, dt) WITH ('bucket.num' = '2')");
+        tEnv.executeSql(
+                "ALTER TABLE "
+                        + partitionedTableName
+                        + " ADD PARTITION (region = 'cn', dt = '2026-09-15')");
+        tEnv.executeSql(
+                "ALTER TABLE "
+                        + partitionedTableName
+                        + " ADD PARTITION (region = 'cn', dt = '2026-09-16')");
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<Row> rows =
+                            collectRows(
+                                    "SELECT partition_name, bucket_id FROM "
+                                            + partitionedTableName
+                                            + FlinkCatalog.BUCKETS_TABLE_SUFFIX
+                                            + " WHERE partition_name = 'cn$2026-09-16'");
+                    assertThat(rows).hasSize(2);
+                    assertThat(rows)
+                            .extracting(row -> row.getField(0))
+                            .containsOnly("cn$2026-09-16");
+                    assertThat(rows)
+                            .extracting(row -> row.getField(1))
+                            .containsExactlyInAnyOrder(0, 1);
+                });
+
+        assertThatThrownBy(
+                        () -> catalog.getTable(new ObjectPath(DEFAULT_DB, "missing_table$buckets")))
+                .isInstanceOf(TableNotExistException.class);
+        assertThatThrownBy(() -> catalog.dropTable(bucketsPath, false))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("read-only virtual table");
+    }
+
+    private List<Row> collectRows(String sql) throws Exception {
+        try (CloseableIterator<Row> rows = tEnv.executeSql(sql).collect()) {
+            return CollectionUtil.iteratorToList(rows);
+        }
     }
 
     /**

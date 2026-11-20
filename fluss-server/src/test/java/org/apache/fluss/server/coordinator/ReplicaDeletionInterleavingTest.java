@@ -17,9 +17,13 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
@@ -32,6 +36,8 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
+import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -41,14 +47,21 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -336,6 +349,142 @@ class ReplicaDeletionInterleavingTest extends CoordinatorEventProcessorTestBase 
         } finally {
             zookeeperClient.registerTabletServer(0, registration);
         }
+    }
+
+    @Test
+    void testPartitionedTableDeletionWaitsForAllResponses(@TempDir Path tempDir) throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "partitioned_deletion_order");
+        String tableRemoteDir = tempDir.resolve("table").toUri().toString();
+        String firstPartitionRemoteDir = tempDir.resolve("first").toUri().toString();
+        String lastPartitionRemoteDir = tempDir.resolve("last").toUri().toString();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_TABLE_DESCRIPTOR.getSchema())
+                        .distributedBy(1)
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build()
+                        .withReplicationFactor(1);
+        long tableId =
+                metadataManager.createTable(tablePath, tableRemoteDir, descriptor, null, false);
+        retry(
+                Duration.ofSeconds(30),
+                () -> verifyContext(ctx -> assertThat(ctx.containsTableId(tableId)).isTrue()));
+
+        long firstPartitionId = zookeeperClient.getPartitionIdAndIncrement();
+        long lastPartitionId = zookeeperClient.getPartitionIdAndIncrement();
+        TablePartition firstPartition = new TablePartition(tableId, firstPartitionId);
+        TablePartition lastPartition = new TablePartition(tableId, lastPartitionId);
+        for (int serverId = 0; serverId < 2; serverId++) {
+            long partitionId = serverId == 0 ? firstPartitionId : lastPartitionId;
+            String partitionName = serverId == 0 ? "first" : "last";
+            String partitionRemoteDir =
+                    serverId == 0 ? firstPartitionRemoteDir : lastPartitionRemoteDir;
+            zookeeperClient.registerPartitionAssignmentAndMetadata(
+                    partitionId,
+                    partitionName,
+                    new PartitionAssignment(
+                            tableId, Collections.singletonMap(0, BucketAssignment.of(serverId))),
+                    partitionRemoteDir,
+                    tablePath,
+                    tableId,
+                    1);
+            awaitReplicaState(
+                    new TableBucketReplica(new TableBucket(tableId, partitionId, 0), serverId),
+                    OnlineReplica);
+        }
+
+        FsPath remoteTableDir =
+                FlussPaths.remoteTableDir(
+                        FlussPaths.remoteLogDir(tableRemoteDir), tablePath, tableId);
+        FsPath firstPartitionDir =
+                FlussPaths.remotePartitionDir(
+                        FlussPaths.remoteLogDir(firstPartitionRemoteDir),
+                        PhysicalTablePath.of(tablePath, "first"),
+                        firstPartition);
+        FsPath lastPartitionDir =
+                FlussPaths.remotePartitionDir(
+                        FlussPaths.remoteLogDir(lastPartitionRemoteDir),
+                        PhysicalTablePath.of(tablePath, "last"),
+                        lastPartition);
+        List<FsPath> remoteDirs =
+                Arrays.asList(remoteTableDir, firstPartitionDir, lastPartitionDir);
+        for (FsPath dir : remoteDirs) {
+            Path directory = Paths.get(dir.toUri());
+            Files.createDirectories(directory);
+            Files.write(directory.resolve("data"), new byte[] {1});
+        }
+
+        DeferredDeletionGateway gateway = new DeferredDeletionGateway();
+        gateways.put(1, gateway);
+        TableBucketReplica lastReplica =
+                new TableBucketReplica(new TableBucket(tableId, lastPartitionId, 0), 1);
+        try {
+            // Drive watcher-produced events directly so deletion admission does not determine
+            // the response order under test. Registrations remain until fixture teardown.
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new DropPartitionEvent(tableId, firstPartitionId, "first"));
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new DropPartitionEvent(tableId, lastPartitionId, "last"));
+            gateway.deletionRequested.get(30, TimeUnit.SECONDS);
+            retry(
+                    Duration.ofSeconds(30),
+                    () ->
+                            verifyContext(
+                                    ctx ->
+                                            assertThat(ctx.getPartitionInfoById(firstPartitionId))
+                                                    .isNull()));
+
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(new DropTableEvent(tableId, false, false));
+            // verifyContext runs after DropTableEvent, so the check for pending partitions
+            // in TableManager.resumeTableDeletions() has already run.
+            verifyContext(
+                    ctx -> {
+                        assertThat(ctx.getTableInfoById(tableId)).isNotNull();
+                        assertThat(ctx.isTableQueuedForDeletion(tableId)).isTrue();
+                        assertThat(ctx.getPartitionInfoById(firstPartitionId)).isNull();
+                        assertThat(ctx.isPartitionQueuedForDeletion(firstPartition)).isFalse();
+                        assertThat(ctx.isPartitionQueuedForDeletion(lastPartition)).isTrue();
+                        assertThat(ctx.getReplicaState(lastReplica))
+                                .isEqualTo(ReplicaDeletionStarted);
+                    });
+            assertThat(gateway.allowDeletion).isNotDone();
+            assertThat(lastPartitionDir.getFileSystem().exists(lastPartitionDir)).isTrue();
+            assertThat(remoteTableDir.getFileSystem().exists(remoteTableDir)).isTrue();
+        } finally {
+            gateway.allowDeletion.complete(null);
+        }
+
+        retry(
+                Duration.ofSeconds(30),
+                () -> {
+                    verifyContext(
+                            ctx -> {
+                                assertThat(ctx.getTableInfoById(tableId)).isNull();
+                                assertThat(ctx.containsTableId(tableId)).isFalse();
+                                assertThat(ctx.isTableQueuedForDeletion(tableId)).isFalse();
+                                assertThat(ctx.getReplicaStates()).isEmpty();
+                                for (TablePartition partition :
+                                        Arrays.asList(firstPartition, lastPartition)) {
+                                    assertThat(ctx.getPartitionInfoById(partition.getPartitionId()))
+                                            .isNull();
+                                    assertThat(ctx.containsPartitionId(partition.getPartitionId()))
+                                            .isFalse();
+                                    assertThat(ctx.isPartitionQueuedForDeletion(partition))
+                                            .isFalse();
+                                }
+                            });
+                    assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+                    assertThat(zookeeperClient.getPartitionAssignment(firstPartitionId)).isEmpty();
+                    assertThat(zookeeperClient.getPartitionAssignment(lastPartitionId)).isEmpty();
+                    for (FsPath dir : remoteDirs) {
+                        assertThat(dir.getFileSystem().exists(dir)).isFalse();
+                    }
+                });
     }
 
     private TableBucket createPartition(TablePath tablePath, String partitionName)

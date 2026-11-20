@@ -27,6 +27,45 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Java Float/Double comparison treats every NaN as one largest value while
+/// distinguishing signed zeros. Widening an f32 to f64 preserves this ordering.
+pub(crate) fn compare_floats(a: f64, b: f64) -> std::cmp::Ordering {
+    canonicalize_nan(a).total_cmp(&canonicalize_nan(b))
+}
+
+/// Canonicalizes comparison/hash keys only; stored values retain their bits.
+pub(crate) fn canonicalize_nan(value: f64) -> f64 {
+    if value.is_nan() {
+        f64::from_bits(0x7ff8_0000_0000_0000)
+    } else {
+        value
+    }
+}
+
+/// Delay before retry number `attempts + 1`, shaped like Java's `ExponentialBackoff`: starts at
+/// `initial_ms`, doubles per attempt up to `max_ms`, and carries +/-20% jitter so requests failing
+/// together do not resend in lockstep. 0 when `initial_ms` is 0.
+///
+/// Unlike Java, which clamps the result to `max_ms`, the jitter applies after the cap, so a delay
+/// can reach 1.2 * `max_ms`. A `max_ms` below `initial_ms` is treated as `initial_ms`.
+pub(crate) fn retry_backoff_ms(initial_ms: u64, max_ms: u64, attempts: i32) -> u64 {
+    use rand::Rng;
+    const MULTIPLIER: f64 = 2.0;
+    const JITTER: f64 = 0.2;
+    if initial_ms == 0 {
+        return 0;
+    }
+    let initial = initial_ms as f64;
+    let max = (max_ms as f64).max(initial);
+    // Cap the exponent like Java's ExponentialBackoff.expMax so that jitter
+    // still produces a range at steady state instead of collapsing onto the max.
+    let exp_max = (max / initial).log2();
+    let exp = (attempts.max(0) as f64).min(exp_max);
+    let term = initial * MULTIPLIER.powf(exp);
+    let jitter_factor = 1.0 - JITTER + rand::rng().random::<f64>() * (2.0 * JITTER);
+    (term * jitter_factor) as u64
+}
+
 pub fn current_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

@@ -490,9 +490,11 @@ class ControlRequestSendThreadTest {
 
         long shutdownStart = System.currentTimeMillis();
         thread.initiateShutdown();
-        thread.awaitShutdown();
+        // Wait for the actual thread to terminate, including subclass cleanup.
+        thread.join(2000);
         long shutdownDuration = System.currentTimeMillis() - shutdownStart;
 
+        assertThat(thread.isAlive()).isFalse();
         assertThat(shutdownDuration).isLessThan(2000);
         assertThat(callbackCount.get()).isEqualTo(0);
         assertThat(getGaugeValue(metricGroup, MetricNames.SENDER_ALIVE)).isEqualTo(0);

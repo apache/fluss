@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::metadata::{TableBucket, TablePath};
 use bytes::Bytes;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 pub struct LookupQuery<T> {
     table_path: TablePath,
@@ -26,6 +27,8 @@ pub struct LookupQuery<T> {
     routing_bucket_count: i32,
     key: Bytes,
     retries: i32,
+    /// Not sent again before this time; `None` for a lookup that was never retried.
+    retry_at: Option<Instant>,
     result_tx: Option<oneshot::Sender<Result<T>>>,
 }
 
@@ -43,6 +46,7 @@ impl<T> LookupQuery<T> {
             routing_bucket_count,
             key,
             retries: 0,
+            retry_at: None,
             result_tx: Some(result_tx),
         }
     }
@@ -67,8 +71,14 @@ impl<T> LookupQuery<T> {
         self.retries
     }
 
-    pub fn increment_retries(&mut self) {
+    /// Counts a retry that must not be sent before `retry_at`.
+    pub fn prepare_retry(&mut self, retry_at: Instant) {
         self.retries += 1;
+        self.retry_at = Some(retry_at);
+    }
+
+    pub fn retry_at(&self) -> Option<Instant> {
+        self.retry_at
     }
 
     /// Whether the lookup needs no result: it already has one, or its caller stopped waiting.
@@ -114,6 +124,13 @@ impl QueuedLookup {
         match self {
             Self::Primary(q) => q.key(),
             Self::Prefix(q) => q.key(),
+        }
+    }
+
+    pub fn retry_at(&self) -> Option<Instant> {
+        match self {
+            Self::Primary(q) => q.retry_at(),
+            Self::Prefix(q) => q.retry_at(),
         }
     }
 

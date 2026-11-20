@@ -312,27 +312,17 @@ fn column_bounds(column: &dyn Array, data_type: &DataType) -> Result<Option<Colu
                 .as_any()
                 .downcast_ref::<PrimitiveArray<$arrow_ty>>()
                 .ok_or_else(|| unexpected_array(column, data_type))?;
-            let java_cmp =
-                |a: <$arrow_ty as arrow::datatypes::ArrowPrimitiveType>::Native,
-                 b: <$arrow_ty as arrow::datatypes::ArrowPrimitiveType>::Native| {
-                    match (a.is_nan(), b.is_nan()) {
-                        (true, true) => std::cmp::Ordering::Equal,
-                        (true, false) => std::cmp::Ordering::Greater,
-                        (false, true) => std::cmp::Ordering::Less,
-                        (false, false) => a.total_cmp(&b),
-                    }
-                };
             let mut bounds = None;
             for value in array.iter().flatten() {
                 bounds = Some(match bounds {
                     None => (value, value),
                     Some((min, max)) => (
-                        if java_cmp(value, min).is_lt() {
+                        if crate::util::compare_floats(f64::from(value), f64::from(min)).is_lt() {
                             value
                         } else {
                             min
                         },
-                        if java_cmp(value, max).is_gt() {
+                        if crate::util::compare_floats(f64::from(value), f64::from(max)).is_gt() {
                             value
                         } else {
                             max
@@ -952,6 +942,36 @@ mod tests {
         assert_eq!(
             i32::from_le_bytes(max[8..12].try_into().unwrap()),
             7_200_000
+        );
+    }
+
+    #[test]
+    fn submillisecond_time_statistics_do_not_allow_exact_filter_pushdown() {
+        use crate::predicate::{BoundPredicate, Literal, col};
+
+        let data_type = DataTypes::time_with_precision(9);
+        let array = Arc::new(Time64NanosecondArray::from(vec![Some(500_000), None]));
+        let (min, max) =
+            single_column_rows(data_type.clone(), array.data_type().clone(), array.clone());
+        // Actual serialized bounds lose the fraction: a server evaluating t > 0
+        // against this maximum would reject a batch containing a matching row.
+        assert_eq!(i32::from_le_bytes(min[8..12].try_into().unwrap()), 0);
+        assert_eq!(i32::from_le_bytes(max[8..12].try_into().unwrap()), 0);
+
+        let row_type = RowType::new(vec![DataField::new("v", data_type, None)]);
+        let batch = RecordBatch::try_from_iter([("v", array as arrow::array::ArrayRef)]).unwrap();
+        let bound = BoundPredicate::bind(Some(&col("v").gt(Literal::Time(0))), &row_type).unwrap();
+        assert!(bound.to_pushdown_predicate().is_none());
+        assert_eq!(
+            bound
+                .into_evaluator()
+                .unwrap()
+                .evaluate_batch(&batch)
+                .unwrap()
+                .values()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![true, false]
         );
     }
 

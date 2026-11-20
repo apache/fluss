@@ -21,7 +21,9 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TablePath;
 
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -46,6 +48,23 @@ public interface MetadataProvider {
      * @return an Optional containing the partition metadata if found in cache, empty otherwise
      */
     Optional<PartitionMetadata> getPartitionMetadataFromCache(PhysicalTablePath physicalTablePath);
+
+    /**
+     * Retrieves the metadata of several partitions from local cache.
+     *
+     * @param physicalTablePaths the physical paths identifying the table partitions
+     * @return the partition metadata found in cache, keyed by physical path; partitions not found
+     *     are absent
+     */
+    default Map<PhysicalTablePath, PartitionMetadata> getPartitionsMetadataFromCache(
+            Collection<PhysicalTablePath> physicalTablePaths) {
+        Map<PhysicalTablePath, PartitionMetadata> result = new HashMap<>();
+        for (PhysicalTablePath physicalTablePath : physicalTablePaths) {
+            getPartitionMetadataFromCache(physicalTablePath)
+                    .ifPresent(metadata -> result.put(physicalTablePath, metadata));
+        }
+        return result;
+    }
 
     /**
      * Retrieves the physical table path from local cache using partition ID.

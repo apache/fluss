@@ -512,6 +512,10 @@ public class ConfigurationTest {
                 .isEqualTo(Password.HIDDEN_CONTENT);
         assertThat(ConfigurationUtils.hideSensitiveValue("client.security.sasl.password", "pwd"))
                 .isEqualTo(Password.HIDDEN_CONTENT);
+        assertThat(
+                        ConfigurationUtils.hideSensitiveValue(
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret"))
+                .isEqualTo(Password.HIDDEN_CONTENT);
         assertThat(ConfigurationUtils.hideSensitiveValue("plain.key", new Password("pwd")))
                 .isEqualTo(Password.HIDDEN_CONTENT);
         assertThat(ConfigurationUtils.hideSensitiveValue("plain.key", "value")).isEqualTo("value");

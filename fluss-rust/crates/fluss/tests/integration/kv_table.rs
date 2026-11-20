@@ -22,8 +22,11 @@ mod kv_table_test {
         ColumnPlan, array_dt_basics_columns, as_row_type, create_partitions, create_table,
         dt_array_int, dt_map_string_int, dt_row_seq_label, get_shared_cluster, make_int_array,
         make_string_array, map_dt_basics_columns, row_dt_basics_columns, scalar_dt_columns,
+        wait_for_partitions_ready,
     };
-    use fluss::client::TableUpsert;
+    use fluss::client::{FlussConnection, TableUpsert, UpsertWriter};
+    use fluss::config::Config;
+    use fluss::error::FlussError;
     use fluss::metadata::{DataField, DataTypes, Schema, TableDescriptor, TablePath};
     use fluss::row::binary_array::FlussArrayWriter;
     use fluss::row::binary_map::FlussMapWriter;
@@ -32,6 +35,7 @@ mod kv_table_test {
         TimestampLtz, TimestampNtz,
     };
     use futures::stream::{FuturesUnordered, StreamExt};
+    use std::time::Duration;
 
     fn make_key(id: i32) -> GenericRow<'static> {
         make_key_with_field_count(id, 3)
@@ -77,15 +81,19 @@ mod kv_table_test {
 
         let test_data = [(1, "Verso", 32i64), (2, "Noco", 25), (3, "Esquie", 35)];
 
-        // Upsert rows (fire-and-forget, then flush)
+        // Upsert rows without waiting, then flush and check each write
+        let mut acks = Vec::new();
         for (id, name, age) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *id);
             row.set_field(1, *name);
             row.set_field(2, *age);
-            upsert_writer.upsert(&row).expect("Failed to upsert row");
+            acks.push(upsert_writer.upsert(&row).expect("Failed to upsert row"));
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         // Lookup records
         let lookuper = table
@@ -223,14 +231,18 @@ mod kv_table_test {
             ("EU", 2, 250i64),
         ];
 
+        let mut acks = Vec::new();
         for (region, user_id, score) in &test_data {
             let mut row = GenericRow::new(3);
             row.set_field(0, *region);
             row.set_field(1, *user_id);
             row.set_field(2, *score);
-            upsert_writer.upsert(&row).expect("Failed to upsert");
+            acks.push(upsert_writer.upsert(&row).expect("Failed to upsert"));
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         // Lookup with composite key
         let lookuper = table
@@ -528,6 +540,7 @@ mod kv_table_test {
             ("APAC", 1, "Noco", 300, 55, "e", 5, "epsilon"),
         ];
 
+        let mut acks = Vec::new();
         for (region, user_id, name, score, seq, label, attr_v, tag) in &test_data {
             let mut nested = GenericRow::new(2);
             nested.set_field(0, *seq);
@@ -547,9 +560,12 @@ mod kv_table_test {
             row.set_field(4, Datum::Row(Box::new(nested)));
             row.set_field(5, Datum::Map(attrs));
             row.set_field(6, tags);
-            upsert_writer.upsert(&row).expect("upsert");
+            acks.push(upsert_writer.upsert(&row).expect("upsert"));
         }
         upsert_writer.flush().await.expect("flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -713,16 +729,20 @@ mod kv_table_test {
             .expect("Failed to create writer");
 
         let regions = ["US", "EU", "APAC"];
+        let mut acks = Vec::new();
         for region in &regions {
             for id in 0..5i32 {
                 let mut row = GenericRow::new(3);
                 row.set_field(0, *region);
                 row.set_field(1, id);
                 row.set_field(2, format!("{}-{}", region, id));
-                writer.upsert(&row).expect("Failed to upsert");
+                acks.push(writer.upsert(&row).expect("Failed to upsert"));
             }
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -827,15 +847,19 @@ mod kv_table_test {
             (1, "aaaaaaaaa", 3, "value3"),
             (2, "aaaaaaaaa", 4, "value4"),
         ];
+        let mut acks = Vec::new();
         for (a, b, c, d) in test_data {
             let mut row = GenericRow::new(4);
             row.set_field(0, *a);
             row.set_field(1, *b);
             row.set_field(2, *c);
             row.set_field(3, *d);
-            writer.upsert(&row).expect("Failed to upsert");
+            acks.push(writer.upsert(&row).expect("Failed to upsert"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -938,6 +962,7 @@ mod kv_table_test {
             ("EU", 1, "aaaaaaaaa", 4, "eu-1"),
             ("EU", 1, "bbbbbbbbb", 5, "eu-2"),
         ];
+        let mut acks = Vec::new();
         for (region, a, b, c, d) in test_data {
             let mut row = GenericRow::new(5);
             row.set_field(0, *region);
@@ -945,9 +970,12 @@ mod kv_table_test {
             row.set_field(2, *b);
             row.set_field(3, *c);
             row.set_field(4, *d);
-            writer.upsert(&row).expect("Failed to upsert");
+            acks.push(writer.upsert(&row).expect("Failed to upsert"));
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -1212,16 +1240,20 @@ mod kv_table_test {
             .expect("Failed to create upsert")
             .create_writer()
             .expect("Failed to create writer");
+        let mut acks = Vec::new();
         for a in 0..20i32 {
             for b in 0..3i64 {
                 let mut row = GenericRow::new(3);
                 row.set_field(0, a);
                 row.set_field(1, b);
                 row.set_field(2, format!("{a}-{b}"));
-                writer.upsert(&row).expect("Failed to upsert");
+                acks.push(writer.upsert(&row).expect("Failed to upsert"));
             }
         }
         writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let prefix_lookuper = table
             .new_lookup()
@@ -1390,15 +1422,21 @@ mod kv_table_test {
             .create_writer()
             .expect("Failed to create Iceberg writer");
 
+        let mut acks = Vec::new();
         for (id, name) in [(1, "Frost"), (2, "Ember")] {
             let mut row = GenericRow::new(2);
             row.set_field(0, id);
             row.set_field(1, name);
-            upsert_writer
-                .upsert(&row)
-                .expect("Failed to upsert Iceberg row");
+            acks.push(
+                upsert_writer
+                    .upsert(&row)
+                    .expect("Failed to upsert Iceberg row"),
+            );
         }
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in acks {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -1558,13 +1596,16 @@ mod kv_table_test {
 
         // Upsert two rows so we can also exercise delete on one and keep the
         // other intact afterwards.
-        upsert_writer
+        let ack1 = upsert_writer
             .upsert(&build_full_row(id))
             .expect("Failed to upsert paimon row");
-        upsert_writer
+        let ack2 = upsert_writer
             .upsert(&build_full_row(id + 1))
             .expect("Failed to upsert second paimon row");
         upsert_writer.flush().await.expect("Failed to flush");
+        for ack in [ack1, ack2] {
+            ack.await.expect("upsert ack");
+        }
 
         let lookuper = table
             .new_lookup()
@@ -2221,6 +2262,118 @@ mod kv_table_test {
         assert_eq!(r3.get_int(0).unwrap(), 3);
         for i in 1..column_count {
             assert!(r3.is_null_at(i).unwrap(), "field {i} should be null");
+        }
+
+        admin.drop_table(&table_path, false).await.expect("drop");
+    }
+
+    fn region_row(region: &'static str, id: i32) -> GenericRow<'static> {
+        let mut row = GenericRow::new(2);
+        row.set_field(0, region);
+        row.set_field(1, id);
+        row
+    }
+
+    async fn upsert_writer(connection: &FlussConnection, table_path: &TablePath) -> UpsertWriter {
+        connection
+            .get_table(table_path)
+            .await
+            .expect("table")
+            .new_upsert()
+            .expect("upsert")
+            .create_writer()
+            .expect("writer")
+    }
+
+    #[tokio::test]
+    async fn upsert_to_missing_partition_creates_it_unless_disabled() {
+        let cluster = get_shared_cluster();
+        let connection = cluster.get_fluss_connection().await;
+        let admin = connection.get_admin().expect("Failed to get admin");
+        let table_path = TablePath::new("fluss", "test_upsert_to_missing_partition");
+        let table_descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("region", DataTypes::string())
+                    .column("id", DataTypes::int())
+                    .primary_key(vec!["region", "id"])
+                    .unwrap()
+                    .build()
+                    .expect("schema"),
+            )
+            .partitioned_by(vec!["region"])
+            .build()
+            .expect("table descriptor");
+        create_table(&admin, &table_path, &table_descriptor).await;
+        create_partitions(&admin, &table_path, "region", &["US"]).await;
+        wait_for_partitions_ready(&admin, &table_path, &["US"]).await;
+
+        let no_create_connection = FlussConnection::new(Config {
+            bootstrap_servers: cluster.plaintext_bootstrap_servers().to_string(),
+            writer_dynamic_create_partition_enabled: false,
+            ..Config::default()
+        })
+        .await
+        .expect("connection");
+        let writer = upsert_writer(&no_create_connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 1)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 2)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            assert_eq!(
+                missing.await.expect_err("missing partition").api_error(),
+                Some(FlussError::PartitionNotExists)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+
+        let writer = upsert_writer(&connection, &table_path).await;
+        let missing = writer.upsert(&region_row("APAC", 3)).expect("upsert");
+        let invalid = writer.upsert(&region_row("EU West", 4)).expect("upsert");
+        let existing = writer.upsert(&region_row("US", 5)).expect("upsert");
+        tokio::time::timeout(Duration::from_secs(60), async {
+            missing.await.expect("upsert to the created partition");
+            assert_eq!(
+                invalid.await.expect_err("invalid partition").api_error(),
+                Some(FlussError::PartitionSpecInvalidException)
+            );
+            existing.await.expect("upsert to the existing partition");
+        })
+        .await
+        .expect("upserts must complete instead of retrying");
+        let mut partitions: Vec<String> = admin
+            .list_partition_infos(&table_path)
+            .await
+            .expect("list partitions")
+            .iter()
+            .map(|partition| partition.get_partition_name())
+            .collect();
+        partitions.sort();
+        assert_eq!(partitions, ["APAC", "US"]);
+        let lookuper = connection
+            .get_table(&table_path)
+            .await
+            .expect("table")
+            .new_lookup()
+            .expect("lookup")
+            .create_lookuper()
+            .expect("lookuper");
+        for (region, id, written) in [
+            ("APAC", 1, false),
+            ("APAC", 3, true),
+            ("US", 2, true),
+            ("US", 5, true),
+        ] {
+            let result = lookuper
+                .lookup(&region_row(region, id))
+                .await
+                .expect("lookup");
+            assert_eq!(
+                result.get_single_row().expect("get row").is_some(),
+                written,
+                "{region}/{id}"
+            );
         }
 
         admin.drop_table(&table_path, false).await.expect("drop");

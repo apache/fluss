@@ -349,7 +349,9 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
                     undoOffsets.size());
             LOG.debug("Subtask {} undoOffsets details: {}", subtaskIndex, undoOffsets);
 
-            performUndoRecovery(undoOffsets);
+            // Recovery writes are durable before their offsets become the next checkpoint baseline.
+            // Idle buckets must not keep depending on history that was already compensated.
+            recoveryOffsets.putAll(performUndoRecovery(undoOffsets));
         } else {
             LOG.info("No undo recovery needed for subtask {}", subtaskIndex);
         }
@@ -392,7 +394,8 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
      * @param undoOffsets the bucket undo offsets containing checkpoint offset and log end offset
      * @throws Exception if recovery fails
      */
-    private void performUndoRecovery(Map<TableBucket, UndoOffsets> undoOffsets) throws Exception {
+    private Map<TableBucket, Long> performUndoRecovery(Map<TableBucket, UndoOffsets> undoOffsets)
+            throws Exception {
         LOG.info(
                 "Performing undo recovery for {} buckets on subtask {}/{}",
                 undoOffsets.size(),
@@ -403,13 +406,15 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
         // UndoOffsets already contains both checkpointOffset and logEndOffset,
         // so no additional listOffset call is needed
         UndoRecoveryManager recoveryManager = new UndoRecoveryManager(table, targetColumnIndexes);
-        recoveryManager.performUndoRecovery(undoOffsets, subtaskIndex, parallelism);
+        Map<TableBucket, Long> recoveredOffsets =
+                recoveryManager.performUndoRecovery(undoOffsets, subtaskIndex, parallelism);
 
         LOG.info(
                 "Completed undo recovery for {} buckets on subtask {}/{}",
                 undoOffsets.size(),
                 subtaskIndex,
                 parallelism);
+        return recoveredOffsets;
     }
 
     // ==================== State Snapshotting ====================

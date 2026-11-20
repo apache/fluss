@@ -230,6 +230,7 @@ impl FlussError {
                 | FlussError::NotEnoughReplicasAfterAppendException
                 | FlussError::NotEnoughReplicasException
                 | FlussError::LeaderNotAvailableException
+                | FlussError::NotCoordinatorLeaderException
                 | FlussError::StorageBackpressureException
                 | FlussError::DiskWriteLocked
                 | FlussError::HistoricalPartitionThrottled
@@ -580,6 +581,7 @@ mod tests {
             FlussError::NotEnoughReplicasAfterAppendException,
             FlussError::NotEnoughReplicasException,
             FlussError::LeaderNotAvailableException,
+            FlussError::NotCoordinatorLeaderException,
             FlussError::StorageBackpressureException,
             FlussError::DiskWriteLocked,
             FlussError::HistoricalPartitionThrottled,

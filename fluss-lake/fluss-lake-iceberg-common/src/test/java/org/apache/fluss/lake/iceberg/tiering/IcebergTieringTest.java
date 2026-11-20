@@ -26,6 +26,7 @@ import org.apache.fluss.lake.committer.LakeCommitter.CommitContext;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -51,6 +52,7 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.data.IcebergGenerics;
 import org.apache.iceberg.data.Record;
+import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
@@ -347,6 +349,82 @@ class IcebergTieringTest {
     }
 
     @Test
+    void testUpsertAcrossTieringRoundsWithWalChangelog() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_upsert_wal_changelog");
+        createTable(tablePath, true, false);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false, ChangelogImage.WAL);
+
+        // WAL changelog image emits only UPDATE_AFTER, even for the first insert
+        tierOneRound(tablePath, tableInfo, toRecord(0L, pkRow(1, "v1"), UPDATE_AFTER));
+        tierOneRound(
+                tablePath,
+                tableInfo,
+                toRecord(1L, pkRow(1, "v2"), UPDATE_AFTER),
+                toRecord(2L, pkRow(1, "v3"), UPDATE_AFTER));
+
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        List<String> rows = new ArrayList<>();
+        try (CloseableIterator<Record> records = IcebergGenerics.read(table).build().iterator()) {
+            while (records.hasNext()) {
+                Record record = records.next();
+                rows.add(record.getField("c1") + ":" + record.getField("c2"));
+            }
+        }
+        assertThat(rows).containsExactly("1:v3");
+    }
+
+    @Test
+    void testInsertWithWalChangelogWritesNoDeleteFile() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "test_insert_wal_changelog");
+        createTable(tablePath, true, false);
+        TableInfo tableInfo = createTableInfo(tablePath, true, false, ChangelogImage.WAL);
+
+        // INSERT is emitted only for a key absent from the KV state, so no stale row to delete
+        tierOneRound(
+                tablePath,
+                tableInfo,
+                toRecord(0L, pkRow(1, "v1"), INSERT),
+                toRecord(1L, pkRow(2, "v2"), INSERT));
+
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        assertThat(table.currentSnapshot().addedDeleteFiles(table.io())).isEmpty();
+        List<String> rows = new ArrayList<>();
+        try (CloseableIterator<Record> records = IcebergGenerics.read(table).build().iterator()) {
+            while (records.hasNext()) {
+                Record record = records.next();
+                rows.add(record.getField("c1") + ":" + record.getField("c2"));
+            }
+        }
+        assertThat(rows).containsExactlyInAnyOrder("1:v1", "2:v2");
+    }
+
+    private static GenericRow pkRow(int key, String value) {
+        GenericRow row = new GenericRow(3);
+        row.setField(0, key);
+        row.setField(1, BinaryString.fromString(value));
+        row.setField(2, BinaryString.fromString("x"));
+        return row;
+    }
+
+    private void tierOneRound(TablePath tablePath, TableInfo tableInfo, LogRecord... records)
+            throws Exception {
+        IcebergWriteResult writeResult;
+        try (LakeWriter<IcebergWriteResult> writer =
+                createLakeWriter(tablePath, 0, null, null, tableInfo)) {
+            for (LogRecord record : records) {
+                writer.write(record);
+            }
+            writeResult = writer.complete();
+        }
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            committer.commit(
+                    committer.toCommittable(Collections.singletonList(writeResult)),
+                    new CommitContext(Collections.emptyMap(), Collections.emptyMap()));
+        }
+    }
+
+    @Test
     void testEmptyCommitCreatesSnapshot() throws Exception {
         TablePath tablePath = TablePath.of("iceberg", "test_empty_commit");
         createTable(tablePath, false, false);
@@ -371,6 +449,63 @@ class IcebergTieringTest {
             assertThat(snapshotId).isEqualTo(icebergSnapshot.snapshotId());
             assertThat(icebergSnapshot.summary()).containsEntry("fluss-offsets", "offsets-path");
         }
+    }
+
+    @Test
+    void testTieringWritesToMappedLakeTablePath() throws Exception {
+        TablePath flussTablePath = TablePath.of("iceberg", "fluss_logical_tiering_table");
+        TablePath lakeTablePath = TablePath.of("iceberg_lake_db", "iceberg_physical_tiering_table");
+
+        // only the mapped physical Iceberg table exists
+        createTable(lakeTablePath, false, false);
+
+        TableInfo tableInfo = createTableInfoWithLakePath(flussTablePath, lakeTablePath);
+
+        // the validator must resolve and load the mapped physical table
+        icebergLakeTieringFactory.validateTable(tableInfo);
+
+        Table lakeTable = icebergCatalog.loadTable(toIceberg(lakeTablePath));
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+
+        List<IcebergWriteResult> writeResults = new ArrayList<>();
+        Map<Integer, List<LogRecord>> recordsByBucket = new HashMap<>();
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer =
+                    createLakeWriter(flussTablePath, bucket, null, null, tableInfo)) {
+                Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpect =
+                        genLogTableRecords(null, bucket, 10);
+                recordsByBucket.put(bucket, writeAndExpect.f1);
+                for (LogRecord record : writeAndExpect.f0) {
+                    writer.write(record);
+                }
+                IcebergWriteResult result = writer.complete();
+                byte[] serialized = writeResultSerializer.serialize(result);
+                writeResults.add(
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), serialized));
+            }
+        }
+
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(flussTablePath, tableInfo)) {
+            IcebergCommittable committable = lakeCommitter.toCommittable(writeResults);
+            lakeCommitter.commit(
+                    committable,
+                    new CommitContext(
+                            Collections.singletonMap("k1", "v1"), Collections.emptyMap()));
+        }
+
+        lakeTable.refresh();
+        assertThat(lakeTable.currentSnapshot()).isNotNull();
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            CloseableIterator<Record> actualRecords = getIcebergRows(lakeTable, null, bucket);
+            verifyTableRecords(actualRecords, recordsByBucket.get(bucket), bucket, null);
+        }
+
+        // the Fluss logical path must never be materialized as a physical Iceberg table
+        assertThatThrownBy(() -> icebergCatalog.loadTable(toIceberg(flussTablePath)))
+                .isInstanceOf(NoSuchTableException.class);
     }
 
     @Test
@@ -400,6 +535,15 @@ class IcebergTieringTest {
 
     private TableInfo createTableInfo(
             TablePath tablePath, boolean isPrimaryKeyTable, boolean isPartitionedTable) {
+        return createTableInfo(
+                tablePath, isPrimaryKeyTable, isPartitionedTable, ChangelogImage.FULL);
+    }
+
+    private TableInfo createTableInfo(
+            TablePath tablePath,
+            boolean isPrimaryKeyTable,
+            boolean isPartitionedTable,
+            ChangelogImage changelogImage) {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("c1", DataTypes.INT())
@@ -417,7 +561,8 @@ class IcebergTieringTest {
                 TableDescriptor.builder()
                         .schema(schemaBuilder.build())
                         .distributedBy(BUCKET_NUM)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true);
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, changelogImage);
         if (isPartitionedTable) {
             descriptorBuilder.partitionedBy("c3");
         }
@@ -475,6 +620,29 @@ class IcebergTieringTest {
         row.setField(1, temporalIdentifier);
         row.setField(2, BinaryString.fromString(payload));
         return row;
+    }
+
+    private TableInfo createTableInfoWithLakePath(
+            TablePath flussTablePath, TablePath lakeTablePath) {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                                lakeTablePath.getDatabaseName())
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                lakeTablePath.getTableName())
+                        .build();
+        return TableInfo.of(flussTablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
     }
 
     private LakeWriter<IcebergWriteResult> createLakeWriter(

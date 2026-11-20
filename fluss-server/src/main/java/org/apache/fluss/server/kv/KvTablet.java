@@ -51,6 +51,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
+import org.apache.fluss.server.kv.rocksdb.RocksDBStatisticsRegistry;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
@@ -65,6 +66,7 @@ import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -94,6 +96,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -123,6 +127,11 @@ public final class KvTablet {
      */
     private static final int MAX_FLUSH_RETRY_BACKOFF_SHIFT =
             64 - Long.numberOfLeadingZeros(MAX_FLUSH_RETRY_DELAY_MS / MIN_FLUSH_RETRY_DELAY_MS);
+
+    // Keep small reads under the lock to avoid fixed snapshot and lease overhead. The 16-key
+    // threshold favors shorter writer lock waits for larger batches, accepting snapshot overhead
+    // even when there are no concurrent writes.
+    private static final int MIN_KEYS_FOR_SNAPSHOT_LOOKUP = 16;
 
     private static final long ROW_COUNT_DISABLED = -1;
 
@@ -191,6 +200,9 @@ public final class KvTablet {
 
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
+
+    // isClosed stops admission; this future also waits for the native resources to be released.
+    private final CompletableFuture<Void> closeCompletion = new CompletableFuture<>();
 
     private KvTablet(
             PhysicalTablePath physicalPath,
@@ -314,6 +326,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 null,
                 null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -339,6 +352,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
+            RocksDBStatisticsRegistry statisticsRegistry,
             KvFlushScheduler kvFlushScheduler,
             @Nullable Runnable flushCompleteListener,
             AutoIncrementManager autoIncrementManager,
@@ -362,6 +376,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 sharedBlockCache,
                 sharedWriteBufferManager,
+                statisticsRegistry,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -409,6 +424,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 sharedBlockCache,
                 null,
+                null,
                 kvFlushScheduler,
                 false,
                 flushCompleteListener,
@@ -434,6 +450,7 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
+            @Nullable RocksDBStatisticsRegistry statisticsRegistry,
             KvFlushScheduler kvFlushScheduler,
             boolean closeFlushScheduler,
             @Nullable Runnable flushCompleteListener,
@@ -480,6 +497,8 @@ public final class KvTablet {
                         sharedRateLimiter,
                         sharedBlockCache,
                         sharedWriteBufferManager,
+                        statisticsRegistry,
+                        tableBucket.getTableId(),
                         compactionFilterFactory);
 
         // Create RocksDB statistics accessor (will be registered to TableMetricGroup by Replica)
@@ -560,6 +579,7 @@ public final class KvTablet {
                 sharedRateLimiter,
                 null,
                 null,
+                null,
                 new KvFlushScheduler(serverConf),
                 true,
                 null,
@@ -574,6 +594,8 @@ public final class KvTablet {
             RateLimiter sharedRateLimiter,
             @Nullable Cache sharedBlockCache,
             @Nullable WriteBufferManager sharedWriteBufferManager,
+            @Nullable RocksDBStatisticsRegistry statisticsRegistry,
+            long tableId,
             @Nullable
                     AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>>
                             compactionFilterFactory)
@@ -589,6 +611,9 @@ public final class KvTablet {
                             sharedRateLimiter,
                             sharedBlockCache,
                             sharedWriteBufferManager);
+            if (statisticsRegistry != null) {
+                rocksDBResourceContainer.useSharedStatistics(statisticsRegistry.acquire(tableId));
+            }
             RocksDBKvBuilder rocksDBKvBuilder =
                     new RocksDBKvBuilder(
                                     kvDir,
@@ -1205,12 +1230,31 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> multiGet(List<byte[]> keys) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return toValueBodySlices(rocksDBKv.multiGet(keys));
-                });
+        List<byte[]> values;
+        if (keys.size() < MIN_KEYS_FOR_SNAPSHOT_LOOKUP) {
+            values =
+                    inReadLock(
+                            kvLock,
+                            () -> {
+                                if (isClosed) {
+                                    throw new IOException("KV tablet is closing: " + tableBucket);
+                                }
+                                return rocksDBKv.multiGet(keys);
+                            });
+        } else {
+            try (RocksDBKv.MultiGetLookup lookup =
+                    inReadLock(
+                            kvLock,
+                            () -> {
+                                if (isClosed) {
+                                    throw new IOException("KV tablet is closing: " + tableBucket);
+                                }
+                                return rocksDBKv.openMultiGet();
+                            })) {
+                values = lookup.read(keys);
+            }
+        }
+        return toValueBodySlices(values);
     }
 
     /**
@@ -1261,12 +1305,17 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return toValueBodySlices(rocksDBKv.prefixLookup(prefixKey));
-                });
+        try (RocksDBKv.PrefixLookup lookup =
+                inReadLock(
+                        kvLock,
+                        () -> {
+                            if (isClosed) {
+                                throw new IOException("KV tablet is closing: " + tableBucket);
+                            }
+                            return rocksDBKv.openPrefixLookup(prefixKey);
+                        })) {
+            return toValueBodySlices(lookup.readAll());
+        }
     }
 
     public List<ByteArraySlice> limitScan(int limit) throws IOException {
@@ -1392,26 +1441,33 @@ public final class KvTablet {
                             flushState = FlushState.IDLE;
                             return true;
                         });
-        if (shouldClose && closeFlushScheduler) {
-            kvFlushScheduler.close();
+        if (shouldClose) {
+            try {
+                if (closeFlushScheduler) {
+                    kvFlushScheduler.close();
+                }
+                if (rocksDBKv != null) {
+                    // Close outside kvLock so active reads and async flushes can release leases.
+                    rocksDBKv.close(closeMode);
+                }
+                closeCompletion.complete(null);
+            } catch (Throwable t) {
+                closeCompletion.completeExceptionally(t);
+            }
         }
-        if (shouldClose && rocksDBKv != null) {
-            // Note: RocksDB metrics lifecycle is managed by TableMetricGroup.
-            // Close outside kvLock so an async flush can finish and release its RocksDB lease.
-            rocksDBKv.close(closeMode);
+        try {
+            closeCompletion.get();
+        } catch (ExecutionException e) {
+            ExceptionUtils.rethrowException(
+                    e.getCause(), "Failed to close KV tablet " + tableBucket);
         }
     }
 
     /** Completely delete the kv directory and all contents form the file system with no delay. */
     public void drop() throws Exception {
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // first close the kv.
-                    close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
-                    // then delete the directory.
-                    FileUtils.deleteDirectory(kvTabletDir);
-                });
+        // Do not hold kvLock while waiting for a concurrent close to finish its flush scheduler.
+        close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+        inWriteLock(kvLock, () -> FileUtils.deleteDirectory(kvTabletDir));
     }
 
     /** Creates an incremental snapshot with the table's thread-safe upload byte counter. */

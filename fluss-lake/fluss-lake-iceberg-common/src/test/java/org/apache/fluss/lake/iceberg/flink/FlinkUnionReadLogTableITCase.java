@@ -29,6 +29,7 @@ import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -69,6 +70,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     @TempDir public static File savepointDir;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -80,7 +83,9 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new ArrayList<>();
@@ -153,7 +158,9 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "stream_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "stream_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new LinkedList<>();
@@ -198,9 +205,11 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildTieringJob(execEnv);
 
         String tableName1 =
-                "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String resultTableName =
-                "result_table" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "result_table" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
         TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
@@ -258,7 +267,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
     @Test
     void testUnionReadWithTemporalFilterPushDown() throws Exception {
         JobClient jobClient = buildTieringJob(execEnv);
-        String tableName = "temporal_filter_log_table";
+        String tableName = tableNames.tableName("temporal_filter_log_table");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Schema schema =
                 Schema.newBuilder()
