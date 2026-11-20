@@ -40,6 +40,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -206,7 +207,7 @@ public class TieringSplitGenerator {
                 long latestBucketOffset = latestBucketsOffset.get(bucket);
                 boolean needsKvSnapshot =
                         !historicalPartition
-                                && latestBucketOffset > 0
+                                && latestBucketOffset >= 0
                                 && lastCommittedBucketOffset == null;
                 if (needsKvSnapshot && !kvSnapshotsFetched) {
                     latestKvSnapshots =
@@ -275,59 +276,32 @@ public class TieringSplitGenerator {
             KvSnapshots latestKvSnapshots,
             @Nullable Long lastCommittedBucketOffset,
             long latestBucketOffset) {
-        if (latestBucketOffset <= 0) {
-            LOG.debug(
-                    "The latestBucketOffset {} is equals or less than 0, skip generating split for bucket {}",
-                    latestBucketOffset,
-                    tableBucket);
-            return Optional.empty();
-        }
-
-        // the bucket is never been tiered, read kv snapshot is more efficient
-        if (lastCommittedBucketOffset == null) {
+        if (lastCommittedBucketOffset == null && latestBucketOffset >= 0) {
             int bucket = tableBucket.getBucket();
-            if (!latestKvSnapshots.getSnapshotId(bucket).isPresent()) {
-                // bucket with non snapshot, scan log from earliest to latest offset
-                return Optional.of(
-                        new TieringLogSplit(
-                                tablePath,
-                                tableBucket,
-                                partitionName,
-                                EARLIEST_OFFSET,
-                                latestBucketOffset,
-                                0));
-            } else {
-                // bucket with snapshot, read kv to latest snapshotId + latestOffsetOfSnapshot
-                checkState(latestKvSnapshots.getLogOffset(bucket).isPresent());
+            OptionalLong snapshotId = latestKvSnapshots.getSnapshotId(bucket);
+            // A snapshot can contain the initial data even when the bucket has no WAL.
+            if (snapshotId.isPresent()) {
+                OptionalLong snapshotOffset = latestKvSnapshots.getLogOffset(bucket);
+                checkState(snapshotOffset.isPresent());
                 return Optional.of(
                         new TieringSnapshotSplit(
                                 tablePath,
                                 tableBucket,
                                 partitionName,
-                                latestKvSnapshots.getSnapshotId(bucket).getAsLong(),
-                                latestKvSnapshots.getLogOffset(bucket).getAsLong(),
+                                snapshotId.getAsLong(),
+                                snapshotOffset.getAsLong(),
                                 0));
-            }
-        } else {
-            // the bucket has been tiered, read bounded log
-            if (lastCommittedBucketOffset < latestBucketOffset) {
-                return Optional.of(
-                        new TieringLogSplit(
-                                tablePath,
-                                tableBucket,
-                                partitionName,
-                                lastCommittedBucketOffset,
-                                latestBucketOffset,
-                                0));
-            } else {
-                LOG.debug(
-                        "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",
-                        lastCommittedBucketOffset,
-                        latestBucketOffset,
-                        tableBucket);
-                return Optional.empty();
             }
         }
+
+        long startOffset =
+                lastCommittedBucketOffset == null ? EARLIEST_OFFSET : lastCommittedBucketOffset;
+        if (latestBucketOffset <= 0 || startOffset >= latestBucketOffset) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new TieringLogSplit(
+                        tablePath, tableBucket, partitionName, startOffset, latestBucketOffset, 0));
     }
 
     private Optional<TieringSplit> generateSplitForLogTableBucket(
