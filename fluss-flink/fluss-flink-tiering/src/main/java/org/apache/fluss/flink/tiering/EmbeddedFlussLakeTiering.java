@@ -130,7 +130,7 @@ public class EmbeddedFlussLakeTiering {
      * @throws IllegalConfigurationException if a config provider marker is malformed or references
      *     an undeclared provider, or the job's parallelism exceeds the aggregate slot capacity
      */
-    public EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
+    EmbeddedFlussLakeTiering(Map<String, String> tieringParams, Configuration flinkConfig) {
         this(tieringParams, flinkConfig, new EmbeddedRuntime(flinkConfig, MiniCluster::new));
     }
 
@@ -138,7 +138,7 @@ public class EmbeddedFlussLakeTiering {
      * Creates an embedded tiering service from the given parameters, Flink configuration, and
      * runtime. Package-private so tests can supply a runtime with a controllable cluster factory.
      *
-     * <p>The parameter and failure semantics are those of the public constructor.
+     * <p>The parameter and failure semantics are those of the two-argument constructor.
      *
      * @param tieringParams the tiering service parameters
      * @param flinkConfig the configuration for the embedded Flink runtime
@@ -167,7 +167,7 @@ public class EmbeddedFlussLakeTiering {
      *
      * @throws Exception if the tiering job fails terminally or cannot be started
      */
-    public void runEmbedded() throws Exception {
+    void runEmbedded() throws Exception {
         shutdownHook = ShutdownHookUtil.addShutdownHook(runtime, "embedded lake tiering", LOG);
         try (EmbeddedRuntime ignored = runtime) {
             checkState(shutdownHook != null, "Cannot register embedded tiering shutdown hook.");
@@ -188,7 +188,7 @@ public class EmbeddedFlussLakeTiering {
      *
      * @return the {@link JobClient} of the submitted tiering job
      */
-    protected JobClient run() throws Exception {
+    JobClient run() throws Exception {
         return job.submit();
     }
 

@@ -251,7 +251,7 @@ class EmbeddedFlussLakeTieringTest {
                 new EmbeddedFlussLakeTiering(tieringParams, new Configuration()) {
 
                     @Override
-                    protected JobClient run() throws Exception {
+                    JobClient run() throws Exception {
                         // a bounded job that fails on its first element; with no
                         // restarts the failure is terminal
                         job.execEnv.setRestartStrategy(RestartStrategies.noRestart());
@@ -304,7 +304,7 @@ class EmbeddedFlussLakeTieringTest {
                         configuration,
                         runtime) {
                     @Override
-                    protected JobClient run() throws Exception {
+                    JobClient run() throws Exception {
                         job.execEnv.setRestartStrategy(RestartStrategies.noRestart());
                         job.execEnv
                                 .fromElements(1)
@@ -367,7 +367,7 @@ class EmbeddedFlussLakeTieringTest {
                                 "paimon"),
                         new Configuration()) {
                     @Override
-                    protected JobClient run() {
+                    JobClient run() {
                         throw new IllegalStateException("expected construction failure");
                     }
                 };
@@ -642,7 +642,7 @@ class EmbeddedFlussLakeTieringTest {
                 configuration,
                 runtime) {
             @Override
-            protected JobClient run() throws Exception {
+            JobClient run() throws Exception {
                 job.execEnv.fromElements(1).sinkTo(new DiscardingSink<>());
                 return job.execEnv.executeAsync("bounded-test-job");
             }
@@ -1009,7 +1009,7 @@ class EmbeddedFlussLakeTieringTest {
                                     "paimon"),
                             configuration) {
                         @Override
-                        protected JobClient run() throws Exception {
+                        JobClient run() throws Exception {
                             if (args.length > 2) {
                                 Files.createFile(Paths.get(args[0], "before-submission"));
                                 new CompletableFuture<Void>().get(60, TimeUnit.SECONDS);
