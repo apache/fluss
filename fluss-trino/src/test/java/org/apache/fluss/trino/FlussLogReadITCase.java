@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -60,6 +61,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -300,6 +303,13 @@ class FlussLogReadITCase {
 
         assertThat(runner.execute("SELECT * FROM all_types").getMaterializedRows())
                 .containsExactlyElementsOf(runner.execute(expected).getMaterializedRows());
+        assertThat(
+                        runner.execute("SELECT nested, mapping, items FROM all_types")
+                                .getMaterializedRows())
+                .containsExactlyElementsOf(
+                        runner.execute(
+                                        "VALUES (ROW(7, '世界'), MAP(ARRAY['k'], ARRAY[CAST(NULL AS INTEGER)]), ARRAY[1, NULL, 3])")
+                                .getMaterializedRows());
         append("all_types", new GenericRow(schema.getColumns().size()));
         assertThat(
                         runner.execute(
@@ -318,6 +328,178 @@ class FlussLogReadITCase {
                         runner.execute(
                                         "SELECT to_unixtime(ltz), CAST(ts AS VARCHAR) FROM all_types")
                                 .getMaterializedRows());
+    }
+
+    @Test
+    void testArrowCompactionPreservesSqlResidual() throws Exception {
+        String name = "compacted_batch_filter";
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("amount", DataTypes.INT())
+                        .column("region", DataTypes.STRING())
+                        .column("dt", DataTypes.DATE())
+                        .build();
+        TablePath path = TablePath.of("fluss", name);
+        admin.createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(schema)
+                                .partitionedBy("region", "dt")
+                                .distributedBy(4, "id")
+                                .property(ConfigOptions.TABLE_STATISTICS_COLUMNS, "amount")
+                                .build(),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
+        String[] regions = {"us", "eu", "us", "asia", "us"};
+        String[] dates = {"2026-10-01", "2026-10-01", "2026-10-01", "2026-10-01", "2026-11-01"};
+        int[] ids = {1, 3, 5, 1, 1};
+        int[] amounts = {10, 20, 30, 10, 10};
+        for (int i : Arrays.asList(0, 1, 3, 4)) {
+            Map<String, String> values = new LinkedHashMap<>();
+            values.put("region", regions[i]);
+            values.put("dt", dates[i]);
+            admin.createPartition(path, new PartitionSpec(values), false).get(30, TimeUnit.SECONDS);
+        }
+        CLUSTER.waitUntilPartitionsCreated(path, 4);
+        for (PartitionInfo partition : admin.listPartitionInfos(path).get(30, TimeUnit.SECONDS)) {
+            for (int bucket = 0; bucket < partition.getBucketCount(); bucket++) {
+                CLUSTER.waitAndGetLeader(
+                        new TableBucket(tableId, partition.getPartitionId(), bucket));
+            }
+        }
+        for (int i = 0; i < ids.length; i++) {
+            append(
+                    name,
+                    GenericRow.of(
+                            ids[i],
+                            amounts[i],
+                            BinaryString.fromString(regions[i]),
+                            (int) LocalDate.parse(dates[i]).toEpochDay()));
+        }
+        String from =
+                " FROM "
+                        + name
+                        + " WHERE region IN ('us', 'eu') AND dt >= DATE '2026-10-01'"
+                        + " AND dt < DATE '2026-11-01' AND id IN (1, 3, 5)";
+        String sql = "SELECT id" + from + " AND amount IN (10, 30) ORDER BY id";
+        assertThat(rows("SELECT id" + from + " AND amount > 15 ORDER BY id"))
+                .containsExactly(Collections.singletonList(3), Collections.singletonList(5));
+
+        assertThat(rows(sql))
+                .containsExactly(Collections.singletonList(1), Collections.singletonList(5));
+        assertThat(
+                        runner.execute(
+                                        Session.builder(runner.getDefaultSession())
+                                                .setCatalogSessionProperty(
+                                                        "fluss", "domain_compaction_threshold", "1")
+                                                .build(),
+                                        sql)
+                                .getMaterializedRows())
+                .extracting(MaterializedRow::getFields)
+                .containsExactly(Collections.singletonList(1), Collections.singletonList(5));
+        assertThatThrownBy(
+                        () -> runner.execute("SET SESSION fluss.domain_compaction_threshold = 0"))
+                .hasMessageContaining("must be positive");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "false,false,ARROW,INDEXED",
+        "false,true,ARROW,INDEXED",
+        "false,false,INDEXED,INDEXED",
+        "false,true,INDEXED,INDEXED",
+        "true,false,ARROW,INDEXED",
+        "true,true,ARROW,INDEXED",
+        "true,false,ARROW,COMPACTED",
+        "true,true,ARROW,COMPACTED"
+    })
+    void testProjectionWithResidualsAndHistoricalSchema(
+            boolean primaryKey, boolean partitioned, LogFormat logFormat, KvFormat kvFormat)
+            throws Exception {
+        String name =
+                "projection_" + primaryKey + "_" + partitioned + "_" + logFormat + "_" + kvFormat;
+        TablePath path = TablePath.of("fluss", name);
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("region", DataTypes.INT())
+                        .column("amount", DataTypes.INT())
+                        .column("items", DataTypes.ARRAY(DataTypes.INT()));
+        if (primaryKey) {
+            schema.primaryKey(
+                    partitioned ? Arrays.asList("id", "region") : Collections.singletonList("id"));
+        }
+        TableDescriptor.Builder descriptor =
+                TableDescriptor.builder()
+                        .schema(schema.build())
+                        .distributedBy(1)
+                        .logFormat(logFormat)
+                        .kvFormat(kvFormat);
+        if (partitioned) {
+            descriptor.partitionedBy("region");
+        }
+        admin.createTable(path, descriptor.build(), false).get(30, TimeUnit.SECONDS);
+        long tableId = admin.getTableInfo(path).get(30, TimeUnit.SECONDS).getTableId();
+        if (partitioned) {
+            for (String region : Arrays.asList("1", "2")) {
+                admin.createPartition(
+                                path,
+                                new PartitionSpec(Collections.singletonMap("region", region)),
+                                false)
+                        .get(30, TimeUnit.SECONDS);
+            }
+            CLUSTER.waitUntilPartitionsCreated(path, 2);
+            for (PartitionInfo partition :
+                    admin.listPartitionInfos(path).get(30, TimeUnit.SECONDS)) {
+                CLUSTER.waitAndGetLeader(new TableBucket(tableId, partition.getPartitionId(), 0));
+            }
+        } else {
+            CLUSTER.waitUntilTableReady(tableId);
+        }
+        try (Table table = connection.getTable(path)) {
+            InternalRow old = GenericRow.of(1, 1, 50, GenericArray.of(1, null));
+            if (primaryKey) {
+                table.newUpsert().createWriter().upsert(old).get(30, TimeUnit.SECONDS);
+            } else {
+                table.newAppend().createWriter().append(old).get(30, TimeUnit.SECONDS);
+            }
+        }
+        admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "extra",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        try (Connection updated = ConnectionFactory.createConnection(CLUSTER.getClientConfig());
+                Table table = updated.getTable(path)) {
+            InternalRow current =
+                    GenericRow.of(2, 2, 150, GenericArray.of(2, 3), BinaryString.fromString("new"));
+            if (primaryKey) {
+                table.newUpsert().createWriter().upsert(current).get(30, TimeUnit.SECONDS);
+            } else {
+                table.newAppend().createWriter().append(current).get(30, TimeUnit.SECONDS);
+            }
+        }
+
+        assertThat(rows("SELECT extra, id, extra FROM " + name + " ORDER BY id"))
+                .containsExactly(Arrays.asList(null, 1, null), Arrays.asList("new", 2, "new"));
+        assertThat(rows("SELECT items FROM " + name + " WHERE amount > 100 AND region >= 1"))
+                .containsExactly(Collections.singletonList(Arrays.asList(2, 3)));
+        assertThat(rows("SELECT items FROM " + name + " WHERE region = 1 AND amount < 100"))
+                .containsExactly(Collections.singletonList(Arrays.asList(1, null)));
+        assertThat(runner.execute("SELECT count(*) FROM " + name).getOnlyValue()).isEqualTo(2L);
+        assertThat(
+                        runner.execute("SELECT count(*) FROM " + name + " WHERE extra IS NULL")
+                                .getOnlyValue())
+                .isEqualTo(1L);
+        assertThat(rows("SELECT extra FROM " + name + " WHERE amount BETWEEN 100 AND 200"))
+                .containsExactly(Collections.singletonList("new"));
     }
 
     @Test
@@ -539,11 +721,11 @@ class FlussLogReadITCase {
                             rows(
                                     "SELECT id FROM "
                                             + name
-                                            + " WHERE id IN (7, 8) AND "
+                                            + " WHERE id IN (7, 9) AND "
                                             + keyFilter
                                             + " ORDER BY id"))
-                    .containsExactly(Collections.singletonList(7), Collections.singletonList(8));
-            assertThat(gate.createdSources() - before).isGreaterThan(1);
+                    .containsExactly(Collections.singletonList(7), Collections.singletonList(9));
+            assertThat(gate.createdSources() - before).isBetween(1, 2);
         }
     }
 

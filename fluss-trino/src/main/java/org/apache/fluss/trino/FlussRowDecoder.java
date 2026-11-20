@@ -50,7 +50,11 @@ import io.trino.spi.type.LongTimestamp;
 import io.trino.spi.type.LongTimestampWithTimeZone;
 import io.trino.spi.type.Type;
 
+import javax.annotation.Nullable;
+
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
@@ -62,16 +66,20 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Writes supported Fluss values into driver-owned Trino blocks. */
 final class FlussRowDecoder {
-    private final List<FlussColumnHandle> columns;
+    @Nullable private final int[] projectedColumns;
+    private final int[] sourceIndexes;
     private final List<Type> types;
     private final List<DataType> dataTypes;
 
-    FlussRowDecoder(Schema schema, List<FlussColumnHandle> columns) {
+    FlussRowDecoder(Schema schema, List<FlussColumnHandle> columns, boolean projectionEnabled) {
         checkNotNull(schema, "schema is null");
-        this.columns = ImmutableList.copyOf(checkNotNull(columns, "columns is null"));
+        checkNotNull(columns, "columns is null");
+        this.sourceIndexes = new int[columns.size()];
+        Map<Integer, Integer> projectedPositions = new LinkedHashMap<>();
         ImmutableList.Builder<Type> types = ImmutableList.builder();
         ImmutableList.Builder<DataType> dataTypes = ImmutableList.builder();
-        for (FlussColumnHandle column : columns) {
+        for (int channel = 0; channel < columns.size(); channel++) {
+            FlussColumnHandle column = columns.get(channel);
             int ordinal = column.getOrdinalPosition();
             checkArgument(ordinal < schema.getColumns().size(), "Column ordinal exceeds schema");
             Schema.Column field = schema.getColumns().get(ordinal);
@@ -81,9 +89,28 @@ final class FlussRowDecoder {
             DataType dataType = field.getDataType();
             dataTypes.add(dataType);
             types.add(FlussTypeConverter.toTrinoType(dataType));
+            sourceIndexes[channel] =
+                    projectionEnabled
+                            ? projectedPositions.computeIfAbsent(
+                                    ordinal, ignored -> projectedPositions.size())
+                            : ordinal;
         }
+        // Log scans require a nonempty projection even when Trino only needs the row count.
+        if (projectedPositions.isEmpty()) {
+            projectedPositions.put(0, 0);
+        }
+        this.projectedColumns =
+                projectionEnabled
+                        ? projectedPositions.keySet().stream().mapToInt(Integer::intValue).toArray()
+                        : null;
         this.types = types.build();
         this.dataTypes = dataTypes.build();
+    }
+
+    /** Returns original schema ordinals in scanner order, or null for a full-row scan. */
+    @Nullable
+    int[] getProjectedColumns() {
+        return projectedColumns == null ? null : projectedColumns.clone();
     }
 
     List<Type> getTypes() {
@@ -91,10 +118,10 @@ final class FlussRowDecoder {
     }
 
     void append(InternalRow row, PageBuilder builder) {
-        for (int channel = 0; channel < columns.size(); channel++) {
+        for (int channel = 0; channel < sourceIndexes.length; channel++) {
             writeValue(
                     row,
-                    columns.get(channel).getOrdinalPosition(),
+                    sourceIndexes[channel],
                     dataTypes.get(channel),
                     types.get(channel),
                     builder.getBlockBuilder(channel));

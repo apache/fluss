@@ -20,6 +20,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
@@ -254,7 +255,18 @@ class FlussPrimaryKeyReadITCase {
 
             assertThat(rows("SELECT id FROM " + name + " WHERE id IN (7, 42)" + " ORDER BY id"))
                     .containsExactly(Collections.singletonList(7), Collections.singletonList(42));
-            assertThat(gate.createdSources() - before).isEqualTo(8);
+            BucketCalculator calculator =
+                    BucketCalculator.forBucketKeyRow(
+                            admin.getTableInfo(tablePath).get(30, TimeUnit.SECONDS));
+            long expectedBuckets =
+                    Arrays.asList(7, 42).stream()
+                            .map(
+                                    id ->
+                                            calculator.getBucketId(
+                                                    calculator.encodeKey(GenericRow.of(id)), 8))
+                            .distinct()
+                            .count();
+            assertThat(gate.createdSources() - before).isEqualTo((int) expectedBuckets);
 
             before = gate.createdSources();
             assertThat(
@@ -603,6 +615,13 @@ class FlussPrimaryKeyReadITCase {
 
         assertThat(runner.execute("SELECT * FROM all_types ORDER BY id").getMaterializedRows())
                 .containsExactlyElementsOf(runner.execute(expected).getMaterializedRows());
+        assertThat(
+                        runner.execute("SELECT nested, mapping, items FROM all_types")
+                                .getMaterializedRows())
+                .containsExactlyElementsOf(
+                        runner.execute(
+                                        "VALUES (ROW(7, '世界'), MAP(ARRAY['k'], ARRAY[CAST(NULL AS INTEGER)]), ARRAY[1, NULL, 3])")
+                                .getMaterializedRows());
         GenericRow nulls = new GenericRow(schema.getColumns().size());
         nulls.setField(0, 2);
         upsert("all_types", nulls);

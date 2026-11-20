@@ -17,19 +17,26 @@
 
 package org.apache.fluss.trino;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
@@ -37,10 +44,15 @@ import org.apache.fluss.utils.IOUtils;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.connector.SourcePage;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.Range;
 import io.trino.spi.predicate.TupleDomain;
+import io.trino.spi.predicate.ValueSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -54,6 +66,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static io.trino.spi.type.BigintType.BIGINT;
+import static org.apache.fluss.record.LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.trino.TestingRowIterator.rows;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -237,6 +250,151 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
             }
         }
         assertThat(ids).containsExactlyInAnyOrder(1L, 2L);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testPhysicalProjectionWithReorderedAndRepeatedColumns(
+            boolean primaryKey, boolean partitioned) throws Exception {
+        setUpProjectionTable(primaryKey, partitioned);
+        source =
+                create(
+                        primaryKey ? FlussSplit.forKv(bucket) : FlussSplit.forLog(bucket, 0, 1),
+                        Arrays.asList(
+                                new FlussColumnHandle("value", 2),
+                                new FlussColumnHandle("id", 0),
+                                new FlussColumnHandle("value", 2)),
+                        MemoryContext.NO_LIMIT);
+
+        SourcePage page = nextPage();
+        assertThat(table.projection).containsExactly(2, 0);
+        assertThat(page.getChannelCount()).isEqualTo(3);
+        assertThat(page.getPositionCount()).isEqualTo(1);
+        assertThat(BIGINT.getLong(page.getBlock(0), 0)).isEqualTo(9);
+        assertThat(BIGINT.getLong(page.getBlock(1), 0)).isEqualTo(7);
+        assertThat(BIGINT.getLong(page.getBlock(2), 0)).isEqualTo(9);
+        assertThat(nextPage()).isNull();
+        assertThat(source.isFinished()).isTrue();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testZeroColumnProjectionReadsOnlyCountCarrier(boolean primaryKey, boolean partitioned)
+            throws Exception {
+        setUpProjectionTable(primaryKey, partitioned);
+        source =
+                create(
+                        primaryKey ? FlussSplit.forKv(bucket) : FlussSplit.forLog(bucket, 0, 1),
+                        Collections.emptyList(),
+                        MemoryContext.NO_LIMIT);
+
+        SourcePage page = nextPage();
+        assertThat(table.projection).containsExactly(0);
+        assertThat(page.getChannelCount()).isZero();
+        assertThat(page.getPositionCount()).isEqualTo(1);
+        assertThat(nextPage()).isNull();
+        assertThat(source.isFinished()).isTrue();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void testEvolvedArrowFallbackWithReorderedAndZeroColumns(
+            boolean partitioned, boolean zeroColumns) throws Exception {
+        setUpProjectionTable(false, partitioned);
+        TablePath path = info.getTablePath();
+        admin.alterTable(
+                        path,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "added",
+                                        DataTypes.BIGINT(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        info = admin.getTableInfo(path).get(30, TimeUnit.SECONDS);
+        handle = tableHandle(info);
+        try (Connection updated = ConnectionFactory.createConnection(CLUSTER.getClientConfig())) {
+            useTable(new TrackedTable(updated.getTable(path)));
+            source =
+                    create(
+                            FlussSplit.forLog(bucket, 0, 1),
+                            zeroColumns
+                                    ? Collections.emptyList()
+                                    : Arrays.asList(
+                                            new FlussColumnHandle("value", 2),
+                                            new FlussColumnHandle("id", 0),
+                                            new FlussColumnHandle("added", 3),
+                                            new FlussColumnHandle("value", 2)),
+                            MemoryContext.NO_LIMIT);
+            SourcePage page = nextPage();
+            assertThat(table.projection).isNull();
+            assertThat(page.getPositionCount()).isEqualTo(1);
+            assertThat(page.getChannelCount()).isEqualTo(zeroColumns ? 0 : 4);
+            if (!zeroColumns) {
+                assertThat(BIGINT.getLong(page.getBlock(0), 0)).isEqualTo(9);
+                assertThat(BIGINT.getLong(page.getBlock(1), 0)).isEqualTo(7);
+                assertThat(page.getBlock(2).isNull(0)).isTrue();
+                assertThat(BIGINT.getLong(page.getBlock(3), 0)).isEqualTo(9);
+            }
+            assertThat(nextPage()).isNull();
+            assertThat(source.isFinished()).isTrue();
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"100,true", "999,false"})
+    void testArrowRangePrunesWholeBatchAndFinishes(long lowerBound, boolean retainsBatch)
+            throws Exception {
+        TablePath path = TablePath.of("Sales", "Statistics");
+        info =
+                createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(descriptor(false).getSchema())
+                                .distributedBy(1)
+                                .property(ConfigOptions.TABLE_STATISTICS_COLUMNS, "value")
+                                .build());
+        handle =
+                tableHandle(info)
+                        .withConstraint(
+                                TupleDomain.withColumnDomains(
+                                        Collections.singletonMap(
+                                                new FlussColumnHandle("value", 1),
+                                                Domain.create(
+                                                        ValueSet.ofRanges(
+                                                                Range.greaterThan(
+                                                                        BIGINT, lowerBound)),
+                                                        false))));
+        bucket = new FlussBucketHandle(info.getTableId(), Optional.empty(), 0);
+        useTable(new TrackedTable(dataConnection().getTable(path)));
+        LogTablet log = CLUSTER.waitAndGetLeaderReplica(bucket.toTableBucket()).getLogTablet();
+        log.appendAsLeader(
+                createLogRecordsWithStatistics(
+                        Arrays.asList(new Object[] {7L, 150L}, new Object[] {8L, 50L}),
+                        info.getRowType()));
+        log.updateHighWatermark(2);
+
+        source =
+                create(
+                        FlussSplit.forLog(bucket, 0, 2),
+                        Collections.singletonList(new FlussColumnHandle("id", 0)),
+                        MemoryContext.NO_LIMIT);
+        List<Long> ids = new ArrayList<>();
+        SourcePage page;
+        while ((page = nextPage()) != null) {
+            for (int position = 0; position < page.getPositionCount(); position++) {
+                ids.add(BIGINT.getLong(page.getBlock(0), position));
+            }
+        }
+
+        // The row with value 50 survives when its batch also contains a matching row.
+        assertThat(ids)
+                .containsExactlyElementsOf(
+                        retainsBatch ? Arrays.asList(7L, 8L) : Collections.emptyList());
+        assertThat(table.filter).isNotNull();
+        assertThat(table.projection).containsExactly(0);
+        assertThat(source.isFinished()).isTrue();
     }
 
     @Test
@@ -693,6 +851,47 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
         assertThat(table.closes).isEqualTo(1);
     }
 
+    private void setUpProjectionTable(boolean primaryKey, boolean partitioned) throws Exception {
+        TablePath path = TablePath.of(tablePath.getDatabaseName(), "Projection");
+        Schema.Builder schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("region", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT());
+        if (primaryKey) {
+            schema.primaryKey(
+                    partitioned ? Arrays.asList("id", "region") : Collections.singletonList("id"));
+        }
+        TableDescriptor.Builder descriptor =
+                TableDescriptor.builder().schema(schema.build()).distributedBy(1);
+        if (partitioned) {
+            descriptor.partitionedBy("region");
+        }
+        info = createTable(path, descriptor.build());
+        handle = tableHandle(info);
+        Optional<Long> partitionId = Optional.empty();
+        if (partitioned) {
+            admin.createPartition(
+                            path, new PartitionSpec(Collections.singletonMap("region", "1")), false)
+                    .get(30, TimeUnit.SECONDS);
+            partitionId =
+                    Optional.of(
+                            admin.listPartitionInfos(path)
+                                    .get(30, TimeUnit.SECONDS)
+                                    .get(0)
+                                    .getPartitionId());
+        }
+        bucket = new FlussBucketHandle(info.getTableId(), partitionId, 0);
+        CLUSTER.waitAndGetLeader(bucket.toTableBucket());
+        useTable(new TrackedTable(dataConnection().getTable(path)));
+        GenericRow row = GenericRow.of(7L, 1, 9L);
+        if (primaryKey) {
+            table.newUpsert().createWriter().upsert(row).get(30, TimeUnit.SECONDS);
+        } else {
+            table.newAppend().createWriter().append(row).get(30, TimeUnit.SECONDS);
+        }
+    }
+
     private void useScanner(BatchScanner scanner) throws Exception {
         useTable(
                 new TrackedTable(catalogTable(tablePath)) {
@@ -765,7 +964,13 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
 
     private FlussPageSource create(
             FlussSplit split, List<FlussColumnHandle> columns, MemoryContext memory) {
-        return new FlussPageSource(clients, handle, split, columns, memory);
+        return new FlussPageSource(
+                clients,
+                handle,
+                split,
+                columns,
+                FlussSessionProperties.DEFAULT_DOMAIN_COMPACTION_THRESHOLD,
+                memory);
     }
 
     private static TableDescriptor descriptor(boolean primaryKey) {
@@ -787,6 +992,8 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
     private static class TrackedTable extends TestingScanTable {
         int scans;
         int closes;
+        int[] projection;
+        Predicate filter;
 
         TrackedTable(Table delegate) {
             super(delegate);
@@ -796,6 +1003,18 @@ final class FlussPageSourceTest extends FlussTrinoTestBase {
         public Scan newScan() {
             scans++;
             return super.newScan();
+        }
+
+        @Override
+        Scan filter(Scan scan, Predicate predicate) {
+            filter = predicate;
+            return super.filter(scan, predicate);
+        }
+
+        @Override
+        Scan project(Scan scan, int[] columns) {
+            projection = columns == null ? null : columns.clone();
+            return super.project(scan, columns);
         }
 
         @Override

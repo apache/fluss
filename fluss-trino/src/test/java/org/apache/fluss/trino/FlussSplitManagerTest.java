@@ -67,6 +67,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.trino.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
@@ -543,13 +545,35 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                 new FlussColumnHandle("region", 1), Domain.singleValue(VARCHAR, utf8Slice("east")));
         domains.put(
                 new FlussColumnHandle("category", 2),
-                Domain.multipleValues(VARCHAR, Arrays.asList(utf8Slice("A"), utf8Slice("B"))));
+                Domain.multipleValues(VARCHAR, Arrays.asList(utf8Slice("A"), utf8Slice("C"))));
         List<ConnectorSplit> splits =
                 planWithHandle(handle.withConstraint(TupleDomain.withColumnDomains(domains)));
         Map<String, Long> partitions = CLUSTER.waitUntilPartitionsCreated(tablePath, 4);
         assertThat(splits)
                 .extracting(split -> ((FlussSplit) split).getBucket().getPartitionId().get())
-                .containsExactlyInAnyOrder(partitions.get("east$A"), partitions.get("east$B"));
+                .containsExactly(partitions.get("east$A"));
+    }
+
+    @Test
+    void testPartitionRangeAndInSelectPhysicalPartitions() throws Exception {
+        create(stringPartitionedTable(true));
+        createPartition("region", "east");
+        createPartition("region", "west");
+        createPartition("region", "south");
+        Map<String, Long> partitions = CLUSTER.waitUntilPartitionsCreated(tablePath, 3);
+        long west = partitions.get("west");
+        long south = partitions.get("south");
+        for (Domain domain :
+                Arrays.asList(
+                        Domain.create(
+                                ValueSet.ofRanges(Range.greaterThan(VARCHAR, utf8Slice("east"))),
+                                false),
+                        Domain.multipleValues(
+                                VARCHAR, Arrays.asList(utf8Slice("south"), utf8Slice("west"))))) {
+            assertThat(planWithHandle(withRegionConstraint(domain)))
+                    .extracting(split -> ((FlussSplit) split).getBucket().getPartitionId().get())
+                    .containsExactlyInAnyOrder(west, west, south, south);
+        }
     }
 
     @Test
@@ -559,11 +583,6 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         createPartition("region", "west");
         for (Domain domain :
                 Arrays.asList(
-                        Domain.create(
-                                ValueSet.ofRanges(Range.greaterThan(VARCHAR, utf8Slice("east"))),
-                                false),
-                        Domain.multipleValues(
-                                VARCHAR, Arrays.asList(utf8Slice("east"), utf8Slice("west"))),
                         Domain.onlyNull(VARCHAR),
                         Domain.singleValue(VARCHAR, utf8Slice("east"), true))) {
             assertThat(planWithHandle(withRegionConstraint(domain))).hasSize(4);
@@ -618,7 +637,10 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
         assertThat(
                         planWithHandle(
                                 withRegionConstraint(
-                                        Domain.singleValue(VARCHAR, utf8Slice("missing")))))
+                                        Domain.create(
+                                                ValueSet.ofRanges(
+                                                        Range.lessThan(VARCHAR, utf8Slice("east"))),
+                                                false))))
                 .isEmpty();
     }
 
@@ -697,6 +719,45 @@ final class FlussSplitManagerTest extends FlussTrinoTestBase {
                         split ->
                                 assertThat(split.getBucket().getBucketId())
                                         .isEqualTo(bucketForId(table, 7, table.getNumBuckets())));
+    }
+
+    @Test
+    void testBucketInOverCombinationLimitPlansAllBuckets() {
+        TableInfo table =
+                tableInfo(
+                        TableDescriptor.builder()
+                                .schema(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT())
+                                                .primaryKey("id")
+                                                .build())
+                                .distributedBy(4, "id")
+                                .build());
+        // Use a key list whose hashes only hit one bucket, so fallback is distinguishable.
+        BucketCalculator calculator = BucketCalculator.forBucketKeyRow(table);
+        List<Long> values =
+                LongStream.range(0, 4096)
+                        .filter(
+                                value ->
+                                        calculator.getBucketId(
+                                                        calculator.encodeKey(
+                                                                GenericRow.of((int) value)),
+                                                        4)
+                                                == 0)
+                        .limit(257)
+                        .boxed()
+                        .collect(Collectors.toList());
+        assertThat(values).hasSize(257);
+        FlussTableHandle constrained =
+                tableHandle(table)
+                        .withConstraint(
+                                TupleDomain.withColumnDomains(
+                                        Collections.singletonMap(
+                                                new FlussColumnHandle("id", 0),
+                                                Domain.multipleValues(INTEGER, values))));
+        assertThat(new FlussSplitPlanner(access).plan(constrained, table))
+                .extracting(split -> split.getBucket().getBucketId())
+                .containsExactly(0, 1, 2, 3);
     }
 
     @ParameterizedTest

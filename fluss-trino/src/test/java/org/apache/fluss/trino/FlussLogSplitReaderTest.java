@@ -96,12 +96,12 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
         Table unused =
                 new TestingScanTable(table) {
                     @Override
-                    public Scan newScan() {
+                    LogScanner createLogScanner(Scan scan) {
                         throw new AssertionError("An empty range must not acquire a scanner");
                     }
                 };
         try (FlussLogSplitReader reader =
-                new FlussLogSplitReader(unused, bucket, new FlussLogRange(1000, 1000))) {
+                new FlussLogSplitReader(unused.newScan(), bucket, new FlussLogRange(1000, 1000))) {
             assertThat(reader.isFinished()).isTrue();
             assertThat(reader.poll(TIMEOUT)).isEqualTo(FINISHED);
             assertThat(reader.hasNext()).isFalse();
@@ -216,7 +216,8 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
             FlussBucketHandle partition =
                     new FlussBucketHandle(info.getTableId(), Optional.of(partitionId), 0);
             try (FlussLogSplitReader reader =
-                    new FlussLogSplitReader(partitioned, partition, new FlussLogRange(0, 1))) {
+                    new FlussLogSplitReader(
+                            partitioned.newScan(), partition, new FlussLogRange(0, 1))) {
                 awaitRecords(reader);
                 assertThat(reader.next().getLong(0)).isEqualTo(5);
                 assertThat(reader.isFinished()).isTrue();
@@ -296,7 +297,7 @@ final class FlussLogSplitReaderTest extends FlussTrinoTestBase {
     }
 
     private FlussLogSplitReader create(long start, long stop) {
-        return new FlussLogSplitReader(table, bucket, new FlussLogRange(start, stop));
+        return new FlussLogSplitReader(table.newScan(), bucket, new FlussLogRange(start, stop));
     }
 
     private ScanRecords records(long... offsets) {

@@ -92,7 +92,7 @@ final class FlussRowDecoderTest {
         for (int i = 0; i < schema.getColumns().size(); i++) {
             columns.add(new FlussColumnHandle(schema.getColumns().get(i).getName(), i));
         }
-        FlussRowDecoder decoder = new FlussRowDecoder(schema, columns);
+        FlussRowDecoder decoder = new FlussRowDecoder(schema, columns, true);
         PageBuilder builder = new PageBuilder(decoder.getTypes());
         byte[] bytes = new byte[] {0, (byte) 255};
         decoder.append(
@@ -132,8 +132,8 @@ final class FlussRowDecoderTest {
         FlussRowDecoder decoder =
                 new FlussRowDecoder(
                         schema,
-                        Arrays.asList(
-                                new FlussColumnHandle("f", 0), new FlussColumnHandle("d", 1)));
+                        Arrays.asList(new FlussColumnHandle("f", 0), new FlussColumnHandle("d", 1)),
+                        true);
         PageBuilder builder = new PageBuilder(decoder.getTypes());
         decoder.append(GenericRow.of(Float.NaN, Double.NaN), builder);
         decoder.append(GenericRow.of(Float.POSITIVE_INFINITY, -0.0d), builder);
@@ -158,11 +158,13 @@ final class FlussRowDecoderTest {
                 new FlussRowDecoder(
                         schema,
                         Arrays.asList(
-                                new FlussColumnHandle("Name", 1), new FlussColumnHandle("ID", 0)));
+                                new FlussColumnHandle("Name", 1), new FlussColumnHandle("ID", 0)),
+                        true);
 
         PageBuilder builder = new PageBuilder(decoder.getTypes());
 
-        decoder.append(GenericRow.of(42L, BinaryString.fromString("世界")), builder);
+        assertThat(decoder.getProjectedColumns()).containsExactly(1, 0);
+        decoder.append(GenericRow.of(BinaryString.fromString("世界"), 42L), builder);
         decoder.append(GenericRow.of(null, null), builder);
 
         Page page = builder.build();
@@ -172,6 +174,25 @@ final class FlussRowDecoderTest {
         assertThat(BIGINT.getLong(page.getBlock(1), 0)).isEqualTo(42);
         assertThat(page.getBlock(0).isNull(1)).isTrue();
         assertThat(page.getBlock(1).isNull(1)).isTrue();
+    }
+
+    @Test
+    void testFullRowFallbackKeepsOriginalOrdinals() {
+        FlussRowDecoder decoder =
+                new FlussRowDecoder(
+                        Schema.newBuilder()
+                                .column("id", DataTypes.BIGINT())
+                                .column("name", DataTypes.STRING())
+                                .build(),
+                        Arrays.asList(
+                                new FlussColumnHandle("name", 1), new FlussColumnHandle("id", 0)),
+                        false);
+        assertThat(decoder.getProjectedColumns()).isNull();
+        PageBuilder builder = new PageBuilder(decoder.getTypes());
+        decoder.append(GenericRow.of(42L, BinaryString.fromString("value")), builder);
+        Page page = builder.build();
+        assertThat(VARCHAR.getSlice(page.getBlock(0), 0).toStringUtf8()).isEqualTo("value");
+        assertThat(BIGINT.getLong(page.getBlock(1), 0)).isEqualTo(42);
     }
 
     @Test
@@ -279,7 +300,7 @@ final class FlussRowDecoderTest {
             schema.column("v" + i, dataTypes[i]);
             columns.add(new FlussColumnHandle("v" + i, i));
         }
-        FlussRowDecoder decoder = new FlussRowDecoder(schema.build(), columns);
+        FlussRowDecoder decoder = new FlussRowDecoder(schema.build(), columns, true);
         for (KvFormat format : Arrays.asList(KvFormat.INDEXED, KvFormat.COMPACTED)) {
             try (RowEncoder encoder = RowEncoder.create(format, dataTypes)) {
                 encoder.startNewRow();
@@ -367,7 +388,8 @@ final class FlussRowDecoderTest {
         FlussRowDecoder decoder =
                 new FlussRowDecoder(
                         Schema.newBuilder().column("v", dataType).build(),
-                        Collections.singletonList(new FlussColumnHandle("v", 0)));
+                        Collections.singletonList(new FlussColumnHandle("v", 0)),
+                        true);
         PageBuilder builder = new PageBuilder(decoder.getTypes());
         decoder.append(GenericRow.of(value), builder);
         Block block = builder.build().getBlock(0);
@@ -382,7 +404,8 @@ final class FlussRowDecoderTest {
                                 new FlussRowDecoder(
                                         schema,
                                         Collections.singletonList(
-                                                new FlussColumnHandle("other", 0))))
+                                                new FlussColumnHandle("other", 0)),
+                                        true))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

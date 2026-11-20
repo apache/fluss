@@ -47,16 +47,19 @@ class TestingScanTable implements Table {
 
     @Override
     public Scan newScan() {
-        Scan scan = delegate.newScan();
+        return wrap(delegate.newScan());
+    }
+
+    private Scan wrap(Scan scan) {
         return new Scan() {
             @Override
             public Scan project(int[] columns) {
-                return scan.project(columns);
+                return wrap(TestingScanTable.this.project(scan, columns));
             }
 
             @Override
             public Scan project(List<String> columns) {
-                return scan.project(columns);
+                return wrap(scan.project(columns));
             }
 
             @Override
@@ -66,7 +69,7 @@ class TestingScanTable implements Table {
 
             @Override
             public Scan filter(Predicate predicate) {
-                return scan.filter(predicate);
+                return wrap(TestingScanTable.this.filter(scan, predicate));
             }
 
             @Override
@@ -94,6 +97,14 @@ class TestingScanTable implements Table {
                 return scan.createBatchScanner();
             }
         };
+    }
+
+    Scan filter(Scan scan, Predicate predicate) {
+        return scan.filter(predicate);
+    }
+
+    Scan project(Scan scan, int[] columns) {
+        return scan.project(columns);
     }
 
     BatchScanner createBatchScanner(Scan scan, TableBucket bucket) {
