@@ -989,6 +989,7 @@ message AllocateBulkLoadBucketSnapshotRequest {
 
 message AllocateBulkLoadBucketSnapshotResponse {
   required int64 snapshot_id = 1;
+  // 0 = ALLOCATED, 1 = COMMITTED.
   required int32 state = 2;
   required int64 log_offset = 3;
 }

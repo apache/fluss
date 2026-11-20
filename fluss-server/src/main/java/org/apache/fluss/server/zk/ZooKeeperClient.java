@@ -1406,11 +1406,14 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     // --------------------------------------------------------------------------------------------
-    // Table Bucket snapshot
+    // BulkLoad
     // --------------------------------------------------------------------------------------------
     /** Reads the BulkLoad transaction and its ZooKeeper version together. */
     public Optional<VersionedData<BulkLoadTransaction>> getBulkLoadTransaction(
             long tableId, String bulkLoadId) throws Exception {
+        if (!BULK_LOAD_ID.matcher(bulkLoadId).matches()) {
+            throw new InvalidBulkLoadRequestException("Invalid bulk_load_id.");
+        }
         return getVersionedData(
                 bulkLoadTransactionPath(tableId, bulkLoadId),
                 bytes -> BulkLoadTransaction.fromJson(tableId, bulkLoadId, bytes));
@@ -1428,12 +1431,6 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<VersionedData<BulkLoadBucket>> getBulkLoadBucket(
             BulkLoadTransaction transaction, TableBucket bucket) throws Exception {
         return getVersionedData(bulkLoadBucketPath(transaction, bucket), BulkLoadBucket::fromJson);
-    }
-
-    /** Reserves an ID from the sequence shared by ordinary and imported bucket snapshots. */
-    public long allocateBucketSnapshotId(TableBucket bucket) throws Exception {
-        return new ZkSequenceIDCounter(zkClient, ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
-                .getAndIncrement();
     }
 
     /**
@@ -1488,12 +1485,10 @@ public class ZooKeeperClient implements AutoCloseable {
                         allocation.data().logOffset,
                         BulkLoadBucket.COMMITTED);
         ops.add(
-                zkClient.transactionOp()
-                        .setData()
-                        .withVersion(allocation.zkVersion())
-                        .forPath(
-                                bulkLoadBucketPath(transaction.data(), bucket),
-                                committed.toJson()));
+                zkOp.updateOp(
+                        bulkLoadBucketPath(transaction.data(), bucket),
+                        committed.toJson(),
+                        allocation.zkVersion()));
         ops.add(
                 zkOp.createOp(
                         BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId()),
@@ -1550,7 +1545,7 @@ public class ZooKeeperClient implements AutoCloseable {
         }
         ops.add(
                 zkOp.checkOp(
-                        bulkLoadTransactionPath(txn.tableId, txn.bulkLoadId),
+                        bulkLoadTransactionPath(txn.tableInfo.getTableId(), txn.bulkLoadId),
                         transaction.zkVersion()));
         ops.add(
                 zkOp.checkOp(
@@ -1559,16 +1554,13 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     private static String bulkLoadTransactionPath(long tableId, String bulkLoadId) {
-        if (!BULK_LOAD_ID.matcher(bulkLoadId).matches()) {
-            throw new InvalidBulkLoadRequestException("Invalid bulk_load_id.");
-        }
         return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
     }
 
     private static String bulkLoadTargetPath(
             BulkLoadTransaction transaction, @Nullable Long partitionId) {
         String target = partitionId == null ? "/table" : "/partitions/" + partitionId;
-        return bulkLoadTransactionPath(transaction.tableId, transaction.bulkLoadId)
+        return bulkLoadTransactionPath(transaction.tableInfo.getTableId(), transaction.bulkLoadId)
                 + "/targets"
                 + target;
     }
@@ -1591,6 +1583,21 @@ public class ZooKeeperClient implements AutoCloseable {
         public synchronized KeeperException getCause() {
             return (KeeperException) super.getCause();
         }
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Table Bucket snapshot
+    // --------------------------------------------------------------------------------------------
+
+    /** Reserves an ID from the sequence shared by ordinary and imported bucket snapshots. */
+    public long allocateBucketSnapshotId(TableBucket bucket) throws Exception {
+        return new ZkSequenceIDCounter(zkClient, ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                .getAndIncrement();
+    }
+
+    /** Returns the number of persisted snapshot references for the given bucket. */
+    public int getBucketSnapshotCount(TableBucket bucket) throws Exception {
+        return getStat(BucketSnapshotsZNode.path(bucket)).map(Stat::getNumChildren).orElse(0);
     }
 
     public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot)
@@ -1639,10 +1646,7 @@ public class ZooKeeperClient implements AutoCloseable {
         String path = ZkData.RecoverySnapshotZNode.path(bucket);
         byte[] selection = ZkData.RecoverySnapshotZNode.encode(snapshotId);
         return current.isPresent()
-                ? zkClient.transactionOp()
-                        .setData()
-                        .withVersion(current.get().zkVersion())
-                        .forPath(path, selection)
+                ? zkOp.updateOp(path, selection, current.get().zkVersion())
                 : zkOp.createOp(path, selection, CreateMode.PERSISTENT);
     }
 

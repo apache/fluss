@@ -18,9 +18,12 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** One fixed physical target in a BulkLoad transaction. */
 @Internal
@@ -48,14 +51,31 @@ public final class BulkLoadTarget {
     public static BulkLoadTarget fromJson(@Nullable Long partitionId, byte[] bytes) {
         return JsonSerdeUtils.readValue(
                 bytes,
-                node ->
-                        new BulkLoadTarget(
-                                partitionId,
-                                node.has("partition_name")
-                                        ? node.get("partition_name").asText()
-                                        : null,
-                                node.get("bucket_count").asInt(),
-                                node.get("remote_data_dir").asText(),
-                                node.get("withdrawn").asBoolean()));
+                node -> {
+                    JsonNode version = node.path("version");
+                    checkArgument(
+                            version.isInt() && version.intValue() == 1,
+                            "Unsupported BulkLoad target record version: %s",
+                            version);
+                    JsonNode partitionName = node.path("partition_name");
+                    checkArgument(
+                            partitionId == null
+                                    ? partitionName.isMissingNode()
+                                    : partitionName.isTextual(),
+                            "BulkLoad target partition ID and name must be specified together.");
+                    JsonNode bucketCount = node.path("bucket_count");
+                    JsonNode remoteDataDir = node.path("remote_data_dir");
+                    JsonNode withdrawn = node.path("withdrawn");
+                    checkArgument(bucketCount.isInt(), "Invalid BulkLoad target bucket count.");
+                    checkArgument(remoteDataDir.isTextual(), "Invalid BulkLoad target directory.");
+                    checkArgument(
+                            withdrawn.isBoolean(), "Invalid BulkLoad target withdrawal state.");
+                    return new BulkLoadTarget(
+                            partitionId,
+                            partitionName.textValue(),
+                            bucketCount.intValue(),
+                            remoteDataDir.textValue(),
+                            withdrawn.booleanValue());
+                });
     }
 }

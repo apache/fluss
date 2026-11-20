@@ -24,18 +24,21 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /** Durable transaction facts; target and bucket records are stored separately. */
 @Internal
 public final class BulkLoadTransaction {
     public static final int RUNNING = 0;
 
-    public final long tableId;
+    private static final int COMMITTED = 1;
+    private static final int ABORTED = 2;
+
     public final String bulkLoadId;
     public final TableInfo tableInfo;
     public final int state;
 
-    private BulkLoadTransaction(long tableId, String bulkLoadId, TableInfo tableInfo, int state) {
-        this.tableId = tableId;
+    private BulkLoadTransaction(String bulkLoadId, TableInfo tableInfo, int state) {
         this.bulkLoadId = bulkLoadId;
         this.tableInfo = tableInfo;
         this.state = state;
@@ -46,6 +49,19 @@ public final class BulkLoadTransaction {
         return JsonSerdeUtils.readValue(
                 bytes,
                 node -> {
+                    JsonNode version = node.path("version");
+                    checkArgument(
+                            version.isInt() && version.intValue() == 1,
+                            "Unsupported BulkLoad transaction record version: %s",
+                            version);
+                    JsonNode state = node.path("state");
+                    checkArgument(
+                            state.isInt()
+                                    && (state.intValue() == RUNNING
+                                            || state.intValue() == COMMITTED
+                                            || state.intValue() == ABORTED),
+                            "Invalid BulkLoad transaction state: %s",
+                            state);
                     JsonNode info = node.get("table_info");
                     JsonNode path = node.get("table_path");
                     TableInfo table =
@@ -63,8 +79,7 @@ public final class BulkLoadTransaction {
                                     info.get("created_time").asLong(),
                                     info.get("modified_time").asLong(),
                                     info.path("bucket_count_epoch").asLong());
-                    return new BulkLoadTransaction(
-                            tableId, bulkLoadId, table, node.get("state").asInt());
+                    return new BulkLoadTransaction(bulkLoadId, table, state.intValue());
                 });
     }
 }

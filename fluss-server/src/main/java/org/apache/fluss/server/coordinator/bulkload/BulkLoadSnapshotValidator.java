@@ -140,8 +140,9 @@ final class BulkLoadSnapshotValidator {
                         !segment.isEmpty() && !segment.equals(".") && !segment.equals(".."),
                         "Unsafe snapshot local path.");
             }
-            require(local.add(name) && remote.add(file.getPath()), "Duplicate snapshot file.");
             FsPath filePath = new FsPath(file.getPath());
+            require(file.getPath().equals(filePath.toString()), "Noncanonical snapshot file path.");
+            require(local.add(name) && remote.add(file.getPath()), "Duplicate snapshot file.");
             requireWithin(filePath, ownerDirectory);
             FileStatus fileStatus = filePath.getFileSystem().getFileStatus(filePath);
             require(

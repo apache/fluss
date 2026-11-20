@@ -1289,6 +1289,7 @@ pub struct AllocateBulkLoadBucketSnapshotRequest {
 pub struct AllocateBulkLoadBucketSnapshotResponse {
     #[prost(int64, required, tag = "1")]
     pub snapshot_id: i64,
+    /// 0 = ALLOCATED, 1 = COMMITTED.
     #[prost(int32, required, tag = "2")]
     pub state: i32,
     #[prost(int64, required, tag = "3")]

@@ -18,13 +18,18 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Immutable allocation and commit result of one transaction bucket. */
 @Internal
 public final class BulkLoadBucket {
     public static final int ALLOCATED = 0;
     public static final int COMMITTED = 1;
+
+    private static final int VERSION = 1;
 
     public final long snapshotId;
     public final long logOffset;
@@ -43,7 +48,7 @@ public final class BulkLoadBucket {
                 this,
                 (value, out) -> {
                     out.writeStartObject();
-                    out.writeNumberField("version", 1);
+                    out.writeNumberField("version", VERSION);
                     out.writeNumberField("snapshot_id", snapshotId);
                     out.writeNumberField("log_offset", logOffset);
                     out.writeNumberField("state", state);
@@ -55,10 +60,29 @@ public final class BulkLoadBucket {
     public static BulkLoadBucket fromJson(byte[] bytes) {
         return JsonSerdeUtils.readValue(
                 bytes,
-                node ->
-                        new BulkLoadBucket(
-                                node.get("snapshot_id").asLong(),
-                                node.get("log_offset").asLong(),
-                                node.get("state").asInt()));
+                node -> {
+                    JsonNode version = node.path("version");
+                    checkArgument(
+                            version.isInt() && version.intValue() == VERSION,
+                            "Unsupported BulkLoad bucket record version: %s",
+                            version);
+                    JsonNode state = node.path("state");
+                    checkArgument(
+                            state.isInt()
+                                    && (state.intValue() == ALLOCATED
+                                            || state.intValue() == COMMITTED),
+                            "Invalid BulkLoad bucket state: %s",
+                            state);
+                    JsonNode snapshotId = node.path("snapshot_id");
+                    JsonNode logOffset = node.path("log_offset");
+                    checkArgument(
+                            snapshotId.isIntegralNumber() && snapshotId.canConvertToLong(),
+                            "Invalid BulkLoad bucket snapshot ID.");
+                    checkArgument(
+                            logOffset.isIntegralNumber() && logOffset.canConvertToLong(),
+                            "Invalid BulkLoad bucket log offset.");
+                    return new BulkLoadBucket(
+                            snapshotId.longValue(), logOffset.longValue(), state.intValue());
+                });
     }
 }

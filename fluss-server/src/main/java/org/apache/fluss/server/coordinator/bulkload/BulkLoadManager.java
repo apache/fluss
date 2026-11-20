@@ -82,7 +82,8 @@ public final class BulkLoadManager {
             FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher)
             throws Exception {
         BulkLoadTransaction original = transaction.data();
-        TableBucket bucket = new TableBucket(original.tableId, partitionId, bucketId);
+        TableBucket bucket =
+                new TableBucket(original.tableInfo.getTableId(), partitionId, bucketId);
         VersionedData<BulkLoadTarget> target = resolveTarget(original, bucket);
         BulkLoadBucket existing =
                 client.getBulkLoadBucket(original, bucket).map(VersionedData::data).orElse(null);
@@ -109,7 +110,7 @@ public final class BulkLoadManager {
             return allocation;
         } catch (KeeperException.NodeExistsException e) {
             BulkLoadTransaction current =
-                    resolveTransaction(original.tableId, original.bulkLoadId).data();
+                    resolveTransaction(original.tableInfo.getTableId(), original.bulkLoadId).data();
             BulkLoadTarget currentTarget = resolveTarget(current, bucket).data();
             BulkLoadBucket winner =
                     client.getBulkLoadBucket(current, bucket)
@@ -117,7 +118,9 @@ public final class BulkLoadManager {
                             .orElseThrow(() -> e);
             return reuseBucketAllocation(current, currentTarget, winner);
         } catch (KeeperException.BadVersionException e) {
-            requireRunning(resolveTransaction(original.tableId, original.bulkLoadId).data());
+            requireRunning(
+                    resolveTransaction(original.tableInfo.getTableId(), original.bulkLoadId)
+                            .data());
             throw e;
         }
     }
@@ -261,7 +264,9 @@ public final class BulkLoadManager {
             throw e.getCause();
         } catch (KeeperException.NodeExistsException | KeeperException.BadVersionException e) {
             BulkLoadTransaction current =
-                    resolveTransaction(bulkLoadTransaction.tableId, bulkLoadTransaction.bulkLoadId)
+                    resolveTransaction(
+                                    bulkLoadTransaction.tableInfo.getTableId(),
+                                    bulkLoadTransaction.bulkLoadId)
                             .data();
             Optional<VersionedData<BulkLoadBucket>> result =
                     client.getBulkLoadBucket(current, bucket);
@@ -285,7 +290,7 @@ public final class BulkLoadManager {
                     String.format(
                             "Cannot commit BulkLoad for %s: the leader WAL end offset changed "
                                     + "from %d at allocation to %d. Resolve concurrent writes "
-                                    + "and retry with a fresh allocation.",
+                                    + "and allocate the bucket in a new BulkLoad transaction.",
                             bucket, allocatedOffset, currentLogEndOffset));
         }
     }

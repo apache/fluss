@@ -41,11 +41,20 @@ public class NotifyLeaderAndIsrResultForBucket extends ResultForBucket {
         this.recoveredSnapshotId = null;
     }
 
-    public NotifyLeaderAndIsrResultForBucket(TableBucket bucket, long recoveredSnapshotId) {
+    /** Reports successful recovery of the specified snapshot. */
+    public static NotifyLeaderAndIsrResultForBucket forRecoveredSnapshot(
+            TableBucket bucket, long snapshotId) {
+        return new NotifyLeaderAndIsrResultForBucket(bucket, snapshotId);
+    }
+
+    private NotifyLeaderAndIsrResultForBucket(TableBucket bucket, long recoveredSnapshotId) {
         super(bucket);
         this.recoveredSnapshotId = recoveredSnapshotId;
     }
 
+    /**
+     * Returns the confirmed recovery snapshot ID, or null if no snapshot recovery was confirmed.
+     */
     public @Nullable Long getRecoveredSnapshotId() {
         return recoveredSnapshotId;
     }

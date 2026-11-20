@@ -705,7 +705,7 @@ public class ReplicaManager implements ServerReconfigurable {
                             }
                             return restored == null
                                     ? new NotifyLeaderAndIsrResultForBucket(data.getTableBucket())
-                                    : new NotifyLeaderAndIsrResultForBucket(
+                                    : NotifyLeaderAndIsrResultForBucket.forRecoveredSnapshot(
                                             data.getTableBucket(), restored);
                         });
     }

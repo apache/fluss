@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.zk;
 
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
@@ -41,7 +42,15 @@ public class ZooKeeperOp {
     }
 
     public CuratorOp updateOp(String path, byte[] data) throws Exception {
-        return zkClient.transactionOp().setData().forPath(path, data);
+        return updateOp(path, data, ZkVersion.MATCH_ANY_VERSION.getVersion());
+    }
+
+    /** Creates an update that requires the given znode version. */
+    public CuratorOp updateOp(String path, byte[] data, int expectedZkVersion) throws Exception {
+        return zkClient.transactionOp()
+                .setData()
+                .withVersion(expectedZkVersion)
+                .forPath(path, data);
     }
 
     public CuratorOp deleteOp(String path) throws Exception {

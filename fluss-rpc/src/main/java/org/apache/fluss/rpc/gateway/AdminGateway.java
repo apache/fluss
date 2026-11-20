@@ -250,6 +250,16 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
             DropKvSnapshotLeaseRequest request);
 
+    /** Allocates a bucket snapshot or returns its original allocation and current state. */
+    @RPC(api = ApiKeys.ALLOCATE_BULK_LOAD_BUCKET_SNAPSHOT)
+    CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
+            AllocateBulkLoadBucketSnapshotRequest request);
+
+    /** Publishes the bucket snapshot durably. TabletServer recovery proceeds asynchronously. */
+    @RPC(api = ApiKeys.COMMIT_BULK_LOAD_BUCKET_SNAPSHOT)
+    CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
+            CommitBulkLoadBucketSnapshotRequest request);
+
     // todo: rename table & alter table
 
     // ==================================================================================
@@ -277,14 +287,4 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
     CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
-
-    /** AllocateBulkLoadBucketSnapshot. */
-    @RPC(api = ApiKeys.ALLOCATE_BULK_LOAD_BUCKET_SNAPSHOT)
-    CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
-            AllocateBulkLoadBucketSnapshotRequest request);
-
-    /** CommitBulkLoadBucketSnapshot. */
-    @RPC(api = ApiKeys.COMMIT_BULK_LOAD_BUCKET_SNAPSHOT)
-    CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
-            CommitBulkLoadBucketSnapshotRequest request);
 }

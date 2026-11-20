@@ -32,7 +32,7 @@ public final class NotifyLeaderAndIsrData {
     private final TableBucket tableBucket;
     private final List<Integer> replicas;
     private final LeaderAndIsr leaderAndIsr;
-    // null when a legacy coordinator omits the fields
+    // Omitted by legacy coordinators and by recovery notifications for an installed layout.
     private final @Nullable Integer bucketCount;
     private final @Nullable Long bucketCountEpoch;
     private final @Nullable Long recoverySnapshotId;
@@ -158,6 +158,7 @@ public final class NotifyLeaderAndIsrData {
         return bucketCountEpoch;
     }
 
+    /** Returns the requested recovery snapshot ID, or null for an ordinary role notification. */
     public @Nullable Long getRecoverySnapshotId() {
         return recoverySnapshotId;
     }
