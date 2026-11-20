@@ -47,6 +47,52 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** SQL registration, grouped/intermediate state and legacy-byte compatibility tests. */
 class SketchFunctionsTest {
+    @Test
+    void testEmptyHllStringsInSql() {
+        MaterializedRow empty =
+                runner.execute(
+                                "SELECT fluss_hll_build_agg(v), fluss_hll_estimate(fluss_hll_build_agg(v)) "
+                                        + "FROM (VALUES VARCHAR '', CAST(NULL AS VARCHAR)) t(v)")
+                        .getMaterializedRows()
+                        .get(0);
+        assertThat(empty.getField(0)).isNull();
+        assertThat(empty.getField(1)).isNull();
+        MaterializedRow mixed =
+                runner.execute(
+                                "SELECT fluss_hll_estimate(fluss_hll_build_agg(v)) "
+                                        + "FROM (VALUES VARCHAR '', VARCHAR ' ', VARCHAR 'user', VARCHAR 'user') t(v)")
+                        .getMaterializedRows()
+                        .get(0);
+        assertThat((Double) mixed.getField(0)).isBetween(1.99, 2.01);
+    }
+
+    @Test
+    void testKllMergeDoesNotRetainOrChangeInput() {
+        for (int k : new int[] {8, 200, 1024}) {
+            for (int count : new int[] {0, 1, 2, 200, 201, 20_000}) {
+                KllDoublesSketch input = KllDoublesSketch.newHeapInstance(k);
+                for (int value = 0; value < count; value++) {
+                    input.update((double) value);
+                }
+                byte[] bytes = input.toByteArray();
+                byte[] original = bytes.clone();
+                SketchState state = new SketchStateFactory().createSingleState();
+                KllDoubleMergeAggregation.input(state, Slices.wrappedBuffer(bytes));
+                assertThat(bytes).containsExactly(original);
+                KllDoublesSketch acc = (KllDoublesSketch) state.getSketch();
+                assertThat(acc.getN()).isEqualTo(count);
+                Arrays.fill(bytes, (byte) 0);
+                if (count > 0) {
+                    assertThat(acc.getMinItem()).isEqualTo(0.0);
+                    assertThat(acc.getMaxItem()).isEqualTo((double) (count - 1));
+                }
+                acc.update(-1.0);
+                assertThat(acc.getN()).isEqualTo(count + 1L);
+                assertThat(acc.getMinItem()).isEqualTo(-1.0);
+            }
+        }
+    }
+
     /** Opt-in SQL benchmark; iteration 0 and 1 warm up the engine. */
     @Test
     void benchmarkSql() {
@@ -161,6 +207,13 @@ class SketchFunctionsTest {
                 .isBetween(18000.0, 22000.0);
         assertThat(SketchReaders.kllQuantile(Slices.wrappedBuffer(kll), 0.5))
                 .isBetween(9000.0, 11000.0);
+        SketchState restored = new SketchStateFactory().createSingleState();
+        KllDoubleMergeAggregation.input(restored, Slices.wrappedBuffer(kll));
+        KllDoublesSketch merged = (KllDoublesSketch) restored.getSketch();
+        assertThat(merged.getN()).isEqualTo(20_000);
+        assertThat(merged.getQuantile(0.5)).isBetween(9000.0, 11000.0);
+        merged.update(-1.0);
+        assertThat(merged.getN()).isEqualTo(20_001);
     }
 
     private static DistributedQueryRunner runner;

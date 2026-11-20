@@ -52,8 +52,10 @@ FROM fluss.fluss.daily_user_metrics;
 
 HLL uses `lgK=12`, and KLL uses `k=200`; merging lower-precision input cannot recover its lost
 accuracy. Use consistent HLL input types across engines: integer IDs and their textual forms
-are distinct inputs. Aggregates ignore nulls, and empty aggregates return null. Readers return
-null for null or empty sketches. Invalid sketch bytes or quantile ranks fail with
+are distinct inputs. Aggregates ignore nulls, and empty aggregates return null. HLL also ignores
+empty strings (`''`): an all-empty-string group returns null, unlike `COUNT(DISTINCT ...)`, which
+counts `''`. Nonempty whitespace strings are counted. Readers return null for null or empty
+sketches. Invalid sketch bytes or quantile ranks fail with
 `INVALID_FUNCTION_ARGUMENT`. KLL ignores NaN inputs, following DataSketches semantics.
 
 The plugin uses DataSketches 9.0.0 for Java 25. The connector plugin classloader isolates its
@@ -65,6 +67,11 @@ results contain only the portable sketch bytes.
 Trino remains read-only for Fluss tables. Sketch-building queries can return bytes for external
 writers, but they do not add connector INSERT support. KLL storage-side merging requires a Fluss
 server with `kll_double_sketch`. Replaying a KLL batch adds its observations again.
+
+When an external writer sends KLL results to Fluss, send independent, non-overlapping batches,
+not successive cumulative sketches. Merging `[10, 20]` and then `[10, 20, 30]` counts five
+observations, not three. Independent batches still require replay protection; batching alone
+does not provide exactly-once writes or deduplication.
 
 ## Supported operations
 

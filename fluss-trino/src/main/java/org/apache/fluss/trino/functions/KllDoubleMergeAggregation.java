@@ -45,7 +45,7 @@ public final class KllDoubleMergeAggregation {
                 () ->
                         SketchSupport.kll(state)
                                 .merge(
-                                        KllDoublesSketch.heapify(
+                                        KllDoublesSketch.wrap(
                                                 MemorySegment.ofArray(value.getBytes()))));
     }
 
