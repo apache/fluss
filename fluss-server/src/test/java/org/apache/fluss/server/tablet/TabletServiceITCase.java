@@ -1202,7 +1202,8 @@ public class TabletServiceITCase {
                                 leaderAndIsr.isr(),
                                 leaderAndIsr,
                                 3,
-                                0L));
+                                0L,
+                                null));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
     }

@@ -63,6 +63,9 @@ import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadMaintenance;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadRecoveryManager;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -122,6 +125,7 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -197,6 +201,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
+
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
@@ -205,6 +210,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
     private final Scheduler scheduler;
+    private final BulkLoadMaintenance bulkLoadMaintenance;
+    private final BulkLoadRecoveryManager bulkLoadRecoveryManager;
     private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
@@ -304,6 +311,38 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper = new LakeTableHelper(zooKeeperClient);
+        java.time.Duration retention =
+                conf.get(ConfigOptions.COORDINATOR_BULKLOAD_RESULT_RETENTION);
+        if (retention.isZero() || retention.isNegative()) {
+            throw new IllegalArgumentException("BulkLoad result retention must be positive.");
+        }
+        long retentionMillis =
+                Math.addExact(retention.toMillis(), retention.getNano() % 1_000_000 == 0 ? 0 : 1);
+        this.bulkLoadRecoveryManager =
+                new BulkLoadRecoveryManager(
+                        zooKeeperClient,
+                        coordinatorEventManager,
+                        coordinatorChannelManager,
+                        completedSnapshotStoreManager,
+                        ioExecutor);
+        this.bulkLoadMaintenance =
+                new BulkLoadMaintenance(
+                        new BulkLoadMetadataStore(zooKeeperClient),
+                        scheduler,
+                        ioExecutor,
+                        () -> {
+                            AccessContextEvent<ZkEpoch> event =
+                                    new AccessContextEvent<>(
+                                            ctx ->
+                                                    new ZkEpoch(
+                                                            ctx.getCoordinatorEpoch(),
+                                                            ctx.getCoordinatorZkVersion()));
+                            coordinatorEventManager.put(event);
+                            return event.getResultFuture();
+                        },
+                        clock,
+                        retentionMillis,
+                        bulkLoadRecoveryManager);
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -316,6 +355,15 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     public CoordinatorContext getCoordinatorContext() {
         return coordinatorContext;
+    }
+
+    CoordinatorChannelManager getCoordinatorChannelManager() {
+        return coordinatorChannelManager;
+    }
+
+    void requestBulkLoadRecovery(TableBucket bucket) {
+        bulkLoadRecoveryManager.request(bucket);
+        bulkLoadMaintenance.trigger();
     }
 
     @VisibleForTesting
@@ -355,12 +403,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
+        bulkLoadMaintenance.start();
 
         // start rebalance manager.
         rebalanceManager.startup();
     }
 
     public void shutdown() {
+        bulkLoadMaintenance.close();
         clearOfflineLeaderRetryTask();
         // Cancel periodic event producers before stopping the event loop.
         rebalanceManager.stopTimeoutChecker();
@@ -1169,6 +1219,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
+        bulkLoadMaintenance.triggerCleanup();
         long tableId = dropTableEvent.getTableId();
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
 
@@ -1217,6 +1268,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {
+        bulkLoadMaintenance.triggerCleanup();
         long tableId = dropPartitionEvent.getTableId();
         TablePartition tablePartition =
                 new TablePartition(tableId, dropPartitionEvent.getPartitionId());

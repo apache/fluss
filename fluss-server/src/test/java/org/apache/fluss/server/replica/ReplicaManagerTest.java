@@ -603,6 +603,14 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.getDiskUsageMonitor().update(0.99);
         assertThat(replicaManager.isDiskWriteLocked()).isTrue();
 
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        INITIAL_LEADER_EPOCH,
+                        Collections.singletonList(TABLET_SERVER_ID),
+                        Collections.emptyList(),
+                        INITIAL_COORDINATOR_EPOCH,
+                        INITIAL_BUCKET_EPOCH);
         CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.becomeLeaderOrFollower(
@@ -612,15 +620,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                                 kvTb,
                                 Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH),
+                                leaderAndIsr,
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
 
         List<NotifyLeaderAndIsrResultForBucket> results = future.get();
@@ -640,15 +643,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 logTb,
                                 Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        Collections.emptyList(),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH),
+                                leaderAndIsr,
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
 
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(logTb));
@@ -1799,7 +1797,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1822,7 +1821,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
         assertThat(future.get())
                 .containsOnly(
@@ -1873,7 +1873,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
 
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tableBucket));
@@ -1902,7 +1903,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1936,7 +1938,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(

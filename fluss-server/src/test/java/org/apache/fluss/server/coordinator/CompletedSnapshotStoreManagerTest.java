@@ -182,11 +182,10 @@ class CompletedSnapshotStoreManagerTest {
             }
         }
         // before remove CompletedSnapshotStore
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
-                .isEqualTo(2);
+        assertThat(tableBuckets).allMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
         // after remove CompletedSnapshotStore
         completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(tableBuckets);
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(tableBuckets).noneMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
     }
 
     @Test

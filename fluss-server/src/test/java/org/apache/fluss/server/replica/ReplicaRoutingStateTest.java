@@ -143,6 +143,7 @@ final class ReplicaRoutingStateTest extends ReplicaTestBase {
                         INITIAL_COORDINATOR_EPOCH,
                         INITIAL_BUCKET_EPOCH),
                 bucketCount,
-                bucketCountEpoch);
+                bucketCountEpoch,
+                null);
     }
 }

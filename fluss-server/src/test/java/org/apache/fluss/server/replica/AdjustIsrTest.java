@@ -142,7 +142,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
                         Arrays.asList(1, 2),
                         new LeaderAndIsr(1, 0, Arrays.asList(1, 2), Collections.emptyList(), 0, 0),
                         3,
-                        0L);
+                        0L,
+                        null);
 
         ReentrantReadWriteLock leaderIsrUpdateLock = replica.getLeaderIsrUpdateLock();
 
@@ -353,6 +354,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
                                         replica.getCoordinatorEpoch(),
                                         bucketEpoch),
                                 3,
-                                0L)));
+                                0L,
+                                null)));
     }
 }

@@ -91,7 +91,8 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         new LeaderAndIsr(
                                 0, 0, Collections.singletonList(0), Collections.emptyList(), 0, 0),
                         3,
-                        0L));
+                        0L,
+                        null));
         addMultiSegmentsToLogTablet(replica.getLogTablet(), segmentSize);
         return replica;
     }

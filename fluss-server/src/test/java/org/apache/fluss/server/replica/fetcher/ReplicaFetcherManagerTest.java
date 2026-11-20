@@ -97,7 +97,8 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         LeaderAndIsr.INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =
@@ -165,7 +166,8 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         INITIAL_COORDINATOR_EPOCH,
                                         LeaderAndIsr.INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 result::set);
 
         assertThat(result.get()).hasSize(1);

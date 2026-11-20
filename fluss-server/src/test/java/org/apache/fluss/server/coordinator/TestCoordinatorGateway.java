@@ -22,6 +22,8 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AbortBulkLoadRequest;
+import org.apache.fluss.rpc.messages.AbortBulkLoadResponse;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AddServerTagByRackRequest;
@@ -30,6 +32,8 @@ import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
@@ -38,8 +42,14 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.BeginBulkLoadRequest;
+import org.apache.fluss.rpc.messages.BeginBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -78,6 +88,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoRequest;
+import org.apache.fluss.rpc.messages.GetBulkLoadInfoResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -102,6 +114,8 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsRequest;
+import org.apache.fluss.rpc.messages.ListInProgressBulkLoadsResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -540,6 +554,45 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     @Override
     public CompletableFuture<DeleteProducerOffsetsResponse> deleteProducerOffsets(
             DeleteProducerOffsetsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<BeginBulkLoadResponse> beginBulkLoad(BeginBulkLoadRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
+            AllocateBulkLoadBucketSnapshotRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
+            CommitBulkLoadBucketSnapshotRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadResponse> commitBulkLoad(CommitBulkLoadRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AbortBulkLoadResponse> abortBulkLoad(AbortBulkLoadRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<GetBulkLoadInfoResponse> getBulkLoadInfo(
+            GetBulkLoadInfoRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ListInProgressBulkLoadsResponse> listInProgressBulkLoads(
+            ListInProgressBulkLoadsRequest request) {
         throw new UnsupportedOperationException();
     }
 

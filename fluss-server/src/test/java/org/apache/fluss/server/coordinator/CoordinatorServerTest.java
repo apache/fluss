@@ -39,7 +39,12 @@ class CoordinatorServerTest extends ServerTestBase {
 
     @BeforeEach
     void beforeEach() throws Exception {
-        coordinatorServer = startCoordinatorServer(createConfiguration());
+        Configuration conf =
+                createConfiguration()
+                        .set(
+                                ConfigOptions.COORDINATOR_BULKLOAD_RESULT_RETENTION,
+                                Duration.ofNanos(1));
+        coordinatorServer = startCoordinatorServer(conf);
         waitUntilCoordinatorServerElected();
     }
 

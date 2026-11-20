@@ -186,7 +186,10 @@ class KvTabletLookupTest extends ReplicaTestBase {
                                 Collections.singletonList(TABLET_SERVER_ID),
                                 Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
-                                0)));
+                                0),
+                        null,
+                        null,
+                        null));
         kvTablet = replica.getKvTablet();
     }
 

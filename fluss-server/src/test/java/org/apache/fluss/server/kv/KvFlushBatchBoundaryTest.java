@@ -166,7 +166,10 @@ class KvFlushBatchBoundaryTest extends ReplicaTestBase {
                         Collections.singletonList(leader),
                         Collections.emptyList(),
                         INITIAL_COORDINATOR_EPOCH,
-                        epoch));
+                        epoch),
+                null,
+                null,
+                null);
     }
 
     private void appendBatches(Replica replica) throws Exception {

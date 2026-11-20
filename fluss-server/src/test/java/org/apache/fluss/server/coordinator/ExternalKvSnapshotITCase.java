@@ -157,7 +157,10 @@ class ExternalKvSnapshotITCase {
                                                     PhysicalTablePath.of(path),
                                                     bucket,
                                                     Arrays.asList(0, 1),
-                                                    cluster.waitLeaderAndIsrReady(bucket)))));
+                                                    cluster.waitLeaderAndIsrReady(bucket),
+                                                    null,
+                                                    null,
+                                                    null))));
             for (int server = 0; server < 2; server++) {
                 assertThat(
                                 cluster.newTabletServerClientForNode(server)

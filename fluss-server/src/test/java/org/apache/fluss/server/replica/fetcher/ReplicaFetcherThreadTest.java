@@ -545,7 +545,7 @@ public class ReplicaFetcherThreadTest {
             retry(
                     Duration.ofSeconds(15),
                     () -> {
-                        java.util.List<ByteBuf> allBufs = testingEndpoint.getAllAllocatedByteBufs();
+                        List<ByteBuf> allBufs = testingEndpoint.getAllAllocatedByteBufs();
                         for (int i = 0; i < allBufs.size(); i++) {
                             assertThat(allBufs.get(i).refCnt())
                                     .as(
@@ -698,7 +698,8 @@ public class ReplicaFetcherThreadTest {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
@@ -715,7 +716,8 @@ public class ReplicaFetcherThreadTest {
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH),
                                 3,
-                                0L)),
+                                0L,
+                                null)),
                 result -> {});
     }
 

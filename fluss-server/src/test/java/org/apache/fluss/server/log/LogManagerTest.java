@@ -59,6 +59,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -242,6 +243,64 @@ final class LogManagerTest extends LogTestBase {
 
         assertThat(checkpoints.get(tableBucket1)).isEqualTo(log1.getRecoveryPoint());
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
+    }
+
+    @Test
+    void testOverwriteTailPersistsBeforeCheckpointAndKeepsLaterWalAfterRestart() throws Exception {
+        initTableBuckets(null);
+        LogTablet log = getOrCreateLog(tablePath1, null, tableBucket1);
+        log.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        long boundary = 10_017L;
+        logManager.initializeOverwriteLocalTail(tableBucket1, boundary);
+        Map<TableBucket, Long> checkpoint =
+                new OffsetCheckpointFile(
+                                new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                        .read();
+        assertThat(log.getRecoveryPoint()).isEqualTo(boundary);
+        assertThat(checkpoint.get(tableBucket1)).isEqualTo(boundary);
+        log.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        long tail = log.localLogEndOffset();
+        logManager.initializeOverwriteLocalTail(tableBucket1, boundary);
+        assertThat(log.localLogEndOffset()).isEqualTo(tail);
+        logManager.shutdown();
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        logManager.startup();
+        LogTablet restarted = getOrCreateLog(tablePath1, null, tableBucket1);
+        assertThat(restarted.localLogStartOffset()).isEqualTo(boundary);
+        assertThat(restarted.localLogEndOffset()).isEqualTo(tail);
+        assertLogRecordsEquals(
+                DATA1_ROW_TYPE,
+                restarted
+                        .read(boundary, Integer.MAX_VALUE, FetchIsolation.LOG_END, true, null, null)
+                        .getRecords(),
+                DATA1);
+    }
+
+    @Test
+    void testOverwriteCheckpointIoFailureIsReportedAfterTailFlush() throws Exception {
+        initTableBuckets(null);
+        LogTablet log = getOrCreateLog(tablePath1, null, tableBucket1);
+        log.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        Path checkpoint = new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE).toPath();
+        Files.deleteIfExists(checkpoint);
+        Files.createDirectory(checkpoint);
+        Path occupied = checkpoint.resolve("occupied");
+        Files.write(occupied, new byte[] {1});
+        try {
+            assertThatThrownBy(() -> logManager.initializeOverwriteLocalTail(tableBucket1, 10_017))
+                    .isInstanceOf(LogStorageException.class);
+            assertThat(log.getRecoveryPoint()).isEqualTo(10_017);
+        } finally {
+            Files.deleteIfExists(occupied);
+            Files.deleteIfExists(checkpoint);
+        }
     }
 
     @Test

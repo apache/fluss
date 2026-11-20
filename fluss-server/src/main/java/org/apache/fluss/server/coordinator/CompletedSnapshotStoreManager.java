@@ -45,7 +45,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
@@ -64,7 +66,7 @@ public class CompletedSnapshotStoreManager {
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStoreManager.class);
     private final int maxNumberOfSnapshotsToRetain;
     private final ZooKeeperClient zooKeeperClient;
-    private final ConcurrentHashMap<TableBucket, CompletedSnapshotStore>
+    private final ConcurrentHashMap<TableBucket, CompletableFuture<CompletedSnapshotStore>>
             bucketCompletedSnapshotStores;
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
@@ -118,49 +120,41 @@ public class CompletedSnapshotStoreManager {
 
     private long physicalStorageRemoteKvSize() {
         return bucketCompletedSnapshotStores.values().stream()
+                .map(
+                        future ->
+                                future.isDone() && !future.isCompletedExceptionally()
+                                        ? future.getNow(null)
+                                        : null)
+                .filter(Objects::nonNull)
                 .map(CompletedSnapshotStore::getPhysicalStorageRemoteKvSize)
                 .reduce(0L, Long::sum);
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
             TablePath tablePath, TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.computeIfAbsent(
-                tableBucket,
-                (bucket) -> {
-                    try {
-                        LOG.info("Creating snapshot store for table bucket {}.", bucket);
-                        long start = System.currentTimeMillis();
-                        CompletedSnapshotStore snapshotStore =
-                                createCompletedSnapshotStore(tableBucket, ioExecutor);
-                        long end = System.currentTimeMillis();
-                        LOG.info(
-                                "Created snapshot store for table bucket {} in {} ms.",
-                                bucket,
-                                end - start);
-
-                        MetricGroup bucketMetricGroup =
-                                coordinatorMetricGroup.getTableBucketMetricGroup(
-                                        tablePath, tableBucket);
-                        if (bucketMetricGroup != null) {
-                            LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
-                            bucketMetricGroup.gauge(
-                                    MetricNames.KV_NUM_SNAPSHOTS, snapshotStore::getNumSnapshots);
-                            bucketMetricGroup.gauge(
-                                    MetricNames.KV_ALL_SNAPSHOT_SIZE,
-                                    snapshotStore::getPhysicalStorageRemoteKvSize);
-                        } else {
-                            LOG.warn(
-                                    "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",
-                                    bucket);
-                        }
-                        return snapshotStore;
-                    } catch (Exception e) {
-                        throw new RuntimeException(
-                                "Failed to create completed snapshot store for table bucket "
-                                        + bucket,
-                                e);
-                    }
-                });
+        CompletableFuture<CompletedSnapshotStore> initializing = new CompletableFuture<>();
+        CompletableFuture<CompletedSnapshotStore> existing =
+                bucketCompletedSnapshotStores.putIfAbsent(tableBucket, initializing);
+        if (existing != null) {
+            return existing.join();
+        }
+        try {
+            CompletedSnapshotStore store = createCompletedSnapshotStore(tableBucket, ioExecutor);
+            MetricGroup metrics =
+                    coordinatorMetricGroup.getTableBucketMetricGroup(tablePath, tableBucket);
+            if (metrics != null) {
+                metrics.gauge(MetricNames.KV_NUM_SNAPSHOTS, store::getNumSnapshots);
+                metrics.gauge(
+                        MetricNames.KV_ALL_SNAPSHOT_SIZE, store::getPhysicalStorageRemoteKvSize);
+            }
+            initializing.complete(store);
+            return store;
+        } catch (Exception e) {
+            initializing.completeExceptionally(e);
+            bucketCompletedSnapshotStores.remove(tableBucket, initializing);
+            throw new RuntimeException(
+                    "Failed to create completed snapshot store for " + tableBucket, e);
+        }
     }
 
     public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
@@ -254,7 +248,12 @@ public class CompletedSnapshotStoreManager {
         Map<Integer, Set<Long>> result = new HashMap<>();
         for (int i = 0; i < numBuckets; i++) {
             TableBucket tb = new TableBucket(tableId, partitionId, i);
-            CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
+            CompletableFuture<CompletedSnapshotStore> cached =
+                    bucketCompletedSnapshotStores.get(tb);
+            CompletedSnapshotStore store =
+                    cached == null || !cached.isDone() || cached.isCompletedExceptionally()
+                            ? null
+                            : cached.getNow(null);
             Set<Long> ids = new HashSet<>(readActiveSnapshotIdsFromZk(tb));
             if (store != null) {
                 ids.addAll(store.getActiveSnapshotIds());
@@ -290,7 +289,7 @@ public class CompletedSnapshotStoreManager {
     }
 
     @VisibleForTesting
-    Map<TableBucket, CompletedSnapshotStore> getBucketCompletedSnapshotStores() {
-        return bucketCompletedSnapshotStores;
+    boolean hasCachedSnapshotStore(TableBucket tableBucket) {
+        return bucketCompletedSnapshotStores.containsKey(tableBucket);
     }
 }

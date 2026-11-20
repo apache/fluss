@@ -330,7 +330,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
                     t1, new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
         }
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
+        assertThat(allTableBuckets(t1Id, nBuckets))
+                .allMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
 
         // drop the table;
         metadataManager.dropTable(t1, false);
@@ -340,7 +341,8 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         assertThat(replicaCapacityController.getKvLeaderReplicaCount()).isEqualTo(3);
 
         // verify CompleteSnapshotStore has been removed when the table is dropped
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(allTableBuckets(t1Id, nBuckets))
+                .noneMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
 
         // replicas and buckets for t2 should still be online
         verifyBucketForTableInState(t2Id, nBuckets, BucketState.OnlineBucket);
@@ -748,7 +750,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         failingChannelManager.awaitFailure();
         fromCtx(context -> null);
 
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(tableBuckets).noneMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
         assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
         assertThat(tableBuckets)
                 .allSatisfy(
@@ -832,7 +834,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         failingChannelManager.awaitFailure();
         fromCtx(context -> null);
 
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(tableBuckets).noneMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
         assertThat(bucketMetricGroups).allMatch(AbstractMetricGroup::isClosed);
         assertThat(tableBuckets)
                 .allSatisfy(
@@ -897,14 +899,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                             tableBucket.getBucket()));
         }
 
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
+        assertThat(allTableBuckets(tableId, partition1Id, nBuckets))
+                .allMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
 
         // drop the partition
         zookeeperClient.deletePartition(tablePath, partition1Name);
         verifyPartitionDropped(tableId, partition1Id);
 
         // verify CompleteSnapshotStore has been removed when the table partition1 is dropped
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(allTableBuckets(tableId, partition1Id, nBuckets))
+                .noneMatch(completedSnapshotStoreManager::hasCachedSnapshotStore);
 
         // now, drop the table and restart the coordinator event processor,
         // the partition2 should be dropped
