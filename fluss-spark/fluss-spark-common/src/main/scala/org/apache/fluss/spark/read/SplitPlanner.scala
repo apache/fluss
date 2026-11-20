@@ -109,8 +109,66 @@ sealed trait UpsertSplitPlanner extends SplitPlanner
 abstract class AbstractSplitPlanner(
     override val tablePath: TablePath,
     override val tableInfo: TableInfo,
-    override val flussConfig: Configuration)
+    override val flussConfig: Configuration,
+    options: CaseInsensitiveStringMap)
   extends SplitPlanner {
+
+  protected val asOfTimestamp: Option[Long] =
+    TimestampBoundaryResolver.timestamp(options, flussConfig, tableInfo)
+  private var historicalStops: Map[Int, Long] = Map.empty
+  private var historicalPlan: Option[Array[InputPartition]] = None
+
+  protected def fixedPlan(body: => Array[InputPartition]): Array[InputPartition] = {
+    if (asOfTimestamp.isEmpty) {
+      body
+    } else {
+      if (historicalPlan.isEmpty) {
+        historicalPlan = Some(body)
+      }
+      historicalPlan.get.clone()
+    }
+  }
+
+  private def historicalSnapshot(): LakeSnapshot = {
+    val current = admin.getTableInfo(tablePath).get()
+    require(
+      current.getTableId == tableInfo.getTableId &&
+        current.getSchemaId == tableInfo.getSchemaId &&
+        current.getNumBuckets == tableInfo.getNumBuckets &&
+        current.getBucketCountEpoch == tableInfo.getBucketCountEpoch,
+      s"Historical table identity/schema/buckets changed for $tablePath"
+    )
+    val lake =
+      FlussLakeUtils.createLakeSource(flussConfig.toMap, tableInfo.getProperties.toMap, tablePath)
+    val probeTable = connectionLease.connection.getTable(tablePath)
+    val (earliest, target) =
+      try {
+        TimestampBoundaryResolver.resolve(
+          admin,
+          probeTable,
+          tableInfo,
+          asOfTimestamp.get,
+          flussConfig)
+      } finally {
+        probeTable.close()
+      }
+    val selected = lake.findHistoricalSnapshot(
+      tableInfo,
+      earliest.mapValues(Long.box).toMap.asJava,
+      target.mapValues(Long.box).toMap.asJava)
+    require(
+      selected.isPresent,
+      s"No complete retained historical base for $tablePath (tableId=${tableInfo.getTableId}, T=${asOfTimestamp.get}, earliest=$earliest, target=$target)"
+    )
+    historicalStops = target.map { case (bucket, offset) => bucket.getBucket -> offset }
+    new LakeSnapshot(selected.get().getSnapshotId, selected.get().getReadableOffsets)
+  }
+
+  protected def nonPartitionedStoppingOffsets(
+      buckets: Seq[Int],
+      retriever: BucketOffsetsRetrieverImpl): Map[Int, Long] =
+    if (asOfTimestamp.isDefined) historicalStops
+    else getBucketOffsets(stoppingOffsetsInitializer, null, buckets, retriever)
 
   // Fluss client connection scoped to plan()-time metadata RPCs (partition/offset/kv-snapshot
   // lookups). Borrowed lazily on first use and returned in plan()'s finally block. We deliberately do
@@ -164,7 +222,8 @@ abstract class AbstractSplitPlanner(
 
   protected def readableLakeSnapshot: Option[LakeSnapshot] = {
     if (!probed) {
-      cachedLakeSnapshot = probeLakeSnapshot()
+      cachedLakeSnapshot =
+        if (asOfTimestamp.isDefined) Some(historicalSnapshot()) else probeLakeSnapshot()
       probed = true
     }
     cachedLakeSnapshot
@@ -266,10 +325,11 @@ class AppendPlanner(
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
     override val flussConfig: Configuration)
-  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
+  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig, options)
   with AppendSplitPlanner {
 
-  override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined && !incrementalMode
+  override def hasLakeSnapshot: Boolean =
+    asOfTimestamp.isDefined || (readableLakeSnapshot.isDefined && !incrementalMode)
 
   private val incrementalMode: Boolean =
     FlussOffsetInitializers.isIncrementalRead(options)
@@ -296,7 +356,7 @@ class AppendPlanner(
   override val logTailPredicate: Option[FlussPredicate] =
     if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) pushedPredicate else None
 
-  override def plan(): Array[InputPartition] =
+  override def plan(): Array[InputPartition] = fixedPlan {
     try {
       timeRange.foreach(
         FlussOffsetInitializers
@@ -309,6 +369,7 @@ class AppendPlanner(
     } finally {
       close()
     }
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Log-only branch: pure Fluss log scan over [start, stop) with optional range splitting.
@@ -472,7 +533,7 @@ class AppendPlanner(
     val lakePartitions = createLakePartitions(lakeSplits, tableId, partitionId = None)
 
     val stoppingOffsets =
-      getBucketOffsets(stoppingOffsetsInitializer, null, buckets, bucketOffsetsRetriever)
+      nonPartitionedStoppingOffsets(buckets, bucketOffsetsRetriever)
     val logPartitions = buckets.flatMap {
       bucketId =>
         val tableBucket = new TableBucket(tableId, bucketId)
@@ -631,10 +692,11 @@ class UpsertPlanner(
     projection: Array[Int],
     options: CaseInsensitiveStringMap,
     override val flussConfig: Configuration)
-  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig)
+  extends AbstractSplitPlanner(tablePath, tableInfo, flussConfig, options)
   with UpsertSplitPlanner {
 
-  override def hasLakeSnapshot: Boolean = readableLakeSnapshot.isDefined && !incrementalMode
+  override def hasLakeSnapshot: Boolean =
+    asOfTimestamp.isDefined || (readableLakeSnapshot.isDefined && !incrementalMode)
 
   private val incrementalMode: Boolean =
     FlussOffsetInitializers.isIncrementalRead(options)
@@ -655,7 +717,7 @@ class UpsertPlanner(
   // to be reconciled with kv snapshots — see FlussUpsertPartitionReader).
   override val logTailPredicate: Option[FlussPredicate] = None
 
-  override def plan(): Array[InputPartition] =
+  override def plan(): Array[InputPartition] = fixedPlan {
     try {
       timeRange.foreach(
         FlussOffsetInitializers
@@ -670,6 +732,7 @@ class UpsertPlanner(
     } finally {
       close()
     }
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Log-only branch: Fluss kv snapshots + log tail (no lake involvement).
@@ -847,7 +910,7 @@ class UpsertPlanner(
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     val stoppingOffsets =
-      getBucketOffsets(stoppingOffsetsInitializer, null, buckets, bucketOffsetsRetriever)
+      nonPartitionedStoppingOffsets(buckets, bucketOffsetsRetriever)
 
     val lakeSplitsByBucket = lakeSplits.groupBy(_.bucket()).mapValues(_.toSeq).toMap
 

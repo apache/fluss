@@ -27,6 +27,8 @@ import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.utils.ArrayUtils;
@@ -41,6 +43,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -72,6 +75,23 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         this.tableLoader = source.tableLoader;
         this.project = ArrayUtils.deepCopy(source.project);
         this.predicate = source.predicate;
+    }
+
+    @Override
+    public Optional<HistoricalSnapshot> findHistoricalSnapshot(
+            TableInfo tableInfo,
+            Map<TableBucket, Long> earliestOffsets,
+            Map<TableBucket, Long> targetOffsets)
+            throws IOException {
+        try (PaimonTableHandle handle = tableLoader.load()) {
+            return new PaimonHistoricalSnapshotSelector(handle.table())
+                    .select(tableInfo, earliestOffsets, targetOffsets);
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException(
+                    "Failed to select historical snapshot for " + tableInfo.getTablePath(), e);
+        }
     }
 
     @Override
