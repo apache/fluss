@@ -553,6 +553,8 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         zookeeperClient.deleteRebalanceTask();
         eventProcessor = buildCoordinatorEventProcessor(clock);
         eventProcessor.startup();
+        eventProcessor.startRebalanceRecovery();
+        waitUntilRebalanceRecoveryCompletes();
         registerTabletServer(3);
         initCoordinatorChannel();
         List<Integer> origin = Arrays.asList(0, 1, 2);
@@ -583,9 +585,13 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.FAILED));
-        assertThat(hasInProgressRebalance()).isFalse();
-        assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
-                .isEqualTo(RebalanceStatus.FAILED);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(hasInProgressRebalance()).isFalse();
+                    assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
+                            .isEqualTo(RebalanceStatus.FAILED);
+                });
         assertThat(
                         zookeeperClient
                                 .getTableAssignment(tableId)
@@ -648,11 +654,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                         : new RebalancePlanForBucket(pending, 0, 0, origin, target));
         String rebalanceId = "cancel-before-restart";
         registerRebalance(rebalanceId, plan);
-        fromCtx(
-                ctx -> {
-                    eventProcessor.getRebalanceManager().cancelRebalance(rebalanceId);
-                    return null;
-                });
+        cancelRebalance(rebalanceId);
         assertThat(rebalanceStatus(pending)).isEqualTo(RebalanceStatus.CANCELED);
         assertThat(zookeeperClient.getRebalanceTask().get().isCancelRequested()).isTrue();
         assertThat(hasInProgressRebalance()).isTrue();
@@ -740,15 +742,13 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                                 .get()
                                 .getBucketAssignment(recoveredIntermediate.getBucket()))
                 .isEqualTo(new BucketAssignment(union));
-        fromCtx(
-                ctx -> {
-                    assertThat(
-                                    eventProcessor.isRebalanceTaskAtOrigin(
-                                            plans.get(recoveredIntermediate)))
-                            .isFalse();
-                    eventProcessor.getRebalanceManager().cancelRebalance(rebalanceId);
-                    return null;
-                });
+        boolean intermediateAtOrigin =
+                fromCtx(
+                        ctx ->
+                                eventProcessor.isRebalanceTaskAtOrigin(
+                                        plans.get(recoveredIntermediate)));
+        assertThat(intermediateAtOrigin).isFalse();
+        cancelRebalance(rebalanceId);
         assertThat(rebalanceStatus(recoveredIntermediate))
                 .as("A previously started migration still needs draining after recovery")
                 .isNotEqualTo(RebalanceStatus.CANCELED);
@@ -1056,6 +1056,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         installBlockingNotifyGateways(recoveredResponses);
         eventProcessor = buildCoordinatorEventProcessor(testClock);
         eventProcessor.startup();
+        eventProcessor.startRebalanceRecovery();
         retry(
                 Duration.ofMinutes(1),
                 () -> {
@@ -1350,6 +1351,26 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 });
     }
 
+    private void cancelRebalance(String rebalanceId) throws Exception {
+        CompletableFuture<Void> completion = new CompletableFuture<>();
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .cancelRebalance(
+                                    rebalanceId,
+                                    failure -> {
+                                        if (failure == null) {
+                                            completion.complete(null);
+                                        } else {
+                                            completion.completeExceptionally(failure);
+                                        }
+                                    });
+                    return null;
+                });
+        completion.get();
+    }
+
     private void restartCoordinator(@Nullable ConcurrentLinkedDeque<PendingNotify> responses)
             throws Exception {
         eventProcessor.shutdown();
@@ -1363,6 +1384,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         }
         eventProcessor = buildCoordinatorEventProcessor(testClock);
         eventProcessor.startup();
-        fromCtx(ctx -> null);
+        eventProcessor.startRebalanceRecovery();
+        waitUntilRebalanceRecoveryCompletes();
     }
 }
