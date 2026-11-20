@@ -141,18 +141,42 @@ impl ScanRecord {
 }
 
 pub struct ScanRecords {
+    consumed_up_to_offsets: HashMap<TableBucket, i64>,
     records: HashMap<TableBucket, Vec<ScanRecord>>,
 }
 
 impl ScanRecords {
     pub fn empty() -> Self {
-        Self {
-            records: HashMap::new(),
-        }
+        Self::new(HashMap::new())
     }
 
     pub fn new(records: HashMap<TableBucket, Vec<ScanRecord>>) -> Self {
-        Self { records }
+        Self {
+            records,
+            consumed_up_to_offsets: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn add_fetched(
+        &mut self,
+        bucket: &TableBucket,
+        records: Vec<ScanRecord>,
+        end: Option<i64>,
+    ) {
+        if let Some(end) = end {
+            self.consumed_up_to_offsets.insert(bucket.clone(), end);
+        }
+        if end.is_some() || !records.is_empty() {
+            self.records
+                .entry(bucket.clone())
+                .or_default()
+                .extend(records);
+        }
+    }
+
+    /// Exclusive offset consumed by this poll, including batches that returned no rows.
+    pub fn consumed_up_to_offset(&self, bucket: &TableBucket) -> Option<i64> {
+        self.consumed_up_to_offsets.get(bucket).copied()
     }
 
     pub fn records(&self, scan_bucket: &TableBucket) -> &[ScanRecord] {
@@ -163,6 +187,7 @@ impl ScanRecords {
         self.records.values().map(|v| v.len()).sum()
     }
 
+    /// A poll that advanced a bucket without returning any rows is not empty.
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
@@ -191,6 +216,7 @@ pub const NO_SCHEMA_ID: i32 = -1;
 /// needed for tracking consumption progress.
 #[derive(Debug, Clone)]
 pub struct ScanBatch {
+    pub(crate) change_types: Option<Vec<ChangeType>>,
     /// The bucket this batch belongs to
     bucket: TableBucket,
     /// The Arrow RecordBatch containing the data
@@ -210,6 +236,7 @@ impl ScanBatch {
             bucket,
             batch,
             base_offset,
+            change_types: None,
             commit_timestamp: NO_COMMIT_TIMESTAMP,
             schema_id: NO_SCHEMA_ID,
         }
@@ -234,6 +261,18 @@ impl ScanBatch {
     /// the batch, including a limit scan that can combine multiple log batches.
     pub fn schema_id(&self) -> i32 {
         self.schema_id
+    }
+
+    /// Row-aligned change types for a primary-key changelog; absent for append-only batches.
+    pub fn change_types(&self) -> Option<&[ChangeType]> {
+        self.change_types.as_deref()
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.batch = self.batch.slice(0, len);
+        if let Some(types) = &mut self.change_types {
+            types.truncate(len);
+        }
     }
 
     pub fn bucket(&self) -> &TableBucket {

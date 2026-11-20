@@ -70,6 +70,10 @@ pub enum FlussLakeError {
     #[error("incompatible UnionRead split version: {0}")]
     IncompatibleSplitVersion(String),
 
+    /// Retained PK state exceeded its budget.
+    #[error("UnionRead memory limit exceeded: {0}")]
+    MemoryLimitExceeded(String),
+
     /// Public engine-integration context is malformed or incomplete.
     #[error("invalid UnionRead context: {0}")]
     InvalidReadContext(String),

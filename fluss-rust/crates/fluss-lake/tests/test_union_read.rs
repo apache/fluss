@@ -22,12 +22,19 @@ mod support;
 use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use fluss::metadata::{
-    AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, Schema,
-    TableDescriptor, TablePath,
+    AddColumn, AlterTableChanges, ColumnPositionType, DataTypes, JsonSerde, Schema, TableBucket,
+    TableDescriptor, TableInfo, TablePath,
 };
 use fluss::predicate::col;
-use fluss_lake::{FlussLakeError, FlussLakeReadContext, FlussLakeTable};
+use fluss::row::GenericRow;
+use fluss::rpc::message::OffsetSpec;
+use fluss_lake::{
+    FlussLakeError, FlussLakeLogPartition, FlussLakeLogRange, FlussLakePartitionIdentity,
+    FlussLakeReadContext, FlussLakeTable, LakePlannerContext, LakeReaderContext, LakeSource,
+    LakeSplit, RecordBatchStream,
+};
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +42,16 @@ fn append_schema() -> Schema {
     Schema::builder()
         .column("id", DataTypes::int())
         .column("name", DataTypes::string())
+        .build()
+        .unwrap()
+}
+
+fn pk_schema() -> Schema {
+    Schema::builder()
+        .column("id", DataTypes::int())
+        .column("name", DataTypes::string())
+        .primary_key(vec!["id"])
+        .unwrap()
         .build()
         .unwrap()
 }
@@ -361,50 +378,58 @@ async fn shared_read_metadata_does_not_outlive_the_read_attempt() {
     admin.drop_table(&path, false).await.unwrap();
 }
 
+fn lake_context(info: &TableInfo, seam: i64, stop: i64) -> FlussLakeReadContext {
+    FlussLakeReadContext::from_boundary(
+        info,
+        Some(1),
+        vec![FlussLakeLogRange::new(
+            TableBucket::new(info.table_id, 0),
+            FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+            1,
+            Some(seam),
+            stop,
+            0,
+        )],
+    )
+    .unwrap()
+}
+
+struct Baseline(RecordBatch);
+impl LakeSource for Baseline {
+    fn format(&self) -> &str {
+        "paimon"
+    }
+    fn plan<'a>(
+        &'a self,
+        ctx: LakePlannerContext<'a>,
+    ) -> BoxFuture<'a, fluss_lake::Result<Vec<LakeSplit>>> {
+        Box::pin(async move {
+            Ok(vec![LakeSplit {
+                format: self.format().into(),
+                snapshot_id: ctx.snapshot_id,
+                partition: FlussLakePartitionIdentity::Unpartitioned,
+                bucket_id: 0,
+                bucket_count: 1,
+                estimated_rows: None,
+                estimated_size: None,
+                payload_version: 1,
+                payload: vec![1],
+            }])
+        })
+    }
+    fn read<'a>(
+        &'a self,
+        ctx: LakeReaderContext<'a>,
+    ) -> BoxFuture<'a, fluss_lake::Result<RecordBatchStream>> {
+        Box::pin(async move {
+            let batch = self.0.project(ctx.projection).unwrap();
+            Ok(Box::pin(futures::stream::iter([Ok(batch)])) as RecordBatchStream)
+        })
+    }
+}
+
 #[tokio::test]
 async fn append_reads_lake_baseline_and_only_the_log_tail() {
-    use fluss::metadata::TableBucket;
-    use fluss_lake::{
-        FlussLakeLogPartition, FlussLakeLogRange, FlussLakePartitionIdentity, LakePlannerContext,
-        LakeReaderContext, LakeSource, LakeSplit, RecordBatchStream,
-    };
-    use futures::future::BoxFuture;
-
-    struct Baseline;
-    impl LakeSource for Baseline {
-        fn format(&self) -> &str {
-            "paimon"
-        }
-        fn plan<'a>(
-            &'a self,
-            ctx: LakePlannerContext<'a>,
-        ) -> BoxFuture<'a, fluss_lake::Result<Vec<LakeSplit>>> {
-            Box::pin(async move {
-                Ok(vec![LakeSplit {
-                    format: self.format().into(),
-                    snapshot_id: ctx.snapshot_id,
-                    partition: FlussLakePartitionIdentity::Unpartitioned,
-                    bucket_id: 0,
-                    bucket_count: 1,
-                    estimated_rows: None,
-                    estimated_size: None,
-                    payload_version: 1,
-                    payload: vec![1],
-                }])
-            })
-        }
-        fn read<'a>(
-            &'a self,
-            ctx: LakeReaderContext<'a>,
-        ) -> BoxFuture<'a, fluss_lake::Result<RecordBatchStream>> {
-            Box::pin(async move {
-                let batch =
-                    RecordBatch::try_new(ctx.schema, vec![Arc::new(Int32Array::from(vec![1]))])
-                        .unwrap();
-                Ok(Box::pin(futures::stream::iter([Ok(batch)])) as RecordBatchStream)
-            })
-        }
-    }
     let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
     let admin = connection.get_admin().unwrap();
     let path = TablePath::new("fluss", "test_union_read_stub_lake_and_tail");
@@ -423,22 +448,10 @@ async fn append_reads_lake_baseline_and_only_the_log_tail() {
     writer.flush().await.unwrap();
     let info = table.get_table_info();
     // Supply an engine-captured boundary: offset 0 is already in the lake.
-    let context = FlussLakeReadContext::from_boundary(
-        info,
-        Some(1),
-        vec![FlussLakeLogRange::new(
-            TableBucket::new(info.table_id, 0),
-            FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
-            1,
-            Some(1),
-            2,
-            0,
-        )],
-    )
-    .unwrap();
+    let context = lake_context(info, 1, 2);
     let scan = FlussLakeTable::new(connection.clone(), &path)
         .new_scan()
-        .with_lake_source(Arc::new(Baseline))
+        .with_lake_source(Arc::new(Baseline(append_batch(vec![1], vec!["baseline"]))))
         .with_projection(vec![0]);
     let plan = scan.plan_with_context(&context).await.unwrap();
     let batches = scan
@@ -449,6 +462,100 @@ async fn append_reads_lake_baseline_and_only_the_log_tail() {
         .await
         .unwrap();
     assert_eq!(sorted_ids(&batches), [1, 2]);
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn pk_lake_baseline_with_an_empty_tail_needs_no_overlay_budget() {
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "union_read_pk_empty_tail");
+    let descriptor = TableDescriptor::builder()
+        .schema(pk_schema())
+        .property("table.datalake.enabled", "true")
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let info = admin.get_table_info(&path).await.unwrap();
+    let context = lake_context(&info, 0, 0);
+    let scan = FlussLakeTable::new(connection, &path)
+        .new_scan()
+        .with_lake_source(Arc::new(Baseline(append_batch(vec![1], vec!["baseline"]))))
+        .with_projection(vec![1]);
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    let batches = scan
+        .new_reader()
+        .with_memory_budget(Arc::new(fluss::client::LimitedReadMemoryBudget::new(0)))
+        .read_splits(plan.splits())
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    assert_eq!(
+        batches,
+        [RecordBatch::try_new(
+            plan.schema(),
+            vec![Arc::new(StringArray::from(vec!["baseline"]))]
+        )
+        .unwrap()]
+    );
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+#[tokio::test]
+async fn pk_lake_and_sparse_tail_filter_the_reconciled_rows() {
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "union_read_pk_lake_and_sparse_tail");
+    let descriptor = TableDescriptor::builder()
+        .schema(pk_schema())
+        .property("table.datalake.enabled", "true")
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_upsert().unwrap().create_writer().unwrap();
+    for row in [
+        pk_row(1, "keep"),
+        pk_row(2, "keep"),
+        pk_row(3, "old"),
+        pk_row(4, "keep"),
+    ] {
+        writer.upsert(&row).unwrap().await.unwrap();
+    }
+    let seam = admin
+        .list_offsets(&path, &[0], OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    writer.upsert(&pk_row(1, "old")).unwrap().await.unwrap();
+    // Each missing-key delete is acknowledged separately so it forms a zero-row CDC batch.
+    writer.delete(&pk_row(99, "")).unwrap().await.unwrap();
+    writer.delete(&pk_row(2, "keep")).unwrap().await.unwrap();
+    writer.upsert(&pk_row(3, "keep")).unwrap().await.unwrap();
+    writer.delete(&pk_row(99, "")).unwrap().await.unwrap();
+    let stop = admin
+        .list_offsets(&path, &[0], OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    let context = lake_context(table.get_table_info(), seam, stop);
+    let baseline = Baseline(append_batch(
+        vec![1, 2, 3, 4],
+        vec!["keep", "keep", "old", "keep"],
+    ));
+    let scan = FlussLakeTable::new(connection.clone(), &path)
+        .new_scan()
+        .with_lake_source(Arc::new(baseline))
+        .with_filter(col("name").eq("keep"))
+        .with_projection(vec![0]);
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    let rows = scan.new_reader().read_splits(plan.splits()).unwrap();
+    let batches = tokio::time::timeout(Duration::from_secs(30), rows.try_collect::<Vec<_>>())
+        .await
+        .expect("PK read did not finish after consuming the final empty batch")
+        .unwrap();
+    assert_eq!(sorted_ids(&batches), [3, 4]);
     admin.drop_table(&path, false).await.unwrap();
 }
 
@@ -520,5 +627,81 @@ async fn dropped_partition_fails_a_frozen_log_read() {
         matches!(result, Err(FlussLakeError::DataUnavailable(_))),
         "{result:?}"
     );
+    admin.drop_table(&path, false).await.unwrap();
+}
+
+fn pk_row(id: i32, name: &'static str) -> GenericRow<'static> {
+    let mut row = GenericRow::new(2);
+    row.set_field(0, id);
+    row.set_field(1, name);
+    row
+}
+
+#[tokio::test]
+async fn complete_log_pk_read_applies_changes_only_up_to_the_frozen_stop() {
+    let connection = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = connection.get_admin().unwrap();
+    let path = TablePath::new("fluss", "union_read_pk_complete_log");
+    let descriptor = TableDescriptor::builder()
+        .schema(pk_schema())
+        .distributed_by(Some(1), vec!["id".into()])
+        .build()
+        .unwrap();
+    support::create_table(&admin, &path, &descriptor).await;
+    let table = connection.get_table(&path).await.unwrap();
+    let writer = table.new_upsert().unwrap().create_writer().unwrap();
+    for value in [pk_row(1, "old"), pk_row(2, "remove"), pk_row(1, "kept")] {
+        writer.upsert(&value).unwrap().await.unwrap();
+    }
+    writer.delete(&pk_row(2, "remove")).unwrap().await.unwrap();
+    let scan = FlussLakeTable::new(connection.clone(), &path)
+        .new_scan()
+        .with_projection(vec![1]);
+    // The cluster periodically creates KV snapshots. Pin the complete-log path
+    // explicitly so this read does not depend on snapshot timing.
+    let info = table.get_table_info();
+    let stop = admin
+        .list_offsets(&path, &[0], fluss::rpc::message::OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    let context = FlussLakeReadContext::from_boundary(
+        info,
+        None,
+        vec![fluss_lake::FlussLakeLogRange::new(
+            fluss::metadata::TableBucket::new(info.table_id, 0),
+            fluss_lake::FlussLakeLogPartition::Ordinary(
+                fluss_lake::FlussLakePartitionIdentity::Unpartitioned,
+            ),
+            1,
+            None,
+            stop,
+            0,
+        )],
+    )
+    .unwrap();
+    let plan = scan.plan_with_context(&context).await.unwrap();
+    writer
+        .upsert(&pk_row(1, "too late"))
+        .unwrap()
+        .await
+        .unwrap();
+    let batches = scan
+        .new_reader()
+        .read_splits(plan.splits())
+        .unwrap()
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap();
+    let names: Vec<_> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap()
+                .iter()
+        })
+        .collect();
+    assert_eq!(names, [Some("kept")]);
     admin.drop_table(&path, false).await.unwrap();
 }

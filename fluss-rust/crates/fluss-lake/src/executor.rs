@@ -25,7 +25,7 @@ use crate::{
 };
 use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
-use fluss::client::{BoundedLogReadRange, FlussTable, RecordBatchLogReader};
+use fluss::client::{BoundedLogReadRange, DeduplicateCurrentView, FlussTable, ReadMemoryBudget};
 use fluss::error::Error as ClientError;
 use fluss::metadata::{RowType, TableInfo};
 use fluss::predicate::{BoundPredicate, Predicate};
@@ -33,6 +33,8 @@ use futures::{StreamExt, TryStreamExt};
 use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
+
+const DEFAULT_SURVIVOR_BATCH_ROWS: usize = 4096;
 
 /// Resources shared only by tasks in one read attempt.
 #[derive(Default)]
@@ -47,6 +49,7 @@ pub(crate) fn execute_split(
     split: &FlussLakeReadSplit,
     scan: &Arc<FlussLakeScan>,
     resources: Arc<ReadResources>,
+    memory_budget: Option<Arc<dyn ReadMemoryBudget>>,
 ) -> Result<RecordBatchStream> {
     if split.table_path() != scan.table_path() {
         return Err(FlussLakeError::PlanningFailed(
@@ -57,11 +60,6 @@ pub(crate) fn execute_split(
     if descriptor.kv_snapshot_id().is_some() {
         return Err(FlussLakeError::PlanningFailed(
             "KV snapshot baseline execution is not yet supported by the UnionRead reader".into(),
-        ));
-    }
-    if split.is_primary_key() && !scan.lake_only() {
-        return Err(FlussLakeError::PlanningFailed(
-            "PK UnionRead execution requires the PK reconciliation executor".into(),
         ));
     }
     if scan.lake_only() && descriptor.start_offset() != descriptor.stop_offset() {
@@ -93,6 +91,7 @@ pub(crate) fn execute_split(
         bound,
         scan.clone(),
         resources,
+        memory_budget,
     )))
 }
 
@@ -101,6 +100,7 @@ async fn open_logical_stream(
     bound: Arc<BoundScan>,
     scan: Arc<FlussLakeScan>,
     resources: Arc<ReadResources>,
+    memory_budget: Option<Arc<dyn ReadMemoryBudget>>,
 ) -> Result<RecordBatchStream> {
     // Share the live identity check within one read attempt, not across queries.
     // Task metadata remains fixed even if the live schema has changed.
@@ -124,8 +124,21 @@ async fn open_logical_stream(
         filter,
         ..
     } = bound.as_ref();
-    let physical =
-        PhysicalProjection::resolve(table_info.row_type(), output_projection.as_deref(), filter)?;
+    let pk_union = split.is_primary_key() && !scan.lake_only();
+    if pk_union {
+        crate::table::validate_pk_union_merge_engine(table_info)?;
+    }
+    let has_log_tail = descriptor.start_offset() != descriptor.stop_offset();
+    let physical = PhysicalProjection::resolve(
+        table_info.row_type(),
+        output_projection.as_deref(),
+        filter,
+        if pk_union && has_log_tail {
+            split.primary_key_indexes()
+        } else {
+            &[]
+        },
+    )?;
     let physical_schema = physical.arrow_schema(table_info.row_type())?;
     let lake_stream = if descriptor.lake_splits().is_empty() {
         Box::pin(futures::stream::empty()) as RecordBatchStream
@@ -147,7 +160,7 @@ async fn open_logical_stream(
                 } else {
                     crate::LakeReadSemantics::Append
                 },
-                reconcile_primary_key: false,
+                reconcile_primary_key: pk_union,
                 splits: tasks,
                 projection: &physical.field_indexes,
                 schema: physical_schema.clone(),
@@ -158,8 +171,26 @@ async fn open_logical_stream(
     let lake_stream = normalize_stream_schema(lake_stream, physical_schema.clone());
     let output_column_count = output_projection.as_deref().map(|indexes| indexes.len());
     let batch_size = scan.max_batch_size();
-    let stream = if scan.lake_only() {
+    let stream = if !has_log_tail {
         lake_stream
+    } else if pk_union {
+        let mut current_view = match memory_budget {
+            Some(budget) => DeduplicateCurrentView::try_new_with_memory_budget(
+                physical_schema,
+                physical.key_positions.clone(),
+                budget,
+            ),
+            None => {
+                DeduplicateCurrentView::try_new(physical_schema, physical.key_positions.clone())
+            }
+        }
+        .map_err(reconciliation_error)?;
+        fold_logical_changelog_tail(&table, descriptor, &physical, &mut current_view).await?;
+        reconciled_stream(
+            current_view,
+            lake_stream,
+            batch_size.unwrap_or(DEFAULT_SURVIVOR_BATCH_ROWS),
+        )
     } else {
         let log_filter = filter.to_pushdown_predicate();
         let log_stream = normalize_stream_schema(
@@ -183,9 +214,6 @@ async fn open_logical_append_log_stream(
     physical: &PhysicalProjection,
     filter: Option<&Predicate>,
 ) -> Result<RecordBatchStream> {
-    if descriptor.start_offset() == descriptor.stop_offset() {
-        return Ok(Box::pin(futures::stream::empty()));
-    }
     let mut table_scan = table
         .new_scan()
         .project(&physical.field_indexes)
@@ -195,19 +223,10 @@ async fn open_logical_append_log_stream(
             .filter(filter.clone())
             .map_err(|error| execution_client_error("apply append-log filter pushdown", error))?;
     }
-    let scanner = table_scan
-        .create_record_batch_log_scanner()
-        .map_err(|error| execution_client_error("create append-log scanner", error))?;
-    let reader = RecordBatchLogReader::new_from_ranges(
-        scanner,
-        vec![BoundedLogReadRange {
-            bucket: descriptor.table_bucket().clone(),
-            starting_offset: descriptor.start_offset(),
-            stopping_offset: descriptor.stop_offset(),
-        }],
-    )
-    .await
-    .map_err(|error| execution_client_error("create bounded append-log reader", error))?;
+    let reader = table_scan
+        .create_bounded_log_reader(vec![log_range(descriptor)])
+        .await
+        .map_err(|error| execution_client_error("create bounded append-log reader", error))?;
     Ok(Box::pin(reader.into_stream().map(|result| {
         result
             .map(|scan_batch| scan_batch.into_batch())
@@ -215,9 +234,48 @@ async fn open_logical_append_log_stream(
     })))
 }
 
+fn log_range(descriptor: &FlussLakeSplitDescriptor) -> BoundedLogReadRange {
+    BoundedLogReadRange {
+        bucket: descriptor.table_bucket().clone(),
+        starting_offset: descriptor.start_offset(),
+        stopping_offset: descriptor.stop_offset(),
+    }
+}
+
+async fn fold_logical_changelog_tail(
+    table: &FlussTable<'_>,
+    descriptor: &FlussLakeSplitDescriptor,
+    physical: &PhysicalProjection,
+    current_view: &mut DeduplicateCurrentView,
+) -> Result<()> {
+    let mut reader = table
+        .new_scan()
+        .project(&physical.field_indexes)
+        .map_err(|error| execution_client_error("apply changelog projection", error))?
+        .create_bounded_log_reader(vec![log_range(descriptor)])
+        .await
+        .map_err(|error| execution_client_error("create bounded changelog reader", error))?;
+    while let Some(batch) = reader
+        .next_batch()
+        .await
+        .map_err(|error| execution_client_error("read bounded changelog tail", error))?
+    {
+        let changes = batch.change_types().ok_or_else(|| {
+            FlussLakeError::DataUnavailable(
+                "expected primary-key changelog, received an append-only batch".into(),
+            )
+        })?;
+        current_view
+            .fold_changelog_batch(batch.batch().clone(), changes)
+            .map_err(reconciliation_error)?;
+    }
+    Ok(())
+}
+
 /// Output columns come first so predicate-only columns can be stripped after filtering.
 struct PhysicalProjection {
     field_indexes: Vec<usize>,
+    key_positions: Vec<usize>,
 }
 
 impl PhysicalProjection {
@@ -225,6 +283,7 @@ impl PhysicalProjection {
         row_type: &RowType,
         output_projection: Option<&[usize]>,
         filter: &BoundPredicate,
+        keys: &[usize],
     ) -> Result<Self> {
         let field_count = row_type.fields().len();
         let mut field_indexes = match output_projection {
@@ -236,12 +295,26 @@ impl PhysicalProjection {
                 field_indexes.push(field_index);
             }
         }
+        let key_positions = keys
+            .iter()
+            .map(|key| {
+                if let Some(index) = field_indexes.iter().position(|field| field == key) {
+                    index
+                } else {
+                    field_indexes.push(*key);
+                    field_indexes.len() - 1
+                }
+            })
+            .collect();
         // Some readers cannot preserve row counts for a zero-column physical
         // read. Read one hidden field and project it away after filtering.
         if field_indexes.is_empty() && field_count > 0 {
             field_indexes.push(0);
         }
-        Ok(Self { field_indexes })
+        Ok(Self {
+            field_indexes,
+            key_positions,
+        })
     }
 
     fn arrow_schema(&self, row_type: &RowType) -> Result<arrow::datatypes::SchemaRef> {
@@ -270,6 +343,49 @@ where
     F: Future<Output = Result<RecordBatchStream>> + Send + 'static,
 {
     Box::pin(futures::stream::once(setup).try_flatten())
+}
+
+/// Reconciles a source-neutral deduplicate state with a lake baseline stream.
+fn reconciled_stream(
+    current_view: DeduplicateCurrentView,
+    baseline_stream: RecordBatchStream,
+    batch_size: usize,
+) -> RecordBatchStream {
+    enum Phase<I> {
+        Baseline(Box<DeduplicateCurrentView>, RecordBatchStream),
+        Survivors(I),
+    }
+
+    Box::pin(futures::stream::try_unfold(
+        Phase::Baseline(Box::new(current_view), baseline_stream),
+        move |phase| async move {
+            let mut survivors = match phase {
+                Phase::Baseline(view, mut stream) => {
+                    while let Some(batch) = stream.try_next().await? {
+                        if let Some(batch) = view
+                            .reconcile_baseline_batch(&batch)
+                            .map_err(reconciliation_error)?
+                        {
+                            return Ok(Some((batch, Phase::Baseline(view, stream))));
+                        }
+                    }
+                    view.finish_batches(batch_size)
+                        .map_err(reconciliation_error)?
+                }
+                Phase::Survivors(batches) => batches,
+            };
+            let batch = survivors.next().transpose().map_err(reconciliation_error)?;
+            Ok(batch.map(|batch| (batch, Phase::Survivors(survivors))))
+        },
+    ))
+}
+
+fn reconciliation_error(error: ClientError) -> FlussLakeError {
+    let message = error_message("reconcile the primary-key current view", &error);
+    match error {
+        ClientError::BufferExhausted { .. } => FlussLakeError::MemoryLimitExceeded(message),
+        _ => FlussLakeError::Internal(message),
+    }
 }
 
 /// Restates every source batch under the physical schema frozen from Fluss
@@ -452,7 +568,8 @@ mod tests {
     #[test]
     fn empty_output_projection_preserves_filtered_row_counts() {
         let filter = bound(col("amount").gt(10_i64));
-        let physical = PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &filter).unwrap();
+        let physical =
+            PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &filter, &[]).unwrap();
         assert_eq!(physical.field_indexes, vec![2]);
         let schema = physical.arrow_schema(&pk_row_type()).unwrap();
         let batch = RecordBatch::try_new(
@@ -474,9 +591,13 @@ mod tests {
                 .all(|b| b.num_rows() == 1 && b.num_columns() == 0)
         );
 
-        let physical =
-            PhysicalProjection::resolve(&pk_row_type(), Some(&[]), &BoundPredicate::AlwaysTrue)
-                .unwrap();
+        let physical = PhysicalProjection::resolve(
+            &pk_row_type(),
+            Some(&[]),
+            &BoundPredicate::AlwaysTrue,
+            &[],
+        )
+        .unwrap();
         assert_eq!(physical.field_indexes, vec![0]);
     }
 
@@ -510,9 +631,13 @@ mod tests {
 
     #[test]
     fn physical_projection_keeps_predicate_columns_hidden_from_output() {
-        let physical =
-            PhysicalProjection::resolve(&pk_row_type(), Some(&[2]), &bound(col("id").eq(1_i32)))
-                .unwrap();
+        let physical = PhysicalProjection::resolve(
+            &pk_row_type(),
+            Some(&[2]),
+            &bound(col("id").eq(1_i32)),
+            &[],
+        )
+        .unwrap();
 
         assert_eq!(physical.field_indexes, vec![2, 0]);
     }
@@ -639,5 +764,57 @@ mod tests {
         let resized = resize_batches(source, 3);
 
         assert_eq!(collect_batches(resized).unwrap(), expected);
+    }
+    #[test]
+    fn pk_budget_is_released_on_baseline_error_and_pending_stream_drop() {
+        use arrow::array::Int32Array;
+        use fluss::client::LimitedReadMemoryBudget;
+        use fluss::record::ChangeType;
+        use futures::FutureExt;
+
+        futures::executor::block_on(async {
+            for fail in [false, true] {
+                let budget = Arc::new(LimitedReadMemoryBudget::new(16_384));
+                let batch = RecordBatch::try_from_iter(vec![(
+                    "id",
+                    Arc::new(Int32Array::from(vec![1])) as arrow::array::ArrayRef,
+                )])
+                .unwrap();
+                let mut view = DeduplicateCurrentView::try_new_with_memory_budget(
+                    batch.schema(),
+                    vec![0],
+                    budget.clone(),
+                )
+                .unwrap();
+                view.fold_changelog_batch(batch, &[ChangeType::Insert])
+                    .unwrap();
+                let baseline: RecordBatchStream = if fail {
+                    Box::pin(futures::stream::once(async {
+                        Err(FlussLakeError::DataUnavailable("expired".into()))
+                    }))
+                } else {
+                    Box::pin(futures::stream::pending())
+                };
+                let mut stream = reconciled_stream(view, baseline, 1);
+                if fail {
+                    assert!(matches!(
+                        stream.next().await,
+                        Some(Err(FlussLakeError::DataUnavailable(_)))
+                    ));
+                    assert_eq!(budget.used_bytes(), 0);
+                } else {
+                    assert!(stream.next().now_or_never().is_none());
+                    assert!(budget.used_bytes() > 0);
+                }
+                drop(stream);
+                assert_eq!(budget.used_bytes(), 0);
+            }
+            assert!(matches!(
+                reconciliation_error(ClientError::BufferExhausted {
+                    message: "limit".into()
+                }),
+                FlussLakeError::MemoryLimitExceeded(_)
+            ));
+        });
     }
 }

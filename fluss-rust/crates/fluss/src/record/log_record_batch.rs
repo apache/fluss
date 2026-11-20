@@ -709,16 +709,11 @@ impl LogRecordBatch {
     }
 
     pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        // Gate on the magic and length first: header offsets of an unsupported
-        // version or a truncated batch must not be interpreted with this layout.
         self.ensure_header_complete()?;
         if self.record_count() == 0 {
             return Ok(LogRecordIterator::empty());
         }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch(arrow_data)?;
-        self.ensure_record_count(record_batch.num_rows())?;
+        let (record_batch, change_types) = self.decode_record_batch(read_context)?;
         let arrow_reader = ArrowReader::new_with_fluss_row_type(
             Arc::new(record_batch),
             read_context.row_type_arc(),
@@ -738,17 +733,31 @@ impl LogRecordBatch {
     /// This is more efficient when you need the entire batch rather than
     /// iterating row-by-row.
     pub fn record_batch(&self, read_context: &ReadContext) -> Result<RecordBatch> {
+        Ok(self.record_batch_with_changes(read_context)?.0)
+    }
+
+    pub(crate) fn record_batch_with_changes(
+        &self,
+        read_context: &ReadContext,
+    ) -> Result<(RecordBatch, BatchChangeTypes)> {
         self.ensure_header_complete()?;
         if self.record_count() == 0 {
-            // Return empty batch with correct schema
-            return Ok(RecordBatch::new_empty(read_context.target_schema()));
+            return Ok((
+                RecordBatch::new_empty(read_context.target_schema()),
+                BatchChangeTypes::Uniform(ChangeType::AppendOnly),
+            ));
         }
+        self.decode_record_batch(read_context)
+    }
 
-        // Batch access drops the change-type vector; use `records()` for CDC.
-        let (_, arrow_data) = self.decode_change_types()?;
+    fn decode_record_batch(
+        &self,
+        read_context: &ReadContext,
+    ) -> Result<(RecordBatch, BatchChangeTypes)> {
+        let (changes, arrow_data) = self.decode_change_types()?;
         let record_batch = read_context.record_batch(arrow_data)?;
         self.ensure_record_count(record_batch.num_rows())?;
-        Ok(record_batch)
+        Ok((record_batch, changes))
     }
 }
 
