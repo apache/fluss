@@ -113,3 +113,59 @@ tests:
               cpu: 1000m
               memory: 2048Mi
         template: templates/sts-tablet.yaml
+
+  - it: should not set resources on the JAAS init container by default
+    set:
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: u
+      security.internal.sasl.plain.password: p
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: render-jaas-config
+        template: templates/sts-coordinator.yaml
+      - isNull:
+          path: spec.template.spec.initContainers[0].resources
+        template: templates/sts-coordinator.yaml
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: render-jaas-config
+        template: templates/sts-tablet.yaml
+      - isNull:
+          path: spec.template.spec.initContainers[0].resources
+        template: templates/sts-tablet.yaml
+
+  - it: should set resources on the JAAS init container in both statefulsets
+    set:
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: u
+      security.internal.sasl.plain.password: p
+      resources:
+        jaasInitContainer:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        template: templates/sts-coordinator.yaml
+      - equal:
+          path: spec.template.spec.initContainers[0].resources
+          value:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+        template: templates/sts-tablet.yaml
