@@ -23,6 +23,8 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -49,6 +51,7 @@ import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
@@ -58,6 +61,7 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -882,6 +886,40 @@ final class ReplicaTest extends ReplicaTestBase {
         verifyGetKeyValues(
                 replica.getKvTablet(),
                 getKeyValuePairs(genKvRecords(Tuple2.of("k1", new Object[] {1, "a"}))));
+    }
+
+    @Test
+    void testSelectedSnapshotPreservesLaggingLocalWal(@TempDir File snapshotDir) throws Exception {
+        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext context = new TestSnapshotContext(snapshotDir.getPath());
+        Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
+        makeKvReplicaAsLeader(replica, 0);
+
+        putRecordsToLeader(replica, genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"})));
+        long prefixEndOffset = replica.getLocalLogEndOffset();
+        putRecordsToLeader(replica, genKvRecordBatch(Tuple2.of("k2", new Object[] {2, "b"})));
+        context.scheduledExecutorService.triggerAllNonPeriodicTasks();
+        CompletedSnapshot snapshot =
+                context.testKvSnapshotStore.waitUntilSnapshotComplete(bucket, 0);
+        FsPath metadata = snapshot.getMetadataFilePath();
+        try (FSDataOutputStream output =
+                metadata.getFileSystem().create(metadata, FileSystem.WriteMode.OVERWRITE)) {
+            output.write(CompletedSnapshotJsonSerde.toJson(snapshot));
+        }
+        zkClient.registerTableBucketSnapshot(
+                bucket,
+                new BucketSnapshot(
+                        snapshot.getSnapshotID(), snapshot.getLogOffset(), metadata.toString()));
+        zkClient.updateRecoverySnapshot(bucket, snapshot.getSnapshotID(), null, -1);
+
+        makeKvReplicaAsFollower(replica, 1);
+        replica.truncateTo(prefixEndOffset);
+        assertThatThrownBy(() -> makeKvReplicaAsLeader(replica, 2))
+                .isInstanceOf(KvStorageException.class)
+                .rootCause()
+                .hasMessageContaining("Local log ends before snapshot offset");
+        assertThat(replica.getLogTablet().localLogStartOffset()).isZero();
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(prefixEndOffset);
     }
 
     @Test

@@ -56,7 +56,6 @@ public final class OffsetCheckpointFile {
     static final int CURRENT_VERSION = 0;
 
     private final CheckpointFile<Pair<TableBucket, Long>> checkpoint;
-    private Map<TableBucket, Long> persistedOffsets;
 
     public OffsetCheckpointFile(File file) throws IOException {
         this.checkpoint =
@@ -66,16 +65,13 @@ public final class OffsetCheckpointFile {
                         new OffsetCheckpointFile.Formatter());
     }
 
-    public synchronized void write(Map<TableBucket, Long> offsets) {
+    public void write(Map<TableBucket, Long> offsets) {
         List<Pair<TableBucket, Long>> list = new ArrayList<>(offsets.size());
         for (Map.Entry<TableBucket, Long> entry : offsets.entrySet()) {
             list.add(new MutablePair<>(entry.getKey(), entry.getValue()));
         }
         try {
             checkpoint.write(list);
-            if (persistedOffsets != null) {
-                persistedOffsets = new HashMap<>(offsets);
-            }
         } catch (IOException e) {
             String msg = "Error while writing to checkpoint file " + checkpoint.getAbsolutePath();
             throw new LogStorageException(msg, e);
@@ -96,14 +92,6 @@ public final class OffsetCheckpointFile {
             result.put(pair.getKey(), pair.getValue());
         }
         return result;
-    }
-
-    /** Returns the last persisted offset without rereading the whole file for each bucket. */
-    public synchronized long getPersistedOffset(TableBucket bucket) {
-        if (persistedOffsets == null) {
-            persistedOffsets = read();
-        }
-        return persistedOffsets.getOrDefault(bucket, 0L);
     }
 
     /** Formatter for offset checkpoint file. */

@@ -245,29 +245,6 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @Test
-    void testOverwriteRecoveryPersistsBoundaryOnlyWhenNeeded() throws Exception {
-        initTableBuckets(null);
-        LogTablet log = getOrCreateLog(tablePath1, null, tableBucket1);
-        OffsetCheckpointFile checkpoint =
-                new OffsetCheckpointFile(
-                        new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE));
-        long boundary = 100L;
-        // Simulate a retry after local truncation and before the recovery checkpoint was written.
-        log.truncateFullyAndStartAt(boundary);
-        assertThat(checkpoint.read()).doesNotContainKey(tableBucket1);
-
-        logManager.initializeOverwriteLocalTail(tableBucket1, boundary);
-        assertThat(checkpoint.read()).containsEntry(tableBucket1, boundary);
-
-        log.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
-        long endOffset = log.localLogEndOffset();
-        assertThat(endOffset).isGreaterThan(boundary);
-        logManager.initializeOverwriteLocalTail(tableBucket1, boundary);
-        assertThat(checkpoint.read()).containsEntry(tableBucket1, boundary);
-        assertThat(log.localLogEndOffset()).isEqualTo(endOffset);
-    }
-
-    @Test
     void testRecoveryAfterLogManagerShutdown() throws Exception {
         initTableBuckets(null);
         LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);

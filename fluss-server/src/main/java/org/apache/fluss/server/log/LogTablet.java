@@ -1196,21 +1196,6 @@ public final class LogTablet {
         }
     }
 
-    /** Advances a lagging overwrite tail while retaining WAL already beyond the snapshot. */
-    boolean initializeOverwriteLocalTail(long snapshotOffset) {
-        synchronized (lock) {
-            checkArgument(snapshotOffset >= 0, "Invalid overwrite recovery offset.");
-            boolean initialized = localLogEndOffset() < snapshotOffset;
-            if (initialized) {
-                truncateFullyAndStartAt(snapshotOffset);
-            }
-            if (getHighWatermark() < localLogStartOffset()) {
-                updateHighWatermark(localLogStartOffset());
-            }
-            return initialized;
-        }
-    }
-
     /** Initializes an unused local log, or accepts a retry at the same empty boundary. */
     void initializeEmptyLocalTail(long endOffset) {
         synchronized (lock) {

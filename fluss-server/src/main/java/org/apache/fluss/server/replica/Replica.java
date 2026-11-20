@@ -923,12 +923,6 @@ public final class Replica {
                 if (deleted) {
                     break;
                 }
-                if (recovery.recoverySnapshotId != null
-                        && org.apache.fluss.utils.ExceptionUtils.findThrowable(
-                                        e, LogStorageException.class)
-                                .isPresent()) {
-                    break;
-                }
                 if (kvTablet != null) {
                     try {
                         checkNotNull(kvManager).dropKv(tableBucket);
@@ -1061,14 +1055,7 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
-                if (recovery.recoverySnapshotId != null) {
-                    try {
-                        logManager.initializeOverwriteLocalTail(tableBucket, restoreStartOffset);
-                    } catch (LogStorageException e) {
-                        fatalErrorHandler.onFatalError(e);
-                        throw e;
-                    }
-                } else if (recovery.initializeLocalLog) {
+                if (recovery.initializeLocalLog) {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
                 rowCount =
@@ -1225,9 +1212,7 @@ public final class Replica {
             throw new KvStorageException("Cannot read recovery source for " + tableBucket, e);
         }
         boolean initializeLocalLog = false;
-        if (recoverySnapshotId == null
-                && snapshot.isPresent()
-                && snapshot.get().getLogOffset() > logTablet.localLogEndOffset()) {
+        if (snapshot.isPresent() && snapshot.get().getLogOffset() > logTablet.localLogEndOffset()) {
             try {
                 if (!snapshotContext
                         .getZooKeeperClient()
@@ -2808,15 +2793,6 @@ public final class Replica {
                                     tableBucket);
                             return 0L;
                         });
-        long localLogStartOffset = log.localLogStartOffset();
-        if (watermark < localLogStartOffset
-                && isKvTable()
-                && snapshotContext
-                        .getZooKeeperClient()
-                        .getSelectedRecoverySnapshotId(tableBucket)
-                        .isPresent()) {
-            watermark = localLogStartOffset;
-        }
         log.updateHighWatermark(watermark);
         log.registerMetrics(bucketMetricGroup);
         LOG.info("Log loaded for bucket {} with initial high watermark {}", tableBucket, watermark);
