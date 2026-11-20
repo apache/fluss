@@ -158,6 +158,23 @@ class JsonKafkaFieldDecoderTest {
     }
 
     @Test
+    void testRejectsNonUtf8Payloads() {
+        JsonKafkaFieldDecoder decoder = decoder(ROW_TYPE, false);
+        assertThatThrownBy(
+                        () ->
+                                decoder.decode(
+                                        ByteBuffer.wrap(
+                                                "{\"id\":7}".getBytes(StandardCharsets.UTF_16LE))))
+                .isInstanceOf(KafkaRecordEncodingException.class);
+
+        byte[] overlongUtf8 = "{\"label\":\"xy\"}".getBytes(StandardCharsets.UTF_8);
+        overlongUtf8[10] = (byte) 0xc0;
+        overlongUtf8[11] = (byte) 0xaf;
+        assertThatThrownBy(() -> decoder.decode(ByteBuffer.wrap(overlongUtf8)))
+                .isInstanceOf(KafkaRecordEncodingException.class);
+    }
+
+    @Test
     void testRawNumbersPreserveDecimalPrecision() {
         JsonKafkaFieldDecoder decoder =
                 decoder(
@@ -165,20 +182,25 @@ class JsonKafkaFieldDecoderTest {
                                 DataTypes.FIELD("floatValue", DataTypes.FLOAT()),
                                 DataTypes.FIELD("doubleValue", DataTypes.DOUBLE()),
                                 DataTypes.FIELD("amount", DataTypes.DECIMAL(30, 10)),
-                                DataTypes.FIELD("floatZero", DataTypes.FLOAT())),
+                                DataTypes.FIELD("floatZero", DataTypes.FLOAT()),
+                                DataTypes.FIELD("doubleZero", DataTypes.DOUBLE())),
                         false);
         Object[] values =
                 decoder.decode(
                                 buffer(
                                         "{\"floatValue\":1.0000000596046448,\"doubleValue\":-0.0,"
-                                                + "\"amount\":12345678901234567890.1234567890,\"floatZero\":-0}"))
+                                                + "\"amount\":12345678901234567890.1234567890,"
+                                                + "\"floatZero\":-0,\"doubleZero\":-0}"))
                         .valueFields();
         assertThat(values[0]).isEqualTo(1.0000001F);
-        // Jackson's decimal/integer nodes currently normalize signed zero (see #4863).
-        assertThat(Double.doubleToRawLongBits((Double) values[1])).isEqualTo(0L);
+        assertThat(Double.doubleToRawLongBits((Double) values[1]))
+                .isEqualTo(Double.doubleToRawLongBits(-0.0D));
         assertThat(((Decimal) values[2]).toBigDecimal())
                 .isEqualByComparingTo("12345678901234567890.1234567890");
-        assertThat(Float.floatToRawIntBits((Float) values[3])).isEqualTo(0);
+        assertThat(Float.floatToRawIntBits((Float) values[3]))
+                .isEqualTo(Float.floatToRawIntBits(-0.0F));
+        assertThat(Double.doubleToRawLongBits((Double) values[4]))
+                .isEqualTo(Double.doubleToRawLongBits(-0.0D));
     }
 
     @ParameterizedTest

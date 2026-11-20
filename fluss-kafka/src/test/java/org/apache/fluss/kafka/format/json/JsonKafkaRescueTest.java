@@ -38,6 +38,8 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
@@ -47,6 +49,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -70,7 +73,7 @@ class JsonKafkaRescueTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testRescuesUnknownAndInvalidFieldsAcrossNestedContainers(boolean nested) throws Exception {
-        KafkaFieldDecoder decoder = decoder(nested, true);
+        KafkaFieldDecoder decoder = decoder(VALUE_TYPE, nested, true);
         String extra = "{\"text\":\"\\uD83D\\uDE00\",\"number\":12345678901234567890.123456789}";
         KafkaDecodedValue decoded =
                 decoder.decode(
@@ -118,7 +121,7 @@ class JsonKafkaRescueTest {
     @ValueSource(booleans = {false, true})
     void testUnpairedSurrogateEscapesFollowDefaultEncoding(boolean nested) throws Exception {
         KafkaDecodedValue decoded =
-                decoder(nested, true)
+                decoder(VALUE_TYPE, nested, true)
                         .decode(
                                 bytes(
                                         "{\"details\":{\"label\":\"\\uD800\"},\"extra\":\"\\uDC00\"}"));
@@ -133,7 +136,7 @@ class JsonKafkaRescueTest {
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testRescueRequiresTheFixedSystemColumn(boolean nested) {
-        KafkaFieldDecoder decoder = decoder(nested, false);
+        KafkaFieldDecoder decoder = decoder(VALUE_TYPE, nested, false);
         assertThat(decoder.decode(bytes("{\"id\":7}")).valueFields())
                 .hasSize(nested ? 1 : VALUE_TYPE.getFieldCount());
         assertThatThrownBy(() -> decoder.decode(bytes("{\"id\":7,\"extra\":1}")))
@@ -143,8 +146,130 @@ class JsonKafkaRescueTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void testRescuePreservesExtremeNumberTokensAndParserPosition(boolean nested) {
+        KafkaDecodedValue decoded =
+                decoder(VALUE_TYPE, nested, true)
+                        .decode(
+                                bytes(
+                                        "{\"ratio\":-1e400,\"id\":2147483648,"
+                                                + "\"extra\":1e2147483648,\"details\":{\"known\":3}}"));
+
+        GenericRow row =
+                nested
+                        ? (GenericRow) decoded.valueFields()[0]
+                        : GenericRow.of(decoded.valueFields());
+        assertThat(row.isNullAt(0)).isTrue();
+        assertThat(row.getRow(1, 2).getInt(0)).isEqualTo(3);
+        assertThat(row.isNullAt(4)).isTrue();
+        assertThat(decoded.rescue())
+                .isEqualTo("{\"ratio\":-1e400,\"id\":2147483648,\"extra\":1e2147483648}");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testArrayRescueRetainsTrailingPositions(boolean nested) throws Exception {
+        KafkaDecodedValue decoded =
+                decoder(VALUE_TYPE, nested, true)
+                        .decode(
+                                bytes(
+                                        "{\"items\":[{\"known\":\"bad\"},{\"known\":2},"
+                                                + "{\"known\":3}]}"));
+
+        ObjectMapper mapper = new ObjectMapper();
+        assertThat(mapper.readTree(decoded.rescue()))
+                .isEqualTo(mapper.readTree("{\"items\":[{\"known\":\"bad\"},null,null]}"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("binarySchemas")
+    void testBase64DecodesEscapedWhitespace(RowType valueType, boolean nested) {
+        for (boolean rescue : new boolean[] {false, true}) {
+            KafkaDecodedValue decoded =
+                    decoder(valueType, nested, rescue)
+                            .decode(bytes("{\"payload\":\" AQID\\nBA== \",\"id\":7}"));
+            GenericRow row =
+                    nested
+                            ? (GenericRow) decoded.valueFields()[0]
+                            : GenericRow.of(decoded.valueFields());
+            assertThat((byte[]) row.getField(0)).containsExactly(1, 2, 3, 4);
+            assertThat(row.getInt(1)).isEqualTo(7);
+            assertThat(decoded.rescue()).isNull();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("binarySchemas")
+    void testBase64RescuePreservesCompleteValue(RowType valueType, boolean nested)
+            throws Exception {
+        KafkaFieldDecoder decoder = decoder(valueType, nested, true);
+        KafkaFieldDecoder strictDecoder = decoder(valueType, nested, false);
+        ObjectMapper mapper = new ObjectMapper();
+        for (String value :
+                Arrays.asList(
+                        "not-base64",
+                        "A",
+                        "AQ",
+                        "AQI",
+                        "AQ===",
+                        "AQ==x",
+                        "A Q==",
+                        "_w==",
+                        "AQID\n!tail",
+                        String.join("", Collections.nCopies(5000, "QUJD")) + "!tail")) {
+            String quotedValue = mapper.writeValueAsString(value);
+            String json = "{\"payload\":" + quotedValue + ",\"id\":7}";
+            KafkaDecodedValue decoded = decoder.decode(bytes(json));
+            GenericRow row =
+                    nested
+                            ? (GenericRow) decoded.valueFields()[0]
+                            : GenericRow.of(decoded.valueFields());
+            assertThat(row.isNullAt(0)).isTrue();
+            assertThat(row.getInt(1)).isEqualTo(7);
+            assertThat(decoded.rescue()).isEqualTo("{\"payload\":" + quotedValue + "}");
+            assertThatThrownBy(() -> strictDecoder.decode(bytes(json)))
+                    .isInstanceOf(KafkaRecordEncodingException.class)
+                    .hasMessageContaining("$[\"payload\"]")
+                    .hasMessageContaining("invalid Base64 string");
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("binarySchemas")
+    void testBase64RejectsMalformedJsonEvenWithRescue(RowType valueType, boolean nested) {
+        for (boolean rescue : new boolean[] {false, true}) {
+            KafkaFieldDecoder decoder = decoder(valueType, nested, rescue);
+            for (String json :
+                    Arrays.asList(
+                            "{\"payload\":\"AQID\nBA==\",\"id\":7}",
+                            "{\"payload\":\"AQID\rBA==\",\"id\":7}",
+                            "{\"payload\":\"AQID\tBA==\",\"id\":7}",
+                            "{\"payload\":\"\\qAQID\",\"id\":7}",
+                            "{\"payload\":\"AQID")) {
+                assertThatThrownBy(() -> decoder.decode(bytes(json)))
+                        .as("rescue=%s, JSON=%s", rescue, json)
+                        .isInstanceOf(KafkaRecordEncodingException.class)
+                        .hasMessageContaining("not valid strict UTF-8 JSON");
+            }
+        }
+    }
+
+    private static Stream<Arguments> binarySchemas() {
+        return Stream.of(DataTypes.BYTES(), DataTypes.BINARY(4))
+                .flatMap(
+                        type -> {
+                            RowType valueType =
+                                    DataTypes.ROW(
+                                            DataTypes.FIELD("payload", type),
+                                            DataTypes.FIELD("id", DataTypes.INT()));
+                            return Stream.of(
+                                    Arguments.of(valueType, false), Arguments.of(valueType, true));
+                        });
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void testStrictConversionsAndInvalidJsonAreStillRejected(boolean nested) {
-        KafkaFieldDecoder strictDecoder = decoder(nested, false);
+        KafkaFieldDecoder strictDecoder = decoder(VALUE_TYPE, nested, false);
         String[][] invalidFields = {
             {"\"id\":\"bad\"", "$[\"id\"]"},
             {"\"details\":{\"known\":\"bad\"}", "$[\"details\"][\"known\"]"},
@@ -156,7 +281,7 @@ class JsonKafkaRescueTest {
                     .isInstanceOf(KafkaRecordEncodingException.class)
                     .hasMessageContaining(field[1]);
         }
-        KafkaFieldDecoder decoder = decoder(nested, true);
+        KafkaFieldDecoder decoder = decoder(VALUE_TYPE, nested, true);
         for (String json :
                 Arrays.asList(
                         "{\"extra\":[",
@@ -218,15 +343,15 @@ class JsonKafkaRescueTest {
         assertThat(rescued).isEmpty();
     }
 
-    private static KafkaFieldDecoder decoder(boolean nested, boolean rescue) {
+    private static KafkaFieldDecoder decoder(RowType valueType, boolean nested, boolean rescue) {
         Schema.Builder schema = Schema.newBuilder();
         if (rescue) {
             schema.column(KafkaTableSchema.RESCUE_COLUMN, DataTypes.STRING());
         }
         if (nested) {
-            schema.column(KafkaTableSchema.VALUE_COLUMN, VALUE_TYPE);
+            schema.column(KafkaTableSchema.VALUE_COLUMN, valueType);
         } else {
-            for (DataField field : VALUE_TYPE.getFields()) {
+            for (DataField field : valueType.getFields()) {
                 schema.column(field.getName(), field.getType());
             }
         }
