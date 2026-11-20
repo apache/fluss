@@ -65,6 +65,7 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -98,6 +99,17 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     // map from subscribed table bucket to split id
     private final Map<TableBucket, String> subscribedBuckets;
+
+    // map from table bucket paused for watermark alignment to split id; unsubscribed from the
+    // scanner
+    private final Map<TableBucket, String> pausedBuckets = new HashMap<>();
+
+    // next log offset to read per subscribed or paused bucket, where a resumed bucket continues
+    private final Map<TableBucket, Long> nextLogOffsets = new HashMap<>();
+
+    // set by wakeUp() so a fetch waiting while every bucket is paused returns to the fetcher
+    private final Object pausedWakeUp = new Object();
+    private boolean wakeUpPending;
 
     @Nullable private final int[] projectedFields;
     @Nullable private final BiPredicate<InternalRow, InternalRow> projectedRowEquals;
@@ -204,6 +216,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             } else {
                 // if not subscribe any buckets, just return empty records
                 if (subscribedBuckets.isEmpty()) {
+                    if (!pausedBuckets.isEmpty()) {
+                        awaitWakeUpWhilePaused();
+                    }
                     return FlinkRecordsWithSplitIds.emptyRecords();
                 }
                 ScanRecords scanRecords = logScanner.poll(POLL_TIMEOUT);
@@ -349,6 +364,67 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     split.splitId(),
                     startingOffset);
             subscribedBuckets.put(tableBucket, split.splitId());
+            nextLogOffsets.put(tableBucket, startingOffset);
+        }
+    }
+
+    /**
+     * Pauses and resumes splits for watermark alignment.
+     *
+     * <p>A paused split's log bucket is unsubscribed from the scanner, so nothing more is fetched
+     * for it, and is subscribed again at the next unread offset on resume. Fetches the scanner had
+     * buffered for the bucket are discarded on unsubscribe, so a resumed split neither skips nor
+     * repeats records. Only log reading is paused: a bounded phase (KV snapshot, lake snapshot or
+     * KV batch) is finite and is read to its end regardless.
+     */
+    @Override
+    public void pauseOrResumeSplits(
+            Collection<SourceSplitBase> splitsToPause, Collection<SourceSplitBase> splitsToResume) {
+        for (SourceSplitBase split : splitsToPause) {
+            TableBucket tableBucket = split.getTableBucket();
+            String splitId = subscribedBuckets.remove(tableBucket);
+            if (splitId != null) {
+                unsubscribeLog(tableBucket);
+                pausedBuckets.put(tableBucket, splitId);
+                LOG.debug(
+                        "Pause log of split {} at offset {}.",
+                        splitId,
+                        nextLogOffsets.get(tableBucket));
+            }
+        }
+
+        for (SourceSplitBase split : splitsToResume) {
+            TableBucket tableBucket = split.getTableBucket();
+            if (pausedBuckets.remove(tableBucket) != null) {
+                subscribeLog(split, nextLogOffsets.get(tableBucket));
+            }
+        }
+    }
+
+    /**
+     * Blocks while every log bucket of this reader is paused, until {@link #wakeUp()} or the poll
+     * timeout, so the fetcher does not spin on empty fetches.
+     */
+    private void awaitWakeUpWhilePaused() throws IOException {
+        synchronized (pausedWakeUp) {
+            try {
+                if (!wakeUpPending) {
+                    pausedWakeUp.wait(POLL_TIMEOUT.toMillis());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(
+                        "Interrupted while waiting for paused splits " + pausedBuckets.values(), e);
+            }
+            wakeUpPending = false;
+        }
+    }
+
+    private void unsubscribeLog(TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() == null) {
+            logScanner.unsubscribe(tableBucket.getBucket());
+        } else {
+            logScanner.unsubscribe(tableBucket.getPartitionId(), tableBucket.getBucket());
         }
     }
 
@@ -413,8 +489,27 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 removedSplits.add(tableBucketAndSplit.getValue());
                 subscribeTableBucketIterator.remove();
                 unsubscribedTableBuckets.add(tableBucket);
+                nextLogOffsets.remove(tableBucket);
                 LOG.info(
                         "Unsubscribe to read log of split {} for non-existed partition {}.",
+                        tableBucketAndSplit.getValue(),
+                        removedPartitions.get(tableBucket.getPartitionId()));
+            }
+        }
+
+        // paused buckets are already unsubscribed from the log scanner
+        Iterator<Map.Entry<TableBucket, String>> pausedIterator =
+                pausedBuckets.entrySet().iterator();
+        while (pausedIterator.hasNext()) {
+            Map.Entry<TableBucket, String> tableBucketAndSplit = pausedIterator.next();
+            TableBucket tableBucket = tableBucketAndSplit.getKey();
+            if (removedPartitions.containsKey(tableBucket.getPartitionId())) {
+                removedSplits.add(tableBucketAndSplit.getValue());
+                pausedIterator.remove();
+                unsubscribedTableBuckets.add(tableBucket);
+                nextLogOffsets.remove(tableBucket);
+                LOG.info(
+                        "Drop paused log split {} for non-existed partition {}.",
                         tableBucketAndSplit.getValue(),
                         removedPartitions.get(tableBucket.getPartitionId()));
             }
@@ -512,8 +607,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 stoppingOffsets.put(scanBucket, stoppingOffset);
                 finishedSplits.add(splitId);
             }
+            if (consumedUpToOffset != null) {
+                nextLogOffsets.merge(scanBucket, consumedUpToOffset, Math::max);
+            }
             if (!bucketScanRecords.isEmpty()) {
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
+                nextLogOffsets.merge(scanBucket, lastRecord.logOffset() + 1, Math::max);
                 // We keep the maximum message timestamp in the fetch for calculating lags
                 maxConsumerRecordTimestampInFetch =
                         Math.max(maxConsumerRecordTimestampInFetch, lastRecord.timestamp());
@@ -570,12 +669,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             Map.Entry<TableBucket, String> entry = iterator.next();
             if (finishedSplitIds.contains(entry.getValue())) {
                 TableBucket tableBucket = entry.getKey();
-                if (tableBucket.getPartitionId() == null) {
-                    logScanner.unsubscribe(tableBucket.getBucket());
-                } else {
-                    logScanner.unsubscribe(tableBucket.getPartitionId(), tableBucket.getBucket());
-                }
+                unsubscribeLog(tableBucket);
                 stoppingOffsets.remove(tableBucket);
+                nextLogOffsets.remove(tableBucket);
                 iterator.remove();
             }
         }
@@ -670,6 +766,10 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         // TODO: we should wakeup snapshot reader as well when it supports.
         if (logScanner != null) {
             logScanner.wakeup();
+        }
+        synchronized (pausedWakeUp) {
+            wakeUpPending = true;
+            pausedWakeUp.notifyAll();
         }
     }
 
