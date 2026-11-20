@@ -1129,6 +1129,7 @@ public final class RecordAccumulator {
                         outputView,
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
+                        writeRecord.isIgnoreNulls(),
                         isHistoricalPartition,
                         clock.milliseconds());
 

@@ -42,6 +42,7 @@ import java.util.concurrent.CompletableFuture;
 public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     private transient UpsertWriter upsertWriter;
+    private final boolean ignoreNulls;
 
     /**
      * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
@@ -73,6 +74,27 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema,
             @Nullable ProducerOffsetReporter offsetReporter) {
+        this(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                targetColumnIndexes,
+                mailboxExecutor,
+                flussSerializationSchema,
+                offsetReporter,
+                false);
+    }
+
+    /** Creates a sink writer with optional request-scoped NULL skipping. */
+    public UpsertSinkWriter(
+            TablePath tablePath,
+            Configuration flussConfig,
+            RowType tableRowType,
+            @Nullable int[] targetColumnIndexes,
+            MailboxExecutor mailboxExecutor,
+            FlussSerializationSchema<InputT> flussSerializationSchema,
+            @Nullable ProducerOffsetReporter offsetReporter,
+            boolean ignoreNulls) {
         super(
                 tablePath,
                 flussConfig,
@@ -81,12 +103,16 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 mailboxExecutor,
                 flussSerializationSchema);
         this.offsetReporter = offsetReporter;
+        this.ignoreNulls = ignoreNulls;
     }
 
     @Override
     public void initialize(SinkWriterMetricGroup metricGroup) {
         super.initialize(metricGroup);
         Upsert upsert = table.newUpsert();
+        if (ignoreNulls) {
+            upsert = upsert.ignoreNulls(true);
+        }
         if (targetColumnIndexes != null) {
             upsert = upsert.partialUpdate(targetColumnIndexes);
         }

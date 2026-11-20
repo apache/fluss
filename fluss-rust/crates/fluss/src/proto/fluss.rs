@@ -385,9 +385,12 @@ pub struct PutKvRequest {
     #[prost(message, repeated, tag = "5")]
     pub buckets_req: ::prost::alloc::vec::Vec<PbPutKvReqForBucket>,
     /// Aggregation mode for this request (see AGG_MODE_* constants above)
-    /// 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
+    /// 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (reserved)
     #[prost(int32, optional, tag = "6")]
     pub agg_mode: ::core::option::Option<i32>,
+    /// Preserve existing target-column values for incoming NULLs (PUT_KV v4+).
+    #[prost(bool, optional, tag = "7")]
+    pub ignore_nulls: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutKvResponse {

@@ -1327,6 +1327,17 @@ public final class Replica {
             MergeMode mergeMode,
             int requiredAcks)
             throws Exception {
+        return putRecordsToLeader(kvRecords, targetColumns, mergeMode, false, requiredAcks);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public LogAppendInfo putRecordsToLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            int requiredAcks)
+            throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
@@ -1347,7 +1358,8 @@ public final class Replica {
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
                     LogAppendInfo logAppendInfo;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
+                        logAppendInfo =
+                                kv.putAsLeader(kvRecords, targetColumns, mergeMode, ignoreNulls);
                     } catch (IOException e) {
                         LOG.error("Error while putting records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
@@ -1373,6 +1385,28 @@ public final class Replica {
             int expectedLeaderEpoch,
             int requiredAcks)
             throws Exception {
+        return putHistoricalRecordsToLeader(
+                kvRecords,
+                targetColumns,
+                mergeMode,
+                false,
+                originalPartitionName,
+                lakeLookup,
+                expectedLeaderEpoch,
+                requiredAcks);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public LogAppendInfo putHistoricalRecordsToLeader(
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            String originalPartitionName,
+            FunctionWithException<List<byte[]>, List<byte[]>, Exception> lakeLookup,
+            int expectedLeaderEpoch,
+            int requiredAcks)
+            throws Exception {
         LocalValueLookupResult localLookupResult =
                 inReadLock(
                         leaderIsrUpdateLock,
@@ -1382,7 +1416,11 @@ public final class Replica {
                             checkNotNull(
                                     kv, "KvTablet for the historical replica shouldn't be null.");
                             return kv.probeLocalPreviousValues(
-                                    kvRecords, targetColumns, mergeMode, originalPartitionName);
+                                    kvRecords,
+                                    targetColumns,
+                                    mergeMode,
+                                    ignoreNulls,
+                                    originalPartitionName);
                         });
 
         // Both the replica read lock and the KV read lock have been released before lake I/O.
@@ -1400,6 +1438,7 @@ public final class Replica {
                                     kvRecords,
                                     targetColumns,
                                     mergeMode,
+                                    ignoreNulls,
                                     originalPartitionName,
                                     historicalValueLookup);
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());

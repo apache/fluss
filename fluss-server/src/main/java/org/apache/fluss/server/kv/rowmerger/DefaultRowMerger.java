@@ -28,21 +28,28 @@ import org.apache.fluss.server.kv.partialupdate.PartialUpdaterCache;
 import javax.annotation.Nullable;
 
 /**
- * The default row merger of primary key table that always retains the latest row and supports
- * configuring target merge columns for partial update.
+ * The default row merger of primary key tables, supporting latest-value updates, partial updates,
+ * and optional preservation of existing values for incoming NULLs.
  *
- * <p>If {@link RowMerger#configureTargetColumns(int[], short, Schema)} receives target indexes that
- * cover every field of the latest schema (same semantic as a full-row write), this merger keeps
- * using plain merge semantics instead of wrapping a partial updater.
+ * <p>NULL-preserving upserts and partial updates construct the result from target columns and
+ * existing values. Full-row deletes retain their normal behavior in either mode.
  */
 public class DefaultRowMerger implements RowMerger {
 
     private final PartialUpdaterCache partialUpdaterCache;
     private final KvFormat kvFormat;
+    private final boolean ignoreNulls;
     private final DeleteBehavior deleteBehavior;
 
     public DefaultRowMerger(KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior) {
+        this(kvFormat, deleteBehavior, false);
+    }
+
+    /** Creates a default merger with optional NULL-preserving upserts. */
+    public DefaultRowMerger(
+            KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior, boolean ignoreNulls) {
         this.kvFormat = kvFormat;
+        this.ignoreNulls = ignoreNulls;
         // for compatibility, default to ALLOW if not specified
         this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
         // TODO: share cache in server level when PartialUpdater is thread-safe
@@ -71,27 +78,35 @@ public class DefaultRowMerger implements RowMerger {
     @Override
     public RowMerger configureTargetColumns(
             @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
-        if (targetColumns == null
-                || TargetColumns.specifiesAllSchemaFieldIndexes(latestSchema, targetColumns)) {
+        boolean fullRow =
+                targetColumns == null
+                        || TargetColumns.specifiesAllSchemaFieldIndexes(
+                                latestSchema, targetColumns);
+        if (fullRow && !ignoreNulls) {
             return this;
-        } else {
-            // this also sanity checks the validity of the partial update
-            PartialUpdater partialUpdater =
-                    partialUpdaterCache.getOrCreatePartialUpdater(
-                            kvFormat, latestShemaId, latestSchema, targetColumns);
-            return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
+        PartialUpdater partialUpdater =
+                partialUpdaterCache.getOrCreatePartialUpdater(
+                        kvFormat, latestShemaId, latestSchema, fullRow ? null : targetColumns);
+        return new PartialUpdateRowMerger(partialUpdater, deleteBehavior, ignoreNulls, fullRow);
     }
 
     /** A merger that partially updates specified columns with the new row. */
     private static class PartialUpdateRowMerger implements RowMerger {
 
         private final PartialUpdater partialUpdater;
+        private final boolean ignoreNulls;
+        private final boolean fullRow;
         private final DeleteBehavior deleteBehavior;
 
         public PartialUpdateRowMerger(
-                PartialUpdater partialUpdater, DeleteBehavior deleteBehavior) {
+                PartialUpdater partialUpdater,
+                DeleteBehavior deleteBehavior,
+                boolean ignoreNulls,
+                boolean fullRow) {
             this.partialUpdater = partialUpdater;
+            this.ignoreNulls = ignoreNulls;
+            this.fullRow = fullRow;
             this.deleteBehavior = deleteBehavior;
         }
 
@@ -105,13 +120,13 @@ public class DefaultRowMerger implements RowMerger {
         @Nullable
         @Override
         public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
-            return partialUpdater.updateRow(oldValue, newValue);
+            return partialUpdater.updateRow(oldValue, newValue, ignoreNulls);
         }
 
         @Nullable
         @Override
         public BinaryValue delete(BinaryValue oldRow) {
-            return partialUpdater.deleteRow(oldRow);
+            return fullRow ? null : partialUpdater.deleteRow(oldRow);
         }
 
         @Override

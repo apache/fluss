@@ -74,6 +74,29 @@ public final class WriteRecord {
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
             MergeMode mergeMode) {
+        return forUpsert(
+                tableInfo,
+                tablePath,
+                row,
+                key,
+                bucketKey,
+                writeFormat,
+                targetColumns,
+                mergeMode,
+                false);
+    }
+
+    /** Creates a write record with an independent NULL assignment policy. */
+    public static WriteRecord forUpsert(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            BinaryRow row,
+            byte[] key,
+            byte[] bucketKey,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "bucketKey must not be null");
@@ -88,7 +111,8 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                ignoreNulls);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
@@ -118,6 +142,20 @@ public final class WriteRecord {
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
             MergeMode mergeMode) {
+        return forDelete(
+                tableInfo, tablePath, key, bucketKey, writeFormat, targetColumns, mergeMode, false);
+    }
+
+    /** Creates a write record with an independent NULL assignment policy. */
+    public static WriteRecord forDelete(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            byte[] key,
+            byte[] bucketKey,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "key must not be null");
         checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
@@ -131,7 +169,8 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                ignoreNulls);
     }
 
     /** Create a write record for append operation for indexed format. */
@@ -222,6 +261,8 @@ public final class WriteRecord {
      */
     private final MergeMode mergeMode;
 
+    private final boolean ignoreNulls;
+
     private WriteRecord(
             TableInfo tableInfo,
             PhysicalTablePath physicalTablePath,
@@ -232,6 +273,30 @@ public final class WriteRecord {
             @Nullable int[] targetColumns,
             int estimatedSizeInBytes,
             MergeMode mergeMode) {
+        this(
+                tableInfo,
+                physicalTablePath,
+                key,
+                bucketKey,
+                row,
+                writeFormat,
+                targetColumns,
+                estimatedSizeInBytes,
+                mergeMode,
+                false);
+    }
+
+    private WriteRecord(
+            TableInfo tableInfo,
+            PhysicalTablePath physicalTablePath,
+            @Nullable byte[] key,
+            @Nullable byte[] bucketKey,
+            @Nullable InternalRow row,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            int estimatedSizeInBytes,
+            MergeMode mergeMode,
+            boolean ignoreNulls) {
         this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
@@ -241,6 +306,7 @@ public final class WriteRecord {
         this.targetColumns = targetColumns;
         this.estimatedSizeInBytes = estimatedSizeInBytes;
         this.mergeMode = mergeMode;
+        this.ignoreNulls = ignoreNulls;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -296,6 +362,11 @@ public final class WriteRecord {
                             writeFormat));
         }
         return estimatedSizeInBytes;
+    }
+
+    /** Whether incoming NULL target-column values preserve existing values. */
+    public boolean isIgnoreNulls() {
+        return ignoreNulls;
     }
 
     public int getSchemaId() {

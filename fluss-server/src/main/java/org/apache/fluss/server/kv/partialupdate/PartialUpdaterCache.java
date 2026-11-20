@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.Schema;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -47,13 +48,13 @@ public class PartialUpdaterCache {
 
     // TODO: extend to tableId and schemaId when the cache is shared across all tables
     public PartialUpdater getOrCreatePartialUpdater(
-            KvFormat kvFormat, short schemaId, Schema schema, int[] targetColumns) {
+            KvFormat kvFormat, short schemaId, Schema schema, @Nullable int[] targetColumns) {
         return rowPartialUpdaters.get(
                 getPartialUpdaterKey(targetColumns, schemaId),
                 k -> new PartialUpdater(kvFormat, schemaId, schema, targetColumns));
     }
 
-    private String getPartialUpdaterKey(int[] targetColumns, int schemaId) {
+    private String getPartialUpdaterKey(@Nullable int[] targetColumns, int schemaId) {
         return schemaId + "_" + Arrays.toString(targetColumns);
     }
 }

@@ -811,6 +811,27 @@ public class ReplicaManager implements ServerReconfigurable {
             MergeMode mergeMode,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
+        putRecordsToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket,
+                targetColumns,
+                mergeMode,
+                false,
+                apiVersion,
+                responseCallback);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public void putRecordsToKv(
+            int timeoutMs,
+            int requiredAcks,
+            Map<TableBucket, KvRecordBatch> entriesPerBucket,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            short apiVersion,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
@@ -818,7 +839,13 @@ public class ReplicaManager implements ServerReconfigurable {
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
+                putToLocalKv(
+                        entriesPerBucket,
+                        targetColumns,
+                        mergeMode,
+                        ignoreNulls,
+                        requiredAcks,
+                        apiVersion);
         LOG.debug(
                 "Put records to local kv storage and wait generate cdc log in {} ms",
                 System.currentTimeMillis() - startTime);
@@ -838,6 +865,27 @@ public class ReplicaManager implements ServerReconfigurable {
             MergeMode mergeMode,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
+        putHistoricalRecordsToKv(
+                timeoutMs,
+                requiredAcks,
+                entriesPerBucket,
+                targetColumns,
+                mergeMode,
+                false,
+                apiVersion,
+                responseCallback);
+    }
+
+    /** Applies the write with an independent NULL assignment policy. */
+    public void putHistoricalRecordsToKv(
+            int timeoutMs,
+            int requiredAcks,
+            Collection<PutKvDataForBucket> entriesPerBucket,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            boolean ignoreNulls,
+            short apiVersion,
+            Consumer<List<PutKvResultForBucket>> responseCallback) {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
@@ -852,7 +900,13 @@ public class ReplicaManager implements ServerReconfigurable {
         AtomicInteger remaining = new AtomicInteger(entriesPerBucket.size());
         entriesPerBucket.forEach(
                 putData ->
-                        historicalPutKv(putData, targetColumns, mergeMode, requiredAcks, apiVersion)
+                        historicalPutKv(
+                                        putData,
+                                        targetColumns,
+                                        mergeMode,
+                                        ignoreNulls,
+                                        requiredAcks,
+                                        apiVersion)
                                 .whenComplete(
                                         (result, error) -> {
                                             PutKvResultForBucket completedResult =
@@ -885,6 +939,7 @@ public class ReplicaManager implements ServerReconfigurable {
             PutKvDataForBucket putData,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             int requiredAcks,
             short apiVersion) {
         TableMetricGroup tableMetrics = null;
@@ -914,7 +969,7 @@ public class ReplicaManager implements ServerReconfigurable {
                             putData.originalPartitionName());
             TableMetricGroup historicalPutMetrics = tableMetrics;
             return historicalPartitionManager
-                    .putKv(replica, copiedData, targetColumns, mergeMode, requiredAcks)
+                    .putKv(replica, copiedData, targetColumns, mergeMode, ignoreNulls, requiredAcks)
                     .thenApply(
                             result -> {
                                 if (result.failed()
@@ -1689,6 +1744,7 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            boolean ignoreNulls,
             int requiredAcks,
             short apiVersion) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
@@ -1703,7 +1759,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
-                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
+                                entry.getValue(),
+                                targetColumns,
+                                mergeMode,
+                                ignoreNulls,
+                                requiredAcks);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,

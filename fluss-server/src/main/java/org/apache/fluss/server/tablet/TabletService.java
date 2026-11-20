@@ -468,6 +468,7 @@ public final class TabletService extends RpcServiceBase
                     putKvData,
                     getTargetColumns(request),
                     mergeMode,
+                    request.hasIgnoreNulls() && request.isIgnoreNulls(),
                     currentSession().getApiVersion(),
                     responseCallback);
         } else {
@@ -480,6 +481,7 @@ public final class TabletService extends RpcServiceBase
                     recordsByBucket,
                     getTargetColumns(request),
                     mergeMode,
+                    request.hasIgnoreNulls() && request.isIgnoreNulls(),
                     currentSession().getApiVersion(),
                     responseCallback);
         }

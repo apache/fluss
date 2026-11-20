@@ -308,6 +308,55 @@ class HistoricalPartitionManagerTest extends ReplicaTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"FULL", "WAL"})
+    void testIgnoreNullsPreservesLakeValues(String image) throws Exception {
+        TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(ChangelogImage.valueOf(image));
+        Replica replica = replicaManager.getReplicaOrException(TABLE_BUCKET);
+        KvTablet kvTablet = replica.getKvTablet();
+        TestingHistoricalLakeLookupManager lakeLookupManager =
+                new TestingHistoricalLakeLookupManager(lookupConfiguration());
+        lakeLookupManager.putLakeValue(
+                ORIGINAL_PARTITION,
+                ValueEncoder.encodeValue(
+                        (short) tableInfo.getSchemaId(),
+                        compactedRow(
+                                tableInfo.getRowType(),
+                                new Object[] {1, "us", ORIGINAL_PARTITION, "lake-value"})));
+        try (HistoricalPartitionManager manager =
+                createHistoricalPartitionManager(lakeLookupManager)) {
+            KvRecordBatch records =
+                    batch(tableInfo.getRowType(), upsert(1, "us", ORIGINAL_PARTITION, null));
+            PutKvResultForBucket result =
+                    manager.putKv(
+                                    replica,
+                                    new PutKvDataForBucket(
+                                            TABLE_BUCKET, records, ORIGINAL_PARTITION),
+                                    null,
+                                    MergeMode.DEFAULT,
+                                    true,
+                                    1)
+                            .get();
+            assertThat(result.failed()).isFalse();
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    key(1, "us"),
+                    tableInfo,
+                    row(1, "us", ORIGINAL_PARTITION, "lake-value"));
+            assertThat(lakeLookupManager.lookupCount).hasValue(1);
+            writeBatch(manager, replica, ORIGINAL_PARTITION, records);
+            flushAndWait(kvTablet, Long.MAX_VALUE);
+            assertHistoricalValue(
+                    kvTablet,
+                    ORIGINAL_PARTITION,
+                    key(1, "us"),
+                    tableInfo,
+                    row(1, "us", ORIGINAL_PARTITION, null));
+        }
+    }
+
     @Test
     void testHistoricalInsertUpdateAndDelete() throws Exception {
         TableInfo tableInfo = registerHistoricalTableAndBecomeLeader(true);
