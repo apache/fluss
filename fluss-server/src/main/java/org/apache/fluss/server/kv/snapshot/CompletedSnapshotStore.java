@@ -157,9 +157,12 @@ public class CompletedSnapshotStore {
     }
 
     private void rememberImportedSnapshot(CompletedSnapshot snapshot) {
-        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-        completedSnapshots.addLast(snapshot);
-        recoverySnapshotId = snapshot.getSnapshotID();
+        long snapshotId = snapshot.getSnapshotID();
+        if (completedSnapshots.stream().noneMatch(s -> s.getSnapshotID() == snapshotId)) {
+            snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+            completedSnapshots.addLast(snapshot);
+        }
+        recoverySnapshotId = snapshotId;
     }
 
     /** Resolves an uncertain publication before acknowledging a retry. */

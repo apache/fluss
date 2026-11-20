@@ -953,18 +953,24 @@ public class ServerRpcMessageUtils {
                 new ArrayList<>();
         for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
                 response.getNotifyBucketsLeaderRespsList()) {
-            TableBucket tableBucket =
-                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
-            // construct the result for notify bucket leader and isr
-            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
-                    protoNotifyLeaderRespForBucket.hasErrorCode()
-                            ? new NotifyLeaderAndIsrResultForBucket(
-                                    tableBucket,
-                                    ApiError.fromErrorMessage(protoNotifyLeaderRespForBucket))
-                            : new NotifyLeaderAndIsrResultForBucket(tableBucket);
-            notifyLeaderAndIsrResultForBuckets.add(notifyLeaderAndIsrResultForBucket);
+            notifyLeaderAndIsrResultForBuckets.add(
+                    toNotifyLeaderAndIsrResult(protoNotifyLeaderRespForBucket));
         }
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    /** Decodes the result for one bucket, including an optional recovery acknowledgment. */
+    public static NotifyLeaderAndIsrResultForBucket toNotifyLeaderAndIsrResult(
+            PbNotifyLeaderAndIsrRespForBucket response) {
+        TableBucket bucket = toTableBucket(response.getTableBucket());
+        if (response.hasErrorCode() && response.getErrorCode() != 0) {
+            return new NotifyLeaderAndIsrResultForBucket(
+                    bucket, ApiError.fromErrorMessage(response));
+        }
+        return response.hasRecoveredSnapshotId()
+                ? NotifyLeaderAndIsrResultForBucket.forRecoveredSnapshot(
+                        bucket, response.getRecoveredSnapshotId())
+                : new NotifyLeaderAndIsrResultForBucket(bucket);
     }
 
     /**

@@ -29,6 +29,7 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -203,7 +204,6 @@ import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
-import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -211,7 +211,6 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
-import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
@@ -375,13 +374,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         Session session = currentSession();
         return submitBulkLoadOperation(
                 manager -> {
-                    VersionedData<BulkLoadTransaction> transaction =
-                            resolveAndAuthorizeBulkLoad(manager, request.getHandle(), session);
+                    PbBulkLoadHandle handle = request.getHandle();
+                    authorizeBulkLoad(handle.getTableId(), session);
                     BulkLoadBucket allocation =
                             manager.allocateBucketSnapshot(
-                                    transaction,
-                                    request.hasPartitionId() ? request.getPartitionId() : null,
-                                    request.getBucketId(),
+                                    handle.getBulkLoadId(),
+                                    new TableBucket(
+                                            handle.getTableId(),
+                                            request.hasPartitionId()
+                                                    ? request.getPartitionId()
+                                                    : null,
+                                            request.getBucketId()),
                                     this::fetchLeaderLogEndOffset);
                     return new AllocateBulkLoadBucketSnapshotResponse()
                             .setSnapshotId(allocation.snapshotId)
@@ -396,16 +399,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         Session session = currentSession();
         return submitBulkLoadOperation(
                 manager -> {
-                    VersionedData<BulkLoadTransaction> transaction =
-                            resolveAndAuthorizeBulkLoad(manager, request.getHandle(), session);
+                    PbBulkLoadHandle handle = request.getHandle();
+                    authorizeBulkLoad(handle.getTableId(), session);
                     TableBucket bucket =
                             new TableBucket(
-                                    request.getHandle().getTableId(),
+                                    handle.getTableId(),
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId());
                     CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
                     manager.commitBucketSnapshot(
-                            transaction,
+                            handle.getBulkLoadId(),
                             bucket,
                             this::fetchLeaderLogEndOffset,
                             processor.completedSnapshotStoreManager(),
@@ -414,17 +417,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 });
     }
 
-    private VersionedData<BulkLoadTransaction> resolveAndAuthorizeBulkLoad(
-            BulkLoadManager manager, PbBulkLoadHandle handle, Session session) throws Exception {
-        VersionedData<BulkLoadTransaction> transaction =
-                manager.resolveTransaction(handle.getTableId(), handle.getBulkLoadId());
+    private void authorizeBulkLoad(long tableId, Session session) {
         if (authorizer != null) {
-            authorizer.authorize(
-                    session,
-                    OperationType.WRITE,
-                    Resource.table(transaction.data().tableInfo.getTablePath()));
+            try {
+                authorizeTableWithSession(session, OperationType.WRITE, tableId);
+            } catch (UnknownTableOrBucketException e) {
+                throw new BulkLoadNotFoundException(
+                        "The original BulkLoad table no longer exists.");
+            }
         }
-        return transaction;
     }
 
     private long fetchLeaderLogEndOffset(TableBucket bucket) throws Exception {

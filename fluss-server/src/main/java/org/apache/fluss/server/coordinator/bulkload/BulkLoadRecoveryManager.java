@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -27,6 +28,7 @@ import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -37,6 +39,7 @@ import org.apache.fluss.utils.concurrent.Scheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -51,6 +54,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** Retries independent cache adoption and leader recovery from physical bucket records. */
@@ -66,6 +70,7 @@ public final class BulkLoadRecoveryManager implements AutoCloseable {
     private final CoordinatorChannelManager channels;
     private final CompletedSnapshotStoreManager snapshots;
     private final Map<TableBucket, Object> active = new ConcurrentHashMap<>();
+    private final Map<TableBucket, Object> newCommitRecoveries = new ConcurrentHashMap<>();
     private final Set<TableBucket> inFlight = ConcurrentHashMap.newKeySet();
     private final Executor executor;
     private final Scheduler scheduler;
@@ -105,7 +110,10 @@ public final class BulkLoadRecoveryManager implements AutoCloseable {
     /** Schedules reconciliation of the currently selected snapshot for the bucket. */
     public synchronized void request(TableBucket bucket) {
         if (!closed) {
-            active.put(bucket, new Object());
+            Object request = new Object();
+            // Expose the priority entry before this request can enter the regular sweep.
+            newCommitRecoveries.put(bucket, request);
+            active.put(bucket, request);
             scheduleScan(0);
         }
     }
@@ -206,39 +214,57 @@ public final class BulkLoadRecoveryManager implements AutoCloseable {
         if (!recoveryRound.hasNext()) {
             recoveryRound = active.entrySet().iterator();
         }
-        // Resume the same sweep when all slots are busy so retries cannot starve later buckets.
+        Iterator<Map.Entry<TableBucket, Object>> newCommits =
+                newCommitRecoveries.entrySet().iterator();
+        List<Map.Entry<TableBucket, Object>> firstAttempts = new ArrayList<>();
+        // Give new commits the first available slots. Their retries join the regular sweep.
         for (int scanned = 0;
                 scanned < MAX_BUCKETS_PER_SCAN
                         && inFlight.size() < MAX_IN_FLIGHT_RECOVERIES
-                        && recoveryRound.hasNext();
+                        && (newCommits.hasNext() || recoveryRound.hasNext());
                 scanned++) {
-            Map.Entry<TableBucket, Object> pending = recoveryRound.next();
+            boolean firstCommitAttempt = newCommits.hasNext();
+            Map.Entry<TableBucket, Object> pending =
+                    firstCommitAttempt ? newCommits.next() : recoveryRound.next();
             TableBucket bucket = pending.getKey();
             Object request = pending.getValue();
-            if (active.get(bucket) != request || !inFlight.add(bucket)) {
+            if (active.get(bucket) != request
+                    || (!firstCommitAttempt && newCommitRecoveries.containsKey(bucket))
+                    || !inFlight.add(bucket)) {
                 continue;
             }
+            if (firstCommitAttempt) {
+                firstAttempts.add(pending);
+            }
             try {
-                Optional<ZooKeeperClient.VersionedData<Long>> selected =
-                        client.getRecoverySnapshotSelection(bucket);
+                Optional<Long> selected = client.getSelectedRecoverySnapshotId(bucket);
                 if (!selected.isPresent()) {
                     finish(bucket, request, false, null);
                     continue;
                 }
-                recover(bucket, selected.get().data(), epoch, request != RECONCILE_AFTER_TAKEOVER)
+                recover(bucket, selected.get(), epoch, request != RECONCILE_AFTER_TAKEOVER)
                         .whenComplete((retry, error) -> finish(bucket, request, retry, error));
             } catch (Exception e) {
                 finish(bucket, request, null, e);
             }
         }
+        // Keep first attempts out of the regular sweep until the next scan.
+        for (Map.Entry<TableBucket, Object> attempt : firstAttempts) {
+            newCommitRecoveries.remove(attempt.getKey(), attempt.getValue());
+        }
     }
 
     private void finish(TableBucket bucket, Object request, Boolean retry, Throwable error) {
         if (error != null) {
-            LOG.warn(
-                    "Cannot reconcile BulkLoad snapshot for {}; the next pass will retry.",
-                    bucket,
-                    error);
+            if (request == RECONCILE_AFTER_TAKEOVER
+                    && stripCompletionException(error) instanceof UnsupportedVersionException) {
+                active.remove(bucket, request);
+            } else {
+                LOG.warn(
+                        "Cannot reconcile BulkLoad snapshot for {}; the next pass will retry.",
+                        bucket,
+                        error);
+            }
         } else if (!retry) {
             active.remove(bucket, request);
         }
@@ -298,7 +324,7 @@ public final class BulkLoadRecoveryManager implements AutoCloseable {
                                             Collections.singletonList(
                                                     ServerRpcMessageUtils
                                                             .makeNotifyBucketLeaderAndIsr(data)));
-                            return channels.bulkLoadRestore(data.getLeader(), request)
+                            return channels.notifyBulkLoadRecovery(data.getLeader(), request)
                                     .thenApplyAsync(
                                             response -> {
                                                 try {
@@ -323,16 +349,17 @@ public final class BulkLoadRecoveryManager implements AutoCloseable {
             PbNotifyLeaderAndIsrRespForBucket response)
             throws Exception {
         TableBucket bucket = data.getTableBucket();
-        if (response.hasErrorCode() && response.getErrorCode() != 0) {
-            throw org.apache.fluss.rpc.protocol.Errors.forCode(response.getErrorCode())
-                    .exception(response.hasErrorMessage() ? response.getErrorMessage() : null);
+        NotifyLeaderAndIsrResultForBucket result =
+                ServerRpcMessageUtils.toNotifyLeaderAndIsrResult(response);
+        if (result.failed()) {
+            throw result.getError().error().exception(result.getErrorMessage());
         }
-        if (response.hasRecoveredSnapshotId()
-                && response.getRecoveredSnapshotId() == selectedSnapshotId
-                && ServerRpcMessageUtils.toTableBucket(response.getTableBucket()).equals(bucket)) {
-            Optional<ZooKeeperClient.VersionedData<Long>> current =
-                    client.getRecoverySnapshotSelection(bucket);
-            if (!current.isPresent() || current.get().data() != selectedSnapshotId) {
+        Long recoveredSnapshotId = result.getRecoveredSnapshotId();
+        if (recoveredSnapshotId != null
+                && recoveredSnapshotId == selectedSnapshotId
+                && result.getTableBucket().equals(bucket)) {
+            Optional<Long> current = client.getSelectedRecoverySnapshotId(bucket);
+            if (!current.isPresent() || current.get() != selectedSnapshotId) {
                 return true;
             }
             if (retainAfterImport || snapshots.isSnapshotRetentionExceeded(bucket)) {

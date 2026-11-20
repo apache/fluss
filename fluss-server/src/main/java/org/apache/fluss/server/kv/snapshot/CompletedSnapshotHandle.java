@@ -52,11 +52,10 @@ public class CompletedSnapshotHandle {
     }
 
     public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
-        try (FSDataInputStream in = openInputStream();
-                ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-            IOUtils.copyBytes(in, outputStream);
-            return CompletedSnapshotJsonSerde.fromJson(outputStream.toByteArray());
-        }
+        FSDataInputStream in = openInputStream();
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        IOUtils.copyBytes(in, outputStream);
+        return CompletedSnapshotJsonSerde.fromJson(outputStream.toByteArray());
     }
 
     public FSDataInputStream openInputStream() throws IOException {

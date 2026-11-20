@@ -57,43 +57,46 @@ public final class BulkLoadManager {
         this.epochVersion = epochVersion;
     }
 
-    /** Resolves the transaction and checks that its original physical table still exists. */
-    public VersionedData<BulkLoadTransaction> resolveTransaction(long tableId, String bulkLoadId)
+    private VersionedData<BulkLoadTransaction> getTransaction(long tableId, String bulkLoadId)
             throws Exception {
-        VersionedData<BulkLoadTransaction> transaction =
-                client.getBulkLoadTransaction(tableId, bulkLoadId)
-                        .orElseThrow(
-                                () ->
-                                        new BulkLoadNotFoundException(
-                                                "BulkLoad transaction does not exist."));
-        Optional<TableRegistration> table =
-                client.getTable(transaction.data().tableInfo.getTablePath());
-        if (!table.isPresent() || table.get().tableId != tableId) {
+        return client.getBulkLoadTransaction(tableId, bulkLoadId)
+                .orElseThrow(
+                        () ->
+                                new BulkLoadNotFoundException(
+                                        "BulkLoad transaction does not exist."));
+    }
+
+    private VersionedData<TableRegistration> getOriginalTable(BulkLoadTransaction transaction)
+            throws Exception {
+        TableInfo original = transaction.tableInfo;
+        Optional<VersionedData<TableRegistration>> table =
+                client.getTableWithVersion(original.getTablePath());
+        if (!table.isPresent() || table.get().data().tableId != original.getTableId()) {
             throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
         }
-        return transaction;
+        return table.get();
     }
 
     /** Allocates a snapshot ID and WAL offset, or returns the previously allocated coordinates. */
     public BulkLoadBucket allocateBucketSnapshot(
-            VersionedData<BulkLoadTransaction> transaction,
-            @Nullable Long partitionId,
-            int bucketId,
+            String bulkLoadId,
+            TableBucket bucket,
             FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher)
             throws Exception {
+        VersionedData<BulkLoadTransaction> transaction =
+                getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction original = transaction.data();
-        TableBucket bucket =
-                new TableBucket(original.tableInfo.getTableId(), partitionId, bucketId);
+        VersionedData<TableRegistration> table = getOriginalTable(original);
         VersionedData<BulkLoadTarget> target = resolveTarget(original, bucket);
         BulkLoadBucket existing =
                 client.getBulkLoadBucket(original, bucket).map(VersionedData::data).orElse(null);
         if (existing != null) {
-            return reuseBucketAllocation(original, target.data(), existing);
+            return reuseBucketAllocation(original, target.data(), existing, table);
         }
 
         requireRunning(original);
         TableAndPartitionZkVersions registrationVersions =
-                validateBuildContext(original, target.data());
+                validateBuildContext(original, target.data(), table);
         long snapshotId = client.allocateBucketSnapshotId(bucket);
         long logOffset = leaderLogEndOffsetFetcher.apply(bucket);
         BulkLoadBucket allocation =
@@ -109,28 +112,31 @@ public final class BulkLoadManager {
                     epochVersion);
             return allocation;
         } catch (KeeperException.NodeExistsException e) {
-            BulkLoadTransaction current =
-                    resolveTransaction(original.tableInfo.getTableId(), original.bulkLoadId).data();
+            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
+            VersionedData<TableRegistration> currentTable = getOriginalTable(current);
             BulkLoadTarget currentTarget = resolveTarget(current, bucket).data();
             BulkLoadBucket winner =
                     client.getBulkLoadBucket(current, bucket)
                             .map(VersionedData::data)
                             .orElseThrow(() -> e);
-            return reuseBucketAllocation(current, currentTarget, winner);
+            return reuseBucketAllocation(current, currentTarget, winner, currentTable);
         } catch (KeeperException.BadVersionException e) {
-            requireRunning(
-                    resolveTransaction(original.tableInfo.getTableId(), original.bulkLoadId)
-                            .data());
+            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
+            getOriginalTable(current);
+            requireRunning(current);
             throw e;
         }
     }
 
     private BulkLoadBucket reuseBucketAllocation(
-            BulkLoadTransaction transaction, BulkLoadTarget target, BulkLoadBucket allocation)
+            BulkLoadTransaction transaction,
+            BulkLoadTarget target,
+            BulkLoadBucket allocation,
+            VersionedData<TableRegistration> table)
             throws Exception {
         if (allocation.state != BulkLoadBucket.COMMITTED) {
             requireRunning(transaction);
-            validateBuildContext(transaction, target);
+            validateBuildContext(transaction, target, table);
         }
         return allocation;
     }
@@ -151,20 +157,14 @@ public final class BulkLoadManager {
 
     // Schema is compared at read time. Callers coordinate DDL through publication.
     private TableAndPartitionZkVersions validateBuildContext(
-            BulkLoadTransaction transaction, BulkLoadTarget target) throws Exception {
+            BulkLoadTransaction transaction,
+            BulkLoadTarget target,
+            VersionedData<TableRegistration> current)
+            throws Exception {
         if (target.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
         }
         TableInfo original = transaction.tableInfo;
-        VersionedData<TableRegistration> current =
-                client.getTableWithVersion(original.getTablePath())
-                        .orElseThrow(
-                                () ->
-                                        new BulkLoadNotFoundException(
-                                                "The original table was deleted."));
-        if (current.data().tableId != original.getTableId()) {
-            throw new InvalidBulkLoadRequestException("Table physical identity changed.");
-        }
         TableInfo table =
                 current.data()
                         .toTableInfo(
@@ -184,16 +184,8 @@ public final class BulkLoadManager {
             return new TableAndPartitionZkVersions(current.zkVersion(), null);
         }
 
-        VersionedData<PartitionRegistration> partition =
-                client.getPartitionWithVersion(original.getTablePath(), target.partitionName)
-                        .orElseThrow(
-                                () ->
-                                        new BulkLoadTargetWithdrawnException(
-                                                "The original partition was deleted."));
+        VersionedData<PartitionRegistration> partition = getOriginalPartition(table, target);
         PartitionRegistration registration = partition.data();
-        if (registration.getPartitionId() != target.partitionId) {
-            throw new BulkLoadTargetWithdrawnException("The original partition was deleted.");
-        }
         int bucketCount =
                 registration.getBucketCountOrDefault(
                         table.getNumBuckets(), table.getBucketCountEpoch());
@@ -204,18 +196,36 @@ public final class BulkLoadManager {
         return new TableAndPartitionZkVersions(current.zkVersion(), partition.zkVersion());
     }
 
+    private VersionedData<PartitionRegistration> getOriginalPartition(
+            TableInfo table, BulkLoadTarget target) throws Exception {
+        VersionedData<PartitionRegistration> partition =
+                client.getPartitionWithVersion(table.getTablePath(), target.partitionName)
+                        .orElseThrow(
+                                () ->
+                                        new BulkLoadTargetWithdrawnException(
+                                                "The original partition was deleted."));
+        PartitionRegistration registration = partition.data();
+        if (registration.getPartitionId() != target.partitionId) {
+            throw new BulkLoadTargetWithdrawnException("The original partition was deleted.");
+        }
+        return partition;
+    }
+
     /**
      * Durably publishes an allocated bucket snapshot. Signals recovery when a publication is new or
      * its result is unknown. A successful return does not imply the leader has applied it yet.
      */
     public void commitBucketSnapshot(
-            VersionedData<BulkLoadTransaction> transaction,
+            String bulkLoadId,
             TableBucket bucket,
             FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher,
             CompletedSnapshotStoreManager snapshots,
             Runnable requestRecovery)
             throws Exception {
+        VersionedData<BulkLoadTransaction> transaction =
+                getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction bulkLoadTransaction = transaction.data();
+        VersionedData<TableRegistration> currentTable = getOriginalTable(bulkLoadTransaction);
         VersionedData<BulkLoadTarget> target = resolveTarget(bulkLoadTransaction, bucket);
         VersionedData<BulkLoadBucket> allocation =
                 client.getBulkLoadBucket(bulkLoadTransaction, bucket)
@@ -230,7 +240,7 @@ public final class BulkLoadManager {
 
         requireRunning(bulkLoadTransaction);
         TableAndPartitionZkVersions registrationVersions =
-                validateBuildContext(bulkLoadTransaction, target.data());
+                validateBuildContext(bulkLoadTransaction, target.data(), currentTable);
         TableInfo table = bulkLoadTransaction.tableInfo;
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
@@ -262,20 +272,29 @@ public final class BulkLoadManager {
         } catch (BulkLoadPublicationUnknownException e) {
             requestRecovery.run();
             throw e.getCause();
-        } catch (KeeperException.NodeExistsException | KeeperException.BadVersionException e) {
-            BulkLoadTransaction current =
-                    resolveTransaction(
-                                    bulkLoadTransaction.tableInfo.getTableId(),
-                                    bulkLoadTransaction.bulkLoadId)
-                            .data();
+        } catch (KeeperException.NodeExistsException
+                | KeeperException.BadVersionException
+                | KeeperException.NoNodeException e) {
+            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
+            getOriginalTable(current);
             Optional<VersionedData<BulkLoadBucket>> result =
                     client.getBulkLoadBucket(current, bucket);
-            if (!result.isPresent() || result.get().data().state != BulkLoadBucket.COMMITTED) {
-                requireRunning(current);
-                throw e;
+            if (result.isPresent() && result.get().data().state == BulkLoadBucket.COMMITTED) {
+                snapshots.reconcileUnconfirmedImport(bucket);
+                return;
             }
-            snapshots.reconcileUnconfirmedImport(bucket);
-            return;
+            requireRunning(current);
+            if (e instanceof KeeperException.NoNodeException && bucket.getPartitionId() != null) {
+                BulkLoadTarget originalTarget = target.data();
+                if (client.getBulkLoadTarget(current, bucket.getPartitionId())
+                        .map(currentTarget -> currentTarget.data().withdrawn)
+                        .orElse(false)) {
+                    throw new BulkLoadTargetWithdrawnException(
+                            "The original physical target was deleted.");
+                }
+                getOriginalPartition(current.tableInfo, originalTarget);
+            }
+            throw e;
         }
         if (published) {
             requestRecovery.run();

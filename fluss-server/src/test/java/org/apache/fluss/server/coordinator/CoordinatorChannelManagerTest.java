@@ -144,7 +144,7 @@ class CoordinatorChannelManagerTest {
                         }
                     };
             CompletableFuture<NotifyLeaderAndIsrResponse> recovery =
-                    manager.bulkLoadRestore(0, new NotifyLeaderAndIsrRequest());
+                    manager.notifyBulkLoadRecovery(0, new NotifyLeaderAndIsrRequest());
             CompletableFuture<Throwable> allocation =
                     CompletableFuture.supplyAsync(
                             () ->

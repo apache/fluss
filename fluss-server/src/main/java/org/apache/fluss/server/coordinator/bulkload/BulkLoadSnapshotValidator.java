@@ -18,8 +18,9 @@
 package org.apache.fluss.server.coordinator.bulkload;
 
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
-import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.fs.FileStatus;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
@@ -32,9 +33,13 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.IOUtils;
 
+import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.URI;
+import java.nio.file.NoSuchFileException;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -45,21 +50,22 @@ final class BulkLoadSnapshotValidator {
     private BulkLoadSnapshotValidator() {}
 
     static CompletedSnapshot validate(
-            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation)
-            throws InvalidBulkLoadSnapshotException {
+            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation) {
         try {
             return validateInput(table, target, bucket, allocation);
-        } catch (InvalidBulkLoadSnapshotException e) {
-            throw e;
-        } catch (Exception e) {
+        } catch (FileNotFoundException | NoSuchFileException | EOFException e) {
             throw new InvalidBulkLoadSnapshotException(
-                    "Could not validate the uploaded snapshot.", e);
+                    "Snapshot file is missing or incomplete.", e);
+        } catch (IOException e) {
+            throw new StorageException("Could not read the uploaded snapshot.", e);
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            throw new InvalidBulkLoadSnapshotException("Invalid uploaded snapshot metadata.", e);
         }
     }
 
     private static CompletedSnapshot validateInput(
             TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation)
-            throws Exception {
+            throws IOException {
         PhysicalTablePath physical =
                 target.partitionName == null
                         ? PhysicalTablePath.of(table.getTablePath())
@@ -71,16 +77,22 @@ final class BulkLoadSnapshotValidator {
                         bucket);
         FsPath directory = FlussPaths.remoteKvSnapshotDir(tabletDir, allocation.snapshotId);
         FsPath path = CompletedSnapshot.getMetadataFilePath(directory);
-        FileStatus status = path.getFileSystem().getFileStatus(path);
+        FileSystem fileSystem = path.getFileSystem();
+        FileStatus status = fileSystem.getFileStatus(path);
         require(
                 !status.isDir() && status.getLen() > 0 && status.getLen() <= Integer.MAX_VALUE,
                 "Invalid snapshot metadata file.");
         byte[] bytes = new byte[(int) status.getLen()];
-        try (FSDataInputStream input = path.getFileSystem().open(path)) {
-            IOUtils.readFully(input, bytes);
+        try (DataInputStream input = new DataInputStream(fileSystem.open(path))) {
+            input.readFully(bytes);
             require(input.read() == -1, "Snapshot metadata changed while reading.");
         }
-        KvSnapshotFileMetadata metadata = KvSnapshotFileMetadataJsonSerde.fromJson(bytes);
+        KvSnapshotFileMetadata metadata;
+        try {
+            metadata = KvSnapshotFileMetadataJsonSerde.fromJson(bytes);
+        } catch (RuntimeException e) {
+            throw new InvalidBulkLoadSnapshotException("Invalid uploaded snapshot metadata.", e);
+        }
         require(metadata.getTableBucket().equals(bucket), "Snapshot physical identity differs.");
         require(metadata.getSnapshotId() == allocation.snapshotId, "Snapshot ID differs.");
         require(
@@ -125,7 +137,7 @@ final class BulkLoadSnapshotValidator {
             FsPath ownerDirectory,
             Set<String> local,
             Set<String> remote)
-            throws Exception {
+            throws IOException {
         long size = 0;
         for (KvSnapshotFileMetadata.FileHandle file : files) {
             String name = file.getLocalPath();

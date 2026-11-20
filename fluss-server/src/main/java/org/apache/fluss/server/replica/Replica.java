@@ -523,12 +523,11 @@ public final class Replica {
             executor.execute(
                     () -> {
                         try {
-                            Optional<ZooKeeperClient.VersionedData<Long>> current =
+                            Optional<Long> current =
                                     snapshotContext
                                             .getZooKeeperClient()
-                                            .getRecoverySnapshotSelection(tableBucket);
-                            if (!current.isPresent()
-                                    || current.get().data().longValue() != recoverySnapshotId) {
+                                            .getSelectedRecoverySnapshotId(tableBucket);
+                            if (!current.isPresent() || current.get() != recoverySnapshotId) {
                                 response.complete(null);
                                 return;
                             }
@@ -538,7 +537,8 @@ public final class Replica {
                                         "BulkLoad recovery requires the matching current leader.");
                             }
                             KvTabletSnapshotTarget target = kvSnapshotTarget;
-                            if (target != null && target.hasSnapshot(recoverySnapshotId)) {
+                            if (target != null
+                                    && target.isSnapshotKnownToKvContext(recoverySnapshotId)) {
                                 response.complete(recoverySnapshotId);
                                 return;
                             }
@@ -553,7 +553,8 @@ public final class Replica {
                                         }
                                         KvTabletSnapshotTarget currentTarget = kvSnapshotTarget;
                                         if (currentTarget != null
-                                                && currentTarget.hasSnapshot(recoverySnapshotId)) {
+                                                && currentTarget.isSnapshotKnownToKvContext(
+                                                        recoverySnapshotId)) {
                                             return;
                                         }
                                         KvRecovery selected = prepareKvRecovery();
@@ -2812,7 +2813,7 @@ public final class Replica {
                 && isKvTable()
                 && snapshotContext
                         .getZooKeeperClient()
-                        .getRecoverySnapshotSelection(tableBucket)
+                        .getSelectedRecoverySnapshotId(tableBucket)
                         .isPresent()) {
             watermark = localLogStartOffset;
         }

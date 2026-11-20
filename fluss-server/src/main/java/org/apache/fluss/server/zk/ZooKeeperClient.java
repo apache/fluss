@@ -23,9 +23,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidBulkLoadRequestException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -1495,33 +1498,25 @@ public class ZooKeeperClient implements AutoCloseable {
                         BucketSnapshotIdZNode.encode(snapshot),
                         CreateMode.PERSISTENT));
 
-        while (true) {
-            List<CuratorOp> attempt = new ArrayList<>(ops);
-            attempt.add(recoverySnapshotUpdate(bucket, snapshot.getSnapshotId(), previous));
-            List<CuratorOp> fenced = wrapRequestsWithEpochCheck(attempt, epochVersion);
+        ops.add(recoverySnapshotUpdate(bucket, snapshot.getSnapshotId(), previous));
+        try {
+            zkClient.transaction().forOperations(wrapRequestsWithEpochCheck(ops, epochVersion));
+        } catch (KeeperException.ConnectionLossException
+                | KeeperException.OperationTimeoutException e) {
+            throw new BulkLoadPublicationUnknownException(e);
+        } catch (KeeperException.BadVersionException
+                | KeeperException.NodeExistsException
+                | KeeperException.NoNodeException e) {
+            Optional<Long> selected;
             try {
-                zkClient.transaction().forOperations(fenced);
-                return;
+                // Curator may have retried the multi after losing its first response.
+                selected = getSelectedRecoverySnapshotId(bucket);
             } catch (KeeperException.ConnectionLossException
-                    | KeeperException.OperationTimeoutException e) {
-                throw new BulkLoadPublicationUnknownException(e);
-            } catch (KeeperException.BadVersionException | KeeperException.NodeExistsException e) {
-                Optional<VersionedData<Long>> current;
-                try {
-                    current = getRecoverySnapshotSelection(bucket);
-                } catch (KeeperException.ConnectionLossException
-                        | KeeperException.OperationTimeoutException verificationFailure) {
-                    // Curator may have retried the multi after losing its first response.
-                    throw new BulkLoadPublicationUnknownException(verificationFailure);
-                }
-                if (current.isPresent() && current.get().data() == snapshot.getSnapshotId()) {
-                    return;
-                }
-                if (previous.map(VersionedData::zkVersion)
-                        .equals(current.map(VersionedData::zkVersion))) {
-                    throw e;
-                }
-                previous = current;
+                    | KeeperException.OperationTimeoutException verificationFailure) {
+                throw new BulkLoadPublicationUnknownException(verificationFailure);
+            }
+            if (!selected.isPresent() || selected.get() != snapshot.getSnapshotId()) {
+                throw e;
             }
         }
     }
@@ -1576,12 +1571,16 @@ public class ZooKeeperClient implements AutoCloseable {
         private static final long serialVersionUID = 1L;
 
         private BulkLoadPublicationUnknownException(KeeperException cause) {
-            super(cause);
+            super(
+                    cause instanceof KeeperException.OperationTimeoutException
+                            ? new TimeoutException("BulkLoad metadata operation timed out.", cause)
+                            : new NetworkException(
+                                    "Connection to BulkLoad metadata store was lost.", cause));
         }
 
         @Override
-        public synchronized KeeperException getCause() {
-            return (KeeperException) super.getCause();
+        public synchronized ApiException getCause() {
+            return (ApiException) super.getCause();
         }
     }
 
@@ -1668,8 +1667,13 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(path).stream().mapToLong(Long::parseLong).max();
     }
 
-    /** Reads the selected recovery identity together with its ZK CAS version. */
-    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(TableBucket bucket)
+    /** Reads the snapshot ID selected for recovery. */
+    public Optional<Long> getSelectedRecoverySnapshotId(TableBucket bucket) throws Exception {
+        return getRecoverySnapshotSelection(bucket).map(VersionedData::data);
+    }
+
+    /** Reads the recovery selection and the version used to update it. */
+    protected Optional<VersionedData<Long>> getRecoverySnapshotSelection(TableBucket bucket)
             throws Exception {
         return getVersionedData(
                 ZkData.RecoverySnapshotZNode.path(bucket), ZkData.RecoverySnapshotZNode::decode);
@@ -1677,12 +1681,12 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Resolves the selected ordinary reference, never substituting another snapshot. */
     public Optional<BucketSnapshot> getRecoveryBucketSnapshot(TableBucket bucket) throws Exception {
-        Optional<VersionedData<Long>> recovery = getRecoverySnapshotSelection(bucket);
+        Optional<Long> recovery = getSelectedRecoverySnapshotId(bucket);
         if (!recovery.isPresent()) {
             return Optional.empty();
         }
         return Optional.of(
-                getTableBucketSnapshot(bucket, recovery.get().data())
+                getTableBucketSnapshot(bucket, recovery.get())
                         .orElseThrow(
                                 () ->
                                         new IllegalStateException(

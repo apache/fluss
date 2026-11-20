@@ -20,7 +20,9 @@ package org.apache.fluss.server.coordinator.bulkload;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.BulkLoadConflictException;
+import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
@@ -166,7 +168,8 @@ class BulkLoadBucketCommitTest {
         assertThat(commit(WAL_OFFSET)).isTrue();
         assertThat(
                         client.getBulkLoadBucket(
-                                        manager.resolveTransaction(bucket.getTableId(), LOAD_ID)
+                                        client.getBulkLoadTransaction(bucket.getTableId(), LOAD_ID)
+                                                .get()
                                                 .data(),
                                         bucket)
                                 .get()
@@ -216,6 +219,31 @@ class BulkLoadBucketCommitTest {
         assertBucketNotCommitted();
     }
 
+    @Test
+    void testCommitReportsTableDeletedAfterValidation() throws Exception {
+        prepareAllocatedBucket();
+        uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
+
+        assertThatThrownBy(
+                        () ->
+                                manager.commitBucketSnapshot(
+                                        LOAD_ID,
+                                        bucket,
+                                        ignored -> {
+                                            client.deleteTable(TABLE);
+                                            return WAL_OFFSET;
+                                        },
+                                        snapshots,
+                                        () -> {
+                                            throw new AssertionError(
+                                                    "No recovery should be requested.");
+                                        }))
+                .isInstanceOf(BulkLoadNotFoundException.class);
+
+        assertBucketNotCommitted();
+        assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).isEmpty();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testRequestsRecoveryOnlyIfPublicationWasAttempted(boolean publicationAttempted)
@@ -260,13 +288,15 @@ class BulkLoadBucketCommitTest {
             assertThatThrownBy(
                             () ->
                                     failingManager.commitBucketSnapshot(
-                                            failingManager.resolveTransaction(
-                                                    bucket.getTableId(), LOAD_ID),
+                                            LOAD_ID,
                                             bucket,
                                             ignored -> WAL_OFFSET,
                                             snapshots,
                                             () -> recoveryRequested.set(true)))
-                    .isInstanceOf(KeeperException.ConnectionLossException.class);
+                    .isInstanceOf(
+                            publicationAttempted
+                                    ? NetworkException.class
+                                    : KeeperException.ConnectionLossException.class);
             assertThat(recoveryRequested.get()).isEqualTo(publicationAttempted);
         }
         assertBucketNotCommitted();
@@ -376,7 +406,7 @@ class BulkLoadBucketCommitTest {
                                                 .commitBulkLoadBucketSnapshot(commit)
                                                 .get(30, TimeUnit.SECONDS))
                         .hasCauseInstanceOf(BulkLoadConflictException.class);
-                assertThat(zk.getRecoverySnapshotSelection(target)).isEmpty();
+                assertThat(zk.getSelectedRecoverySnapshotId(target)).isEmpty();
                 assertThat(zk.getTableBucketSnapshot(target, allocated.getSnapshotId())).isEmpty();
                 assertThat(
                                 coordinator
@@ -440,8 +470,6 @@ class BulkLoadBucketCommitTest {
                                         false))
                         .get(30, TimeUnit.SECONDS);
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
-                assertThat(zk.getRecoverySnapshotSelection(target).get().data())
-                        .isEqualTo(allocated.getSnapshotId());
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
                 AllocateBulkLoadBucketSnapshotResponse replay =
                         coordinator
@@ -450,7 +478,8 @@ class BulkLoadBucketCommitTest {
                 assertThat(replay.getState()).isEqualTo(BulkLoadBucket.COMMITTED);
                 assertThat(replay.getSnapshotId()).isEqualTo(allocated.getSnapshotId());
                 assertThat(replay.getLogOffset()).isEqualTo(allocated.getLogOffset());
-                assertThat(zk.getRecoverySnapshotSelection(target).get().zkVersion()).isZero();
+                assertThat(zk.getSelectedRecoverySnapshotId(target))
+                        .contains(allocated.getSnapshotId());
 
                 Tuple2<byte[], byte[]> imported = getKeyValuePairs(rows).get(0);
                 retry(Duration.ofSeconds(30), () -> assertLookupRow(leader, tableId, imported));
@@ -466,7 +495,7 @@ class BulkLoadBucketCommitTest {
                 retry(
                         Duration.ofSeconds(30),
                         () ->
-                                assertThat(zk.getRecoverySnapshotSelection(target).get().data())
+                                assertThat(zk.getSelectedRecoverySnapshotId(target).get())
                                         .isEqualTo(ordinarySnapshot));
                 assertLookupRow(leader, tableId, imported);
                 assertLookupRow(leader, tableId, getKeyValuePairs(tail).get(0));
@@ -486,20 +515,21 @@ class BulkLoadBucketCommitTest {
     private void assertBucketNotCommitted() throws Exception {
         assertThat(
                         client.getBulkLoadBucket(
-                                        manager.resolveTransaction(bucket.getTableId(), LOAD_ID)
+                                        client.getBulkLoadTransaction(bucket.getTableId(), LOAD_ID)
+                                                .get()
                                                 .data(),
                                         bucket)
                                 .get()
                                 .data()
                                 .state)
                 .isEqualTo(BulkLoadBucket.ALLOCATED);
-        assertThat(client.getRecoverySnapshotSelection(bucket)).isEmpty();
+        assertThat(client.getSelectedRecoverySnapshotId(bucket)).isEmpty();
     }
 
     private boolean commit(long leaderOffset) throws Exception {
         AtomicBoolean recoveryRequested = new AtomicBoolean();
         manager.commitBucketSnapshot(
-                manager.resolveTransaction(bucket.getTableId(), LOAD_ID),
+                LOAD_ID,
                 bucket,
                 ignored -> leaderOffset,
                 snapshots,

@@ -71,6 +71,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -361,8 +362,8 @@ public class CoordinatorChannelManager {
         return rpcGatewayManager.getRpcGateway(targetServerId);
     }
 
-    /** Sends a worker-side asynchronous recovery query to the matching current leader. */
-    public CompletableFuture<NotifyLeaderAndIsrResponse> bulkLoadRestore(
+    /** Sends a BulkLoad recovery notification to the current leader and awaits its response. */
+    public CompletableFuture<NotifyLeaderAndIsrResponse> notifyBulkLoadRecovery(
             int leader, NotifyLeaderAndIsrRequest request) {
         TabletServerGateway gateway =
                 getTabletServerGateway(leader)
@@ -377,7 +378,7 @@ public class CoordinatorChannelManager {
                 "Timed out waiting for the BulkLoad recovery notification response.");
     }
 
-    /** Reads the current leader LEO for a per-bucket BulkLoad allocation on a worker thread. */
+    /** Reads the leader's WAL end offset for BulkLoad bucket allocation and commit. */
     public long bulkLoadLogEndOffset(int leader, TableBucket bucket) throws Exception {
         TabletServerGateway gateway =
                 getTabletServerGateway(leader)
@@ -385,15 +386,14 @@ public class CoordinatorChannelManager {
                                 () ->
                                         new NotLeaderOrFollowerException(
                                                 "BulkLoad bucket leader is unavailable."));
+        // A nonnegative follower_server_id requests the LEO instead of the high watermark.
         ListOffsetsRequest request =
-                new ListOffsetsRequest()
-                        .setTableId(bucket.getTableId())
-                        .setFollowerServerId(leader)
-                        .setOffsetType(ListOffsetsParam.LATEST_OFFSET_TYPE);
-        request.addBucketId(bucket.getBucket());
-        if (bucket.getPartitionId() != null) {
-            request.setPartitionId(bucket.getPartitionId());
-        }
+                makeListOffsetsRequest(
+                        leader,
+                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                        bucket.getTableId(),
+                        bucket.getPartitionId(),
+                        bucket.getBucket());
         PbListOffsetsRespForBucket response;
         try {
             response =
