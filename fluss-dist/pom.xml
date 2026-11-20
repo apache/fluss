@@ -117,6 +117,13 @@
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-lake-delta</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
       
         <dependency>
             <groupId>org.apache.flink</groupId>

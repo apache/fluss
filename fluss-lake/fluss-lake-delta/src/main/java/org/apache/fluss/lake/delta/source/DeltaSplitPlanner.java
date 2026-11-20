@@ -1,0 +1,168 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.lake.delta.source;
+
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.delta.DeltaConfig;
+import org.apache.fluss.lake.delta.utils.DeltaPartitionLiterals;
+import org.apache.fluss.lake.source.Planner;
+import org.apache.fluss.metadata.TablePath;
+
+import io.delta.kernel.Scan;
+import io.delta.kernel.Snapshot;
+import io.delta.kernel.TableManager;
+import io.delta.kernel.data.FilteredColumnarBatch;
+import io.delta.kernel.data.Row;
+import io.delta.kernel.engine.Engine;
+import io.delta.kernel.exceptions.KernelException;
+import io.delta.kernel.internal.InternalScanFileUtils;
+import io.delta.kernel.internal.util.PartitionUtils;
+import io.delta.kernel.types.StructField;
+import io.delta.kernel.types.StructType;
+import io.delta.kernel.utils.CloseableIterator;
+
+import javax.annotation.Nullable;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+import static org.apache.fluss.lake.delta.tiering.DeltaLakeCommitter.FLUSS_DOMAIN;
+
+/**
+ * Plans one {@link DeltaSplit} per data file of the Delta table version that Fluss registered as
+ * its lake snapshot, or of the latest version when that one holds the same Fluss data.
+ */
+public class DeltaSplitPlanner implements Planner<DeltaSplit> {
+
+    private final Configuration options;
+    private final TablePath tablePath;
+    private final long snapshotId;
+    private final @Nullable int[][] project;
+
+    public DeltaSplitPlanner(
+            Configuration options,
+            TablePath tablePath,
+            long snapshotId,
+            @Nullable int[][] project) {
+        this.options = options;
+        this.tablePath = tablePath;
+        this.snapshotId = snapshotId;
+        this.project = project;
+    }
+
+    @Override
+    public List<DeltaSplit> plan() throws IOException {
+        Engine engine = DeltaConfig.createEngine(options);
+        Snapshot snapshot = snapshotToRead(engine, DeltaConfig.tablePath(options, tablePath));
+        StructType schema = snapshot.getSchema();
+        Scan scan = snapshot.getScanBuilder().withReadSchema(readSchema(schema)).build();
+        Row scanState = scan.getScanState(engine);
+        String scanStateSchema = scanState.getSchema().toJson();
+        String scanStateJson = KernelRowJson.toJson(scanState);
+        List<String> partitionColumns = snapshot.getPartitionColumnNames();
+
+        List<DeltaSplit> splits = new ArrayList<>();
+        try (CloseableIterator<FilteredColumnarBatch> scanFiles = scan.getScanFiles(engine)) {
+            while (scanFiles.hasNext()) {
+                try (CloseableIterator<Row> rows = scanFiles.next().getRows()) {
+                    while (rows.hasNext()) {
+                        Row scanFile = rows.next();
+                        splits.add(
+                                new DeltaSplit(
+                                        scanStateSchema,
+                                        scanStateJson,
+                                        scanFile.getSchema().toJson(),
+                                        KernelRowJson.toJson(scanFile),
+                                        partition(scanFile, partitionColumns, schema)));
+                    }
+                }
+            }
+        }
+        return splits;
+    }
+
+    /**
+     * Returns the latest version when it holds the same Fluss data as the registered lake snapshot,
+     * otherwise the registered lake snapshot.
+     *
+     * <p>Other engines may commit after Fluss, for example {@code OPTIMIZE}, and {@code VACUUM}
+     * later deletes the files those commits replaced. If no Fluss commit happens in between, for
+     * example because the Fluss table gets no new data, reading the registered version would fail
+     * on the deleted files. Fluss changes its domain metadata on every commit, and other engines
+     * must not change the data of the table, so a later version with the same domain metadata,
+     * schema and partition columns holds the same rows as the registered one.
+     */
+    private Snapshot snapshotToRead(Engine engine, String path) {
+        Snapshot latest = TableManager.loadSnapshot(path).build(engine);
+        if (latest.getVersion() == snapshotId) {
+            return latest;
+        }
+        Snapshot registered;
+        try {
+            registered = TableManager.loadSnapshot(path).atVersion(snapshotId).build(engine);
+        } catch (KernelException e) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Cannot load version %s of Delta table %s, which Fluss registered as "
+                                    + "its lake snapshot. If log cleanup has removed it, keep "
+                                    + "'delta.logRetentionDuration' longer than the time between "
+                                    + "two Fluss commits.",
+                            snapshotId, path),
+                    e);
+        }
+        Optional<String> flussData = registered.getDomainMetadata(FLUSS_DOMAIN);
+        boolean sameFlussData =
+                flussData.isPresent()
+                        && flussData.equals(latest.getDomainMetadata(FLUSS_DOMAIN))
+                        && registered.getSchema().equals(latest.getSchema())
+                        && registered
+                                .getPartitionColumnNames()
+                                .equals(latest.getPartitionColumnNames());
+        return sameFlussData ? latest : registered;
+    }
+
+    /** The columns to read, in the order of the projection. */
+    private StructType readSchema(StructType schema) {
+        if (project == null) {
+            return schema;
+        }
+        List<StructField> fields = new ArrayList<>(project.length);
+        for (int[] path : project) {
+            // Fluss only pushes down top-level projections for lake sources
+            fields.add(schema.at(path[0]));
+        }
+        return new StructType(fields);
+    }
+
+    /** The partition values of the data file, as they appear in the Fluss partition name. */
+    private static List<String> partition(
+            Row scanFile, List<String> partitionColumns, StructType schema) {
+        Map<String, String> values = InternalScanFileUtils.getPartitionValues(scanFile);
+        List<String> partition = new ArrayList<>(partitionColumns.size());
+        for (String column : partitionColumns) {
+            partition.add(
+                    DeltaPartitionLiterals.toFlussPartitionValue(
+                            PartitionUtils.literalForPartitionValue(
+                                    schema.get(column).getDataType(), values.get(column))));
+        }
+        return partition;
+    }
+}

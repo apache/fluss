@@ -29,7 +29,7 @@ Configure lakehouse settings in `server.yaml` on all Fluss servers (CoordinatorS
 Fluss follows a simple convention for these keys:
 
 - `datalake.enabled: true` explicitly enables lakehouse capability for the cluster. If it is left unset, configuring `datalake.format` alone also enables it; whenever `datalake.enabled` is `true`, `datalake.format` must also be set.
-- `datalake.format` selects the lake format for the cluster (`paimon`, `iceberg`, `hudi`, or `lance`).
+- `datalake.format` selects the lake format for the cluster (`paimon`, `iceberg`, `hudi`, `lance`, or `delta`).
 - Format-specific options use the `datalake.<format>.*` prefix. Fluss strips this prefix and passes the remaining keys straight to the corresponding lake catalog/client — for example `datalake.paimon.metastore` becomes `metastore` and `datalake.iceberg.type` becomes `type`. Any option supported by the lake catalog can be set this way.
 - Only configure options for the format selected by `datalake.format`.
 
@@ -100,6 +100,15 @@ datalake.lance.warehouse: s3://bucket/lance
 ```
 
 </TabItem>
+<TabItem value="delta" label="Delta Lake">
+
+```yaml title="server.yaml"
+datalake.enabled: true
+datalake.format: delta
+datalake.delta.warehouse: hdfs:///path/to/delta
+```
+
+</TabItem>
 </Tabs>
 
 ### Method 2: Dynamic Configuration
@@ -157,6 +166,11 @@ Add JARs to `${FLUSS_HOME}/plugins/<format>/` based on your configuration:
 Lance support is built into the Fluss distribution. Cloud storage credentials are configured via storage-options.
 
 </TabItem>
+<TabItem value="delta" label="Delta Lake">
+
+Delta Lake support is built into the Fluss distribution (`plugins/delta/`), but it doesn't bundle Hadoop. Copy `hadoop-client-api` and `hadoop-client-runtime` from a Hadoop 3.x package into `plugins/delta/`. `HADOOP_CLASSPATH` isn't enough for the Fluss servers (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#fluss-servers)). For an `s3a://` warehouse, also copy `hadoop-aws`, its dependencies, and the AWS SDK bundle (see [Amazon S3 and S3-Compatible Storage](../streaming-lakehouse/datalake-formats/delta.md#amazon-s3-and-s3-compatible-storage)).
+
+</TabItem>
 </Tabs>
 
 ## Starting the Tiering Service
@@ -202,6 +216,14 @@ Add the following to `${FLINK_HOME}/lib`:
 
 - [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 - [fluss-lake-lance-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-lance/$FLUSS_VERSION$/fluss-lake-lance-$FLUSS_VERSION$.jar)
+
+</TabItem>
+<TabItem value="delta" label="Delta Lake">
+
+- [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- [fluss-lake-delta-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-delta/$FLUSS_VERSION$/fluss-lake-delta-$FLUSS_VERSION$.jar)
+- Hadoop client JARs — export `HADOOP_CLASSPATH` before starting the Flink cluster (see [Delta Lake Hadoop Dependencies](../streaming-lakehouse/datalake-formats/delta.md#flink-clusters))
+- For an `s3a://` warehouse, the AWS SDK bundle (see [Amazon S3 and S3-Compatible Storage](../streaming-lakehouse/datalake-formats/delta.md#amazon-s3-and-s3-compatible-storage))
 
 </TabItem>
 </Tabs>
@@ -258,6 +280,16 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 ```
 
 </TabItem>
+<TabItem value="delta" label="Delta Lake">
+
+```shell
+${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format delta \
+    --datalake.delta.warehouse hdfs:///path/to/delta
+```
+
+</TabItem>
 </Tabs>
 
 :::note
@@ -295,6 +327,6 @@ SELECT * FROM my_table;
 SELECT * FROM my_table$lake;
 ```
 
-For Hudi lake-only reads, use Hudi's native catalog or another Hudi-compatible engine. The Fluss catalog `$lake` suffix currently exposes Paimon and Iceberg lake tables.
+For Hudi lake-only reads, use Hudi's native catalog or another Hudi-compatible engine. For Delta Lake, use any Delta Lake reader with the table path. The Fluss catalog `$lake` suffix currently exposes Paimon and Iceberg lake tables.
 
 See [Union Read](../streaming-lakehouse/union-read.md) for more details.

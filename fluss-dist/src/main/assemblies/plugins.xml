@@ -111,6 +111,12 @@
             <destName>fluss-lake-hudi-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
+        <file>
+            <source>../fluss-lake/fluss-lake-delta/target/fluss-lake-delta-${project.version}.jar</source>
+            <outputDirectory>plugins/delta/</outputDirectory>
+            <destName>fluss-lake-delta-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
   </files>
 
 </assembly>

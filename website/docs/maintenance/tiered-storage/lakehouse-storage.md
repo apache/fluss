@@ -5,7 +5,7 @@ sidebar_position: 3
 
 # Lakehouse Storage
 
-Fluss leverages well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, and Lance as the tiered storage layer. The Tiering Service continuously tiers Fluss data to Lakehouse storage, where it can be read by Fluss clients in a streaming manner and accessed directly by external systems such as Flink, Spark, StarRocks, and others.
+Fluss leverages well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, Lance, and Delta Lake as the tiered storage layer. The Tiering Service continuously tiers Fluss data to Lakehouse storage, where it can be read by Fluss clients in a streaming manner and accessed directly by external systems such as Flink, Spark, StarRocks, and others.
 
 For deployment instructions, see [Deploying Lakestream](../../install-deploy/deploying-streaming-lakehouse.md).
 
@@ -55,7 +55,7 @@ For format-specific configuration, see:
 |--------|------|---------|-------------|
 | `table.datalake.enabled` | Boolean | false | Enable lakehouse storage for this table |
 | `table.datalake.freshness` | Duration | 3min | Maximum lag between Fluss and data lake table |
-| `table.datalake.format` | String | - | Data lake format (paimon, iceberg, hudi, lance). Inherits from cluster config |
+| `table.datalake.format` | String | - | Data lake format (paimon, iceberg, hudi, lance, delta). Inherits from cluster config |
 | `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
 | `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
 
