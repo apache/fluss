@@ -977,7 +977,12 @@ public class MetadataManager {
                 lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
         boolean enablingDataLake =
                 isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor);
-        Long currentLakeSnapshotId = enablingDataLake ? getCurrentLakeSnapshotId(tableInfo) : null;
+        boolean changingLakeDestination =
+                tableChanges.stream().anyMatch(LakeTableUtil::isLakeTablePathChange);
+        Long currentLakeSnapshotId =
+                enablingDataLake || changingLakeDestination
+                        ? getCurrentLakeSnapshotId(tableInfo)
+                        : null;
         LakeCatalog.Context lakeCatalogContext =
                 new CoordinatorService.DefaultLakeCatalogContext(
                         false,
@@ -1019,13 +1024,11 @@ public class MetadataManager {
         // We should always alter lake table even though datalake is disabled.
         // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
         // again, the lake table will mismatch.
-        // Sync to lake if this table has ever opted into datalake (key present regardless of
-        // value), or if this change is enabling datalake now. The latter is needed because
-        // resetting table.datalake.enabled removes the key entirely (see
-        // #getUpdatedTableDescriptor), so a later re-enable would otherwise see an old descriptor
-        // without the key and skip the alterTable call that re-applies lakestream.enabled.
+        // Resetting table.datalake.enabled removes the key entirely. Enabling lake storage or
+        // changing its destination must still invoke the lake catalog to validate the binding.
         if (lakeCatalog != null
                 && (enablingDataLake
+                        || changingLakeDestination
                         || tableDescriptor
                                 .getProperties()
                                 .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key()))) {

@@ -71,6 +71,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.File;
@@ -151,20 +152,38 @@ class PaimonLakeTableLookuperTest {
         }
     }
 
-    @ParameterizedTest(name = "lookupMode={0}")
-    @EnumSource(LakeLookupMode.class)
-    void testLookupPartitionedPrimaryKeyTable(LakeLookupMode lookupMode) throws Exception {
+    @ParameterizedTest(name = "lookupMode={0}, withBranch={1}")
+    @CsvSource({"SST,false", "SST,true", "SCAN,false", "SCAN,true"})
+    void testLookupPartitionedPrimaryKeyTable(LakeLookupMode lookupMode, boolean withBranch)
+            throws Exception {
         TablePath tablePath = TablePath.of(DB, "partitioned_pk");
         Schema schema = pkSchema();
-        TableDescriptor tableDescriptor = partitionedPkDescriptor(schema);
+        TableDescriptor.Builder descriptor =
+                TableDescriptor.builder(partitionedPkDescriptor(schema));
+        if (withBranch) {
+            descriptor.property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        }
+        TableDescriptor tableDescriptor = descriptor.build();
         FileStoreTable table = createPaimonTable(tablePath, tableDescriptor);
+        if (withBranch) {
+            // Give main a different value for the same key to detect accidental fallback.
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(1, "20240101", "main"))));
+            table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath, "rt"));
+        }
         writeAndCommitData(
                 table,
                 Collections.singletonMap(
                         0, Collections.singletonList(paimonRow(1, "20240101", "Alice"))));
 
+        Configuration config = Configuration.fromMap(tableDescriptor.getProperties());
+        config.set(ConfigOptions.TABLE_KV_FORMAT, KvFormat.COMPACTED);
+        config.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, 1);
+        config.set(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_LOOKUP_MODE, lookupMode);
         try (LakeTableLookuper lookuper =
-                createLookuper(lookupMode, tablePath, KvFormat.COMPACTED)) {
+                createLookuper(tablePath, new TableConfig(config), NO_OP_DISK_WRITE_GUARD)) {
             List<Boolean> lookupFileDownloads = new ArrayList<>();
             LakeTableLookuper.LookupContext context =
                     lookupContext(

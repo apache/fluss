@@ -42,6 +42,7 @@ import org.apache.fluss.flink.procedure.FlussProcedureContext;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -149,6 +150,9 @@ public class FlinkCatalog extends AbstractCatalog {
             FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
     static final String LAKE_TABLE_NAME_OPTION =
             FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
+
+    static final String LAKE_TABLE_BRANCH_OPTION =
+            FLUSS_CONF_PREFIX + ConfigOptions.TABLE_DATALAKE_BRANCH.key();
 
     protected final ClassLoader classLoader;
 
@@ -476,7 +480,11 @@ public class FlinkCatalog extends AbstractCatalog {
                 }
                 TablePath lakeTablePath = tableInfo.getLakeTablePath();
                 String lakeObjectName =
-                        resolveToLakeObjectName(lakeTablePath.getTableName(), tableName);
+                        resolveToLakeObjectName(
+                                lakeTablePath.getTableName(),
+                                tableName,
+                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
+                                tableInfo.getTableConfig().getDataLakeBranch().orElse(null));
 
                 CatalogBaseTable lakeTable =
                         getLakeTable(
@@ -484,7 +492,11 @@ public class FlinkCatalog extends AbstractCatalog {
                                 lakeObjectName,
                                 tableInfo.getProperties(),
                                 getLakeCatalogProperties());
-                return withResolvedLakeTablePath(lakeTable, flussTablePath, lakeTablePath);
+                return withResolvedLakeTablePath(
+                        lakeTable,
+                        flussTablePath,
+                        lakeTablePath,
+                        tableInfo.getTableConfig().getDataLakeBranch().orElse(null));
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }
@@ -534,7 +546,10 @@ public class FlinkCatalog extends AbstractCatalog {
      * lake table name is provided, the Fluss table name before {@code $lake} is used.
      */
     static String resolveToLakeObjectName(
-            @Nullable String mappedLakeTableName, String flinkObjectName) {
+            @Nullable String mappedLakeTableName,
+            String flinkObjectName,
+            @Nullable DataLakeFormat lakeFormat,
+            @Nullable String branch) {
         int splitterIndex = flinkObjectName.indexOf(LAKE_TABLE_SPLITTER);
         if (splitterIndex < 0) {
             // Already a physical lake object name, such as "orders" or "orders$snapshots".
@@ -546,6 +561,8 @@ public class FlinkCatalog extends AbstractCatalog {
                 mappedLakeTableName == null
                         ? flinkObjectName.substring(0, splitterIndex)
                         : mappedLakeTableName;
+        resolvedLakeTableName =
+                LakeFlinkCatalog.resolveTableName(lakeFormat, resolvedLakeTableName, branch);
 
         // Keep everything after "$lake": "orders$lake$snapshots" becomes "orders$snapshots".
         String suffixAfterLakeSplitter =
@@ -565,8 +582,12 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     private static CatalogBaseTable withResolvedLakeTablePath(
-            CatalogBaseTable lakeTable, TablePath flussTablePath, TablePath lakeTablePath) {
-        if (!(lakeTable instanceof CatalogTable) || lakeTablePath.equals(flussTablePath)) {
+            CatalogBaseTable lakeTable,
+            TablePath flussTablePath,
+            TablePath lakeTablePath,
+            @Nullable String branch) {
+        if (!(lakeTable instanceof CatalogTable)
+                || (lakeTablePath.equals(flussTablePath) && branch == null)) {
             return lakeTable;
         }
 
@@ -575,6 +596,11 @@ public class FlinkCatalog extends AbstractCatalog {
         // path as the source of truth for factory identifier resolution.
         options.put(LAKE_TABLE_DATABASE_NAME_OPTION, lakeTablePath.getDatabaseName());
         options.put(LAKE_TABLE_NAME_OPTION, lakeTablePath.getTableName());
+        if (branch == null) {
+            options.remove(LAKE_TABLE_BRANCH_OPTION);
+        } else {
+            options.put(LAKE_TABLE_BRANCH_OPTION, branch);
+        }
         return ((CatalogTable) lakeTable).copy(options);
     }
 

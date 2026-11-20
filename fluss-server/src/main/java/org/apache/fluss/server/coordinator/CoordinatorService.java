@@ -276,7 +276,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             Arrays.asList(
                                     ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                                     ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
-                                    ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key())));
+                                    ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                                    ConfigOptions.TABLE_DATALAKE_BRANCH.key())));
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
@@ -723,18 +724,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private static void validateExistingTableFromLake(
-            TablePath paimonTablePath,
+            TablePath lakeTablePath,
             TableInfo existingFlussTableInfo,
-            TableDescriptor paimonDerivedFlussDescriptor) {
+            TableDescriptor lakeDerivedFlussDescriptor) {
         if (existingFlussTableInfo.getTableConfig().getDataLakeFormat().orElse(null)
                         != DataLakeFormat.PAIMON
-                || !existingFlussTableInfo.getLakeTablePath().equals(paimonTablePath)) {
+                || !existingFlussTableInfo.getLakeTablePath().equals(lakeTablePath)) {
             throw incompatibleExistingTableFromLake(
-                    paimonTablePath, "it is not mapped to this Paimon table");
+                    lakeTablePath, "it is not mapped to this Paimon table");
         }
         TableDescriptor existingFlussDescriptor = existingFlussTableInfo.toTableDescriptor();
+        if (existingFlussTableInfo.getTableConfig().getDataLakeBranch().isPresent()) {
+            throw incompatibleExistingTableFromLake(
+                    lakeTablePath,
+                    "option '" + ConfigOptions.TABLE_DATALAKE_BRANCH.key() + "' is configured");
+        }
         int expectedBucketCount =
-                paimonDerivedFlussDescriptor
+                lakeDerivedFlussDescriptor
                         .getTableDistribution()
                         .flatMap(TableDescriptor.TableDistribution::getBucketCount)
                         .orElse(existingFlussTableInfo.getNumBuckets());
@@ -742,15 +748,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // Keep existing options omitted by the request, including the datalake enabled state.
         TableDescriptor expectedFlussDescriptor =
                 TableDescriptor.builder(existingFlussDescriptor)
-                        .schema(paimonDerivedFlussDescriptor.getSchema())
-                        .partitionedBy(paimonDerivedFlussDescriptor.getPartitionKeys())
+                        .schema(lakeDerivedFlussDescriptor.getSchema())
+                        .partitionedBy(lakeDerivedFlussDescriptor.getPartitionKeys())
                         .distributedBy(
-                                expectedBucketCount, paimonDerivedFlussDescriptor.getBucketKeys())
-                        .properties(paimonDerivedFlussDescriptor.getProperties())
+                                expectedBucketCount, lakeDerivedFlussDescriptor.getBucketKeys())
+                        .properties(lakeDerivedFlussDescriptor.getProperties())
                         .build();
         if (!existingFlussDescriptor.equals(expectedFlussDescriptor)) {
             throw incompatibleExistingTableFromLake(
-                    paimonTablePath,
+                    lakeTablePath,
                     String.format(
                             "its definition does not match the Paimon table and requested options"
                                     + " (existing Fluss definition: %s; expected Fluss definition: %s)",

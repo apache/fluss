@@ -64,6 +64,11 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         FileStoreTable fileStoreTable =
                 getTable(
                         lakeTablePath,
+                        writerInitContext
+                                .tableInfo()
+                                .getTableConfig()
+                                .getDataLakeBranch()
+                                .orElse(null),
                         writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction(),
                         bucketOverride);
 
@@ -150,10 +155,14 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
     }
 
     private FileStoreTable getTable(
-            TablePath tablePath, boolean isAutoCompaction, @Nullable Integer bucketOverride)
+            TablePath tablePath,
+            @Nullable String branch,
+            boolean isAutoCompaction,
+            @Nullable Integer bucketOverride)
             throws IOException {
         try {
-            FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable table =
+                    (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath, branch));
             if (bucketOverride != null) {
                 // copy(Map) rejects BUCKET as immutable, so swap it in via a schema copy,
                 // which only rebuilds the in-memory table view.

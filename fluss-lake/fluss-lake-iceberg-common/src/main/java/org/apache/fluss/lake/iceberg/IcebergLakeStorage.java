@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.iceberg.source.IcebergLakeSource;
 import org.apache.fluss.lake.iceberg.source.IcebergSplit;
 import org.apache.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory;
@@ -46,7 +47,7 @@ public class IcebergLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<IcebergSplit> createLakeSource(TablePath tablePath) {
+    public LakeSource<IcebergSplit> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
         return new IcebergLakeSource(icebergConfig, tablePath);
     }
 }

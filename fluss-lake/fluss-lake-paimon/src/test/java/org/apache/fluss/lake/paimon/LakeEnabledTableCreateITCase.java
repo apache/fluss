@@ -58,6 +58,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -332,15 +334,16 @@ class LakeEnabledTableCreateITCase {
                 BUCKET_NUM);
     }
 
-    @Test
-    void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
+    @ParameterizedTest
+    @ValueSource(strings = {"", "paimon."})
+    void testCreateLakeEnableTableWithUnsettablePaimonOptions(String prefix) {
         assertThat(PAIMON_UNSETTABLE_OPTIONS).doesNotContain(CoreOptions.PATH.key());
 
         Map<String, String> customProperties = new HashMap<>();
 
         for (String key : PAIMON_UNSETTABLE_OPTIONS) {
             customProperties.clear();
-            customProperties.put(key, "v");
+            customProperties.put(prefix + key, "v");
 
             TableDescriptor table =
                     TableDescriptor.builder()
@@ -360,7 +363,7 @@ class LakeEnabledTableCreateITCase {
                     .hasMessage(
                             String.format(
                                     "The Paimon option %s will be set automatically by Fluss and should not be set manually.",
-                                    key));
+                                    prefix + key));
         }
     }
 
@@ -1224,6 +1227,73 @@ class LakeEnabledTableCreateITCase {
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining(
                         "The Paimon table path can only be altered before the Paimon table is created");
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "table.datalake.database-name",
+                "table.datalake.table-name",
+                "table.datalake.branch"
+            })
+    void testLakeDestinationCanOnlyChangeBeforeInitialization(String optionKey) throws Exception {
+        TablePath tablePath =
+                TablePath.of(DATABASE, "lake_destination_" + optionKey.replace('.', '_'));
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(BUCKET_NUM, "id")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .build();
+        admin.createTable(tablePath, descriptor, false).get();
+        List<TableChange> resetLake =
+                Collections.singletonList(
+                        TableChange.reset(ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        admin.alterTable(tablePath, resetLake, false).get();
+
+        // An uninitialized destination remains configurable after resetting lake storage.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.set(optionKey, "future_target")),
+                        false)
+                .get();
+        assertThat(admin.getTableInfo(tablePath).get().toTableDescriptor().getProperties())
+                .containsEntry(optionKey, "future_target")
+                .doesNotContainKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(DATABASE, tablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class);
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")),
+                        false)
+                .get();
+        admin.alterTable(tablePath, resetLake, false).get();
+        Map<String, String> properties =
+                admin.getTableInfo(tablePath).get().toTableDescriptor().getProperties();
+        assertThat(properties).doesNotContainKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+
+        // Removing the enabled key must not bypass validation of an existing lake destination.
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                optionKey, "another_target")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(optionKey);
+        assertThat(admin.getTableInfo(tablePath).get().toTableDescriptor().getProperties())
+                .isEqualTo(properties);
     }
 
     @Test

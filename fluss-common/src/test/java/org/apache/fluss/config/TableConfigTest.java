@@ -29,6 +29,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TableConfigTest {
 
     @Test
+    void testDataLakeBranch() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getDataLakeBranch()).isEmpty();
+        conf.set(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        assertThat(tableConfig.getDataLakeBranch()).hasValue("rt");
+        conf.removeConfig(ConfigOptions.TABLE_DATALAKE_BRANCH);
+        assertThat(tableConfig.getDataLakeBranch()).isEmpty();
+    }
+
+    @Test
     void testMinInSyncReplicas() {
         Configuration conf = new Configuration();
         TableConfig tableConfig = new TableConfig(conf);

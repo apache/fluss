@@ -18,7 +18,9 @@
 
 package org.apache.fluss.lake.paimon.source;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
@@ -85,6 +87,47 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
     }
 
     @Test
+    void testReadBoundBranch() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        createTable(tablePath, SCHEMA);
+        writeRecord(
+                tablePath,
+                Collections.singletonList(
+                        GenericRow.of(
+                                1,
+                                BinaryString.fromString("main"),
+                                0,
+                                0L,
+                                Timestamp.fromEpochMillis(0))));
+        ((FileStoreTable) getTable(tablePath)).branchManager().createBranch("rt");
+        TablePath branchPath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE + "$branch_rt");
+        writeRecord(
+                branchPath,
+                Collections.singletonList(
+                        GenericRow.of(
+                                2,
+                                BinaryString.fromString("rt"),
+                                0,
+                                0L,
+                                Timestamp.fromEpochMillis(0))));
+
+        Configuration tableConfiguration = new Configuration();
+        tableConfiguration.set(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt");
+        LakeSource<PaimonSplit> source =
+                lakeStorage.createLakeSource(tablePath, new TableConfig(tableConfiguration)).copy();
+        List<Integer> ids = new ArrayList<>();
+        for (PaimonSplit split : source.createPlanner(() -> 1).plan()) {
+            RecordReader reader = source.createRecordReader(() -> split);
+            try (CloseableIterator<LogRecord> records = reader.read()) {
+                while (records.hasNext()) {
+                    ids.add(records.next().getRow().getInt(0));
+                }
+            }
+        }
+        assertThat(ids).containsExactly(2);
+    }
+
+    @Test
     void testEmptyFiltersDoNotAccessCatalog() {
         PaimonLakeSource lakeSource =
                 new PaimonLakeSource(
@@ -138,7 +181,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         LakeSource<PaimonSplit> lakeSource =
                 useProvidedTable
                         ? new PaimonLakeSource((FileStoreTable) getTable(tablePath))
-                        : lakeStorage.createLakeSource(tablePath);
+                        : lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();

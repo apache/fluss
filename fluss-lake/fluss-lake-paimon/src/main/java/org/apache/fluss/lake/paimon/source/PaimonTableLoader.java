@@ -27,6 +27,8 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
 
+import javax.annotation.Nullable;
+
 import java.io.Serializable;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -48,10 +50,13 @@ interface PaimonTableLoader extends Serializable {
 
         private final Configuration paimonConfig;
         private final TablePath tablePath;
+        @Nullable private final String branch;
 
-        CatalogTableLoader(Configuration paimonConfig, TablePath tablePath) {
+        CatalogTableLoader(
+                Configuration paimonConfig, TablePath tablePath, @Nullable String branch) {
             this.paimonConfig = new Configuration(paimonConfig);
             this.tablePath = tablePath;
+            this.branch = branch;
         }
 
         @Override
@@ -60,7 +65,8 @@ interface PaimonTableLoader extends Serializable {
                     CatalogFactory.createCatalog(
                             CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
             try {
-                FileStoreTable table = (FileStoreTable) catalog.getTable(toPaimon(tablePath));
+                FileStoreTable table =
+                        (FileStoreTable) catalog.getTable(toPaimon(tablePath, branch));
                 return new PaimonTableHandle() {
                     private boolean closed;
 

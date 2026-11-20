@@ -111,7 +111,8 @@ class IcebergRecordReaderTest extends IcebergSourceTestBase {
 
         List<Row> actual = new ArrayList<>();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         for (IcebergSplit icebergSplit : lakeSource.createPlanner(snapshot::snapshotId).plan()) {
             RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
             CloseableIterator<LogRecord> iterator = recordReader.read();

@@ -179,7 +179,8 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
         writeRecord(tablePath, Collections.singletonList(record1));
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
 
         return plan.get(0);
@@ -197,7 +198,8 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
         writeRecord(tablePath, Collections.singletonList(record1));
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
 
         return plan.get(0);

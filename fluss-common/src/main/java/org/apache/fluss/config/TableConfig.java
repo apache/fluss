@@ -135,6 +135,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);
     }
 
+    /** Gets the target branch, or empty to retain the lake's default behavior. */
+    public Optional<String> getDataLakeBranch() {
+        return config.getOptional(ConfigOptions.TABLE_DATALAKE_BRANCH);
+    }
+
     /** Whether historical partition access is enabled. */
     public boolean isHistoricalPartitionEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED);

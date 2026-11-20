@@ -25,9 +25,12 @@ import org.apache.fluss.utils.PropertiesUtils;
 
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.flink.FlinkCatalogFactory;
 import org.apache.paimon.flink.FlinkFileIOLoader;
 import org.apache.paimon.options.Options;
+
+import javax.annotation.Nullable;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
@@ -111,6 +114,25 @@ public class LakeFlinkCatalog implements AutoCloseable {
                 lakeFormat,
                 "DataLake format is null, must call getLakeCatalog first to initialize lake format.");
         return lakeFormat;
+    }
+
+    /** Resolves a table name using the target lake format's branch syntax. */
+    public static String resolveTableName(
+            @Nullable DataLakeFormat lakeFormat, String tableName, @Nullable String branch) {
+        if (branch == null) {
+            return tableName;
+        }
+        if (lakeFormat == PAIMON) {
+            return tableName
+                    + Identifier.SYSTEM_TABLE_SPLITTER
+                    + Identifier.SYSTEM_BRANCH_PREFIX
+                    + branch;
+        }
+        throw new UnsupportedOperationException(
+                "Option '"
+                        + ConfigOptions.TABLE_DATALAKE_BRANCH.key()
+                        + "' is not supported for lake format: "
+                        + lakeFormat);
     }
 
     @Override

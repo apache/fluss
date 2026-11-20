@@ -29,6 +29,7 @@ import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkFullCacheLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -95,20 +96,70 @@ abstract class FlinkTableFactoryTest {
 
     @Test
     void testResolveToLakeObjectName() {
-        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$buckets")).isTrue();
-        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$buckets")).isFalse();
-        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake"))
-                .isEqualTo("fluss_table");
-        assertThat(FlinkCatalog.resolveToLakeObjectName(null, "fluss_table$lake$snapshots"))
-                .isEqualTo("fluss_table$snapshots");
-        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table$lake"))
-                .isEqualTo("custom_lake_table");
         assertThat(
                         FlinkCatalog.resolveToLakeObjectName(
-                                "custom_lake_table", "fluss_table$lake$snapshots"))
-                .isEqualTo("custom_lake_table$snapshots");
-        assertThat(FlinkCatalog.resolveToLakeObjectName("custom_lake_table", "fluss_table"))
+                                null, "fluss_table$lake", DataLakeFormat.PAIMON, null))
                 .isEqualTo("fluss_table");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table",
+                                "fluss_table$lake$snapshots",
+                                DataLakeFormat.PAIMON,
+                                null))
+                .isEqualTo("custom_lake_table$snapshots");
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$buckets")).isTrue();
+        assertThat(FlinkCatalog.isVirtualTableName("fluss_table$lake$buckets")).isFalse();
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                null, "fluss_table$lake", DataLakeFormat.PAIMON, "main"))
+                .isEqualTo("fluss_table$branch_main");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                null, "fluss_table$lake$snapshots", DataLakeFormat.PAIMON, "main"))
+                .isEqualTo("fluss_table$branch_main$snapshots");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table",
+                                "fluss_table$lake",
+                                DataLakeFormat.PAIMON,
+                                "main"))
+                .isEqualTo("custom_lake_table$branch_main");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table",
+                                "fluss_table$lake$snapshots",
+                                DataLakeFormat.PAIMON,
+                                "main"))
+                .isEqualTo("custom_lake_table$branch_main$snapshots");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table", "fluss_table", DataLakeFormat.PAIMON, "main"))
+                .isEqualTo("fluss_table");
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                null, "fluss_table$lake$snapshots", DataLakeFormat.PAIMON, "rt"))
+                .isEqualTo("fluss_table$branch_rt$snapshots");
+    }
+
+    @Test
+    void testResolveToIcebergObjectName() {
+        assertThat(
+                        FlinkCatalog.resolveToLakeObjectName(
+                                "custom_lake_table",
+                                "fluss_table$lake$snapshots",
+                                DataLakeFormat.ICEBERG,
+                                null))
+                .isEqualTo("custom_lake_table$snapshots");
+        // The Paimon branch suffix must never be sent to an Iceberg catalog.
+        assertThatThrownBy(
+                        () ->
+                                FlinkCatalog.resolveToLakeObjectName(
+                                        "custom_lake_table",
+                                        "fluss_table$lake",
+                                        DataLakeFormat.ICEBERG,
+                                        "rt"))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_BRANCH.key(), "iceberg");
     }
 
     @Test
@@ -123,12 +174,23 @@ abstract class FlinkTableFactoryTest {
                 ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$lake$snapshots");
         assertThat(
                         FlinkTableFactory.resolveToLakeIdentifier(
-                                flinkIdentifier, Collections.emptyMap()))
+                                flinkIdentifier, Collections.emptyMap(), DataLakeFormat.PAIMON))
                 .isEqualTo(ObjectIdentifier.of("catalog", "fluss_db", "fluss_table$snapshots"));
-        assertThat(FlinkTableFactory.resolveToLakeIdentifier(flinkIdentifier, lakeTableOptions))
+        assertThat(
+                        FlinkTableFactory.resolveToLakeIdentifier(
+                                flinkIdentifier, lakeTableOptions, DataLakeFormat.PAIMON))
                 .isEqualTo(
                         ObjectIdentifier.of(
                                 "catalog", "custom_lake_db", "custom_lake_table$snapshots"));
+        lakeTableOptions.put("fluss." + ConfigOptions.TABLE_DATALAKE_BRANCH.key(), "rt");
+        assertThat(
+                        FlinkTableFactory.resolveToLakeIdentifier(
+                                flinkIdentifier, lakeTableOptions, DataLakeFormat.PAIMON))
+                .isEqualTo(
+                        ObjectIdentifier.of(
+                                "catalog",
+                                "custom_lake_db",
+                                "custom_lake_table$branch_rt$snapshots"));
     }
 
     @Test

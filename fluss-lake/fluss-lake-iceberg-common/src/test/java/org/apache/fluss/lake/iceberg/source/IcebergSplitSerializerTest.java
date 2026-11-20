@@ -77,7 +77,8 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
         table.refresh();
         Snapshot snapshot = table.currentSnapshot();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<IcebergSplit> plan = lakeSource.createPlanner(snapshot::snapshotId).plan();
 
         IcebergSplit originalIcebergSplit = plan.get(0);
@@ -159,7 +160,8 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
         table.refresh();
         Snapshot snapshot = table.currentSnapshot();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<IcebergSplit> plan = lakeSource.createPlanner(snapshot::snapshotId).plan();
 
         IcebergSplit original = plan.get(0);

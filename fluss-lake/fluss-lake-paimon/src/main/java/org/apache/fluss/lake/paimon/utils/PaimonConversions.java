@@ -124,6 +124,7 @@ public class PaimonConversions {
     @VisibleForTesting public static final Set<String> PAIMON_UNSETTABLE_OPTIONS = new HashSet<>();
 
     static {
+        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BRANCH.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
         PAIMON_UNSETTABLE_OPTIONS.add(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
@@ -164,8 +165,19 @@ public class PaimonConversions {
         }
     }
 
+    /** Converts a table path to a Paimon identifier. */
     public static Identifier toPaimon(TablePath tablePath) {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    /**
+     * Resolves a Paimon identifier, retaining the catalog's default behavior when no branch is set.
+     */
+    public static Identifier toPaimon(TablePath tablePath, @Nullable String branch) {
+        if (branch == null) {
+            return toPaimon(tablePath);
+        }
+        return new Identifier(tablePath.getDatabaseName(), tablePath.getTableName(), branch);
     }
 
     public static Object toPaimonLiteral(DataType dataType, Object flussLiteral) {

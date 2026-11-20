@@ -43,7 +43,7 @@ public final class LakeTableUtil {
         return TablePath.of(lakeDatabaseName, lakeTableName);
     }
 
-    /** Returns the changed lake table path option key, if present. */
+    /** Returns the changed lake destination option key (database, table, or branch), if present. */
     public static Optional<String> getLakeTablePathOptionKey(TableChange tableChange) {
         String optionKey;
         if (tableChange instanceof TableChange.SetOption) {
@@ -54,13 +54,14 @@ public final class LakeTableUtil {
             return Optional.empty();
         }
         if (ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(optionKey)
-                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey)) {
+                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(optionKey)
+                || ConfigOptions.TABLE_DATALAKE_BRANCH.key().equals(optionKey)) {
             return Optional.of(optionKey);
         }
         return Optional.empty();
     }
 
-    /** Returns whether the table change affects the resolved lake table path. */
+    /** Returns whether the change affects the physical lake destination, including its branch. */
     public static boolean isLakeTablePathChange(TableChange tableChange) {
         return getLakeTablePathOptionKey(tableChange).isPresent();
     }

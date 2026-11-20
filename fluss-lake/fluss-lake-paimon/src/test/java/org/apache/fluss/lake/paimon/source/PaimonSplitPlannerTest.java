@@ -55,7 +55,8 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
     @Test
     void testPlanForMissingTable() {
         LakeSource<PaimonSplit> lakeSource =
-                lakeStorage.createLakeSource(TablePath.of(DEFAULT_DB, DEFAULT_TABLE));
+                lakeStorage.createLakeSource(
+                        TablePath.of(DEFAULT_DB, DEFAULT_TABLE), DEFAULT_TABLE_CONFIG);
 
         assertThatThrownBy(() -> lakeSource.createPlanner(() -> 1L).plan())
                 .isInstanceOf(RuntimeException.class)
@@ -86,7 +87,8 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         writeRecord(tablePath, Arrays.asList(record1, record2));
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
         List<Split> actualSplits = ((FileStoreTable) table).newScan().plan().splits();
@@ -120,7 +122,8 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
 
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
         assertThat(paimonSplits).isNotEmpty();
@@ -146,7 +149,7 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         LakeSource<PaimonSplit> lakeSource =
                 useProvidedTable
                         ? new PaimonLakeSource((FileStoreTable) getTable(tablePath))
-                        : lakeStorage.createLakeSource(tablePath);
+                        : lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         PredicateBuilder predicateBuilder =
                 new PredicateBuilder(toFlussRowType(getTable(tablePath).rowType()));
         lakeSource.withFilters(

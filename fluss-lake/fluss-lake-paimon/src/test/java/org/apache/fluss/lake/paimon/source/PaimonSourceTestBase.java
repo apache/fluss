@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.paimon.PaimonLakeStorage;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.CloseableIterator;
@@ -49,6 +50,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
 /** Base class for paimon lakehouse test. */
 class PaimonSourceTestBase {
+    protected static final TableConfig DEFAULT_TABLE_CONFIG = new TableConfig(new Configuration());
     protected static final String DEFAULT_DB = "fluss_lakehouse";
     protected static final String DEFAULT_TABLE = "test_lakehouse_table";
     protected static final int DEFAULT_BUCKET_NUM = 1;

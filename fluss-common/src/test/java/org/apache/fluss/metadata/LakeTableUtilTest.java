@@ -52,6 +52,9 @@ class LakeTableUtilTest {
     void testIsLakeTablePathChange() {
         String databaseNameKey = ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key();
         String tableNameKey = ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key();
+        String branchKey = ConfigOptions.TABLE_DATALAKE_BRANCH.key();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.set(branchKey, "rt"))).isTrue();
+        assertThat(LakeTableUtil.isLakeTablePathChange(TableChange.reset(branchKey))).isTrue();
 
         assertThat(LakeTableUtil.getLakeTablePathOptionKey(TableChange.set(databaseNameKey, "db")))
                 .contains(databaseNameKey);

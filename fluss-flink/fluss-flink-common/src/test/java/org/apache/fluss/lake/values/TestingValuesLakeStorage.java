@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.values;
 
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
@@ -38,7 +39,7 @@ public class TestingValuesLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<?> createLakeSource(TablePath tablePath) {
+    public LakeSource<?> createLakeSource(TablePath tablePath, TableConfig tableConfig) {
         throw new UnsupportedOperationException("Not impl.");
     }
 }

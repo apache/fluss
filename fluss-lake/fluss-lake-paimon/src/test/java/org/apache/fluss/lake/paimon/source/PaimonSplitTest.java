@@ -65,7 +65,8 @@ class PaimonSplitTest extends PaimonSourceTestBase {
         writeRecord(tablePath, Collections.singletonList(record1));
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
         // test bucket() and partition() method
@@ -99,7 +100,8 @@ class PaimonSplitTest extends PaimonSourceTestBase {
         writeRecord(tablePath, Collections.singletonList(record1));
         Snapshot snapshot = table.latestSnapshot().get();
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
         // The DATE partition must be rendered in Fluss partition-name format ("2024-03-01"),

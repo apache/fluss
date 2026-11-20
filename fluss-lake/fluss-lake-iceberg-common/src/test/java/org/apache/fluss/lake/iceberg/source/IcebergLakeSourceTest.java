@@ -147,7 +147,8 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         Predicate filter3 = FLUSS_BUILDER.startsWith(1, BinaryString.fromString("name"));
         List<Predicate> allFilters = Arrays.asList(filter1, filter2, filter3);
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
@@ -213,7 +214,8 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         writeRecord(table, temporalRows(14, LocalDate.of(2024, 2, 1), 3), null, 0);
         table.refresh();
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
 
         assertTemporalFilter(
                 lakeSource,
@@ -269,7 +271,8 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         Predicate filter2 = FLUSS_BUILDER_TINYINT.lessOrEqual(0, (byte) 3);
         List<Predicate> allFilters = Arrays.asList(filter1, filter2);
 
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<IcebergSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEqualTo(allFilters);
         assertThat(filterPushDownResult.remainingPredicates()).isEmpty();

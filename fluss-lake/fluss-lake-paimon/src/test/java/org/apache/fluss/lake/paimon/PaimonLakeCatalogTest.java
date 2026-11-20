@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -34,6 +35,7 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
+import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.schema.SchemaChange;
@@ -95,6 +97,132 @@ class PaimonLakeCatalogTest {
     void cleanup() {
         flussPaimonCatalog.close();
         setUp();
+    }
+
+    @Test
+    void testBindAndAlterExistingBranch() throws Exception {
+        TablePath tablePath = TablePath.of("branch_db", "events");
+        createTable(tablePath.getDatabaseName(), tablePath.getTableName());
+        Catalog catalog = flussPaimonCatalog.getPaimonCatalog();
+        ((FileStoreTable) catalog.getTable(toPaimon(tablePath))).branchManager().createBranch("rt");
+        TableDescriptor descriptor =
+                TableDescriptor.builder(getTableDescriptor(FLUSS_SCHEMA))
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .build();
+        flussPaimonCatalog.createTable(
+                tablePath, descriptor, new TestingLakeCatalogContext(descriptor));
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "extra",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+        TableDescriptor updated =
+                TableDescriptor.builder(descriptor)
+                        .schema(SchemaUpdate.applySchemaChanges(FLUSS_SCHEMA, changes))
+                        .build();
+        flussPaimonCatalog.alterTable(
+                tablePath, changes, new TestingLakeCatalogContext(descriptor, updated));
+        assertThat(
+                        ((FileStoreTable) catalog.getTable(toPaimon(tablePath, "rt")))
+                                .rowType()
+                                .getFieldNames())
+                .contains("extra");
+        assertThat(
+                        ((FileStoreTable) catalog.getTable(toPaimon(tablePath)))
+                                .rowType()
+                                .getFieldNames())
+                .doesNotContain("extra");
+        // The existing branch may evolve independently of the main branch.
+        flussPaimonCatalog.createTable(tablePath, updated, new TestingLakeCatalogContext(updated));
+    }
+
+    @Test
+    void testMissingBranchIsCreatedEmptyAndReused() throws Exception {
+        TablePath tablePath = TablePath.of("branch_db", "auto_branch");
+        TableDescriptor mainDescriptor =
+                TableDescriptor.builder(
+                                getTableDescriptor(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.BIGINT())
+                                                .build()))
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "main")
+                        .build();
+        flussPaimonCatalog.createTable(
+                tablePath, mainDescriptor, new TestingLakeCatalogContext(mainDescriptor));
+        long mainSnapshotId = writeSingleRow(tablePath);
+        TableDescriptor branchDescriptor =
+                TableDescriptor.builder(mainDescriptor)
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .build();
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext(branchDescriptor);
+
+        flussPaimonCatalog.createTable(tablePath, branchDescriptor, context);
+        flussPaimonCatalog.createTable(tablePath, branchDescriptor, context);
+
+        Catalog catalog = flussPaimonCatalog.getPaimonCatalog();
+        FileStoreTable branch = (FileStoreTable) catalog.getTable(toPaimon(tablePath, "rt"));
+        assertThat(branch.rowType().getFieldNames()).containsExactly("id");
+        assertThat(branch.snapshotManager().latestSnapshotId()).isNull();
+        assertThat(
+                        ((FileStoreTable) catalog.getTable(toPaimon(tablePath)))
+                                .snapshotManager()
+                                .latestSnapshotId())
+                .isEqualTo(mainSnapshotId);
+    }
+
+    @Test
+    void testMissingBranchWithRegisteredSnapshotIsNotRecreated() {
+        TablePath tablePath = TablePath.of("branch_db", "lost_branch");
+        TableDescriptor descriptor =
+                TableDescriptor.builder(getTableDescriptor(FLUSS_SCHEMA))
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .build();
+        TestingLakeCatalogContext context =
+                new TestingLakeCatalogContext(descriptor) {
+                    @Override
+                    public Optional<Long> getCurrentLakeSnapshotId() {
+                        return Optional.of(1L);
+                    }
+                };
+        assertThatThrownBy(() -> flussPaimonCatalog.createTable(tablePath, descriptor, context))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("registered lake snapshot");
+        Catalog catalog = flussPaimonCatalog.getPaimonCatalog();
+        assertThatThrownBy(() -> catalog.getTable(toPaimon(tablePath, "rt")))
+                .isInstanceOf(Catalog.TableNotExistException.class);
+        assertThatThrownBy(() -> catalog.getTable(toPaimon(tablePath)))
+                .isInstanceOf(Catalog.TableNotExistException.class);
+    }
+
+    @Test
+    void testIncompatibleSchemaDoesNotCreateBranch() {
+        TablePath tablePath = TablePath.of("branch_db", "incompatible_branch");
+        createTable(tablePath.getDatabaseName(), tablePath.getTableName());
+        TableDescriptor descriptor =
+                TableDescriptor.builder(
+                                getTableDescriptor(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.BIGINT())
+                                                .build()))
+                        .property(ConfigOptions.TABLE_DATALAKE_BRANCH, "rt")
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.createTable(
+                                        tablePath,
+                                        descriptor,
+                                        new TestingLakeCatalogContext(descriptor)))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("schema is not compatible");
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog
+                                        .getPaimonCatalog()
+                                        .getTable(toPaimon(tablePath, "rt")))
+                .isInstanceOf(Catalog.TableNotExistException.class);
     }
 
     @Test

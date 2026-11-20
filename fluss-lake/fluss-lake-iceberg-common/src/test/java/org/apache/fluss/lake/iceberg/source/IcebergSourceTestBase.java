@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.iceberg.IcebergLakeStorage;
 import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
@@ -53,6 +54,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Base class for Iceberg source tests. */
 class IcebergSourceTestBase {
+    protected static final TableConfig DEFAULT_TABLE_CONFIG = new TableConfig(new Configuration());
     protected static final String DEFAULT_DB = "fluss_lakehouse";
     protected static final String DEFAULT_TABLE = "test_lakehouse_table";
     protected static final int DEFAULT_BUCKET_NUM = 1;

@@ -146,6 +146,7 @@ public class TableDescriptorValidation {
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
         checkCustomLakePathSupported(tableConf, clusterDataLakeFormat);
+        checkLakeBranchSupported(tableConf, clusterDataLakeFormat);
     }
 
     /** Validates the schema after altering table columns. */
@@ -260,6 +261,25 @@ public class TableDescriptorValidation {
         if (dataLakeFormat != DataLakeFormat.PAIMON && dataLakeFormat != DataLakeFormat.ICEBERG) {
             throw new InvalidConfigException(
                     "Custom lake table path is only supported for Paimon and Iceberg.");
+        }
+    }
+
+    private static void checkLakeBranchSupported(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        if (!tableConf.contains(ConfigOptions.TABLE_DATALAKE_BRANCH)) {
+            return;
+        }
+        DataLakeFormat format =
+                tableConf
+                        .getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                        .orElse(clusterDataLakeFormat);
+        if (format != DataLakeFormat.PAIMON) {
+            throw new InvalidConfigException(
+                    "'table.datalake.branch' is only supported for Paimon.");
+        }
+        String branch = tableConf.get(ConfigOptions.TABLE_DATALAKE_BRANCH);
+        if (branch.trim().isEmpty()) {
+            throw new InvalidConfigException("'table.datalake.branch' must not be empty.");
         }
     }
 

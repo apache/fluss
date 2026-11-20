@@ -55,7 +55,7 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             TablePath tablePath,
             @Nullable Predicate predicate,
             long snapshotId) {
-        this(new CatalogTableLoader(paimonConfig, tablePath), predicate, snapshotId);
+        this(new CatalogTableLoader(paimonConfig, tablePath, null), predicate, snapshotId);
     }
 
     PaimonSplitPlanner(

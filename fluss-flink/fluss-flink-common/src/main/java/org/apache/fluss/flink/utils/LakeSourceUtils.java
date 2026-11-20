@@ -19,6 +19,7 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
@@ -68,7 +69,8 @@ public class LakeSourceUtils {
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
         TablePath lakeTablePath = LakeTableUtil.resolveLakeTablePath(tablePath, tableConfig);
         try {
-            return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(lakeTablePath);
+            return (LakeSource<LakeSplit>)
+                    lakeStorage.createLakeSource(lakeTablePath, new TableConfig(tableConfig));
         } catch (UnsupportedOperationException e) {
             throw new UnsupportedOperationException(
                     String.format(

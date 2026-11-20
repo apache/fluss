@@ -142,7 +142,11 @@ public class PaimonScanBasedTableLookuper implements LakeTableLookuper {
                                 CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
                 try {
                     FileStoreTable table =
-                            (FileStoreTable) newCatalog.getTable(toPaimon(tablePath));
+                            (FileStoreTable)
+                                    newCatalog.getTable(
+                                            toPaimon(
+                                                    tablePath,
+                                                    tableConfig.getDataLakeBranch().orElse(null)));
                     if (table.primaryKeys().isEmpty()) {
                         throw new UnsupportedOperationException(
                                 "Point lookup is only supported for primary-key Paimon tables.");

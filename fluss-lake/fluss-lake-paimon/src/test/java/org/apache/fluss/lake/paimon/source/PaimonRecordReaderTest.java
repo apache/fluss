@@ -83,7 +83,8 @@ class PaimonRecordReaderTest extends PaimonSourceTestBase {
         List<InternalRow> writtenRows = new ArrayList<>();
         prepareLogTable(tablePath, isPartitioned, DEFAULT_BUCKET_NUM, writtenRows);
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         Table table = getTable(tablePath);
         Snapshot snapshot = table.latestSnapshot().get();
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
@@ -124,7 +125,8 @@ class PaimonRecordReaderTest extends PaimonSourceTestBase {
         List<InternalRow> writtenRows = new ArrayList<>();
         prepareLogTable(tablePath, false, DEFAULT_BUCKET_NUM, writtenRows);
 
-        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource<PaimonSplit> lakeSource =
+                lakeStorage.createLakeSource(tablePath, DEFAULT_TABLE_CONFIG);
         int[][] project = new int[][] {new int[] {5}, new int[] {1}, new int[] {3}};
         lakeSource.withProject(project);
         project[0][0] = 0;
