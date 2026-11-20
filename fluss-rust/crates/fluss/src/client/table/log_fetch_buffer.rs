@@ -693,7 +693,9 @@ impl DefaultCompletedFetch {
     }
 
     fn next_log_batch(&mut self) -> Option<Result<LogRecordBatch>> {
-        let batch = self.log_record_batch.next()?;
+        let batch = self
+            .log_record_batch
+            .next_for_scan(self.resolver.checks_crc(self.is_remote))?;
         Some(batch.and_then(|batch| self.maybe_ensure_valid(&batch).map(|()| batch)))
     }
 

@@ -2999,7 +2999,10 @@ mod tests {
                 vec![2],
                 vec![0, 1, 2],
             ] {
-                check_poll_remote_projection_case(batch_mode, &fields, compression).await?;
+                for check_crc in [false, true] {
+                    check_poll_remote_projection_case(batch_mode, &fields, compression, check_crc)
+                        .await?;
+                }
             }
         }
         Ok(())
@@ -3009,6 +3012,7 @@ mod tests {
         batch_mode: bool,
         fields: &[usize],
         compression: &str,
+        check_crc: bool,
     ) -> Result<()> {
         use crate::metadata::DataField;
         use crate::row::DataGetters;
@@ -3044,7 +3048,8 @@ mod tests {
             )]),
         )?;
         let mut builder = MemoryLogRecordsArrowBuilder::new(config, false)?;
-        for name in [Some("alice"), None] {
+        let name_value = "alice".repeat(4096);
+        for name in [Some(name_value.as_str()), None] {
             let mut row = GenericRow::new(2);
             row.set_field(0, 7_i32);
             if let Some(name) = name {
@@ -3085,7 +3090,10 @@ mod tests {
                 Arc::new(RpcClient::new()),
                 Arc::clone(&metadata),
                 Arc::clone(&inner.log_scanner_status),
-                &Config::default(),
+                &Config {
+                    scanner_log_check_crc: check_crc,
+                    ..Config::default()
+                },
                 Some(fields.to_vec()),
                 fixed_schema,
                 None,
@@ -3102,10 +3110,25 @@ mod tests {
             fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
             let directory = tempfile::tempdir()?;
             let path = directory.path().join("remote.log");
-            std::fs::write(&path, &data)?;
+            // Damage only an unselected string buffer. Checked reads must reject even
+            // this corruption before resolving the historical schema.
+            let corrupt_unselected = fixed_schema && compression == "NONE" && fields == [0];
+            if corrupt_unselected {
+                let mut damaged = data.clone();
+                let offset = damaged
+                    .windows(5)
+                    .position(|bytes| bytes == b"alice")
+                    .unwrap();
+                damaged[offset] ^= 1;
+                std::fs::write(&path, damaged)?;
+            } else {
+                std::fs::write(&path, &data)?;
+            }
+            let logs = LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?;
+            let read_count = logs.file_bytes_read();
             let completed = DefaultCompletedFetch::new(
                 bucket.clone(),
-                LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path)?,
+                logs,
                 data.len(),
                 Arc::clone(&fetcher.resolver),
                 true,
@@ -3113,6 +3136,13 @@ mod tests {
                 2,
             );
             fetcher.log_fetch_buffer.add(Box::new(completed));
+            if corrupt_unselected && check_crc {
+                let error = poll_test_offsets(&inner, batch_mode).await.unwrap_err();
+                assert!(error.to_string().contains("stored crc"), "{error}");
+                assert!(fetcher.resolver.resolve(1, true).is_none());
+                assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(0));
+                continue;
+            }
             if batch_mode {
                 let scanner = RecordBatchLogScanner {
                     inner: Arc::clone(&inner),
@@ -3141,7 +3171,7 @@ mod tests {
                                 .as_any()
                                 .downcast_ref::<StringArray>()
                                 .unwrap();
-                            assert_eq!(names.value(0), "alice");
+                            assert_eq!(names.value(0), name_value);
                             assert!(names.is_null(1));
                         }
                         2 => assert_eq!(batch.column(column).null_count(), 2),
@@ -3164,7 +3194,7 @@ mod tests {
                             1 => {
                                 assert_eq!(record.row.is_null_at(column)?, index == 1);
                                 if index == 0 {
-                                    assert_eq!(record.row.get_string(column)?, "alice");
+                                    assert_eq!(record.row.get_string(column)?, name_value);
                                 }
                             }
                             2 => assert!(record.row.is_null_at(column)?),
@@ -3173,6 +3203,16 @@ mod tests {
                     }
                 }
                 assert!(scanner.poll(Duration::ZERO).await?.is_empty());
+            }
+            let bytes_read = read_count.load(std::sync::atomic::Ordering::Relaxed);
+            if check_crc {
+                assert!(bytes_read >= data.len());
+            } else if compression == "NONE" && !fields.contains(&1) {
+                assert!(
+                    bytes_read < data.len() / 2,
+                    "read {bytes_read} of {} bytes",
+                    data.len()
+                );
             }
             assert!(fetcher.resolver.resolve(1, true).is_some());
             assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(2));
@@ -3330,6 +3370,81 @@ mod tests {
                 .map(|r| r.offset())
                 .collect())
         }
+    }
+
+    #[tokio::test]
+    async fn projected_file_errors_are_cached_until_seek() -> Result<()> {
+        for batch_mode in [false, true] {
+            let (inner, _, _) = scanner_fixture(true)?;
+            let (row_type, data) = crate::test_utils::build_append_only_batch(&[(7, "payload")]);
+            let context = Arc::new(ReadContext::with_projection_pushdown(
+                to_arrow_schema(&row_type)?,
+                Arc::new(row_type.project(&[0])?),
+                vec![0],
+                true,
+            )?);
+            let resolver = Arc::new(
+                ReadContextResolver::new(1, context.clone(), context, Some(vec![0]))
+                    .with_check_crc(false),
+            );
+            let fetcher = &inner.log_fetcher;
+            let bucket = TableBucket::new(1, 0);
+            inner
+                .log_scanner_status
+                .assign_scan_bucket(bucket.clone(), 0);
+            fetcher.nodes_with_pending_fetch_requests.lock().insert(1);
+            let directory = tempfile::tempdir()?;
+            let add = |bytes: &[u8], offset| -> Result<_> {
+                let path = directory.path().join(format!("{offset}.log"));
+                std::fs::write(&path, bytes)?;
+                let logs =
+                    LogRecordsBatches::from_file(std::fs::File::open(&path)?, 0, path.clone())?;
+                let read_count = logs.file_bytes_read();
+                fetcher
+                    .log_fetch_buffer
+                    .add(Box::new(DefaultCompletedFetch::new(
+                        bucket.clone(),
+                        logs,
+                        bytes.len(),
+                        resolver.clone(),
+                        true,
+                        offset,
+                        0,
+                    )));
+                Ok((path, read_count))
+            };
+            let mut bad = data.clone();
+            bad[..8].copy_from_slice(&1_i64.to_le_bytes());
+            bad[RECORDS_OFFSET..].fill(0);
+            let (path, read_count) = add(&[data.clone(), bad].concat(), 0)?;
+            assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![0]);
+            let error = poll_test_offsets(&inner, batch_mode)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("Invalid projected Arrow IPC"), "{error}");
+            let reads = read_count.load(std::sync::atomic::Ordering::Relaxed);
+            for _ in 0..3 {
+                assert_eq!(
+                    poll_test_offsets(&inner, batch_mode)
+                        .now_or_never()
+                        .unwrap()
+                        .unwrap_err()
+                        .to_string(),
+                    error
+                );
+                assert_eq!(read_count.load(std::sync::atomic::Ordering::Relaxed), reads);
+                assert!(path.exists());
+                assert_eq!(inner.log_scanner_status.get_bucket_offset(&bucket), Some(1));
+            }
+            change_subscription(&inner, batch_mode, Some(2)).await?;
+            let mut recovery = data;
+            recovery[..8].copy_from_slice(&2_i64.to_le_bytes());
+            add(&recovery, 2)?;
+            assert_eq!(poll_test_offsets(&inner, batch_mode).await?, vec![2]);
+            assert!(!path.exists());
+        }
+        Ok(())
     }
 
     #[tokio::test]
