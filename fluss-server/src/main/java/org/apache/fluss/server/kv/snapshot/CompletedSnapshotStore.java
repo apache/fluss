@@ -313,7 +313,7 @@ public class CompletedSnapshotStore {
 
         // The subsumed queue contains only snapshots whose durable references were removed.
         // Shared SST files are managed separately by the registry.
-        snapshotsCleaner.cleanSubsumedSnapshots(stillInUseIds, () -> {}, ioExecutor);
+        snapshotsCleaner.cleanSubsumedSnapshots(() -> {}, ioExecutor);
     }
 
     private void removeUnusedSnapshots() throws Exception {

@@ -610,7 +610,8 @@ public class ReplicaManager implements ServerReconfigurable {
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
             Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
-        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> activations = new ArrayList<>();
+        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> recoveryResponses =
+                new ArrayList<>();
         inLock(
                 replicaStateChangeLock,
                 () -> {
@@ -629,8 +630,8 @@ public class ReplicaManager implements ServerReconfigurable {
                         }
                         try {
                             if (data.getRecoverySnapshotId() != null) {
-                                activations.add(
-                                        queryBulkLoadRestore(data, requestCoordinatorEpoch));
+                                recoveryResponses.add(
+                                        requestBulkLoadRecovery(data, requestCoordinatorEpoch));
                                 continue;
                             }
                             HostedReplica hosted = allReplicas.get(bucket);
@@ -659,15 +660,15 @@ public class ReplicaManager implements ServerReconfigurable {
                     startHighWatermarkCheckPointThread();
                     replicaFetcherManager.shutdownIdleFetcherThreads();
                 });
-        if (activations.isEmpty()) {
+        if (recoveryResponses.isEmpty()) {
             responseCallback.accept(new ArrayList<>(result.values()));
             return;
         }
-        CompletableFuture.allOf(activations.toArray(new CompletableFuture<?>[0]))
+        CompletableFuture.allOf(recoveryResponses.toArray(new CompletableFuture<?>[0]))
                 .whenComplete(
                         (ignored, error) -> {
                             for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> activation :
-                                    activations) {
+                                    recoveryResponses) {
                                 NotifyLeaderAndIsrResultForBucket completed = activation.join();
                                 result.put(completed.getTableBucket(), completed);
                             }
@@ -675,7 +676,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         });
     }
 
-    private CompletableFuture<NotifyLeaderAndIsrResultForBucket> queryBulkLoadRestore(
+    private CompletableFuture<NotifyLeaderAndIsrResultForBucket> requestBulkLoadRecovery(
             NotifyLeaderAndIsrData data, int requestCoordinatorEpoch) {
         Replica replica = getReplicaOrException(data.getTableBucket());
         if (data.getLeader() != serverId

@@ -1580,6 +1580,11 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                             ctx.addPendingLeaderActivation(bucket);
                             return ctx.getBucketLeaderAndIsr(bucket).get().leader();
                         });
+        // Record only the traffic sent after the initial role notification.
+        initCoordinatorChannel();
+        TestTabletServerGateway observer =
+                (TestTabletServerGateway)
+                        testCoordinatorChannelManager.getTabletServerGateway(1).get();
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
@@ -1601,6 +1606,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                     assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
                     assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
                 });
+        assertThat(observer.pendingRequestSize()).isZero();
     }
 
     private void putFailedNotifyResponse(

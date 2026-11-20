@@ -1406,16 +1406,22 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                                         || !assignment.contains(serverId)) {
                                                     continue;
                                                 }
-                                                ctx.getBucketLeaderAndIsr(bucket)
-                                                        .ifPresent(
-                                                                role ->
-                                                                        addRoleNotification(
-                                                                                Collections
-                                                                                        .singleton(
-                                                                                                serverId),
-                                                                                bucket,
-                                                                                assignment,
-                                                                                role));
+                                                LeaderAndIsr role =
+                                                        ctx.getBucketLeaderAndIsr(bucket)
+                                                                .orElse(null);
+                                                if (role == null) {
+                                                    continue;
+                                                }
+                                                PhysicalTablePath path =
+                                                        roleNotificationPath(bucket);
+                                                if (path != null) {
+                                                    coordinatorRequestBatch.addRoleNotification(
+                                                            Collections.singleton(serverId),
+                                                            path,
+                                                            bucket,
+                                                            assignment,
+                                                            role);
+                                                }
                                             }
                                             coordinatorRequestBatch.sendRequestToTabletServers(
                                                     coordinatorEpoch);
@@ -3063,34 +3069,31 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private void sendLeaderAndIsrRequest(
             TableBucket tableBucket, List<Integer> replicas, LeaderAndIsr leaderAndIsr) {
+        PhysicalTablePath path = roleNotificationPath(tableBucket);
+        if (path == null) {
+            return;
+        }
         coordinatorRequestBatch.newBatch();
-        addRoleNotification(new HashSet<>(replicas), tableBucket, replicas, leaderAndIsr);
+        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                new HashSet<>(replicas), path, tableBucket, replicas, leaderAndIsr);
         coordinatorRequestBatch.sendRequestToTabletServers(
                 coordinatorContext.getCoordinatorEpoch());
     }
 
-    private void addRoleNotification(
-            Set<Integer> recipients,
-            TableBucket tableBucket,
-            List<Integer> replicas,
-            LeaderAndIsr leaderAndIsr) {
+    private @Nullable PhysicalTablePath roleNotificationPath(TableBucket tableBucket) {
         String partitionName = null;
         if (tableBucket.getPartitionId() != null) {
             partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
             if (partitionName == null) {
-                LOG.error("Can't find partition name for partition: {}.", tableBucket.getBucket());
-                return;
+                LOG.error(
+                        "Can't find partition name for partition: {}.",
+                        tableBucket.getPartitionId());
+                return null;
             }
         }
 
-        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                recipients,
-                PhysicalTablePath.of(
-                        coordinatorContext.getTablePathById(tableBucket.getTableId()),
-                        partitionName),
-                tableBucket,
-                replicas,
-                leaderAndIsr);
+        return PhysicalTablePath.of(
+                coordinatorContext.getTablePathById(tableBucket.getTableId()), partitionName);
     }
 
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {
