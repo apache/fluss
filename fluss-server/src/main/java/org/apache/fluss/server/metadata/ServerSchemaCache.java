@@ -48,6 +48,7 @@ public class ServerSchemaCache {
 
     private final MetadataManager metadataManager;
     private final Map<Long, SchemaInfo> latestSchemaByTableId;
+
     // table_id -> subscriber count
     private final Map<Long, Integer> subscriberCounters;
     private final Cache<TableSchemaKey, Schema> schemaCache;
@@ -179,6 +180,21 @@ public class ServerSchemaCache {
         @Override
         public SchemaInfo getLatestSchemaInfo() {
             return latestSchemaByTableId.get(tableId);
+        }
+
+        @Override
+        public SchemaInfo refreshLatestSchemaInfo() {
+            // Keep metadata I/O outside ConcurrentHashMap's per-key lock so notifications and
+            // unsubscribe operations can proceed while a refresh is in flight.
+            SchemaInfo refreshed = metadataManager.getLatestSchema(tablePath);
+            subscriberCounters.computeIfPresent(
+                    tableId,
+                    (key, count) -> {
+                        updateSchema(tableId, refreshed.getSchemaId(), refreshed.getSchema());
+                        return count;
+                    });
+            SchemaInfo latest = latestSchemaByTableId.get(tableId);
+            return latest == null ? refreshed : latest;
         }
 
         @Override
