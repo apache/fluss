@@ -146,4 +146,68 @@ class LakeTableJsonSerdeTest extends JsonSerdeTestBase<LakeTable> {
         LakeTableSnapshot expectedSnapshot2 = new LakeTableSnapshot(11L, expectedBuckets2);
         assertThat(actual2.getOrReadLatestTableSnapshot()).isEqualTo(expectedSnapshot2);
     }
+
+    /**
+     * Verifies forward / backward compatibility of the optional {@code commit_timestamp} field
+     * introduced in #2625.
+     *
+     * <ul>
+     *   <li>Legacy V2 JSON without {@code commit_timestamp} must deserialize successfully and the
+     *       in-memory entry should report {@link
+     *       LakeTable.LakeSnapshotMetadata#UNKNOWN_COMMIT_TIMESTAMP}.
+     *   <li>V2 JSON containing {@code commit_timestamp} must round-trip and the value must be
+     *       preserved.
+     *   <li>An entry stamped with a non-zero timestamp must serialize the field; an entry whose
+     *       timestamp is {@code UNKNOWN_COMMIT_TIMESTAMP} must omit the field (keeping output
+     *       byte-compatible with legacy znodes).
+     * </ul>
+     */
+    @Test
+    void testCommitTimestampJsonCompatibility() throws IOException {
+        // 1. Legacy V2 JSON (no commit_timestamp) -> fallback to UNKNOWN_COMMIT_TIMESTAMP
+        String legacyV2 =
+                "{\"version\":2,\"lake_snapshots\":["
+                        + "{\"snapshot_id\":7,\"tiered_offsets\":\"/p/t7\",\"readable_offsets\":\"/p/r7\"}"
+                        + "]}";
+        LakeTable parsedLegacy =
+                JsonSerdeUtils.readValue(
+                        legacyV2.getBytes(StandardCharsets.UTF_8), LakeTableJsonSerde.INSTANCE);
+        assertThat(parsedLegacy.getLakeSnapshotMetadatas()).hasSize(1);
+        assertThat(parsedLegacy.getLakeSnapshotMetadatas().get(0).getCommitTimestamp())
+                .isEqualTo(LakeTable.LakeSnapshotMetadata.UNKNOWN_COMMIT_TIMESTAMP);
+
+        // 2. New V2 JSON with commit_timestamp -> value preserved
+        String newV2 =
+                "{\"version\":2,\"lake_snapshots\":["
+                        + "{\"snapshot_id\":8,\"tiered_offsets\":\"/p/t8\","
+                        + "\"readable_offsets\":\"/p/r8\",\"commit_timestamp\":12345678}"
+                        + "]}";
+        LakeTable parsedNew =
+                JsonSerdeUtils.readValue(
+                        newV2.getBytes(StandardCharsets.UTF_8), LakeTableJsonSerde.INSTANCE);
+        assertThat(parsedNew.getLakeSnapshotMetadatas()).hasSize(1);
+        assertThat(parsedNew.getLakeSnapshotMetadatas().get(0).getCommitTimestamp())
+                .isEqualTo(12345678L);
+
+        // 3. Round-trip: stamped entry serializes the field, unknown entry omits it.
+        LakeTable.LakeSnapshotMetadata stamped =
+                new LakeTable.LakeSnapshotMetadata(
+                        9L, new FsPath("/p/t9"), new FsPath("/p/r9"), 99999L);
+        LakeTable.LakeSnapshotMetadata unstamped =
+                new LakeTable.LakeSnapshotMetadata(10L, new FsPath("/p/t10"), null);
+        List<LakeTable.LakeSnapshotMetadata> mixed = new ArrayList<>();
+        mixed.add(stamped);
+        mixed.add(unstamped);
+        LakeTable mixedTable = new LakeTable(mixed);
+
+        byte[] serialized =
+                JsonSerdeUtils.writeValueAsBytes(mixedTable, LakeTableJsonSerde.INSTANCE);
+        String serializedStr = new String(serialized, StandardCharsets.UTF_8);
+        assertThat(serializedStr).contains("\"commit_timestamp\":99999");
+        // entry #2 is unstamped, the field should be absent
+        assertThat(serializedStr).doesNotContain("\"commit_timestamp\":0");
+
+        LakeTable roundTripped = JsonSerdeUtils.readValue(serialized, LakeTableJsonSerde.INSTANCE);
+        assertThat(roundTripped).isEqualTo(mixedTable);
+    }
 }

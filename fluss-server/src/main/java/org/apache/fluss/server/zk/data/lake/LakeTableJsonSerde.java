@@ -54,6 +54,8 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
     private static final String SNAPSHOT_ID_KEY = "snapshot_id";
     private static final String TIERED_OFFSETS_KEY = "tiered_offsets";
     private static final String READABLE_OFFSETS_KEY = "readable_offsets";
+    // Optional timestamp for legacy compatibility.
+    private static final String COMMIT_TIMESTAMP_KEY = "commit_timestamp";
 
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
@@ -91,6 +93,13 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
                 generator.writeStringField(
                         READABLE_OFFSETS_KEY,
                         lakeSnapshotMetadata.getReadableOffsetsFilePath().toString());
+            }
+            // commit_timestamp is omitted when unknown to keep JSON compact.
+            // Readers fall back to UNKNOWN_COMMIT_TIMESTAMP if absent.
+            if (lakeSnapshotMetadata.getCommitTimestamp()
+                    != LakeTable.LakeSnapshotMetadata.UNKNOWN_COMMIT_TIMESTAMP) {
+                generator.writeNumberField(
+                        COMMIT_TIMESTAMP_KEY, lakeSnapshotMetadata.getCommitTimestamp());
             }
             generator.writeEndObject();
         }
@@ -133,10 +142,20 @@ public class LakeTableJsonSerde implements JsonSerializer<LakeTable>, JsonDeseri
             JsonNode readableOffsetsNode = snapshotNode.get(READABLE_OFFSETS_KEY);
             FsPath readableOffsetsPath =
                     readableOffsetsNode != null ? new FsPath(readableOffsetsNode.asText()) : null;
+            // Optional field. Legacy znodes don't have it; fall back to
+            // UNKNOWN_COMMIT_TIMESTAMP for list-order semantics.
+            JsonNode commitTsNode = snapshotNode.get(COMMIT_TIMESTAMP_KEY);
+            long commitTimestamp =
+                    commitTsNode != null
+                            ? commitTsNode.asLong()
+                            : LakeTable.LakeSnapshotMetadata.UNKNOWN_COMMIT_TIMESTAMP;
 
             LakeTable.LakeSnapshotMetadata metadata =
                     new LakeTable.LakeSnapshotMetadata(
-                            snapshotId, new FsPath(tieredOffsetsPath), readableOffsetsPath);
+                            snapshotId,
+                            new FsPath(tieredOffsetsPath),
+                            readableOffsetsPath,
+                            commitTimestamp);
             lakeSnapshotMetadatas.add(metadata);
         }
         return new LakeTable(lakeSnapshotMetadatas);
