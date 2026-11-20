@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -87,6 +88,12 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "defaultdb";
+
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final String scopedMergeEngineWithVersion =
+            tableNames.tableName("merge_engine_with_version");
+    private final String scopedSinkTest = tableNames.tableName("sink_test");
 
     protected StreamExecutionEnvironment env;
     protected StreamTableEnvironment tEnv;
@@ -149,21 +156,26 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
                         : "";
         tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3'"
+                ("create table "
+                                + scopedSinkTest
+                                + " (a int not null, b bigint, c string) with "
+                                + "('bucket.num' = '3'")
                         + compressedProperties
                         + ")");
         tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + "(a, b, c) "
                                 + "VALUES (1, 3501, 'Tim'), "
                                 + "(2, 3502, 'Fabian'), "
                                 + "(3, 3503, 'coco'), "
                                 + "(4, 3504, 'jerry'), "
                                 + "(5, 3505, 'piggy'), "
-                                + "(6, 3506, 'stave')")
+                                + "(6, 3506, 'stave')"))
                 .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
@@ -180,25 +192,32 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
                         : "";
         tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3'"
+                ("create table "
+                                + scopedSinkTest
+                                + " (a int not null, b bigint, c string) with "
+                                + "('bucket.num' = '3'")
                         + compressedProperties
                         + ")");
         tEnv.executeSql(
-                        "INSERT INTO sink_test "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + " "
                                 + "VALUES (1, 3501, 'Tim'), "
                                 + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'coco') ")
+                                + "(3, 3503, 'coco') "))
                 .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         // add new column
-        tEnv.executeSql("alter table sink_test add add_column int").await();
+        tEnv.executeSql(("alter table " + scopedSinkTest + " add add_column int")).await();
         tEnv.executeSql(
-                        "INSERT INTO sink_test "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + " "
                                 + "VALUES (4, 3504, 'jerry', 4), "
                                 + "(5, 3505, 'piggy', 5), "
-                                + "(6, 3506, 'stave', 6)")
+                                + "(6, 3506, 'stave', 6)"))
                 .await();
         List<String> expectedRows =
                 Arrays.asList(
@@ -208,7 +227,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
 
         // read with new schema.
-        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        rowIter = tEnv.executeSql("select * from " + scopedSinkTest).collect();
         expectedRows =
                 Arrays.asList(
                         "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
@@ -222,11 +241,15 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testAppendLogWithBucketKey(DistributionMode distributionMode) throws Exception {
         tEnv.executeSql(
                 String.format(
-                        "create table sink_test (a int not null, b bigint, c string) "
-                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.distribution-mode'= '%s')",
+                        ("create table "
+                                + scopedSinkTest
+                                + " (a int not null, b bigint, c string) "
+                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.distribution-mode'= '%s')"),
                         distributionMode));
         String insertSql =
-                "INSERT INTO sink_test(a, b, c) "
+                ("INSERT INTO "
+                        + scopedSinkTest
+                        + "(a, b, c) "
                         + "VALUES (1, 3501, 'Tim'), "
                         + "(2, 3502, 'Fabian'), "
                         + "(3, 3503, 'Tim'), "
@@ -237,7 +260,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(9, 3509, 'Tim'), "
                         + "(10, 3510, 'coco'), "
                         + "(11, 3511, 'stave'), "
-                        + "(12, 3512, 'Tim')";
+                        + "(12, 3512, 'Tim')");
 
         if (distributionMode == DistributionMode.PARTITION_DYNAMIC) {
             assertThatThrownBy(() -> tEnv.executeSql(insertSql))
@@ -257,7 +280,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertThat(insertPlan).doesNotContain("\"ship_strategy\" : \"REBALANCE\"");
         tEnv.executeSql(insertSql).await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         //noinspection ArraysAsListWithZeroOrOneArgument
         List<List<String>> expectedGroups =
                 Arrays.asList(
@@ -297,22 +321,26 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testAppendLogWithRoundRobin() throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3', 'client.writer.bucket.no-key-assigner' = 'round_robin')");
+                ("create table "
+                        + scopedSinkTest
+                        + " (a int not null, b bigint, c string) with "
+                        + "('bucket.num' = '3', 'client.writer.bucket.no-key-assigner' = 'round_robin')"));
         tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + "(a, b, c) "
                                 + "VALUES (1, 3501, 'Tim'), "
                                 + "(2, 3502, 'Fabian'), "
                                 + "(3, 3503, 'coco'), "
                                 + "(4, 3504, 'jerry'), "
                                 + "(5, 3505, 'piggy'), "
-                                + "(6, 3506, 'stave')")
+                                + "(6, 3506, 'stave')"))
                 .await();
 
         Map<Integer, List<String>> rows = new HashMap<>();
         Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         try (Connection conn = ConnectionFactory.createConnection(clientConf);
-                Table table = conn.getTable(TablePath.of(DEFAULT_DB, "sink_test"));
+                Table table = conn.getTable(TablePath.of(DEFAULT_DB, scopedSinkTest));
                 LogScanner logScanner = table.newScan().createLogScanner()) {
             logScanner.subscribeFromBeginning(0);
             logScanner.subscribeFromBeginning(1);
@@ -343,22 +371,27 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testAppendLogWithMultiBatch() throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3')");
+                ("create table "
+                        + scopedSinkTest
+                        + " (a int not null, b bigint, c string) with "
+                        + "('bucket.num' = '3')"));
         int batchSize = 3;
         for (int i = 0; i < batchSize; i++) {
             tEnv.executeSql(
-                            "INSERT INTO sink_test(a, b, c) "
+                            ("INSERT INTO "
+                                    + scopedSinkTest
+                                    + "(a, b, c) "
                                     + "VALUES (1, 3501, 'Tim'), "
                                     + "(2, 3502, 'Fabian'), "
                                     + "(3, 3503, 'coco'), "
                                     + "(4, 3504, 'jerry'), "
                                     + "(5, 3505, 'piggy'), "
-                                    + "(6, 3506, 'stave')")
+                                    + "(6, 3506, 'stave')"))
                     .await();
         }
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         List<String> expectedRows = new ArrayList<>();
         for (int i = 0; i < batchSize; i++) {
             expectedRows.addAll(
@@ -375,12 +408,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testAppendLogPartitionTable(DistributionMode distributionMode) throws Exception {
         tEnv.executeSql(
                 String.format(
-                        "create table sink_test (a int not null, b bigint, c string) "
+                        ("create table "
+                                + scopedSinkTest
+                                + " (a int not null, b bigint, c string) "
                                 + " partitioned by (c) "
-                                + "with ('bucket.num' = '3', 'sink.distribution-mode'= '%s')",
+                                + "with ('bucket.num' = '3', 'sink.distribution-mode'= '%s')"),
                         distributionMode));
         String insertSql =
-                "INSERT INTO sink_test(a, b, c) "
+                ("INSERT INTO "
+                        + scopedSinkTest
+                        + "(a, b, c) "
                         + "VALUES (1, 3501, 'Tim'), "
                         + "(2, 3502, 'Fabian'), "
                         + "(3, 3503, 'Tim'), "
@@ -391,7 +428,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                         + "(9, 3509, 'Tim'), "
                         + "(10, 3510, 'coco'), "
                         + "(11, 3511, 'stave'), "
-                        + "(12, 3512, 'Tim')";
+                        + "(12, 3512, 'Tim')");
 
         if (distributionMode == DistributionMode.BUCKET
                 || distributionMode == DistributionMode.BUCKET_BALANCE) {
@@ -411,7 +448,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv.executeSql(insertSql).await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         //noinspection ArraysAsListWithZeroOrOneArgument
         List<List<String>> expectedGroups =
                 Arrays.asList(
@@ -438,18 +476,22 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testPut(DistributionMode distributionMode) throws Exception {
         tEnv.executeSql(
                 String.format(
-                        "create table sink_test (a int not null primary key not enforced, b bigint, c string)"
-                                + " with('bucket.num' = '3', 'sink.distribution-mode'= '%s')",
+                        ("create table "
+                                + scopedSinkTest
+                                + " (a int not null primary key not enforced, b bigint, c string)"
+                                + " with('bucket.num' = '3', 'sink.distribution-mode'= '%s')"),
                         distributionMode));
 
         String insertSql =
-                "INSERT INTO sink_test(a, b, c) "
+                ("INSERT INTO "
+                        + scopedSinkTest
+                        + "(a, b, c) "
                         + "VALUES (1, 3501, 'Tim'), "
                         + "(2, 3502, 'Fabian'), "
                         + "(3, 3503, 'coco'), "
                         + "(4, 3504, 'jerry'), "
                         + "(5, 3505, 'piggy'), "
-                        + "(6, 3506, 'stave')";
+                        + "(6, 3506, 'stave')");
         if (distributionMode == DistributionMode.PARTITION_DYNAMIC) {
             assertThatThrownBy(() -> tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN))
                     .hasMessageContaining(
@@ -470,7 +512,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv.executeSql(insertSql).await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
@@ -479,14 +522,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         tEnv.executeSql(
-                        "INSERT INTO sink_test(c, b, a) "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + "(c, b, a) "
                                 + "VALUES "
                                 + "('Timmy', 501, 11), "
                                 + "('Fab', 502, 12), "
                                 + "('cony', 503, 13), "
                                 + "('jemmy', 504, 14), "
                                 + "('pig', 505, 15), "
-                                + "('stephen', 506, 16)")
+                                + "('stephen', 506, 16)"))
                 .await();
         expectedRows =
                 Arrays.asList(
@@ -518,22 +563,29 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testPutDuringAddColumn() throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null primary key not enforced, b bigint, c string)");
+                ("create table "
+                        + scopedSinkTest
+                        + " (a int not null primary key not enforced, b bigint, c string)"));
         tEnv.executeSql(
-                        "INSERT INTO sink_test "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + " "
                                 + "VALUES (1, 3501, 'Tim'), "
                                 + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'coco') ")
+                                + "(3, 3503, 'coco') "))
                 .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         // add new column
-        tEnv.executeSql("alter table sink_test add add_column int").await();
+        tEnv.executeSql(("alter table " + scopedSinkTest + " add add_column int")).await();
         tEnv.executeSql(
-                        "INSERT INTO sink_test "
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + " "
                                 + "VALUES (4, 3504, 'jerry', 4), "
                                 + "(5, 3505, 'piggy', 5), "
-                                + "(6, 3506, 'stave', 6)")
+                                + "(6, 3506, 'stave', 6)"))
                 .await();
         List<String> expectedRows =
                 Arrays.asList(
@@ -544,7 +596,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
 
         // read with new schema.
-        rowIter = tEnv.executeSql("select * from sink_test").collect();
+        rowIter = tEnv.executeSql("select * from " + scopedSinkTest).collect();
         expectedRows =
                 Arrays.asList(
                         "+I[1, 3501, Tim, null]", "+I[2, 3502, Fabian, null]",
@@ -558,13 +610,18 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testPartialUpsert() throws Exception {
         disableSinkRequireOnConflict();
         tEnv.executeSql(
-                "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
+                ("create table "
+                        + scopedSinkTest
+                        + " (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')"));
 
         // partial insert
-        tEnv.executeSql("INSERT INTO sink_test(a, b) VALUES (1, 111), (2, 222)").await();
-        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)").await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(a, b) VALUES (1, 111), (2, 222)"))
+                .await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(c, a) VALUES ('c1', 1), ('c2', 2)"))
+                .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
 
         List<String> expectedRows =
                 Arrays.asList(
@@ -594,14 +651,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.createTemporaryView("changeLog", changeLogTable);
 
         // check the target fields in row 1 is set to null
-        tEnv.executeSql("INSERT INTO sink_test(a, b) SELECT f0, f1 FROM changeLog").await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(a, b) SELECT f0, f1 FROM changeLog"))
+                .await();
         expectedRows =
                 Arrays.asList(
                         "-U[1, 111, c1]", "+U[1, 333, c1]", "-U[1, 333, c1]", "+U[1, null, c1]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // check the row 1 will be deleted finally since all the fields in the row are set to null
-        tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog").await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(a, c) SELECT f0, f2 FROM changeLog"))
+                .await();
         expectedRows = Arrays.asList("-U[1, null, c1]", "+U[1, null, c11]", "-D[1, null, c11]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
@@ -609,17 +668,24 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testPartialUpsertDuringAddColumn() throws Exception {
         tEnv.executeSql(
-                "create table sink_test (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')");
+                ("create table "
+                        + scopedSinkTest
+                        + " (a int not null primary key not enforced, b bigint, c string) with('bucket.num' = '3')"));
 
         // partial insert
-        tEnv.executeSql("INSERT INTO sink_test(a, b) VALUES (1, 111), (2, 222)").await();
-        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)").await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(a, b) VALUES (1, 111), (2, 222)"))
+                .await();
+        tEnv.executeSql(("INSERT INTO " + scopedSinkTest + "(c, a) VALUES ('c1', 1), ('c2', 2)"))
+                .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from " + scopedSinkTest).collect();
         // add new column
-        tEnv.executeSql("alter table sink_test add add_column string").await();
+        tEnv.executeSql(("alter table " + scopedSinkTest + " add add_column string")).await();
         tEnv.executeSql(
-                        "INSERT INTO sink_test(add_column, a ) VALUES ('new_value', 1), ('new_value', 2)")
+                        ("INSERT INTO "
+                                + scopedSinkTest
+                                + "(add_column, a ) VALUES ('new_value', 1), ('new_value', 2)"))
                 .await();
 
         // read with old schema
@@ -640,7 +706,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // read with new schema
         CloseableIterator<Row> newSchemaRowIter =
                 tEnv.executeSql(
-                                "select * from sink_test /*+ OPTIONS('scan.startup.mode' = 'earliest') */ ")
+                                ("select * from "
+                                        + scopedSinkTest
+                                        + " /*+ OPTIONS('scan.startup.mode' = 'earliest') */ "))
                         .collect();
         expectedRows =
                 Arrays.asList(
@@ -768,9 +836,11 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
             throws Exception {
         String tableName =
-                String.format(
-                        "%s_partitioned_%s_table_sink",
-                        isPrimaryKeyTable ? "primary_key" : "log", isAutoPartition ? "auto" : "");
+                tableNames.tableName(
+                        String.format(
+                                "%s_partitioned_%s_table_sink",
+                                isPrimaryKeyTable ? "primary_key" : "log",
+                                isAutoPartition ? "auto" : ""));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
         Collection<String> partitions;
@@ -863,7 +933,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testDeleteAndUpdateStmtOnPkTable() throws Exception {
-        String tableName = "pk_table_delete_test";
+        String tableName = tableNames.tableName("pk_table_delete_test");
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -948,7 +1018,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testBatchDeleteAndUpdateStmtOnPkTable() throws Exception {
-        String tableName = "pk_table_batch_delete_update_test";
+        String tableName = tableNames.tableName("pk_table_batch_delete_update_test");
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1022,7 +1092,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testDeleteAndUpdateStmtOnPartitionedPkTable() throws Exception {
-        String tableName = "partitioned_pk_table_delete_test";
+        String tableName = tableNames.tableName("partitioned_pk_table_delete_test");
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1112,7 +1182,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @ValueSource(booleans = {true, false})
     void testUnsupportedDeleteAndUpdateStmtOnLogTable(boolean isPartitionedTable) {
         String tableName =
-                isPartitionedTable ? "partitioned_log_table_delete_test" : "log_table_delete_test";
+                tableNames.tableName(
+                        isPartitionedTable
+                                ? "partitioned_log_table_delete_test"
+                                : "log_table_delete_test");
         String partitionedTableStmt =
                 " partitioned by (c) with ('table.auto-partition.enabled' = 'true','table.auto-partition.time-unit' = 'year')";
         tBatchEnv.executeSql(
@@ -1346,7 +1419,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     @MultiVersionTest
     void testSkipUnchangedUpsertsSupportsMutations() throws Exception {
-        String tableName = "skipUnchangedUpsertsTable";
+        String tableName = tableNames.tableName("skipUnchangedUpsertsTable");
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1413,18 +1486,22 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testVersionMergeEngineWithTypeBigint() throws Exception {
         tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
+                ("create table "
+                        + scopedMergeEngineWithVersion
+                        + " (a int not null primary key not enforced,"
                         + " b string, ts bigint) with('table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+                        + "'table.merge-engine.versioned.ver-column' = 'ts')"));
 
         // insert once
         tEnv.executeSql(
-                        "insert into merge_engine_with_version (a, b, ts) VALUES "
-                                + "(1, 'v1', 1000), (2, 'v2', 1000), (1, 'v11', 999), (3, 'v3', 1000)")
+                        ("insert into "
+                                + scopedMergeEngineWithVersion
+                                + " (a, b, ts) VALUES "
+                                + "(1, 'v1', 1000), (2, 'v2', 1000), (1, 'v11', 999), (3, 'v3', 1000)"))
                 .await();
 
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from merge_engine_with_version").collect();
+                tEnv.executeSql("select * from " + scopedMergeEngineWithVersion).collect();
 
         // id=1 not update
         List<String> expectedRows =
@@ -1434,8 +1511,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // insert again, update id=3 and id=2 (>= old version), insert id=4, ignore id=1
         tEnv.executeSql(
-                        "insert into merge_engine_with_version (a, b, ts) VALUES "
-                                + "(3, 'v33', 1001), (4, 'v44', 1000), (1, 'v11', 999), (2, 'v22', 1000)")
+                        ("insert into "
+                                + scopedMergeEngineWithVersion
+                                + " (a, b, ts) VALUES "
+                                + "(3, 'v33', 1001), (4, 'v44', 1000), (1, 'v11', 999), (2, 'v22', 1000)"))
                 .await();
         expectedRows =
                 Arrays.asList(
@@ -1450,19 +1529,23 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @Test
     void testVersionMergeEngineWithTypeTimestamp() throws Exception {
         tEnv.executeSql(
-                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                        ("create table "
+                                + scopedMergeEngineWithVersion
+                                + " (a int not null primary key not enforced,"
                                 + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
-                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')"))
                 .await();
         // insert once
         tEnv.executeSql(
-                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        ("INSERT INTO "
+                                + scopedMergeEngineWithVersion
+                                + " (a, b, ts) VALUES "
                                 + "(1, 'v1', TIMESTAMP '2024-12-27 12:00:00.123'), "
                                 + "(2, 'v2', TIMESTAMP '2024-12-27 12:00:00.123'), "
-                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123');")
+                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123');"))
                 .await();
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from merge_engine_with_version").collect();
+                tEnv.executeSql("select * from " + scopedMergeEngineWithVersion).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123]",
@@ -1472,9 +1555,11 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // insert again. id=1 not update, but id=3 updated
         tEnv.executeSql(
-                "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                ("INSERT INTO "
+                        + scopedMergeEngineWithVersion
+                        + " (a, b, ts) VALUES "
                         + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
-                        + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');");
+                        + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');"));
         expectedRows =
                 Arrays.asList(
                         "-U[3, v3, 2024-12-27T12:00:00.123]",
@@ -1487,21 +1572,25 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv.getConfig().set("table.local-time-zone", "UTC");
         tEnv.executeSql(
-                        "create table merge_engine_with_version (a int not null primary key not enforced,"
+                        ("create table "
+                                + scopedMergeEngineWithVersion
+                                + " (a int not null primary key not enforced,"
                                 + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
                                 + "'table.merge-engine' = 'versioned',"
-                                + "'table.merge-engine.versioned.ver-column' = 'ts')")
+                                + "'table.merge-engine.versioned.ver-column' = 'ts')"))
                 .await();
 
         // insert once
         tEnv.executeSql(
-                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        ("INSERT INTO "
+                                + scopedMergeEngineWithVersion
+                                + " (a, b, ts) VALUES "
                                 + "(1, 'v1', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
                                 + "(2, 'v2', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                                + "(3, 'v3', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));"))
                 .await();
         CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from merge_engine_with_version").collect();
+                tEnv.executeSql("select * from " + scopedMergeEngineWithVersion).collect();
         List<String> expectedRows =
                 Arrays.asList(
                         "+I[1, v1, 2024-12-27T12:00:00.123456789Z]",
@@ -1511,9 +1600,11 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // insert again. id=1 not update, but id=3 updated
         tEnv.executeSql(
-                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        ("INSERT INTO "
+                                + scopedMergeEngineWithVersion
+                                + " (a, b, ts) VALUES "
                                 + "(1, 'v11', CAST(TIMESTAMP '2024-12-27 12:00:00.123456788' AS TIMESTAMP(9) WITH LOCAL TIME ZONE)), "
-                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));")
+                                + "(3, 'v33', CAST(TIMESTAMP '2024-12-27 12:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE));"))
                 .await();
         expectedRows =
                 Arrays.asList(
@@ -1820,7 +1911,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testDeleteBehaviorDisabledForDeleteStmt() throws Exception {
-        String tableName = "delete_behavior_disable_table";
+        String tableName = tableNames.tableName("delete_behavior_disable_table");
         tBatchEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1856,7 +1947,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"ignore", "disable", "allow"})
     void testDeleteBehaviorForInsertStmt(String deleteBehavior) throws Exception {
-        String tableName = "delete_behavior_ignore_table";
+        String tableName = tableNames.tableName("delete_behavior_ignore_table");
         tEnv.executeSql(
                 String.format(
                         "create table %s ("
@@ -1871,13 +1962,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         if (deleteBehavior.equals("allow")) {
             assertThat(changelogModePlan)
                     .contains(
-                            "TableSourceScan(table=[[testcatalog, defaultdb, delete_behavior_ignore_table]], fields=[a, b], "
+                            "TableSourceScan(table=[[testcatalog, defaultdb, "
+                                    + tableName
+                                    + "]], fields=[a, b], "
                                     + "changelogMode=[I,UB,UA,D])");
         } else {
             // For 'ignore' and 'disable', delete operations are not emitted in the changelog
             assertThat(changelogModePlan)
                     .contains(
-                            "TableSourceScan(table=[[testcatalog, defaultdb, delete_behavior_ignore_table]], fields=[a, b], "
+                            "TableSourceScan(table=[[testcatalog, defaultdb, "
+                                    + tableName
+                                    + "]], fields=[a, b], "
                                     + "changelogMode=[I,UB,UA])");
         }
 
@@ -1959,7 +2054,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        String tableName = "wal_mode_pk_table";
+        String tableName = tableNames.tableName("wal_mode_pk_table");
         // Create a table with WAL mode and default merge engine
         tEnv.executeSql(
                 String.format(
@@ -2031,7 +2126,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        String tableName = "auto_increment_pk_table";
+        String tableName = tableNames.tableName("auto_increment_pk_table");
         // Create a table with auto increment column
         tEnv.executeSql(
                 String.format(
@@ -2127,7 +2222,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
 
-        String tableName = "wal_mode_pk_table";
+        String tableName = tableNames.tableName("wal_mode_pk_table");
         // Create a table with WAL mode and auto increment column
         tEnv.executeSql(
                 String.format(

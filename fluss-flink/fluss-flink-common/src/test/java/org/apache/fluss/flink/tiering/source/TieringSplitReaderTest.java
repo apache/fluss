@@ -73,7 +73,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testTieringTable() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "fluss_test_tiering_one_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "fluss_test_tiering_one_table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         TestingLakeTieringFactory lakeTieringFactory = new TestingLakeTieringFactory();
         try (Connection connection =
@@ -174,9 +174,9 @@ class TieringSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testTieringMixTables() throws Exception {
-        TablePath tablePath0 = TablePath.of("fluss", "tiering_table0");
+        TablePath tablePath0 = tableNames.tablePath("fluss", "tiering_table0");
         long tableId0 = createTable(tablePath0, DEFAULT_PK_TABLE_DESCRIPTOR);
-        TablePath tablePath1 = TablePath.of("fluss", "tiering_table1");
+        TablePath tablePath1 = tableNames.tablePath("fluss", "tiering_table1");
         long tableId1 = createTable(tablePath1, DEFAULT_PK_TABLE_DESCRIPTOR);
 
         try (Connection connection =
@@ -258,7 +258,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
             verifyTieringRows(tieringSplitReader, expectTierRows, expectedFinishSplits);
 
             // test tiering another log table2
-            TablePath tablePath2 = TablePath.of("fluss", "tiering_table2");
+            TablePath tablePath2 = tableNames.tablePath("fluss", "tiering_table2");
             long tableId2 = createTable(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR);
             Map<TableBucket, List<InternalRow>> table2Rows = putRows(tableId2, tablePath2, 10);
             splitsAddition =
@@ -296,7 +296,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testLogSplitWithoutWritableRecordsCanCompleteLakeWriter() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "tiering_table_without_writable_records");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "tiering_table_without_writable_records");
         TableDescriptor singleBucketPkTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -354,7 +355,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
      */
     @Test
     void testLakeWriterClosedWhenCompleteFails() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "tiering_close_writer_on_complete_failure");
+        TablePath tablePath =
+                tableNames.tablePath("fluss", "tiering_close_writer_on_complete_failure");
         TableDescriptor singleBucketPkTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -412,7 +414,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
      */
     @Test
     void testCloseClosesAllInFlightLakeWriters() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "tiering_close_in_flight_writers");
+        TablePath tablePath = tableNames.tablePath("fluss", "tiering_close_in_flight_writers");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         TestingLakeTieringFactory lakeTieringFactory = new TestingLakeTieringFactory();
         try (Connection connection =
@@ -458,7 +460,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
      */
     @Test
     void testTieringFirstRowMergeEngineFinishes() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "tiering_first_row_finish");
+        TablePath tablePath = tableNames.tablePath("fluss", "tiering_first_row_finish");
         TableDescriptor descriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)

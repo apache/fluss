@@ -37,6 +37,7 @@ import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -78,6 +79,8 @@ class LakeTableManagerITCase {
                     .setRemoteDirNames(Arrays.asList("default-remote-data", TABLE_REMOTE_DIR_NAME))
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private static Configuration getClusterConfig() {
         Configuration conf = Configuration.fromMap(getDataLakeFormat());
         conf.set(
@@ -103,7 +106,7 @@ class LakeTableManagerITCase {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
 
-        TablePath tablePath = TablePath.of("fluss", "test_lake_table");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_lake_table");
 
         // create the table
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
@@ -128,7 +131,7 @@ class LakeTableManagerITCase {
                         .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .build();
-        TablePath lakeTablePath = TablePath.of("fluss", "test_lake_enabled_table");
+        TablePath lakeTablePath = tableNames.tablePath("fluss", "test_lake_enabled_table");
         // create the table
         adminGateway
                 .createTable(newCreateTableRequest(lakeTablePath, lakeTableDescriptor, false))
@@ -149,7 +152,7 @@ class LakeTableManagerITCase {
     @Test
     void testPrepareLakeTableSnapshotUsesTableRemoteDataDir() throws Exception {
         CoordinatorGateway gateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
-        TablePath tablePath = TablePath.of("fluss", "test_prepare_lake_snapshot");
+        TablePath tablePath = tableNames.tablePath("fluss", "test_prepare_lake_snapshot");
         TableDescriptor tableDescriptor =
                 newPkTable()
                         .withProperties(

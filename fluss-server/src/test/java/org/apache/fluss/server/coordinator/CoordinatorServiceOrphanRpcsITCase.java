@@ -39,6 +39,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -64,7 +65,6 @@ class CoordinatorServiceOrphanRpcsITCase {
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
-    private static final TablePath PK_TABLE_PATH = TablePath.of("orphan_rpc_test_db", "pk_table");
     private static final TableDescriptor PK_TABLE_DESCRIPTOR =
             TableDescriptor.builder()
                     .schema(
@@ -83,11 +83,15 @@ class CoordinatorServiceOrphanRpcsITCase {
     private long pkTableId;
     @TempDir static Path tempDir;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
+    private final TablePath pkTablePath = tableNames.tablePath("orphan_rpc_test_db", "pk_table");
+
     @BeforeEach
     void setupTables() throws Exception {
         pkTableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, PK_TABLE_PATH, PK_TABLE_DESCRIPTOR);
+                        FLUSS_CLUSTER_EXTENSION, pkTablePath, PK_TABLE_DESCRIPTOR);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(pkTableId);
     }
 

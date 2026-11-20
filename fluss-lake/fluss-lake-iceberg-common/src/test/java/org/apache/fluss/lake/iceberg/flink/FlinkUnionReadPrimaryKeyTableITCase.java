@@ -32,6 +32,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -66,6 +67,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test case for union read primary key table. */
 public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
+
+    private final TestTableNames tableNames = new TestTableNames();
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void testUnionReadInStreamMode(Boolean isPartitioned) throws Exception {
@@ -73,7 +77,9 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         JobClient jobClient = buildTieringJob(execEnv);
 
         String tableName =
-                "stream_pk_table_full" + (isPartitioned ? "_partitioned" : "_non_partitioned");
+                tableNames.tableName(
+                        "stream_pk_table_full"
+                                + (isPartitioned ? "_partitioned" : "_non_partitioned"));
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         // create table & write initial data
@@ -307,7 +313,9 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName = "lake_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "lake_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
@@ -366,7 +374,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
 
     @Test
     void testUnionReadWithCustomLakeTablePath() throws Exception {
-        String tableName = "pk_table_custom_lake_mapping";
+        String tableName = tableNames.tableName("pk_table_custom_lake_mapping");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         TablePath lakeTablePath = TablePath.of("custom_db", "pk_table_custom_lake_target");
 

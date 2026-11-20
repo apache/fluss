@@ -40,6 +40,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseMetadataManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterEach;
@@ -85,6 +86,8 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     private static final String DEFAULT_DB = "test-snapshot-scan-db";
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private RemoteFileDownloader remoteFileDownloader;
 
     @BeforeEach
@@ -104,7 +107,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanSnapshot() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-snapshot");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-snapshot");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // scan the snapshot
@@ -128,7 +131,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanTaggedSnapshot() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-tagged-table-snapshot");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-tagged-table-snapshot");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
@@ -145,7 +148,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testScanSnapshotDuringSchemaChange() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-snapshot-schema-change");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-snapshot-schema-change");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // put into values with old schema.
@@ -207,7 +210,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     public void testKvSnapshotLease() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-kv-snapshot-lease");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-kv-snapshot-lease");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         String kvSnapshotLeaseId1 = "test-lease";
@@ -344,7 +347,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTableLevelScanRespectsLimit() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test-table-level-scan-limit");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test-table-level-scan-limit");
         long tableId = createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, true);
 
         // insert 3 rows per bucket (9 total across 3 buckets)

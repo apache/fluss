@@ -25,13 +25,16 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterEach;
@@ -48,7 +51,6 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
@@ -85,17 +87,20 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                     new Object[] {4, "derek"},
                     new Object[] {5, "fiona"});
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     @BeforeEach
     protected void setup() throws Exception {
         super.setup();
 
         // Create table for filter testing
-        tableId = createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        tableId = createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
         metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
-        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(data1TablePath));
 
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
         // Add bucket 0 and bucket 1 to log scanner status
@@ -121,7 +126,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         logFetcher.registerTable(
                 new TableScanSpec(
                         TableInfo.of(
-                                DATA1_TABLE_PATH,
+                                data1TablePath,
                                 tableId,
                                 1,
                                 DATA1_TABLE_DESCRIPTOR,
@@ -455,7 +460,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         logFetcher.registerTable(
                 new TableScanSpec(
                         TableInfo.of(
-                                DATA1_TABLE_PATH,
+                                data1TablePath,
                                 tableId,
                                 1,
                                 DATA1_TABLE_DESCRIPTOR,

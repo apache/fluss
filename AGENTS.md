@@ -307,6 +307,14 @@ fluss/
 - When modifying existing tests, do not expand Mockito usage. Existing Mockito usage does not justify new usage, and unrelated Mockito tests do not need to be rewritten.
 - Keep changes focused; do not introduce unrelated production refactoring solely to avoid Mockito.
 
+### Table Names in Shared Test Clusters
+
+- Ordinary test invocations sharing a Fluss cluster must use distinct fully qualified table paths, including parameterized and repeated invocations. Waiting for a drop future does not imply that every metadata cache has observed the deletion.
+- Prefer an instance-scoped `TestTableNames` in JUnit's per-method lifecycle, or a name derived from the test method and all invocation parameters. Keep the generated path and use it consistently for DDL, reads, writes, SQL, and assertions; do not put generated names in static fields shared by test methods.
+- When a framework reuses the test instance, such as JUnit `PER_CLASS` or ScalaTest suites, create a fresh naming scope in each test's setup before deriving names. A final helper initialized once for the suite does not isolate its test methods.
+- Preserve deliberate name reuse in tests of table recreation, duplicate creation, catalog behavior, or metadata recovery. Reuse one scoped name within the invocation when exercising those contracts. Tests using a fresh cluster per invocation, and metadata-only unit tests, do not need globally unique names.
+- Name isolation prevents unrelated tests from interfering; it does not replace regression coverage or fixes for table recreation in production. Do not add a blanket duplicate-name assertion that rejects intentional reuse.
+
 ### Test Design
 
 - Add tests for new behavior, covering success, failure, and edge cases.

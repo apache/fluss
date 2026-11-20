@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -60,6 +61,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** End-to-end tests for writing and scanning POJOs via client API. */
 public class FlussTypedClientITCase extends ClientToServerITCaseBase {
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     /** Test POJO containing all supported field types used by converters. */
     public static class AllTypesPojo {
@@ -288,7 +291,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTypedAppendWriteAndScan() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "all_types_log");
+        TablePath path = tableNames.tablePath("pojo_db", "all_types_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(allTypesLogSchema()).distributedBy(2).build();
         createTable(path, td, true);
@@ -328,7 +331,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     void testTypedUpsertWriteAndScan() throws Exception {
         // Build all-types PK table schema (PK on 'a')
         Schema schema = allTypesPkSchema();
-        TablePath path = TablePath.of("pojo_db", "all_types_pk");
+        TablePath path = tableNames.tablePath("pojo_db", "all_types_pk");
         TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(2, "a").build();
         createTable(path, td, true);
 
@@ -392,7 +395,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTypedDeleteOnPartitionedTable() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "partitioned_delete");
+        TablePath path = tableNames.tablePath("pojo_db", "partitioned_delete");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -438,7 +441,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     @Test
     void testTypedLookups() throws Exception {
         Schema schema = allTypesPkSchema();
-        TablePath path = TablePath.of("pojo_db", "lookup_pk");
+        TablePath path = tableNames.tablePath("pojo_db", "lookup_pk");
         TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(2, "a").build();
         createTable(path, td, true);
 
@@ -470,7 +473,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     @Test
     void testInternalRowLookup() throws Exception {
         Schema schema = allTypesPkSchema();
-        TablePath path = TablePath.of("pojo_db", "lookup_internalrow");
+        TablePath path = tableNames.tablePath("pojo_db", "lookup_internalrow");
         TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(2, "a").build();
         createTable(path, td, true);
 
@@ -501,7 +504,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTypedProjections() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "proj_log");
+        TablePath path = tableNames.tablePath("pojo_db", "proj_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(allTypesLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -695,7 +698,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testComplexTypesAppendWriteAndScan() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "complex_types_log");
+        TablePath path = tableNames.tablePath("pojo_db", "complex_types_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(complexTypesLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -748,7 +751,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testComplexTypesUpsertAndLookup() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "complex_types_pk");
+        TablePath path = tableNames.tablePath("pojo_db", "complex_types_pk");
         TableDescriptor td =
                 TableDescriptor.builder()
                         .schema(complexTypesPkSchema())
@@ -851,7 +854,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
                         .column("nullableIntList", DataTypes.ARRAY(DataTypes.INT()))
                         .build();
 
-        TablePath path = TablePath.of("pojo_db", "list_fields_log");
+        TablePath path = tableNames.tablePath("pojo_db", "list_fields_log");
         TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(1).build();
         createTable(path, td, true);
 
@@ -1124,7 +1127,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
      */
     @Test
     void testNestedRowAppendAndScan() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "nested_row_log");
+        TablePath path = tableNames.tablePath("pojo_db", "nested_row_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(nestedRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -1184,7 +1187,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
      */
     @Test
     void testNestedRowUpsertAndLookup() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "nested_row_pk");
+        TablePath path = tableNames.tablePath("pojo_db", "nested_row_pk");
         TableDescriptor td =
                 TableDescriptor.builder()
                         .schema(nestedRowPkSchema())
@@ -1233,7 +1236,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
      */
     @Test
     void testArrayOfRowAppendAndScan() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "array_of_row_log");
+        TablePath path = tableNames.tablePath("pojo_db", "array_of_row_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -1284,7 +1287,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
      */
     @Test
     void testMapOfRowAppendAndScan() throws Exception {
-        TablePath path = TablePath.of("pojo_db", "map_of_row_log");
+        TablePath path = tableNames.tablePath("pojo_db", "map_of_row_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(mapOfRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -1329,7 +1332,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     @Test
     void testListOfRowAppendAndScan() throws Exception {
         // Reuses the same ARRAY<ROW> schema; only the POJO field type differs (List vs array)
-        TablePath path = TablePath.of("pojo_db", "list_of_row_log");
+        TablePath path = tableNames.tablePath("pojo_db", "list_of_row_log");
         TableDescriptor td =
                 TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
@@ -1369,7 +1372,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     void testTypedPartialUpdates() throws Exception {
         // Use full PK schema and update a subset of fields
         Schema schema = allTypesPkSchema();
-        TablePath path = TablePath.of("pojo_db", "pk_partial");
+        TablePath path = tableNames.tablePath("pojo_db", "pk_partial");
         TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(1, "a").build();
         createTable(path, td, true);
 

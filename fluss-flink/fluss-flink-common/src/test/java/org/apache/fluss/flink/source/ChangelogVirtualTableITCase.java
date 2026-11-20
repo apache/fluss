@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -86,6 +87,8 @@ abstract class ChangelogVirtualTableITCase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "test_changelog_db";
+    private final TestTableNames tableNames = new TestTableNames();
+
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
     protected Connection conn;
@@ -478,7 +481,7 @@ abstract class ChangelogVirtualTableITCase {
     @ValueSource(booleans = {false, true})
     void testProjectedChangelogPreservesUnchangedUpdates(boolean filterUnchangedRows)
             throws Exception {
-        String tableName = "projected_changelog_" + filterUnchangedRows;
+        String tableName = tableNames.tableName("projected_changelog_" + filterUnchangedRows);
         tEnv.executeSql(
                 "CREATE TABLE "
                         + tableName

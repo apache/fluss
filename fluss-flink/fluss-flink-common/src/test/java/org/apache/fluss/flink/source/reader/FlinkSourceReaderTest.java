@@ -93,7 +93,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testCheckpointHybridSnapshotFinishedBeforeFirstLogRecord() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_checkpoint_hybrid_snapshot_finished");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_checkpoint_hybrid_snapshot_finished");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -215,7 +216,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testCheckpointLakeSplitFinishedBeforeFirstLogRecord() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_checkpoint_lake_split_finished");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_checkpoint_lake_split_finished");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DEFAULT_PK_TABLE_SCHEMA)
@@ -326,7 +328,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testRestoreHybridLakeSplitAcrossBusinessPartitions() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_restore_multi_partition_lake_split");
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "test_restore_multi_partition_lake_split");
         // Model the historical bucket's shared log with one physical bucket. Its lake baseline
         // contains separate splits for two business partitions, with overlapping primary-key IDs.
         TableDescriptor tableDescriptor =
@@ -442,7 +445,8 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     @Test
     void testRestorePartiallyConsumedLakeSnapshotSplit() throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_DB, "test_restore_partially_consumed_lake_snapshot_split");
+                tableNames.tablePath(
+                        DEFAULT_DB, "test_restore_partially_consumed_lake_snapshot_split");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DEFAULT_LOG_TABLE_SCHEMA).distributedBy(1).build();
         long tableId = createTable(tablePath, tableDescriptor);
@@ -517,7 +521,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
 
     @Test
     void testHandlePartitionsRemovedEvent() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_partitioned_table");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "test_partitioned_table");
 
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
@@ -616,7 +620,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
     @Test
     void testPendingRecordsMetricAfterFetcherRecreation() throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
+                tableNames.tablePath(DEFAULT_DB, "test_pending_records_after_fetcher_recreation");
         TableDescriptor tableDescriptor = DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR;
         long tableId = createTable(tablePath, tableDescriptor);
 

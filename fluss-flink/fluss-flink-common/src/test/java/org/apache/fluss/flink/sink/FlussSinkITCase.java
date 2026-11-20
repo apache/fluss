@@ -80,8 +80,8 @@ public class FlussSinkITCase extends FlinkTestBase {
     private static final TableDescriptor logTableDescriptor =
             TableDescriptor.builder().schema(logSchema).build();
 
-    private static final String pkTableName = "orders_test_pk";
-    private static final String logTableName = "orders_test_log";
+    private final String pkTableName = tableNames.tableName("orders_test_pk");
+    private final String logTableName = tableNames.tableName("orders_test_log");
 
     private StreamExecutionEnvironment env;
     private String bootstrapServers;
@@ -312,7 +312,8 @@ public class FlussSinkITCase extends FlinkTestBase {
 
     @Test
     public void testPartialUpdateWithTwoWriters() throws Exception {
-        createTable(TablePath.of(DEFAULT_DB, "partial_update_two_writers_test"), pkTableDescriptor);
+        String tableName = tableNames.tableName("partial_update_two_writers_test");
+        createTable(TablePath.of(DEFAULT_DB, tableName), pkTableDescriptor);
 
         // Initial inserts targeting only orderId+itemId; amount and address are non-target
         ArrayList<TestOrder> initialOrders = new ArrayList<>();
@@ -326,7 +327,7 @@ public class FlussSinkITCase extends FlinkTestBase {
                 FlussSink.<TestOrder>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable("partial_update_two_writers_test")
+                        .setTable(tableName)
                         .setPartialUpdateColumns("orderId", "itemId")
                         .setSerializationSchema(new TestOrderSerializationSchema())
                         .build();
@@ -344,7 +345,7 @@ public class FlussSinkITCase extends FlinkTestBase {
                 FlussSink.<TestOrder>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable("partial_update_two_writers_test")
+                        .setTable(tableName)
                         .setPartialUpdateColumns("orderId", "amount", "address")
                         .setSerializationSchema(new TestOrderSerializationSchema())
                         .build();
@@ -352,7 +353,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         updateStream.sinkTo(updateSink).name("Fluss Amount/Address Update Sink");
         env.execute("Test Amount/Address Updates");
 
-        Table table = conn.getTable(new TablePath(DEFAULT_DB, "partial_update_two_writers_test"));
+        Table table = conn.getTable(new TablePath(DEFAULT_DB, tableName));
         LogScanner logScanner = table.newScan().createLogScanner();
 
         int numBuckets = table.getTableInfo().getNumBuckets();

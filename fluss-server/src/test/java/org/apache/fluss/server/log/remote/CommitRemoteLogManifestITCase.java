@@ -21,9 +21,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -36,7 +39,6 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
@@ -54,11 +56,13 @@ class CommitRemoteLogManifestITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     @Test
     void testDeleteOutOfSyncReplicaLogAfterCommit() throws Exception {
         // then create a table with 3 buckets
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
 
         // find the tb whose leader is the server with large log tiering interval.
         TableBucket tb = new TableBucket(tableId, 0);

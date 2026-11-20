@@ -20,6 +20,8 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.tablet.TabletServer;
@@ -27,6 +29,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,7 +39,6 @@ import java.time.Duration;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +52,9 @@ public class NotifyLeaderAndIsrITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     private ZooKeeperClient zkClient;
 
     @BeforeEach
@@ -61,7 +66,7 @@ public class NotifyLeaderAndIsrITCase {
     void testNotifyLeaderAndIsr() throws Exception {
         long tableId =
                 RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                        FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr leaderAndIsr =

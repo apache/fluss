@@ -23,8 +23,11 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,8 +39,6 @@ import java.util.List;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowListAssert.assertThatRows;
 
@@ -45,6 +46,10 @@ import static org.apache.fluss.testutils.InternalRowListAssert.assertThatRows;
 class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     private static final int SERVER = 0;
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data1TablePathPk = tableNames.tablePath(TestData.DATA1_TABLE_PATH_PK);
 
     @BeforeEach
     void beforeEach() throws Exception {
@@ -56,8 +61,8 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAppend() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             GenericRow row = row(1, "a");
 
@@ -80,9 +85,9 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPut() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
+        createTable(data1TablePathPk, DATA1_TABLE_DESCRIPTOR_PK, false);
         // put one row
-        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+        try (Table table = conn.getTable(data1TablePathPk)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             InternalRow row = row(1, "a");
             upsertWriter.upsert(row).get();
@@ -105,10 +110,10 @@ class FlussFailServerTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLogScan() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
         // append one row.
         GenericRow row = row(1, "a");
-        try (Table table = conn.getTable(DATA1_TABLE_PATH);
+        try (Table table = conn.getTable(data1TablePath);
                 LogScanner logScanner = createLogScanner(table)) {
             subscribeFromBeginning(logScanner, table);
             AppendWriter appendWriter = table.newAppend().createWriter();

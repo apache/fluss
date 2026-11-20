@@ -28,6 +28,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -71,6 +72,8 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
     @TempDir public static File savepointDir;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @BeforeAll
     protected static void beforeAll() {
         FlinkUnionReadTestBase.beforeAll();
@@ -81,7 +84,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     void testUnionReadFullType(boolean isPartitioned) throws Exception {
         JobClient jobClient = buildCheckpointedTieringJob();
 
-        String tableName = "pk_table_full_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName =
+                tableNames.tableName(
+                        "pk_table_full_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         long tableId =
@@ -148,7 +153,9 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildCheckpointedTieringJob();
 
         String tableName =
-                "stream_pk_table_full_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "stream_pk_table_full_"
+                                + (isPartitioned ? "partitioned" : "non_partitioned"));
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
         long tableId =
@@ -193,9 +200,11 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         JobClient jobClient = buildCheckpointedTieringJob();
 
         String tableName =
-                "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
         String resultTableName =
-                "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+                tableNames.tableName(
+                        "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned"));
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         TablePath resultTablePath = TablePath.of(DEFAULT_DB, resultTableName);

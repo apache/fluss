@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -68,10 +69,13 @@ import static org.assertj.core.api.Assertions.tuple;
  */
 class FlussAdmin2ITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testListPartitionInfos() throws Exception {
         String dbName = "test_db";
-        TablePath nonPartitionedTablePath = TablePath.of(dbName, "test_non_partitioned_table");
+        TablePath nonPartitionedTablePath =
+                tableNames.tablePath(dbName, "test_non_partitioned_table");
         createTable(nonPartitionedTablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
         assertThatThrownBy(() -> admin.listPartitionInfos(nonPartitionedTablePath).get())
                 .cause()
@@ -98,7 +102,7 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_DATALAKE_FORMAT, PAIMON)
                         .property(ConfigOptions.TABLE_DATALAKE_HISTORICAL_PARTITION_ENABLED, true)
                         .build();
-        TablePath partitionedTablePath = TablePath.of(dbName, "test_partitioned_table");
+        TablePath partitionedTablePath = tableNames.tablePath(dbName, "test_partitioned_table");
         admin.createTable(partitionedTablePath, partitionedTable, false).get();
         Map<String, Long> partitionIdByNames =
                 FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(
@@ -154,7 +158,7 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
                 .contains(HISTORICAL_PARTITION_VALUE);
 
         TablePath noSystemPartitionTablePath =
-                TablePath.of(dbName, "test_partitioned_table_without_system_partition");
+                tableNames.tablePath(dbName, "test_partitioned_table_without_system_partition");
         admin.createTable(noSystemPartitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, false)
                 .get();
         ListPartitionInfosResponse responseWithoutSystemPartitions =
@@ -183,7 +187,7 @@ class FlussAdmin2ITCase extends ClientToServerITCaseBase {
 
     @Test
     void testDescribeClusterDuringRollingUpgrade() throws Exception {
-        TablePath tablePath = TablePath.of("test_db", "describe_cluster_table");
+        TablePath tablePath = tableNames.tablePath("test_db", "describe_cluster_table");
         long tableId = createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, true);
         waitAllReplicasReady(tableId, 3);
 
