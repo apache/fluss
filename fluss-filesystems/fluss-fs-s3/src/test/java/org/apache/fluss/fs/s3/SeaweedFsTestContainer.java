@@ -29,7 +29,7 @@ import java.time.Duration;
 class SeaweedFsTestContainer extends GenericContainer<SeaweedFsTestContainer> {
 
     private static final DockerImageName SEAWEEDFS_IMAGE =
-            DockerImageName.parse("chrislusf/seaweedfs:4.38");
+            DockerImageName.parse("chrislusf/seaweedfs:4.50");
     private static final int S3_PORT = 8333;
     private static final String ACCESS_KEY = "fluss-test-access";
     private static final String SECRET_KEY = "fluss-test-secret";
