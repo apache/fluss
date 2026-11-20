@@ -23,10 +23,14 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.testutils.CountingSource;
 import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -34,6 +38,8 @@ import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.functions.MapFunction;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.CheckpointingOptions;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.MemorySize;
@@ -42,6 +48,7 @@ import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.DataTypes;
@@ -49,7 +56,12 @@ import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,6 +75,9 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
@@ -99,6 +114,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <ul>
  *   <li><b>Rescale Up</b>: {@link #testRescaleUp()} - Parallelism 1 → 2
  *   <li><b>Rescale Down</b>: {@link #testRescaleDown()} - Parallelism 2 → 1
+ *   <li><b>Partitioned Bucket Rescale</b>: {@link
+ *       #testPartitionedTableRecoveryAfterBucketRescale()} - Tests recovery when the table's bucket
+ *       num is rescaled across job submissions
  * </ul>
  *
  * <p><b>Note:</b> Rescale tests continue to use savepoints because Flink checkpoints are bound to
@@ -460,6 +478,132 @@ abstract class UndoRecoveryITCase {
     }
 
     /**
+     * Tests that a partitioned primary key table sink recovers after the table's bucket num is
+     * rescaled between job submissions.
+     *
+     * <p>This reproduces the mixed-layout hazard the per-partition bucket count resolver fixes:
+     * after an ALTER bucket.num, the table-level value captured by a job submitted afterwards no
+     * longer matches the counts of partitions created before the rescale. Before the fix, the
+     * bucket shuffle sharded the pre-rescale partition with the stale table-level value, splitting
+     * one bucket's keys across multiple writer subtasks; the next restore then failed with
+     * conflicting per-bucket offsets in the WriterState, leaving the sink unrecoverable.
+     *
+     * <p>Pattern:
+     *
+     * <ol>
+     *   <li>Phase 1: write 10 records per key into partition 2024-01 (1 bucket),
+     *       stop-with-savepoint
+     *   <li>Rescale: table-level bucket.num 1 -> 2; partition 2024-02 created with 2 buckets
+     *   <li>Phase 2: NEW job submission (graph captures the post-rescale table-level bucket num 2)
+     *       restores the savepoint and writes 5 records per key into 2024-01. With the fix, the
+     *       channel computer resolves 2024-01's actual count (1) and keeps one writer per bucket.
+     *   <li>Phase 3: NEW job submission restores phase 2's savepoint and writes 3 records per key
+     *       into 2024-02. Before the fix, restoring the scattered WriterState threw conflicting
+     *       checkpoint offsets and the job never recovered.
+     * </ol>
+     *
+     * <p>Parallelism 3 divides neither bucket count, so every partition shards in combine mode.
+     * Keys 1 and 2 resolve to bucket 0 and key 3 to bucket 1 of the pre-rescale partition (for
+     * bucketing mod 2), which makes the pre-fix scatter deterministic.
+     */
+    @Test
+    void testPartitionedTableRecoveryAfterBucketRescale() throws Exception {
+        String tableName = "undo_partition_rescale_" + System.currentTimeMillis();
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        String producerId = "test-producer-partition-rescale-" + System.currentTimeMillis();
+        final int oldBucketNum = 1;
+        final int newBucketNum = 2;
+        final int parallelism = 3;
+
+        initTableEnvironment(null, false)
+                .executeSql(createPartitionedAggTableDDL(tableName, oldBucketNum));
+
+        // The pre-rescale partition keeps its single-bucket layout across the rescale.
+        createPartition(tablePath, "2024-01");
+
+        // Phase 1: pre-rescale job submission (graph captures table-level bucket.num = 1).
+        JobClient phase1Job =
+                startPartitionedUndoJob(tablePath, producerId, null, 10, parallelism, "2024-01");
+        long expectedAfterPhase1 = 10 * VALUE_PER_RECORD;
+        retry(
+                DEFAULT_TIMEOUT,
+                () -> {
+                    Map<String, Long> sums = scanSumsByPartitionAndKey(tablePath);
+                    for (long key = 1; key <= 3; key++) {
+                        assertThat(sums.get("2024-01:" + key))
+                                .as("Key %d sum before savepoint", key)
+                                .isEqualTo(expectedAfterPhase1);
+                    }
+                });
+
+        waitForCheckpoint(phase1Job.getJobID());
+        String savepoint1 =
+                phase1Job
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get(60, TimeUnit.SECONDS);
+        waitForJobTermination(phase1Job, DEFAULT_TIMEOUT);
+
+        // Rescale: partitions created afterwards use the new table-level bucket num.
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.modifyBucketCount(newBucketNum)),
+                        false)
+                .get();
+        createPartition(tablePath, "2024-02");
+
+        // Phase 2: post-rescale job submission (graph captures table-level bucket.num = 2).
+        JobClient phase2Job =
+                startPartitionedUndoJob(
+                        tablePath, producerId, savepoint1, 5, parallelism, "2024-01");
+        long expectedAfterPhase2 = 15 * VALUE_PER_RECORD;
+        retry(
+                DEFAULT_TIMEOUT,
+                () -> {
+                    Map<String, Long> sums = scanSumsByPartitionAndKey(tablePath);
+                    for (long key = 1; key <= 3; key++) {
+                        assertThat(sums.get("2024-01:" + key))
+                                .as("Key %d sum before phase 2 savepoint", key)
+                                .isEqualTo(expectedAfterPhase2);
+                    }
+                });
+
+        waitForCheckpoint(phase2Job.getJobID());
+        String savepoint2 =
+                phase2Job
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get(60, TimeUnit.SECONDS);
+        waitForJobTermination(phase2Job, DEFAULT_TIMEOUT);
+
+        // Phase 3: restore phase 2's savepoint and write into the post-rescale partition.
+        JobClient phase3Job =
+                startPartitionedUndoJob(
+                        tablePath, producerId, savepoint2, 3, parallelism, "2024-02");
+        long expectedPhase3 = 3 * VALUE_PER_RECORD;
+        retry(
+                DEFAULT_TIMEOUT,
+                () -> {
+                    Map<String, Long> sums = scanSumsByPartitionAndKey(tablePath);
+                    for (long key = 1; key <= 3; key++) {
+                        assertThat(sums.get("2024-01:" + key))
+                                .as("Key %d sum in the pre-rescale partition after recovery", key)
+                                .isEqualTo(expectedAfterPhase2);
+                        assertThat(sums.get("2024-02:" + key))
+                                .as("Key %d sum in the post-rescale partition", key)
+                                .isEqualTo(expectedPhase3);
+                    }
+                });
+
+        phase3Job.cancel().get();
+        waitForJobTermination(phase3Job, DEFAULT_TIMEOUT);
+    }
+
+    /**
      * Tests that undo recovery works through the SQL/Table API sink path.
      *
      * <p>The SQL path creates the sink via {@code FlinkTableSink.getSinkRuntimeProvider()} → {@code
@@ -782,6 +926,22 @@ abstract class UndoRecoveryITCase {
                 DEFAULT_DB, tableName, bucketNum);
     }
 
+    private String createPartitionedAggTableDDL(String tableName, int bucketNum) {
+        return String.format(
+                "CREATE TABLE `%s`.`%s` ("
+                        + "  id BIGINT NOT NULL,"
+                        + "  part STRING NOT NULL,"
+                        + "  sum_val BIGINT,"
+                        + "  PRIMARY KEY (id, part) NOT ENFORCED"
+                        + ") PARTITIONED BY (part)"
+                        + " WITH ("
+                        + "  'bucket.num' = '%d',"
+                        + "  'table.merge-engine' = 'aggregation',"
+                        + "  'fields.sum_val.agg' = 'sum'"
+                        + ")",
+                DEFAULT_DB, tableName, bucketNum);
+    }
+
     /**
      * Unified method to start a bounded streaming job.
      *
@@ -906,6 +1066,81 @@ abstract class UndoRecoveryITCase {
     }
 
     /**
+     * Starts a bounded undo-recovery job against a partitioned primary key table.
+     *
+     * <p>The counting source emits two-field (key, value) rows; a map extends them to the table
+     * schema (id, part, sum_val) with a fixed partition value, so all records of a phase land in
+     * one pre-created partition.
+     *
+     * @param tablePath target table
+     * @param producerId producer ID for undo recovery
+     * @param restorePath savepoint (or externalized checkpoint) to restore from, or null
+     * @param maxRecordsPerKey records to emit per key
+     * @param parallelism job parallelism
+     * @param partitionValue the partition value written to
+     */
+    private JobClient startPartitionedUndoJob(
+            TablePath tablePath,
+            String producerId,
+            @Nullable String restorePath,
+            int maxRecordsPerKey,
+            int parallelism,
+            String partitionValue)
+            throws Exception {
+
+        Configuration conf = new Configuration();
+        if (restorePath != null) {
+            conf.setString("execution.savepoint.path", restorePath);
+        }
+
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        env.setParallelism(parallelism);
+        env.enableCheckpointing(1000);
+
+        DataStreamSource<RowData> stream =
+                env.fromSource(
+                        CountingSource.multiKey(VALUE_PER_RECORD, maxRecordsPerKey),
+                        WatermarkStrategy.noWatermarks(),
+                        "counting-source");
+
+        TypeInformation<RowData> rowTypeInfo =
+                InternalTypeInfo.of(
+                        RowType.of(
+                                new LogicalType[] {
+                                    DataTypes.BIGINT().getLogicalType(),
+                                    DataTypes.STRING().getLogicalType(),
+                                    DataTypes.BIGINT().getLogicalType()
+                                },
+                                new String[] {"id", "part", "sum_val"}));
+        DataStream<RowData> partitionedStream =
+                stream.map(
+                                (MapFunction<RowData, RowData>)
+                                        row -> {
+                                            GenericRowData newRow = new GenericRowData(3);
+                                            newRow.setField(0, row.getLong(0));
+                                            newRow.setField(
+                                                    1, StringData.fromString(partitionValue));
+                                            newRow.setField(2, row.getLong(1));
+                                            return newRow;
+                                        })
+                        .returns(rowTypeInfo);
+
+        FlussSink<RowData> sink =
+                FlussSink.<RowData>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(tablePath.getDatabaseName())
+                        .setTable(tablePath.getTableName())
+                        .setProducerId(producerId)
+                        .setSerializationSchema(new RowDataSerializationSchema(false, true))
+                        .build();
+
+        partitionedStream.sinkTo(sink).name("Fluss Sink");
+
+        return env.executeAsync(
+                "Partitioned undo test (p=" + parallelism + ", part=" + partitionValue + ")");
+    }
+
+    /**
      * Starts a job with FailingCountingSource for checkpoint-based failover testing.
      *
      * <p>This method configures a job that will:
@@ -1007,6 +1242,34 @@ abstract class UndoRecoveryITCase {
                             .isNull();
                 });
         LOG.info("Verified producer offsets cleaned up for {}", producerId);
+    }
+
+    private void createPartition(TablePath tablePath, String partitionName) throws Exception {
+        admin.createPartition(
+                        tablePath,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                        Collections.singletonList("part"), partitionName)
+                                .toPartitionSpec(),
+                        false)
+                .get();
+    }
+
+    /**
+     * Batch scans the whole table and folds the latest value of each primary key per partition.
+     *
+     * @return map from "{partition}:{id}" to the aggregated sum
+     */
+    private Map<String, Long> scanSumsByPartitionAndKey(TablePath tablePath) throws Exception {
+        Map<String, Long> sums = new HashMap<>();
+        try (Table table = conn.getTable(tablePath);
+                BatchScanner scanner = table.newScan().createBatchScanner()) {
+            for (InternalRow row : BatchScanUtils.collectRows(scanner)) {
+                String partition = row.getString(1).toString();
+                long id = row.getLong(0);
+                sums.merge(partition + ":" + id, row.getLong(2), Long::sum);
+            }
+        }
+        return sums;
     }
 
     @Nullable
