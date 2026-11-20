@@ -56,6 +56,21 @@ pub type MessengerTransport = ServerConnectionInner<BufStream<Transport>>;
 
 pub type ServerConnection = Arc<MessengerTransport>;
 
+/// Whether a failed request could have reached the server. A partial write is uncertain.
+#[derive(Debug)]
+pub(crate) enum RequestFailure {
+    NotSent(Error),
+    MaybeSent(Error),
+}
+
+impl RequestFailure {
+    fn into_error(self) -> Error {
+        match self {
+            Self::NotSent(error) | Self::MaybeSent(error) => error,
+        }
+    }
+}
+
 // Matches Java's ExponentialBackoff(100ms initial, 2x multiplier, 5000ms max, 0.2 jitter).
 const AUTH_INITIAL_BACKOFF_MS: f64 = 100.0;
 const AUTH_MAX_BACKOFF_MS: f64 = 5000.0;
@@ -840,6 +855,45 @@ where
         self.dispatch_request(msg).await?.receive().await
     }
 
+    pub(crate) async fn request_with_send_status<R>(
+        &self,
+        msg: R,
+        write_started: &mut bool,
+    ) -> Result<R::ResponseBody, RequestFailure>
+    where
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
+    {
+        self.dispatch_with_send_status(msg, write_started)
+            .await?
+            .receive()
+            .await
+            .map_err(RequestFailure::MaybeSent)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_write_lock_for_test<F: Future>(&self, request: F) -> F::Output {
+        let _guard = self.stream_write.lock().await;
+        request.await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn close_before_write_for_test<F: Future>(&self, request: F) -> F::Output {
+        let write_guard = self.stream_write.lock().await;
+        tokio::pin!(request);
+        tokio::select! {
+            _ = &mut request => panic!("request completed while writes were blocked"),
+            () = async {
+                while !matches!(&*self.state.lock(), ConnectionState::RequestMap(map) if !map.is_empty()) {
+                    tokio::task::yield_now().await;
+                }
+            } => {}
+        }
+        self.close_if_idle(Instant::now(), Duration::ZERO).unwrap();
+        drop(write_guard);
+        request.await
+    }
+
     /// Writes the complete request frame without waiting for the response.
     ///
     /// Ordered callers must serialize this phase, including connection acquisition, rather
@@ -854,8 +908,25 @@ where
         R: RequestBody + Send + WriteType<Vec<u8>>,
         R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
     {
-        let api_version = self.resolve_api_version(R::API_KEY)?;
-        msg.check_version(api_version)?;
+        self.dispatch_with_send_status(msg, &mut false)
+            .await
+            .map_err(RequestFailure::into_error)
+    }
+
+    async fn dispatch_with_send_status<R>(
+        &self,
+        msg: R,
+        write_started: &mut bool,
+    ) -> Result<PendingResponse<R::ResponseBody>, RequestFailure>
+    where
+        R: RequestBody + Send + WriteType<Vec<u8>>,
+        R::ResponseBody: ReadType<Cursor<Vec<u8>>>,
+    {
+        let api_version = self
+            .resolve_api_version(R::API_KEY)
+            .map_err(RequestFailure::NotSent)?;
+        msg.check_version(api_version)
+            .map_err(RequestFailure::NotSent)?;
         let request_id = self.request_id.fetch_add(1, Ordering::SeqCst) & 0x7FFFFFFF;
         let header = RequestHeader {
             request_api_key: R::API_KEY,
@@ -868,9 +939,10 @@ where
         // write header
         header
             .write(&mut buf)
-            .map_err(RpcError::WriteMessageError)?;
+            .map_err(|e| RequestFailure::NotSent(RpcError::WriteMessageError(e).into()))?;
         // write message body
-        msg.write(&mut buf).map_err(RpcError::WriteMessageError)?;
+        msg.write(&mut buf)
+            .map_err(|e| RequestFailure::NotSent(RpcError::WriteMessageError(e).into()))?;
 
         let (tx, rx) = channel();
 
@@ -882,14 +954,18 @@ where
             ConnectionState::RequestMap(map) => {
                 map.insert(request_id, ActiveRequest { channel: tx });
             }
-            ConnectionState::Poison(e) => return Err(RpcError::Poisoned(Arc::clone(e)).into()),
+            ConnectionState::Poison(e) => {
+                return Err(RequestFailure::NotSent(
+                    RpcError::Poisoned(Arc::clone(e)).into(),
+                ));
+            }
         }
 
         // count only the API message body, excluding the protocol header.
         let request_body_bytes = buf.len().saturating_sub(REQUEST_HEADER_LENGTH) as u64;
         let mut request_metrics = RequestMetricsLifecycle::begin(R::API_KEY, request_body_bytes);
 
-        self.send_message(buf)
+        self.send_message(buf, write_started)
             .await
             .inspect_err(|_| request_metrics.complete(0))?;
         Ok(PendingResponse {
@@ -902,19 +978,27 @@ where
         })
     }
 
-    async fn send_message(&self, msg: Vec<u8>) -> Result<(), RpcError> {
+    async fn send_message(
+        &self,
+        msg: Vec<u8>,
+        write_started: &mut bool,
+    ) -> Result<(), RequestFailure> {
         let mut stream_write = Arc::clone(&self.stream_write).lock_owned().await;
         let state = Arc::clone(&self.state);
         let last_activity = Arc::clone(&self.last_activity);
         let closed = Arc::clone(&self.closed);
 
+        // Once the cancellation-safe writer starts, dropping the request cannot stop the frame.
+        *write_started = true;
         // use a wrapper so that cancellation doesn't cancel the send operation and leaves half-send messages on the wire
         let fut = CancellationSafeFuture::new(async move {
             // Created before the state check, so that a close after the check wakes it.
             let closed = closed.notified();
             match &*state.lock() {
                 ConnectionState::Poison(error) => {
-                    return Err(RpcError::Poisoned(Arc::clone(error)));
+                    return Err(RequestFailure::NotSent(
+                        RpcError::Poisoned(Arc::clone(error)).into(),
+                    ));
                 }
                 // Under the state lock, so that closing for idleness either sees this write and
                 // keeps the connection, or comes first and the write is not sent.
@@ -936,7 +1020,9 @@ where
             // This must live inside the cancellation-safe future: if the caller is
             // cancelled mid-frame, a failure of its background write still poisons
             // the connection before the write lock is released to another request.
-            result.map_err(|error| RpcError::Poisoned(state.lock().poison(error)))
+            result.map_err(|error| {
+                RequestFailure::MaybeSent(RpcError::Poisoned(state.lock().poison(error)).into())
+            })
         });
 
         fut.await
@@ -1326,6 +1412,33 @@ mod tests {
     }
 
     // -- Tests -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn request_failure_distinguishes_closed_connection_from_partial_write() {
+        let (conn, _server) = duplex_conn(4096);
+        conn.close_if_idle(Instant::now(), Duration::ZERO).unwrap();
+        assert!(matches!(
+            conn.request_with_send_status(TestProduceRequest, &mut false)
+                .await,
+            Err(RequestFailure::NotSent(_))
+        ));
+
+        // Once any part of the frame reached the peer, a disconnect cannot prove rejection.
+        let (conn, mut server) = duplex_conn(8);
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut started = false;
+            tokio::join!(
+                conn.request_with_send_status(TestProduceRequest, &mut started),
+                async {
+                    server.read_u8().await.unwrap();
+                    drop(server);
+                }
+            )
+        })
+        .await
+        .expect("partial write did not fail after disconnect");
+        assert!(matches!(result, Err(RequestFailure::MaybeSent(_))));
+    }
 
     /// ProduceLog-only version table, so `dispatch_request` skips the real handshake.
     fn produce_api_versions() -> ServerApiVersions {

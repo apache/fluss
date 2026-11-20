@@ -206,6 +206,20 @@ pub enum FlussError {
     HistoricalPartitionThrottled = 73,
     /// The request's bucket routing is missing or stale; refresh metadata and rebuild it.
     InvalidBucketRouting = 74,
+    /// The consumer group ID is invalid.
+    InvalidConsumerGroupId = 75,
+    /// The consumer group owner is loading.
+    ConsumerGroupOwnerLoading = 76,
+    /// The consumer group owner is unavailable.
+    ConsumerGroupOwnerNotAvailable = 77,
+    /// This server is not the consumer group owner.
+    NotConsumerGroupOwner = 78,
+    /// The consumer group does not exist.
+    ConsumerGroupIdNotFound = 79,
+    /// The consumer offset metadata exceeds the server limit.
+    ConsumerOffsetMetadataTooLarge = 80,
+    /// The request contains an invalid combination or value of parameters.
+    InvalidRequest = 81,
 }
 
 impl FlussError {
@@ -218,6 +232,9 @@ impl FlussError {
         matches!(
             self,
             FlussError::NetworkException
+                | FlussError::ConsumerGroupOwnerLoading
+                | FlussError::ConsumerGroupOwnerNotAvailable
+                | FlussError::NotConsumerGroupOwner
                 | FlussError::CorruptMessage
                 | FlussError::SchemaNotExist
                 | FlussError::LogStorageException
@@ -381,6 +398,17 @@ impl FlussError {
             FlussError::HistoricalPartitionThrottled => {
                 "Historical partition request is throttled because too many historical requests are in flight."
             }
+            FlussError::InvalidConsumerGroupId => "The consumer group ID is invalid.",
+            FlussError::ConsumerGroupOwnerLoading => "The consumer group owner is loading.",
+            FlussError::ConsumerGroupOwnerNotAvailable => {
+                "The consumer group owner is unavailable."
+            }
+            FlussError::NotConsumerGroupOwner => "This server is not the consumer group owner.",
+            FlussError::ConsumerGroupIdNotFound => "The consumer group does not exist.",
+            FlussError::ConsumerOffsetMetadataTooLarge => {
+                "The consumer offset metadata exceeds the server limit."
+            }
+            FlussError::InvalidRequest => "The request contains invalid parameters.",
             FlussError::InvalidBucketRouting => {
                 "The request's bucket routing information is missing or invalid. The client should refresh partition metadata and rebuild the request."
             }
@@ -475,6 +503,13 @@ impl FlussError {
             72 => FlussError::StorageBackpressureException,
             73 => FlussError::HistoricalPartitionThrottled,
             74 => FlussError::InvalidBucketRouting,
+            75 => FlussError::InvalidConsumerGroupId,
+            76 => FlussError::ConsumerGroupOwnerLoading,
+            77 => FlussError::ConsumerGroupOwnerNotAvailable,
+            78 => FlussError::NotConsumerGroupOwner,
+            79 => FlussError::ConsumerGroupIdNotFound,
+            80 => FlussError::ConsumerOffsetMetadataTooLarge,
+            81 => FlussError::InvalidRequest,
             _ => FlussError::UnknownServerError,
         }
     }

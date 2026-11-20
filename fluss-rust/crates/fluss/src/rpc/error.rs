@@ -56,3 +56,19 @@ pub enum RpcError {
         api_version: ApiVersion,
     },
 }
+
+impl RpcError {
+    /// A broken transport can be retried on a new connection. Invalid frames or
+    /// undecodable responses do not become valid by rediscovering the endpoint.
+    pub(crate) fn is_transport_failure(&self) -> bool {
+        match self {
+            Self::Poisoned(cause) => cause.is_transport_failure(),
+            Self::IO(_)
+            | Self::ConnectionError(_)
+            | Self::IdleConnectionClosed(_)
+            | Self::ReadMessageError(crate::rpc::frame::ReadError::IO(_))
+            | Self::WriteMessageError(crate::rpc::frame::WriteError::IO(_)) => true,
+            _ => false,
+        }
+    }
+}

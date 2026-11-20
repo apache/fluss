@@ -32,3 +32,9 @@ pub use metadata::*;
 pub(crate) use schema_getter::ClientSchemaGetter;
 pub use table::*;
 pub use write::*;
+
+mod consumer_offsets;
+pub use consumer_offsets::{
+    ConsumerGroupOptions, OffsetAndMetadata, OffsetCommitError, OffsetCommitHandle,
+    OffsetCommitOutcome, OffsetCommitResult,
+};
