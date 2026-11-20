@@ -76,11 +76,13 @@ public final class NettyClient implements RpcClient {
     private final ClientMetricGroup clientMetricGroup;
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
+    private final long requestTimeoutMillis;
 
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
         this.connections = new ConcurrentHashMap<>();
+        this.requestTimeoutMillis = conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis();
 
         // build bootstrap
         this.eventGroup =
@@ -228,7 +230,8 @@ public final class NettyClient implements RpcClient {
                             // Avoid recursive map updates when connecting fails synchronously.
                             (con, ignore) ->
                                     eventGroup.execute(
-                                            () -> connections.remove(connectionKey, con)));
+                                            () -> connections.remove(connectionKey, con)),
+                            requestTimeoutMillis);
                 });
     }
 
