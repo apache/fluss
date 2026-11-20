@@ -46,13 +46,18 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.RetryOneTime;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -64,6 +69,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -71,7 +77,9 @@ import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
@@ -100,7 +108,6 @@ class BulkLoadBucketCommitTest {
 
     private ZooKeeperClient client;
     private BulkLoadManager manager;
-    private BulkLoadMetadataStore store;
     private CompletedSnapshotStoreManager snapshots;
     private TableBucket bucket;
     private String remoteDataDir;
@@ -135,7 +142,6 @@ class BulkLoadBucketCommitTest {
         int epoch =
                 client.fenceBecomeCoordinatorLeader("bucket-commit").getCoordinatorEpochZkVersion();
         manager = new BulkLoadManager(client, metadata, epoch);
-        store = new BulkLoadMetadataStore(client);
         snapshots =
                 new CompletedSnapshotStoreManager(
                         1,
@@ -158,11 +164,12 @@ class BulkLoadBucketCommitTest {
         client.updateRecoverySnapshot(bucket, previousId, null, -1);
         assertThat(commit(WAL_OFFSET)).isTrue();
         assertThat(
-                        store.bucket(
-                                        manager.transaction(bucket.getTableId(), LOAD_ID).value,
+                        client.getBulkLoadBucket(
+                                        manager.resolveTransaction(bucket.getTableId(), LOAD_ID)
+                                                .data(),
                                         bucket)
                                 .get()
-                                .value
+                                .data()
                                 .state)
                 .isEqualTo(BulkLoadBucket.COMMITTED);
         assertThat(client.getRecoveryBucketSnapshot(bucket))
@@ -205,6 +212,62 @@ class BulkLoadBucketCommitTest {
         assertThatThrownBy(() -> commit(WAL_OFFSET))
                 .isInstanceOf(KeeperException.NodeExistsException.class);
         assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).contains(existing);
+        assertBucketNotCommitted();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testRequestsRecoveryOnlyIfPublicationWasAttempted(boolean publicationAttempted)
+            throws Exception {
+        prepareAllocatedBucket();
+        CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
+        // Force the actual multi to return NodeExists and then require a selection readback.
+        client.registerTableBucketSnapshot(
+                bucket,
+                new BucketSnapshot(
+                        SNAPSHOT_ID, WAL_OFFSET, uploaded.getMetadataFilePath().toString()));
+        Configuration conf = new Configuration().set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        CuratorFrameworkWithUnhandledErrorListener curator =
+                ZooKeeperUtils.startZookeeperClient(
+                        CuratorFrameworkFactory.builder()
+                                .connectString(ZK.getCustomExtension().getConnectString())
+                                .namespace(client.getCuratorClient().getNamespace())
+                                .retryPolicy(new RetryOneTime(0)),
+                        NOPErrorHandler.INSTANCE);
+        try (ZooKeeperClient failingClient =
+                new ZooKeeperClient(curator, conf) {
+                    private int selectionReads;
+
+                    @Override
+                    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(
+                            TableBucket bucket) throws Exception {
+                        if (++selectionReads == (publicationAttempted ? 2 : 1)) {
+                            throw new KeeperException.ConnectionLossException();
+                        }
+                        return super.getRecoverySnapshotSelection(bucket);
+                    }
+                }) {
+            assertThat(curator.asCuratorFramework().blockUntilConnected(10, TimeUnit.SECONDS))
+                    .isTrue();
+            BulkLoadManager failingManager =
+                    new BulkLoadManager(
+                            failingClient,
+                            new MetadataManager(
+                                    client, conf, new LakeCatalogDynamicLoader(conf, null, true)),
+                            client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+            AtomicBoolean recoveryRequested = new AtomicBoolean();
+            assertThatThrownBy(
+                            () ->
+                                    failingManager.commitBucketSnapshot(
+                                            failingManager.resolveTransaction(
+                                                    bucket.getTableId(), LOAD_ID),
+                                            bucket,
+                                            ignored -> WAL_OFFSET,
+                                            snapshots,
+                                            () -> recoveryRequested.set(true)))
+                    .isInstanceOf(KeeperException.ConnectionLossException.class);
+            assertThat(recoveryRequested.get()).isEqualTo(publicationAttempted);
+        }
         assertBucketNotCommitted();
     }
 
@@ -326,19 +389,19 @@ class BulkLoadBucketCommitTest {
                 int leaderEpoch = cluster.waitAndGetLeaderReplica(target).getLeaderEpoch();
                 int coordinatorVersion = zk.getCurrentEpoch().getCoordinatorEpochZkVersion();
                 cluster.stopCoordinatorServer();
-                BulkLoadMetadataStore metadataStore = new BulkLoadMetadataStore(zk);
-                BulkLoadMetadataStore.Versioned<BulkLoadTransaction> transaction =
-                        metadataStore.transaction(tableId, LOAD_ID).get();
-                metadataStore.commitBucket(
+                VersionedData<BulkLoadTransaction> transaction =
+                        zk.getBulkLoadTransaction(tableId, LOAD_ID).get();
+                zk.commitBulkLoadBucket(
                         transaction,
-                        metadataStore.target(transaction.value, null).get(),
+                        zk.getBulkLoadTarget(transaction.data(), null).get(),
                         target,
-                        metadataStore.bucket(transaction.value, target).get(),
+                        zk.getBulkLoadBucket(transaction.data(), target).get(),
                         new BucketSnapshot(
                                 uploaded.getSnapshotId(),
                                 uploaded.getLogOffset(),
                                 uploaded.getMetadataFilePath().toString()),
-                        Collections.emptyList(),
+                        zk.getTableWithVersion(path).get().zkVersion(),
+                        null,
                         coordinatorVersion);
                 cluster.startCoordinatorServer();
 
@@ -412,23 +475,26 @@ class BulkLoadBucketCommitTest {
 
     private void assertBucketNotCommitted() throws Exception {
         assertThat(
-                        store.bucket(
-                                        manager.transaction(bucket.getTableId(), LOAD_ID).value,
+                        client.getBulkLoadBucket(
+                                        manager.resolveTransaction(bucket.getTableId(), LOAD_ID)
+                                                .data(),
                                         bucket)
                                 .get()
-                                .value
+                                .data()
                                 .state)
                 .isEqualTo(BulkLoadBucket.ALLOCATED);
         assertThat(client.getRecoverySnapshotSelection(bucket)).isEmpty();
     }
 
     private boolean commit(long leaderOffset) throws Exception {
-        return manager.commitBucket(
-                manager.transaction(bucket.getTableId(), LOAD_ID),
-                bucket.getPartitionId(),
-                bucket.getBucket(),
+        AtomicBoolean recoveryRequested = new AtomicBoolean();
+        manager.commitBucketSnapshot(
+                manager.resolveTransaction(bucket.getTableId(), LOAD_ID),
+                bucket,
                 ignored -> leaderOffset,
-                snapshots);
+                snapshots,
+                () -> recoveryRequested.set(true));
+        return recoveryRequested.get();
     }
 
     private CompletedSnapshotHandle uploadSnapshot(long snapshotId, long offset) throws Exception {

@@ -171,7 +171,6 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadMetadataStore.Versioned;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -204,6 +203,7 @@ import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
+import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -215,7 +215,6 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -292,7 +291,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                                     ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key())));
     private final int defaultBucketNumber;
-    private final Supplier<CoordinatorEventProcessor> bulkLoadEventProcessorSupplier;
+    private final Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
     private final boolean kvTableAllowCreation;
@@ -337,7 +336,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 dynamicConfigManager,
                 ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
-        this.bulkLoadEventProcessorSupplier = coordinatorEventProcessorSupplier;
+        this.coordinatorEventProcessorSupplier = coordinatorEventProcessorSupplier;
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
         this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
@@ -374,16 +373,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
             AllocateBulkLoadBucketSnapshotRequest request) {
         Session session = currentSession();
-        return bulkLoadWork(
+        return submitBulkLoadOperation(
                 manager -> {
-                    Versioned<BulkLoadTransaction> transaction =
+                    VersionedData<BulkLoadTransaction> transaction =
                             resolveAndAuthorizeBulkLoad(manager, request.getHandle(), session);
                     BulkLoadBucket allocation =
-                            manager.allocate(
+                            manager.allocateBucketSnapshot(
                                     transaction,
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId(),
-                                    this::bulkLoadLogEndOffset);
+                                    this::fetchLeaderLogEndOffset);
                     return new AllocateBulkLoadBucketSnapshotResponse()
                             .setSnapshotId(allocation.snapshotId)
                             .setLogOffset(allocation.logOffset)
@@ -395,48 +394,40 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
             CommitBulkLoadBucketSnapshotRequest request) {
         Session session = currentSession();
-        return bulkLoadWork(
+        return submitBulkLoadOperation(
                 manager -> {
-                    Versioned<BulkLoadTransaction> transaction =
+                    VersionedData<BulkLoadTransaction> transaction =
                             resolveAndAuthorizeBulkLoad(manager, request.getHandle(), session);
                     TableBucket bucket =
                             new TableBucket(
                                     request.getHandle().getTableId(),
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId());
-                    CoordinatorEventProcessor processor = bulkLoadEventProcessorSupplier.get();
-                    try {
-                        if (manager.commitBucket(
-                                transaction,
-                                bucket.getPartitionId(),
-                                bucket.getBucket(),
-                                this::bulkLoadLogEndOffset,
-                                processor.completedSnapshotStoreManager())) {
-                            processor.requestBulkLoadRecovery(bucket);
-                        }
-                    } catch (KeeperException.ConnectionLossException
-                            | KeeperException.OperationTimeoutException e) {
-                        processor.requestBulkLoadRecovery(bucket);
-                        throw e;
-                    }
+                    CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
+                    manager.commitBucketSnapshot(
+                            transaction,
+                            bucket,
+                            this::fetchLeaderLogEndOffset,
+                            processor.completedSnapshotStoreManager(),
+                            () -> processor.requestBulkLoadRecovery(bucket));
                     return new CommitBulkLoadBucketSnapshotResponse();
                 });
     }
 
-    private Versioned<BulkLoadTransaction> resolveAndAuthorizeBulkLoad(
+    private VersionedData<BulkLoadTransaction> resolveAndAuthorizeBulkLoad(
             BulkLoadManager manager, PbBulkLoadHandle handle, Session session) throws Exception {
-        Versioned<BulkLoadTransaction> transaction =
-                manager.transaction(handle.getTableId(), handle.getBulkLoadId());
+        VersionedData<BulkLoadTransaction> transaction =
+                manager.resolveTransaction(handle.getTableId(), handle.getBulkLoadId());
         if (authorizer != null) {
             authorizer.authorize(
                     session,
                     OperationType.WRITE,
-                    Resource.table(transaction.value.tableInfo.getTablePath()));
+                    Resource.table(transaction.data().tableInfo.getTablePath()));
         }
         return transaction;
     }
 
-    private long bulkLoadLogEndOffset(TableBucket bucket) throws Exception {
+    private long fetchLeaderLogEndOffset(TableBucket bucket) throws Exception {
         int leader =
                 zkClient.getLeaderAndIsr(bucket)
                         .orElseThrow(
@@ -444,13 +435,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                         new NotLeaderOrFollowerException(
                                                 "BulkLoad bucket has no leader: " + bucket))
                         .leader();
-        return bulkLoadEventProcessorSupplier
+        return coordinatorEventProcessorSupplier
                 .get()
                 .getCoordinatorChannelManager()
                 .bulkLoadLogEndOffset(leader, bucket);
     }
 
-    private <T> CompletableFuture<T> bulkLoadWork(
+    private <T> CompletableFuture<T> submitBulkLoadOperation(
             FunctionWithException<BulkLoadManager, T, Exception> action) {
         final int epochVersion = coordinatorZkVersionSupplier.get();
         return CompletableFuture.supplyAsync(

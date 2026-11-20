@@ -22,7 +22,7 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.server.zk.ZooKeeperClient.BulkLoadPublicationUnknownException;
 import org.apache.fluss.utils.function.RunnableWithException;
 
 import org.slf4j.Logger;
@@ -143,8 +143,7 @@ public class CompletedSnapshotStore {
                     reconcileUnconfirmedImportUnderLock();
                     try {
                         persist.run();
-                    } catch (KeeperException.ConnectionLossException
-                            | KeeperException.OperationTimeoutException e) {
+                    } catch (BulkLoadPublicationUnknownException e) {
                         unconfirmedImport = snapshot;
                         throw e;
                     }
