@@ -298,4 +298,113 @@ class LanceArrowUtilsTest {
         assertThat(tagsChildren.get(0).getName()).isEqualTo("element");
         assertThat(tagsChildren.get(0).getType()).isEqualTo(ArrowType.Utf8.INSTANCE);
     }
+
+    @Test
+    void testToArrowSchemaWithMapType() {
+        // Create a RowType with a Map field
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD(
+                                "attributes", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())));
+
+        Schema arrowSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        // Verify the schema has 2 fields
+        assertThat(arrowSchema.getFields()).hasSize(2);
+
+        // Verify the id field
+        Field idField = arrowSchema.getFields().get(0);
+        assertThat(idField.getName()).isEqualTo("id");
+        assertThat(idField.getType()).isInstanceOf(ArrowType.Int.class);
+
+        // Lance does not support Arrow Map type, Map is converted to List<Struct<key, value>>
+        Field mapField = arrowSchema.getFields().get(1);
+        assertThat(mapField.getName()).isEqualTo("attributes");
+        assertThat(mapField.getType()).isInstanceOf(ArrowType.List.class);
+
+        // Verify the element struct children
+        List<Field> mapChildren = mapField.getChildren();
+        assertThat(mapChildren).hasSize(1);
+
+        Field elementField = mapChildren.get(0);
+        assertThat(elementField.getName()).isEqualTo("element");
+        assertThat(elementField.getType()).isEqualTo(ArrowType.Struct.INSTANCE);
+
+        // Verify the key and value fields
+        List<Field> entryChildren = elementField.getChildren();
+        assertThat(entryChildren).hasSize(2);
+
+        Field keyField = entryChildren.get(0);
+        assertThat(keyField.getName()).isEqualTo("key");
+        assertThat(keyField.getType()).isEqualTo(ArrowType.Utf8.INSTANCE);
+
+        Field valueField = entryChildren.get(1);
+        assertThat(valueField.getName()).isEqualTo("value");
+        assertThat(valueField.getType()).isInstanceOf(ArrowType.Int.class);
+    }
+
+    @Test
+    void testToArrowSchemaWithMapOfComplexValueType() {
+        // Create a Map field with Row as the value type
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD(
+                                "contacts",
+                                DataTypes.MAP(
+                                        DataTypes.STRING(),
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("phone", DataTypes.STRING()),
+                                                DataTypes.FIELD("email", DataTypes.STRING())))));
+
+        Schema arrowSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        // In Lance, Map is represented as List<Struct<key, value>>
+        Field mapField = arrowSchema.getFields().get(1);
+        assertThat(mapField.getName()).isEqualTo("contacts");
+        assertThat(mapField.getType()).isInstanceOf(ArrowType.List.class);
+
+        // Verify the element struct
+        Field elementField = mapField.getChildren().get(0);
+        assertThat(elementField.getName()).isEqualTo("element");
+        assertThat(elementField.getChildren()).hasSize(2);
+
+        // Verify the value is a struct type
+        Field valueField = elementField.getChildren().get(1);
+        assertThat(valueField.getName()).isEqualTo("value");
+        assertThat(valueField.getType()).isEqualTo(ArrowType.Struct.INSTANCE);
+        assertThat(valueField.getChildren()).hasSize(2);
+    }
+
+    @Test
+    void testToArrowSchemaWithRowContainingMap() {
+        // Create a RowType with a nested Row containing a Map
+        RowType rowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD(
+                                "data",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD(
+                                                "props",
+                                                DataTypes.MAP(
+                                                        DataTypes.STRING(), DataTypes.STRING())),
+                                        DataTypes.FIELD("count", DataTypes.INT()))));
+
+        Schema arrowSchema = LanceArrowUtils.toArrowSchema(rowType);
+
+        // Verify the data struct field
+        Field dataField = arrowSchema.getFields().get(1);
+        assertThat(dataField.getName()).isEqualTo("data");
+        assertThat(dataField.getType()).isEqualTo(ArrowType.Struct.INSTANCE);
+
+        // Verify the props map field within the struct (represented as List in Lance)
+        List<Field> dataChildren = dataField.getChildren();
+        assertThat(dataChildren).hasSize(2);
+
+        Field propsField = dataChildren.get(0);
+        assertThat(propsField.getName()).isEqualTo("props");
+        assertThat(propsField.getType()).isInstanceOf(ArrowType.List.class);
+    }
 }
