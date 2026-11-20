@@ -201,10 +201,21 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                         }
                         initExecutor.shutdownNow();
                         IOUtils.closeQuietly(snapshotFilesReader);
-                        FileUtils.deleteDirectoryQuietly(snapshotLocalDirectory.toFile());
                         readerIsReady.signalAll();
                     }
                 });
+        boolean interrupted = false;
+        while (!initExecutor.isTerminated()) {
+            try {
+                initExecutor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        FileUtils.deleteDirectoryQuietly(snapshotLocalDirectory.toFile());
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void initReaderAsynchronously() {
