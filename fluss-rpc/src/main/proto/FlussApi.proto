@@ -479,8 +479,9 @@ message CommitConsumerOffsetsRequest {
   repeated PbCommitConsumerOffsetsRequestTable tables = 2;
 }
 
-// Group validation, owner availability, authorization, and malformed requests use the RPC
-// ErrorResponse envelope. Offset validation and write failures are reported per bucket.
+// Group validation, owner availability, authorization, and malformed requests (including
+// negative offsets) use the RPC ErrorResponse envelope. Metadata-size and write failures are
+// reported per bucket.
 message CommitConsumerOffsetsResponse {
   // One result per distinct bucket in the request.
   repeated PbCommitConsumerOffsetsResponseTable tables = 1;

@@ -1263,13 +1263,7 @@ public class ServerRpcMessageUtils {
         for (PbCommitConsumerOffsetsRequestTable table : request.getTablesList()) {
             for (PbCommitConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
                 Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
-                if (partitionId != null && partitionId == NON_PARTITIONED_PARTITION_ID) {
-                    throw new InvalidPartitionException(
-                            "partition_id="
-                                    + NON_PARTITIONED_PARTITION_ID
-                                    + " is reserved for internal offset storage; "
-                                    + "omit partition_id for non-partitioned tables.");
-                }
+                validateOffsetPartitionId(partitionId);
                 TableBucket tableBucket =
                         new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
                 offsets.put(
@@ -1277,6 +1271,15 @@ public class ServerRpcMessageUtils {
                         new ConsumerOffsetAndMetadata(
                                 bucket.getOffset(),
                                 bucket.hasMetadata() ? bucket.getMetadata() : null));
+            }
+        }
+        for (Map.Entry<TableBucket, ConsumerOffsetAndMetadata> entry : offsets.entrySet()) {
+            if (entry.getValue().getOffset() < 0) {
+                throw new InvalidRequestException(
+                        "Consumer offset for "
+                                + entry.getKey()
+                                + " must not be negative: "
+                                + entry.getValue().getOffset());
             }
         }
         return offsets;
@@ -1300,6 +1303,7 @@ public class ServerRpcMessageUtils {
         for (PbGetConsumerOffsetsRequestTable table : request.getTablesList()) {
             for (PbGetConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
                 Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
+                validateOffsetPartitionId(partitionId);
                 TableBucket tableBucket =
                         new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
                 if (!seenBuckets.add(tableBucket)) {
@@ -1526,6 +1530,7 @@ public class ServerRpcMessageUtils {
         for (PbDeleteConsumerOffsetsRequestTable table : request.getTablesList()) {
             for (PbDeleteConsumerOffsetsRequestBucket bucket : table.getBucketsList()) {
                 Long partitionId = bucket.hasPartitionId() ? bucket.getPartitionId() : null;
+                validateOffsetPartitionId(partitionId);
                 TableBucket tableBucket =
                         new TableBucket(table.getTableId(), partitionId, bucket.getBucketId());
                 if (!seenBuckets.add(tableBucket)) {
@@ -1537,6 +1542,16 @@ public class ServerRpcMessageUtils {
             }
         }
         return requestedBuckets;
+    }
+
+    private static void validateOffsetPartitionId(Long partitionId) {
+        if (partitionId != null && partitionId == NON_PARTITIONED_PARTITION_ID) {
+            throw new InvalidPartitionException(
+                    "partition_id="
+                            + NON_PARTITIONED_PARTITION_ID
+                            + " is reserved for internal offset storage; "
+                            + "omit partition_id for non-partitioned tables.");
+        }
     }
 
     /** Builds the list-groups response. */

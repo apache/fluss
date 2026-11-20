@@ -35,6 +35,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
@@ -80,6 +81,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -650,6 +652,76 @@ public interface Admin extends AutoCloseable {
             String partitionName,
             Collection<Integer> buckets,
             OffsetSpec offsetSpec);
+
+    /**
+     * Alters the committed offsets of a consumer group for the given table buckets.
+     *
+     * <p>This method is useful for resetting offsets, e.g. re-playing or skipping records. The
+     * first successful offset commit for a new group ID also creates its group metadata. If the
+     * group owner is unavailable, the returned futures can complete exceptionally.
+     *
+     * @param groupId the consumer group id
+     * @param newOffsets the non-negative offsets (and optional metadata) to commit, keyed by table
+     *     bucket
+     * @return a result exposing per-bucket futures and an aggregate future
+     */
+    AlterConsumerGroupOffsetsResult alterConsumerGroupOffsets(
+            String groupId, Map<TableBucket, OffsetMetadata> newOffsets);
+
+    /**
+     * Lists all committed offsets of a consumer group.
+     *
+     * @param groupId the consumer group id
+     * @return a future completed with the committed offsets keyed by table bucket
+     */
+    CompletableFuture<Map<TableBucket, OffsetMetadata>> listConsumerGroupOffsets(String groupId);
+
+    /**
+     * Lists the committed offsets of a consumer group for the given table buckets.
+     *
+     * <p>An empty set selects no buckets and returns a completed future containing an empty map.
+     *
+     * @param groupId the consumer group id
+     * @param buckets the table buckets whose committed offsets are listed
+     * @return a future completed with the committed offsets keyed by table bucket
+     */
+    CompletableFuture<Map<TableBucket, OffsetMetadata>> listConsumerGroupOffsets(
+            String groupId, Set<TableBucket> buckets);
+
+    /**
+     * Lists all consumer groups hosted across the tablet servers of the cluster.
+     *
+     * <p>The result aggregates groups from every alive tablet server and de-duplicates them by
+     * group id. If any tablet server request fails, the returned future completes exceptionally.
+     *
+     * @return a future completed with the ids of the consumer groups
+     */
+    CompletableFuture<Collection<String>> listConsumerGroups();
+
+    /**
+     * Deletes the given consumer groups.
+     *
+     * <p>All group IDs are validated before any deletion starts. Deleting a group removes its
+     * committed offsets. Each distinct group ID is deleted once and has its own result future.
+     *
+     * @param groupIds the consumer group ids to delete
+     * @return a result exposing per-group futures and an aggregate future
+     * @throws InvalidConsumerGroupIdException if any group ID is null or invalid
+     */
+    DeleteConsumerGroupsResult deleteConsumerGroups(Collection<String> groupIds);
+
+    /**
+     * Deletes the committed offsets of the selected table buckets for a consumer group.
+     *
+     * <p>The returned result exposes a future per bucket, so callers can inspect which deletions
+     * succeeded and which failed.
+     *
+     * @param groupId the consumer group id
+     * @param buckets the table buckets whose committed offsets should be deleted
+     * @return a result exposing per-bucket futures and an aggregate future
+     */
+    DeleteConsumerGroupOffsetsResult deleteConsumerGroupOffsets(
+            String groupId, Set<TableBucket> buckets);
 
     /**
      * Asynchronously gets the statistics of this table.

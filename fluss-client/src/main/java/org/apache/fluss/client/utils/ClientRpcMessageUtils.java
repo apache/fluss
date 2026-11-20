@@ -20,6 +20,7 @@ package org.apache.fluss.client.utils;
 import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.ClusterHealthStatus;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.admin.TabletServerDescription;
@@ -62,11 +63,18 @@ import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -85,9 +93,22 @@ import org.apache.fluss.rpc.messages.PbAddColumn;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
 import org.apache.fluss.rpc.messages.PbBucketOffset;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbDatabaseSummary;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbDeleteConsumerOffsetsResponseTable;
+import org.apache.fluss.rpc.messages.PbDeletedGroup;
 import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropColumn;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsRequestTable;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseBucket;
+import org.apache.fluss.rpc.messages.PbGetConsumerOffsetsResponseTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
@@ -116,6 +137,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
@@ -128,6 +151,7 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -1048,5 +1072,208 @@ public class ClientRpcMessageUtils {
                     value);
             return null;
         }
+    }
+
+    /**
+     * Makes a {@link CommitConsumerOffsetsRequest} for the given group and offsets.
+     *
+     * @param groupId the consumer group id
+     * @param offsets the offsets to commit
+     * @return the request
+     */
+    public static CommitConsumerOffsetsRequest makeCommitConsumerOffsetsRequest(
+            String groupId, Map<TableBucket, OffsetMetadata> offsets) {
+        Map<Long, List<PbCommitConsumerOffsetsRequestBucket>> bucketsByTable = new HashMap<>();
+        for (Map.Entry<TableBucket, OffsetMetadata> entry : offsets.entrySet()) {
+            TableBucket tableBucket = entry.getKey();
+            OffsetMetadata offsetMetadata = entry.getValue();
+            PbCommitConsumerOffsetsRequestBucket bucket =
+                    new PbCommitConsumerOffsetsRequestBucket()
+                            .setBucketId(tableBucket.getBucket())
+                            .setOffset(offsetMetadata.getOffset())
+                            .setMetadata(offsetMetadata.getMetadata());
+            if (tableBucket.getPartitionId() != null) {
+                bucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            bucketsByTable
+                    .computeIfAbsent(tableBucket.getTableId(), ignored -> new ArrayList<>())
+                    .add(bucket);
+        }
+
+        CommitConsumerOffsetsRequest request =
+                new CommitConsumerOffsetsRequest().setGroupId(groupId);
+        for (Map.Entry<Long, List<PbCommitConsumerOffsetsRequestBucket>> entry :
+                bucketsByTable.entrySet()) {
+            request.addAllTables(
+                    Collections.singletonList(
+                            new PbCommitConsumerOffsetsRequestTable()
+                                    .setTableId(entry.getKey())
+                                    .addAllBuckets(entry.getValue())));
+        }
+        return request;
+    }
+
+    /**
+     * Makes a {@link GetConsumerOffsetsRequest} for the given group and buckets.
+     *
+     * <p>If {@code tableBuckets} is {@code null}, the request asks for all committed offsets of the
+     * group. An empty set selects no buckets.
+     *
+     * @param groupId the consumer group id
+     * @param tableBuckets the buckets whose committed offsets are requested; {@code null} requests
+     *     all committed offsets of the group
+     * @return the request
+     */
+    public static GetConsumerOffsetsRequest makeGetConsumerOffsetsRequest(
+            String groupId, Set<TableBucket> tableBuckets) {
+        GetConsumerOffsetsRequest request = new GetConsumerOffsetsRequest().setGroupId(groupId);
+        if (tableBuckets == null) {
+            return request.setAllOffsets(true);
+        }
+        request.setAllOffsets(false);
+        Map<Long, List<PbGetConsumerOffsetsRequestBucket>> bucketsByTable = new HashMap<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            PbGetConsumerOffsetsRequestBucket bucket =
+                    new PbGetConsumerOffsetsRequestBucket().setBucketId(tableBucket.getBucket());
+            if (tableBucket.getPartitionId() != null) {
+                bucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            bucketsByTable
+                    .computeIfAbsent(tableBucket.getTableId(), ignored -> new ArrayList<>())
+                    .add(bucket);
+        }
+        for (Map.Entry<Long, List<PbGetConsumerOffsetsRequestBucket>> entry :
+                bucketsByTable.entrySet()) {
+            request.addAllTables(
+                    Collections.singletonList(
+                            new PbGetConsumerOffsetsRequestTable()
+                                    .setTableId(entry.getKey())
+                                    .addAllBuckets(entry.getValue())));
+        }
+        return request;
+    }
+
+    /**
+     * Decodes a {@link GetConsumerOffsetsResponse} into a map of bucket to offset metadata.
+     *
+     * @param response the response from the tablet server
+     * @return an unmodifiable map of committed offsets
+     */
+    public static Map<TableBucket, OffsetMetadata> toConsumerOffsets(
+            GetConsumerOffsetsResponse response) {
+        Map<TableBucket, OffsetMetadata> offsets = new HashMap<>();
+        for (PbGetConsumerOffsetsResponseTable table : response.getTablesList()) {
+            for (PbGetConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                Errors error =
+                        bucket.hasErrorCode() ? Errors.forCode(bucket.getErrorCode()) : Errors.NONE;
+                if (error != Errors.NONE) {
+                    throw error.exception(
+                            bucket.hasErrorMessage() ? bucket.getErrorMessage() : null);
+                }
+                if (bucket.hasOffset()) {
+                    offsets.put(
+                            new TableBucket(
+                                    table.getTableId(),
+                                    bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                    bucket.getBucketId()),
+                            new OffsetMetadata(
+                                    bucket.getOffset(),
+                                    bucket.hasMetadata() ? bucket.getMetadata() : ""));
+                }
+            }
+        }
+        return Collections.unmodifiableMap(offsets);
+    }
+
+    /**
+     * Makes a {@link DeleteConsumerOffsetsRequest} for the given group and buckets.
+     *
+     * @param groupId the consumer group id
+     * @param tableBuckets the buckets whose committed offsets should be deleted
+     * @return the request
+     */
+    public static DeleteConsumerOffsetsRequest makeDeleteConsumerOffsetsRequest(
+            String groupId, Set<TableBucket> tableBuckets) {
+        Map<Long, List<PbDeleteConsumerOffsetsRequestBucket>> bucketsByTable = new HashMap<>();
+        for (TableBucket tableBucket : tableBuckets) {
+            PbDeleteConsumerOffsetsRequestBucket bucket =
+                    new PbDeleteConsumerOffsetsRequestBucket().setBucketId(tableBucket.getBucket());
+            if (tableBucket.getPartitionId() != null) {
+                bucket.setPartitionId(tableBucket.getPartitionId());
+            }
+            bucketsByTable
+                    .computeIfAbsent(tableBucket.getTableId(), ignored -> new ArrayList<>())
+                    .add(bucket);
+        }
+        DeleteConsumerOffsetsRequest request =
+                new DeleteConsumerOffsetsRequest().setGroupId(groupId);
+        for (Map.Entry<Long, List<PbDeleteConsumerOffsetsRequestBucket>> entry :
+                bucketsByTable.entrySet()) {
+            request.addAllTables(
+                    Collections.singletonList(
+                            new PbDeleteConsumerOffsetsRequestTable()
+                                    .setTableId(entry.getKey())
+                                    .addAllBuckets(entry.getValue())));
+        }
+        return request;
+    }
+
+    /**
+     * Decodes a {@link DeleteConsumerOffsetsResponse} into a map of bucket to error.
+     *
+     * @param response the response from the tablet server
+     * @return a map of table bucket to error, with {@link ApiError#NONE} for successful deletions
+     */
+    public static Map<TableBucket, ApiError> toDeleteConsumerOffsetsErrors(
+            DeleteConsumerOffsetsResponse response) {
+        Map<TableBucket, ApiError> errors = new HashMap<>();
+        for (PbDeleteConsumerOffsetsResponseTable table : response.getTablesList()) {
+            for (PbDeleteConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                errors.put(
+                        new TableBucket(
+                                table.getTableId(),
+                                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                bucket.getBucketId()),
+                        ApiError.fromErrorMessage(bucket));
+            }
+        }
+        return errors;
+    }
+
+    /**
+     * Decodes a {@link CommitConsumerOffsetsResponse} into per-bucket errors.
+     *
+     * @param response the response from the tablet server
+     * @return a map of table bucket to its error, with {@link ApiError#NONE} for successful commits
+     */
+    public static Map<TableBucket, ApiError> toCommitConsumerOffsetsErrors(
+            CommitConsumerOffsetsResponse response) {
+        Map<TableBucket, ApiError> errors = new HashMap<>();
+        for (PbCommitConsumerOffsetsResponseTable table : response.getTablesList()) {
+            for (PbCommitConsumerOffsetsResponseBucket bucket : table.getBucketsList()) {
+                TableBucket tableBucket =
+                        new TableBucket(
+                                table.getTableId(),
+                                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                                bucket.getBucketId());
+                errors.put(tableBucket, ApiError.fromErrorMessage(bucket));
+            }
+        }
+        return Collections.unmodifiableMap(errors);
+    }
+
+    /**
+     * Decodes a {@link DeleteConsumerGroupsResponse} into a map of group id to error.
+     *
+     * @param response the response from the tablet server
+     * @return a map of group id to error, with {@link ApiError#NONE} for successful deletions
+     */
+    public static Map<String, ApiError> toDeleteConsumerGroupsErrors(
+            DeleteConsumerGroupsResponse response) {
+        Map<String, ApiError> errors = new HashMap<>();
+        for (PbDeletedGroup group : response.getGroupsList()) {
+            errors.put(group.getGroupId(), ApiError.fromErrorMessage(group));
+        }
+        return errors;
     }
 }
