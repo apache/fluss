@@ -18,8 +18,11 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
+import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -127,5 +130,97 @@ class KvSnapshotBatchScannerTest {
                                         name.startsWith("kv-snapshots-")
                                                 && new File(dir, name).isDirectory());
         assertThat(localDirs).isEmpty();
+    }
+
+    @Test
+    void testClosingScannerWaitsForDownloadWorkerInitialization(@TempDir Path tempDir)
+            throws Exception {
+        CountDownLatch openStarted = new CountDownLatch(1);
+        CountDownLatch inputCloseStarted = new CountDownLatch(1);
+        CountDownLatch releaseInputClose = new CountDownLatch(1);
+
+        FileSystem fileSystem =
+                new LocalFileSystem() {
+                    @Override
+                    public FSDataInputStream open(FsPath path) {
+                        openStarted.countDown();
+                        return new FSDataInputStream() {
+                            @Override
+                            public int read() {
+                                return -1;
+                            }
+
+                            @Override
+                            public void close() {
+                                inputCloseStarted.countDown();
+                                boolean interrupted = false;
+                                while (true) {
+                                    try {
+                                        releaseInputClose.await();
+                                        break;
+                                    } catch (InterruptedException e) {
+                                        interrupted = true;
+                                    }
+                                }
+                                if (interrupted) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            }
+
+                            @Override
+                            public void seek(long desired) {}
+
+                            @Override
+                            public long getPos() {
+                                return 0;
+                            }
+                        };
+                    }
+                };
+
+        FsPath remotePath =
+                new FsPath(tempDir.resolve("dummy-remote-file").toUri()) {
+                    @Override
+                    public FileSystem getFileSystem() {
+                        return fileSystem;
+                    }
+                };
+        List<FsPathAndFileName> files =
+                Collections.singletonList(new FsPathAndFileName(remotePath, "file.sst"));
+        RemoteFileDownloader downloader = new RemoteFileDownloader(1);
+        KvSnapshotBatchScanner scanner =
+                new KvSnapshotBatchScanner(
+                        1,
+                        SCHEMA,
+                        new TestingSchemaGetter(1, SCHEMA),
+                        new TableBucket(1L, 0),
+                        files,
+                        null,
+                        tempDir.toString(),
+                        KvValueLayout.PLAIN,
+                        KvFormat.COMPACTED,
+                        downloader);
+
+        Thread closeThread = new Thread(scanner::close);
+        try {
+            assertThat(openStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            closeThread.start();
+            assertThat(inputCloseStarted.await(10, TimeUnit.SECONDS)).isTrue();
+            releaseInputClose.countDown();
+            closeThread.join(TimeUnit.SECONDS.toMillis(10));
+            assertThat(closeThread.isAlive()).isFalse();
+        } finally {
+            releaseInputClose.countDown();
+            scanner.close();
+            downloader.close();
+        }
+
+        assertThat(
+                        tempDir.toFile()
+                                .listFiles(
+                                        (dir, name) ->
+                                                name.startsWith("kv-snapshots-")
+                                                        && new File(dir, name).isDirectory()))
+                .isEmpty();
     }
 }
