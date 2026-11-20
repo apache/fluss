@@ -25,7 +25,8 @@ use crate::client::table::remote_log::{
 use crate::error::{ApiError, Error, Result};
 use crate::metadata::TableBucket;
 use crate::record::{
-    ChangeType, LogRecordBatch, LogRecordIterator, LogRecordsBatches, ReadContext, ScanRecord,
+    BatchChangeTypes, ChangeType, LogRecordBatch, LogRecordIterator, LogRecordsBatches,
+    ReadContext, ScanRecord,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -67,6 +68,7 @@ pub(crate) struct FetchErrorContext {
 pub(crate) struct FetchedBatch {
     /// The decoded Arrow data, already sliced to the rows the caller asked for.
     pub(crate) batch: RecordBatch,
+    pub(crate) change_types: Option<Vec<ChangeType>>,
     /// Offset of the first record in [`Self::batch`], which is the log batch's
     /// base offset unless leading rows were sliced off.
     pub(crate) base_offset: i64,
@@ -658,36 +660,33 @@ impl DefaultCompletedFetch {
                 .pending_record_batch
                 .take()
                 .expect("pending batch must still be present after schema resolution");
-            let mut record_batch = log_batch.record_batch(&read_context)?;
-
-            // Skip empty batches
-            if record_batch.num_rows() == 0 {
+            let (batch, changes) = log_batch.record_batch_with_changes(&read_context)?;
+            let start = self.next_fetch_offset.max(log_batch.base_log_offset());
+            if log_batch.next_log_offset() <= self.next_fetch_offset {
                 continue;
             }
-
-            // Calculate the effective base offset for this batch
-            let log_base_offset = log_batch.base_log_offset();
-            let commit_timestamp = log_batch.commit_timestamp();
-            let schema_id = i32::from(log_batch.schema_id());
-            let effective_base_offset = if self.next_fetch_offset > log_base_offset {
-                let skip_count = (self.next_fetch_offset - log_base_offset) as usize;
-                if skip_count >= record_batch.num_rows() {
-                    continue;
-                }
-                // Slice the batch to skip the first skip_count rows
-                record_batch = record_batch.slice(skip_count, record_batch.num_rows() - skip_count);
-                self.next_fetch_offset
-            } else {
-                log_base_offset
-            };
-
             self.next_fetch_offset = log_batch.next_log_offset();
+            // A header-only CDC batch advances the scan without producing any rows.
+            let skip = ((start - log_batch.base_log_offset()) as usize).min(batch.num_rows());
+            let record_batch = if skip == 0 {
+                batch
+            } else {
+                batch.slice(skip, batch.num_rows() - skip)
+            };
+            let change_types = match changes {
+                BatchChangeTypes::Uniform(_) => None,
+                BatchChangeTypes::PerRecord(mut types) => {
+                    types.drain(..skip);
+                    Some(types)
+                }
+            };
             self.records_read += record_batch.num_rows();
             return Ok(FetchStep::InProgress(FetchedBatch {
                 batch: record_batch,
-                base_offset: effective_base_offset,
-                commit_timestamp,
-                schema_id,
+                base_offset: start,
+                change_types,
+                commit_timestamp: log_batch.commit_timestamp(),
+                schema_id: i32::from(log_batch.schema_id()),
             }));
         }
     }
@@ -1683,6 +1682,10 @@ mod tests {
                 ))?;
             }
             let mut bytes = builder.build()?;
+            if offset == 0 {
+                bytes =
+                    splice_change_type_vector(&bytes, &[ChangeType::Insert, ChangeType::Delete]);
+            }
             // Stamp the header fields a leader assigns, which the client-side
             // builder leaves zeroed. Both of them sit before `CRC_OFFSET` and
             // the checksum only covers `SCHEMA_ID_OFFSET` onwards, so the batch
@@ -1728,6 +1731,10 @@ mod tests {
 
         let batches = expect_data(fetch.fetch_batches(10)?);
         assert_eq!(batches.len(), 2);
+        assert_eq!(
+            batches[0].change_types.as_deref(),
+            Some([ChangeType::Delete].as_slice())
+        );
         assert_eq!(batches[0].schema_id, 1);
         assert_eq!(batches[1].schema_id, 2);
         assert_eq!(

@@ -25,9 +25,7 @@ use crate::{
 };
 use arrow::compute::filter_record_batch;
 use arrow::record_batch::RecordBatch;
-use fluss::client::{
-    BoundedLogReadRange, DeduplicateCurrentView, FlussTable, ReadMemoryBudget, RecordBatchLogReader,
-};
+use fluss::client::{BoundedLogReadRange, DeduplicateCurrentView, FlussTable, ReadMemoryBudget};
 use fluss::error::Error as ClientError;
 use fluss::metadata::{RowType, TableInfo};
 use fluss::predicate::{BoundPredicate, Predicate};
@@ -225,24 +223,23 @@ async fn open_logical_append_log_stream(
             .filter(filter.clone())
             .map_err(|error| execution_client_error("apply append-log filter pushdown", error))?;
     }
-    let scanner = table_scan
-        .create_record_batch_log_scanner()
-        .map_err(|error| execution_client_error("create append-log scanner", error))?;
-    let reader = RecordBatchLogReader::new_from_ranges(
-        scanner,
-        vec![BoundedLogReadRange {
-            bucket: descriptor.table_bucket().clone(),
-            starting_offset: descriptor.start_offset(),
-            stopping_offset: descriptor.stop_offset(),
-        }],
-    )
-    .await
-    .map_err(|error| execution_client_error("create bounded append-log reader", error))?;
+    let reader = table_scan
+        .create_bounded_log_reader(vec![log_range(descriptor)])
+        .await
+        .map_err(|error| execution_client_error("create bounded append-log reader", error))?;
     Ok(Box::pin(reader.into_stream().map(|result| {
         result
             .map(|scan_batch| scan_batch.into_batch())
             .map_err(|error| execution_client_error("read bounded append-log split", error))
     })))
+}
+
+fn log_range(descriptor: &FlussLakeSplitDescriptor) -> BoundedLogReadRange {
+    BoundedLogReadRange {
+        bucket: descriptor.table_bucket().clone(),
+        starting_offset: descriptor.start_offset(),
+        stopping_offset: descriptor.stop_offset(),
+    }
 }
 
 async fn fold_logical_changelog_tail(
@@ -251,43 +248,28 @@ async fn fold_logical_changelog_tail(
     physical: &PhysicalProjection,
     current_view: &mut DeduplicateCurrentView,
 ) -> Result<()> {
-    let scanner = table
+    let mut reader = table
         .new_scan()
         .project(&physical.field_indexes)
         .map_err(|error| execution_client_error("apply changelog projection", error))?
-        .create_log_scanner()
-        .map_err(|error| execution_client_error("create changelog scanner", error))?;
-    let table_bucket = descriptor.table_bucket().clone();
-    match table_bucket.partition_id() {
-        Some(partition_id) => scanner
-            .subscribe_partition(
-                partition_id,
-                table_bucket.bucket_id(),
-                descriptor.start_offset(),
+        .create_bounded_log_reader(vec![log_range(descriptor)])
+        .await
+        .map_err(|error| execution_client_error("create bounded changelog reader", error))?;
+    while let Some(batch) = reader
+        .next_batch()
+        .await
+        .map_err(|error| execution_client_error("read bounded changelog tail", error))?
+    {
+        let changes = batch.change_types().ok_or_else(|| {
+            FlussLakeError::DataUnavailable(
+                "expected primary-key changelog, received an append-only batch".into(),
             )
-            .await
-            .map_err(|error| execution_client_error("subscribe partition bucket", error))?,
-        None => scanner
-            .subscribe(table_bucket.bucket_id(), descriptor.start_offset())
-            .await
-            .map_err(|error| execution_client_error("subscribe table bucket", error))?,
-    }
-
-    let stop = descriptor.stop_offset();
-    loop {
-        let records = scanner
-            .poll_frozen()
-            .await
-            .map_err(|error| execution_client_error("poll bounded changelog tail", error))?;
-        fold_tail_records(records.records(&table_bucket), stop, current_view)?;
-        // An empty CDC batch consumes an offset without yielding a ScanRecord.
-        let position = scanner.bucket_offset(&table_bucket).ok_or_else(|| {
-            FlussLakeError::DataUnavailable(format!("lost subscription for bucket {table_bucket}"))
         })?;
-        if position >= stop {
-            return Ok(());
-        }
+        current_view
+            .fold_changelog_batch(batch.batch().clone(), changes)
+            .map_err(reconciliation_error)?;
     }
+    Ok(())
 }
 
 /// Output columns come first so predicate-only columns can be stripped after filtering.
@@ -350,35 +332,6 @@ impl PhysicalProjection {
                 ))
             })
     }
-}
-
-// The record scanner preserves change types. Fold contiguous rows from the
-// same Arrow batch together, clipping the last run to the frozen stop.
-fn fold_tail_records(
-    records: &[fluss::record::ScanRecord],
-    stop: i64,
-    view: &mut DeduplicateCurrentView,
-) -> Result<()> {
-    let mut records = records.iter().take_while(|r| r.offset() < stop).peekable();
-    while let Some(record) = records.next() {
-        let row = record.row();
-        let batch = row.get_record_batch().ok_or_else(|| {
-            FlussLakeError::Internal("changelog record has no backing Arrow batch".into())
-        })?;
-        let start = row.get_row_id();
-        let mut changes = vec![*record.change_type()];
-        while let Some(r) = records.next_if(|r| {
-            r.row().get_row_id() == start + changes.len()
-                && r.row()
-                    .get_record_batch()
-                    .is_some_and(|b| std::ptr::eq(batch, b))
-        }) {
-            changes.push(*r.change_type());
-        }
-        view.fold_changelog_batch(batch.slice(start, changes.len()), &changes)
-            .map_err(reconciliation_error)?;
-    }
-    Ok(())
 }
 
 /// Defers an asynchronous stream setup until the stream's first poll.

@@ -160,6 +160,7 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
+| `async fn create_bounded_log_reader(self, ranges: Vec<BoundedLogReadRange>) -> Result<RecordBatchLogReader>` | Read frozen ranges of an append log or a primary-key changelog. Use `ScanBatch::change_types` for CDC. |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
 
 ## `LogScanner`
@@ -243,8 +244,8 @@ thread that belongs to the same runtime** — nested `block_on` panics. Prefer
 `RecordBatchLogReader::next_batch` in async Rust code; use this adapter only at
 sync/FFI boundaries.
 
-Bucket and offset metadata carried by `ScanBatch` is **dropped** here, because
-the Arrow trait contract yields plain `RecordBatch`. If you need offsets or
+Bucket, offset, and change-type metadata carried by `ScanBatch` is **dropped** here, because
+the Arrow trait contract yields plain `RecordBatch`. If you need offsets, change types, or
 bucket identity per batch, use `next_batch` instead.
 
 | Method                                                          | Description                                      |
@@ -296,8 +297,9 @@ existing key emits `-U` then `+U`; the `WAL` mode emits only `+U`.
 | Method                                                                   | Description                       |
 |--------------------------------------------------------------------------|-----------------------------------|
 | `fn count(&self) -> usize`                                               | Number of records                 |
-| `fn is_empty(&self) -> bool`                                             | Whether the result set is empty   |
+| `fn is_empty(&self) -> bool`                                             | True if no bucket returned records or advanced   |
 | `fn records(&self, bucket: &TableBucket) -> &[ScanRecord]`               | Get records for a specific bucket |
+| `fn consumed_up_to_offset(&self, bucket: &TableBucket) -> Option<i64>` | Exclusive offset consumed in this poll; can advance even if the bucket returned no records |
 | `fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>>` | Get all records grouped by bucket |
 
 `ScanRecords` also implements `IntoIterator`, so you can iterate over all records directly:
@@ -315,6 +317,7 @@ for record in records {
 | `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
 | `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
 | `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn change_types(&self) -> Option<&[ChangeType]>` | One change type per CDC row; absent for append-only batches |
 | `fn last_offset(&self) -> i64`      | Last record offset                |
 | `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
 | `fn schema_id(&self) -> i32`      | Schema ID from the source log batch |
