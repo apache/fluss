@@ -22,14 +22,18 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.block.BlockBuilder;
 import org.apache.datasketches.hll.HllUnion;
 import org.apache.datasketches.kll.KllDoublesSketch;
+import org.apache.datasketches.kll.KllSketch;
 
 import java.lang.foreign.MemorySegment;
+import java.util.concurrent.atomic.AtomicLongArray;
 
 import static io.trino.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
 
 /** Shared sketch byte-format and aggregate-state operations. */
 final class SketchSupport {
+    private static final AtomicLongArray DEFAULT_KLL_SIZES = new AtomicLongArray(Long.SIZE);
+
     private SketchSupport() {}
 
     static long estimatedSize(Object sketch) {
@@ -39,7 +43,33 @@ final class SketchSupport {
         if (sketch instanceof HllUnion) {
             return 256L + 2L * ((HllUnion) sketch).getUpdatableSerializationBytes();
         }
-        return 256L + 2L * ((KllDoublesSketch) sketch).getSerializedSizeBytes();
+        KllDoublesSketch kll = (KllDoublesSketch) sketch;
+        if (kll.getK() != KllSketch.DEFAULT_K) {
+            return kllSizeBound(kll.getK(), kll.getN());
+        }
+        int bucket = Long.SIZE - Long.numberOfLeadingZeros(kll.getN());
+        long size = DEFAULT_KLL_SIZES.get(bucket);
+        if (size == 0) {
+            // Cache an upper bound per count range, avoiding sizing allocations on every update.
+            long maxN = bucket == 0 ? 0 : -1L >>> (Long.SIZE - bucket);
+            size = kllSizeBound(kll.getK(), maxN);
+            DEFAULT_KLL_SIZES.compareAndSet(bucket, 0, size);
+        }
+        return size;
+    }
+
+    private static long kllSizeBound(int k, long n) {
+        if (n > (1L << 50)) {
+            // The sizing API overflows for large N. Across at most 64 levels, geometric
+            // capacities sum to less than 3*k plus the minimum capacity (8) per level.
+            return 256L
+                    + Double.BYTES * (3L * k + 8L * Long.SIZE)
+                    + Integer.BYTES * (Long.SIZE + 1L);
+        }
+        // Updatable size includes unused capacity omitted by compact serialization.
+        return 256L
+                + KllSketch.getMaxSerializedSizeBytes(
+                        k, n, KllSketch.SketchType.KLL_DOUBLES_SKETCH, true);
     }
 
     static byte[] bytes(Object sketch) {
