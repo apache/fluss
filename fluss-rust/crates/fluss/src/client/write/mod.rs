@@ -28,6 +28,7 @@ use crate::row::InternalRow;
 pub use accumulator::*;
 use arrow::array::RecordBatch;
 use bytes::Bytes;
+use parking_lot::Mutex;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -56,6 +57,8 @@ pub struct WriteRecord<'a> {
     /// Optional deadline bounding the buffer-memory wait during append. `None`
     /// falls back to the writer's configured buffer wait timeout.
     submit_deadline: Option<Instant>,
+    /// Buffer memory reserved before the append, used instead of acquiring it there.
+    reserved_memory: Mutex<Option<MemoryPermit>>,
 }
 
 impl<'a> WriteRecord<'a> {
@@ -148,6 +151,7 @@ impl<'a> WriteRecord<'a> {
             schema_id,
             write_format: WriteFormat::ArrowLog,
             submit_deadline: None,
+            reserved_memory: Mutex::new(None),
         }
     }
 
@@ -165,6 +169,7 @@ impl<'a> WriteRecord<'a> {
             schema_id,
             write_format: WriteFormat::ArrowLog,
             submit_deadline: None,
+            reserved_memory: Mutex::new(None),
         }
     }
 
@@ -180,6 +185,21 @@ impl<'a> WriteRecord<'a> {
     pub fn with_submit_deadline(mut self, deadline: Option<Instant>) -> Self {
         self.submit_deadline = deadline;
         self
+    }
+
+    /// Attaches buffer memory reserved ahead of the append; the batch holding this record
+    /// takes it, and it is released when the record joins an existing batch or is dropped.
+    pub(crate) fn with_reserved_memory(self, permit: Option<MemoryPermit>) -> Self {
+        *self.reserved_memory.lock() = permit;
+        self
+    }
+
+    pub(crate) fn take_reserved_memory(&self) -> Option<MemoryPermit> {
+        self.reserved_memory.lock().take()
+    }
+
+    pub(crate) fn restore_reserved_memory(&self, permit: MemoryPermit) {
+        *self.reserved_memory.lock() = Some(permit);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -201,6 +221,7 @@ impl<'a> WriteRecord<'a> {
             schema_id,
             write_format,
             submit_deadline: None,
+            reserved_memory: Mutex::new(None),
         }
     }
 }
