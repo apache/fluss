@@ -274,15 +274,17 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 
 #### Prerequisites and JARs
 
-The example below uses Spark 3.5 with Scala 2.12 and Java 11. Use a Fluss build containing the Spark tiering service, and match the application's Scala binary version to your Spark distribution.
+The Spark tiering application is built for Spark 3.5. Use a Spark 3.5 distribution built with Scala 2.12 to run the application JAR below. The example was tested with Spark 3.5.7 and Java 11.
+
+This guide shows how to deploy Spark tiering to Paimon. Integration tests also cover Spark tiering to Iceberg log tables. For Hudi and Lance deployment examples, see [Flink](#flink).
 
 For Paimon tiering, prepare:
 
 | JAR | Purpose |
 |-----|---------|
 | `fluss-spark-tiering_2.12-$FLUSS_VERSION$.jar` | Application JAR, produced under `fluss-spark/fluss-spark-tiering/target/` when building Fluss |
-| `fluss-lake-paimon-$FLUSS_VERSION$.jar` | Fluss lake connector, using the same Fluss version as the application |
-| `paimon-bundle-$PAIMON_VERSION$.jar` | Paimon runtime, matching the version used by the Fluss lake connector |
+| `fluss-lake-paimon-$FLUSS_VERSION$.jar` | Fluss lake connector, produced under `fluss-lake/fluss-lake-paimon/target/` when building the same Fluss version as the application |
+| [paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar) | Paimon runtime, matching the version used by the Fluss lake connector |
 
 The application JAR includes the Fluss client and common Spark integration code. Supply the lake connector and its runtime dependencies with `--jars` so they are available to both the driver and executors. Installing plugins only on the Fluss servers does not make them available to Spark.
 
