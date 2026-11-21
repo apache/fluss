@@ -62,6 +62,11 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>org.apache.datasketches</groupId>
+            <artifactId>datasketches-java</artifactId>
+            <version>9.0.0</version>
+        </dependency>
         <!-- Connector implementation -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
