@@ -19,13 +19,16 @@ package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.client.utils.TestingRpcClient;
+import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
@@ -47,6 +50,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -114,6 +118,177 @@ public class MetadataUpdaterTest {
                                         rpcClient, CS_NODE, gateway2, 3))
                 .isInstanceOf(StaleMetadataException.class)
                 .hasMessageContaining("The metadata is stale.");
+    }
+
+    @Test
+    void testFullUpdateResolvesPartitionUsingOriginCluster() throws Exception {
+        TablePath tablePath = TablePath.of("db", "table");
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "p");
+        Cluster originCluster =
+                new Cluster(
+                        Collections.singletonMap(TS_NODE.id(), TS_NODE),
+                        CS_NODE,
+                        Collections.emptyMap(),
+                        Collections.singletonMap(tablePath, 1L),
+                        Collections.emptyMap(),
+                        Collections.singletonMap(TableOrPartition.ofTable(1L), 8),
+                        Collections.singletonMap(1L, 1L));
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer()
+                .setNodeId(TS_NODE.id())
+                .setHost(TS_NODE.host())
+                .setPort(TS_NODE.port());
+        response.addPartitionMetadata()
+                .setTableId(1L)
+                .setPartitionId(11L)
+                .setPartitionName("p")
+                .setBucketCount(4);
+        AdminReadOnlyGateway gateway =
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        return CompletableFuture.completedFuture(response);
+                    }
+                };
+
+        Cluster rebuilt =
+                MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                        gateway, false, originCluster, null, null, Collections.singleton(11L));
+
+        assertThat(rebuilt.getPartitionId(partitionPath)).hasValue(11L);
+        assertThat(rebuilt.getBucketCount(TableOrPartition.ofPartition(11L))).hasValue(4);
+        assertThat(rebuilt.getBucketCount(TableOrPartition.ofTable(1L))).isEmpty();
+        assertThat(rebuilt.getBucketCountEpoch(1L)).isEmpty();
+        assertThat(rebuilt.getTableId(tablePath)).isEmpty();
+    }
+
+    @Test
+    void testRebuildFailureIsWrappedInExecutionException() {
+        AdminReadOnlyGateway gateway =
+                new TestCoordinatorGateway() {
+                    @Override
+                    public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
+                        return CompletableFuture.completedFuture(new MetadataResponse());
+                    }
+                };
+
+        assertThatThrownBy(
+                        () ->
+                                MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                                        gateway, Collections.emptySet()))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(StaleMetadataException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testNodeOnlyPartialUpdateReusesMetadata(boolean changedNodes) {
+        TablePath tablePath = TablePath.of("db", "table");
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, "p");
+        TableBucket bucket = new TableBucket(1L, 11L, 0);
+        ServerNode oldNode =
+                new ServerNode(
+                        1,
+                        "localhost",
+                        8080,
+                        ServerType.TABLET_SERVER,
+                        null,
+                        ServerTag.TEMPORARY_OFFLINE);
+        Cluster original =
+                new Cluster(
+                        Collections.singletonMap(1, oldNode),
+                        CS_NODE,
+                        Collections.singletonMap(
+                                partitionPath,
+                                Collections.singletonList(
+                                        new BucketLocation(
+                                                partitionPath, bucket, 1, new int[] {1}))),
+                        Collections.singletonMap(tablePath, 1L),
+                        Collections.singletonMap(partitionPath, 11L),
+                        Collections.singletonMap(TableOrPartition.ofPartition(11L), 1),
+                        Collections.singletonMap(1L, 1L));
+        MetadataResponse response = new MetadataResponse();
+        response.addTabletServer()
+                .setNodeId(1)
+                .setHost(changedNodes ? "new-host" : "localhost")
+                .setPort(changedNodes ? 8081 : 8080);
+        if (changedNodes) {
+            response.getTabletServersList().get(0).setRack("new-rack");
+        }
+        response.setCoordinatorServer()
+                .setNodeId(1)
+                .setHost(changedNodes ? "new-coordinator" : "localhost")
+                .setPort(8080);
+
+        Cluster refreshed =
+                MetadataUtils.rebuildCluster(
+                        original, true, response, Collections.emptySet(), Collections.emptySet());
+
+        assertThat(refreshed.getBucketLocationsByPath())
+                .isSameAs(original.getBucketLocationsByPath());
+        assertThat(refreshed.getTableIdByPath()).isSameAs(original.getTableIdByPath());
+        assertThat(refreshed.getPartitionIdByPath()).isSameAs(original.getPartitionIdByPath());
+        assertThat(refreshed.getBucketCountByTableOrPartition())
+                .isSameAs(original.getBucketCountByTableOrPartition());
+        assertThat(refreshed.getBucketCountEpochByTableId())
+                .isSameAs(original.getBucketCountEpochByTableId());
+        assertThat(refreshed.getTabletServer(1).host())
+                .isEqualTo(changedNodes ? "new-host" : "localhost");
+        assertThat(refreshed.getTabletServer(1).port()).isEqualTo(changedNodes ? 8081 : 8080);
+        assertThat(refreshed.getTabletServer(1).rack()).isEqualTo(changedNodes ? "new-rack" : null);
+        assertThat(refreshed.getTabletServer(1).serverTag()).isNull();
+        assertThat(refreshed.getCoordinatorServer().host())
+                .isEqualTo(changedNodes ? "new-coordinator" : "localhost");
+
+        Cluster invalidated =
+                refreshed.invalidPhysicalTableBucketAndPartitionMeta(
+                        Collections.singleton(partitionPath));
+        assertThat(invalidated.leaderFor(bucket)).isNull();
+        assertThat(invalidated.getPartitionId(partitionPath)).isEmpty();
+        assertThat(invalidated.getBucketCountEpoch(1L)).hasValue(1L);
+        assertThat(refreshed.leaderFor(bucket)).isEqualTo(1);
+        assertThat(original.getPartitionId(partitionPath)).hasValue(11L);
+        assertThat(original.getTabletServer(1).serverTag()).isEqualTo(ServerTag.TEMPORARY_OFFLINE);
+
+        MetadataResponse partitionResponse = new MetadataResponse();
+        partitionResponse.addTabletServer().setNodeId(2).setHost("localhost").setPort(8081);
+        partitionResponse
+                .addPartitionMetadata()
+                .setTableId(1L)
+                .setPartitionId(11L)
+                .setPartitionName("p")
+                .setBucketCount(1)
+                .addBucketMetadata()
+                .setBucketId(0)
+                .setLeaderId(2);
+        Cluster updated =
+                MetadataUtils.rebuildCluster(
+                        refreshed,
+                        true,
+                        partitionResponse,
+                        Collections.emptySet(),
+                        Collections.emptySet());
+        assertThat(updated.leaderFor(bucket)).isEqualTo(2);
+        assertThat(updated.getBucketCountEpoch(1L)).hasValue(1L);
+        assertThat(updated.getCoordinatorServer()).isNull();
+        assertThat(refreshed.leaderFor(bucket)).isEqualTo(1);
+
+        Cluster full =
+                MetadataUtils.rebuildCluster(
+                        original, false, response, Collections.emptySet(), Collections.emptySet());
+        assertThat(full.getBucketLocationsByPath()).isEmpty();
+        assertThat(full.getTableIdByPath()).isEmpty();
+        assertThat(full.getPartitionIdByPath()).isEmpty();
+        assertThat(full.getBucketCountEpochByTableId()).isEmpty();
+        assertThatThrownBy(
+                        () ->
+                                MetadataUtils.rebuildCluster(
+                                        original,
+                                        true,
+                                        new MetadataResponse(),
+                                        Collections.emptySet(),
+                                        Collections.emptySet()))
+                .isInstanceOf(StaleMetadataException.class);
     }
 
     @Test
