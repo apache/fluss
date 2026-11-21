@@ -37,6 +37,12 @@ import org.apache.fluss.flink.functions.bitmap.RbOrFunction;
 import org.apache.fluss.flink.functions.bitmap.RbToArrayFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorAggFunction;
 import org.apache.fluss.flink.functions.bitmap.RbXorFunction;
+import org.apache.fluss.flink.functions.sketch.HllBuildAggFunction;
+import org.apache.fluss.flink.functions.sketch.HllEstimateFunction;
+import org.apache.fluss.flink.functions.sketch.HllMergeAggFunction;
+import org.apache.fluss.flink.functions.sketch.KllDoubleBuildAggFunction;
+import org.apache.fluss.flink.functions.sketch.KllDoubleMergeAggFunction;
+import org.apache.fluss.flink.functions.sketch.KllDoubleQuantileFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.FlussProcedureContext;
 import org.apache.fluss.flink.procedure.ProcedureManager;
@@ -166,6 +172,12 @@ public class FlinkCatalog extends AbstractCatalog {
 
     static {
         Map<String, String> map = new HashMap<>();
+        map.put("fluss_hll_build_agg", HllBuildAggFunction.class.getName());
+        map.put("fluss_hll_merge_agg", HllMergeAggFunction.class.getName());
+        map.put("fluss_hll_estimate", HllEstimateFunction.class.getName());
+        map.put("fluss_kll_double_build_agg", KllDoubleBuildAggFunction.class.getName());
+        map.put("fluss_kll_double_merge_agg", KllDoubleMergeAggFunction.class.getName());
+        map.put("fluss_kll_double_quantile", KllDoubleQuantileFunction.class.getName());
         // aggregate functions
         map.put("rb_build_agg", RbBuildAggFunction.class.getName());
         map.put("rb_or_agg", RbOrAggFunction.class.getName());

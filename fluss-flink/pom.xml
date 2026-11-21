@@ -63,12 +63,25 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <configuration>
+                    <relocations combine.children="append">
+                        <relocation>
+                            <pattern>META-INF.versions.11.org.apache.datasketches</pattern>
+                            <shadedPattern>META-INF.versions.11.org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                        </relocation>
+                        <relocation>
+                            <pattern>org.apache.datasketches</pattern>
+                            <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                        </relocation>
+                    </relocations>
                     <filters combine.children="append">
                         <filter>
                             <artifact>org.apache.fluss:fluss-client</artifact>
                             <excludes>
                                 <!-- fluss-client bundles SLF4J classes; use Flink's logging API. -->
                                 <exclude>org/slf4j/**</exclude>
+                                <!-- These inherited entries have unrelocated paths but relocated bytecode. -->
+                                <exclude>META-INF/versions/**/com/fasterxml/jackson/**</exclude>
+                                <exclude>META-INF/versions/**/org/yaml/snakeyaml/**</exclude>
                             </excludes>
                         </filter>
                     </filters>
