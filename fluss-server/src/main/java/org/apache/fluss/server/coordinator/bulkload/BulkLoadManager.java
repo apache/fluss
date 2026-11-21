@@ -21,7 +21,7 @@ import org.apache.fluss.exception.BulkLoadConflictException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
-import org.apache.fluss.exception.InvalidBulkLoadRequestException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
@@ -147,10 +147,10 @@ public final class BulkLoadManager {
                 client.getBulkLoadTarget(transaction, bucket.getPartitionId())
                         .orElseThrow(
                                 () ->
-                                        new InvalidBulkLoadRequestException(
+                                        new InvalidRequestException(
                                                 "Target is not part of this transaction."));
         if (bucket.getBucket() < 0 || bucket.getBucket() >= target.data().bucketCount) {
-            throw new InvalidBulkLoadRequestException("Invalid bucket ID.");
+            throw new InvalidRequestException("Invalid bucket ID.");
         }
         return target;
     }
@@ -175,11 +175,11 @@ public final class BulkLoadManager {
                 || !table.getPartitionKeys().equals(original.getPartitionKeys())
                 || !table.getBucketKeys().equals(original.getBucketKeys())
                 || !Objects.equals(table.getRemoteDataDir(), original.getRemoteDataDir())) {
-            throw new InvalidBulkLoadRequestException("BulkLoad build context changed.");
+            throw new InvalidRequestException("BulkLoad build context changed.");
         }
         if (target.partitionId == null) {
             if (table.getNumBuckets() != target.bucketCount) {
-                throw new InvalidBulkLoadRequestException("BulkLoad target bucket count changed.");
+                throw new InvalidRequestException("BulkLoad target bucket count changed.");
             }
             return new TableAndPartitionZkVersions(current.zkVersion(), null);
         }
@@ -191,7 +191,7 @@ public final class BulkLoadManager {
                         table.getNumBuckets(), table.getBucketCountEpoch());
         if (bucketCount != target.bucketCount
                 || !Objects.equals(registration.getRemoteDataDir(), target.remoteDataDir)) {
-            throw new InvalidBulkLoadRequestException("BulkLoad target build context changed.");
+            throw new InvalidRequestException("BulkLoad target build context changed.");
         }
         return new TableAndPartitionZkVersions(current.zkVersion(), partition.zkVersion());
     }
@@ -231,7 +231,7 @@ public final class BulkLoadManager {
                 client.getBulkLoadBucket(bulkLoadTransaction, bucket)
                         .orElseThrow(
                                 () ->
-                                        new InvalidBulkLoadRequestException(
+                                        new InvalidRequestException(
                                                 "Bucket has not been allocated."));
         if (allocation.data().state == BulkLoadBucket.COMMITTED) {
             snapshots.reconcileUnconfirmedImport(bucket);

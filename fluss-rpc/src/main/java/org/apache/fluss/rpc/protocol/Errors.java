@@ -44,7 +44,6 @@ import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
-import org.apache.fluss.exception.InvalidBulkLoadRequestException;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
@@ -332,20 +331,18 @@ public enum Errors {
             81,
             "The request contains an invalid combination or value of parameters.",
             InvalidRequestException::new),
-    INVALID_BULK_LOAD_REQUEST(
-            82, "Invalid BulkLoad request.", InvalidBulkLoadRequestException::new),
-    BULK_LOAD_NOT_FOUND(83, "BulkLoad transaction does not exist.", BulkLoadNotFoundException::new),
+    BULK_LOAD_NOT_FOUND(82, "BulkLoad transaction does not exist.", BulkLoadNotFoundException::new),
     BULK_LOAD_CONFLICT(
-            84, "BulkLoad conflicts with another operation.", BulkLoadConflictException::new),
+            83, "BulkLoad conflicts with another operation.", BulkLoadConflictException::new),
     BULK_LOAD_STATE_CONFLICT(
-            85,
+            84,
             "BulkLoad operation conflicts with the transaction state.",
             BulkLoadStateException::new),
     INVALID_BULK_LOAD_SNAPSHOT(
-            86, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
+            85, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
     BULK_LOAD_TARGET_WITHDRAWN(
-            87, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
-    KV_RECOVERY_IN_PROGRESS(88, "KV recovery is in progress.", KvRecoveryInProgressException::new);
+            86, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
+    KV_RECOVERY_IN_PROGRESS(87, "KV recovery is in progress.", KvRecoveryInProgressException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

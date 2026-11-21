@@ -26,7 +26,7 @@ import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
-import org.apache.fluss.exception.InvalidBulkLoadRequestException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -1415,7 +1415,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<VersionedData<BulkLoadTransaction>> getBulkLoadTransaction(
             long tableId, String bulkLoadId) throws Exception {
         if (!BULK_LOAD_ID.matcher(bulkLoadId).matches()) {
-            throw new InvalidBulkLoadRequestException("Invalid bulk_load_id.");
+            throw new InvalidRequestException("Invalid bulk_load_id.");
         }
         return getVersionedData(
                 bulkLoadTransactionPath(tableId, bulkLoadId),

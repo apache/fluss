@@ -51,10 +51,12 @@ import org.apache.fluss.server.kv.KvFlushScheduler;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.TestingHoldableKvFlushScheduler;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
+import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -90,6 +92,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
@@ -891,7 +894,22 @@ final class ReplicaTest extends ReplicaTestBase {
     @Test
     void testSelectedSnapshotPreservesLaggingLocalWal(@TempDir File snapshotDir) throws Exception {
         TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        TestSnapshotContext context = new TestSnapshotContext(snapshotDir.getPath());
+        ZooKeeperCompletedSnapshotHandleStore snapshotStore =
+                new ZooKeeperCompletedSnapshotHandleStore(zkClient);
+        TestSnapshotContext context =
+                new TestSnapshotContext(snapshotDir.getPath()) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return target -> {
+                            Optional<CompletedSnapshotHandle> handle =
+                                    snapshotStore.getLatestCompletedSnapshotHandle(target);
+                            return handle.isPresent()
+                                    ? handle.get().retrieveCompleteSnapshot()
+                                    : null;
+                        };
+                    }
+                };
         Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
         makeKvReplicaAsLeader(replica, 0);
 

@@ -557,14 +557,15 @@ public final class Replica {
                                                         recoverySnapshotId)) {
                                             return;
                                         }
-                                        KvRecovery selected = prepareKvRecovery();
-                                        if (!Long.valueOf(recoverySnapshotId)
-                                                .equals(selected.recoverySnapshotId)) {
+                                        Optional<CompletedSnapshot> selected =
+                                                getBulkLoadRecoverySnapshot(recoverySnapshotId);
+                                        if (!selected.isPresent()) {
                                             return;
                                         }
+                                        KvRecovery recovery = prepareKvRecovery(selected);
                                         dropKv();
                                         try {
-                                            createKv(selected, recoverySnapshotId);
+                                            createKv(recovery, recoverySnapshotId);
                                         } catch (Exception e) {
                                             dropKv();
                                             throw e;
@@ -613,7 +614,7 @@ public final class Replica {
                             // Resolve recovery metadata before changing role state or dropping KV.
                             KvRecovery recovery =
                                     requiresLeaderActivation(data.getLeaderEpoch()) && isKvTable()
-                                            ? prepareKvRecovery()
+                                            ? prepareKvRecovery(getLatestSnapshot(tableBucket))
                                             : null;
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
@@ -908,12 +909,15 @@ public final class Replica {
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
             try {
                 if (i > 1) {
-                    recovery = prepareKvRecovery();
-                    if (expectedImportSnapshotId != null
-                            && !expectedImportSnapshotId.equals(recovery.recoverySnapshotId)) {
+                    Optional<CompletedSnapshot> snapshot =
+                            expectedImportSnapshotId == null
+                                    ? getLatestSnapshot(tableBucket)
+                                    : getBulkLoadRecoverySnapshot(expectedImportSnapshotId);
+                    if (expectedImportSnapshotId != null && !snapshot.isPresent()) {
                         lastError = new KvStorageException("BulkLoad recovery selection changed.");
                         break;
                     }
+                    recovery = prepareKvRecovery(snapshot);
                 }
                 snapshotUsed = initKvTablet(recovery);
                 lastError = null;
@@ -1190,27 +1194,24 @@ public final class Replica {
         return false;
     }
 
-    private KvRecovery prepareKvRecovery() {
+    private Optional<CompletedSnapshot> getBulkLoadRecoverySnapshot(long recoverySnapshotId) {
         if (isHistoricalPartition()) {
-            return new KvRecovery(Optional.empty(), false, null);
+            return Optional.empty();
         }
-        @Nullable Long recoverySnapshotId = null;
-        Optional<CompletedSnapshot> snapshot;
         try {
-            ZooKeeperClient client = snapshotContext.getZooKeeperClient();
-            Optional<BucketSnapshot> selected = client.getRecoveryBucketSnapshot(tableBucket);
-            if (selected.isPresent()) {
-                BucketSnapshot reference = selected.get();
-                recoverySnapshotId = reference.getSnapshotId();
-                snapshot =
-                        Optional.of(
-                                reference.toCompletedSnapshotHandle().retrieveCompleteSnapshot());
-            } else {
-                snapshot = getLatestSnapshot(tableBucket);
+            Optional<BucketSnapshot> selected =
+                    snapshotContext.getZooKeeperClient().getRecoveryBucketSnapshot(tableBucket);
+            if (!selected.isPresent() || selected.get().getSnapshotId() != recoverySnapshotId) {
+                return Optional.empty();
             }
+            return Optional.of(
+                    selected.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot());
         } catch (Exception e) {
             throw new KvStorageException("Cannot read recovery source for " + tableBucket, e);
         }
+    }
+
+    private KvRecovery prepareKvRecovery(Optional<CompletedSnapshot> snapshot) {
         boolean initializeLocalLog = false;
         if (snapshot.isPresent() && snapshot.get().getLogOffset() > logTablet.localLogEndOffset()) {
             try {
@@ -1231,7 +1232,7 @@ public final class Replica {
                         "Failed to prepare snapshot recovery for " + tableBucket + '.', e);
             }
         }
-        return new KvRecovery(snapshot, initializeLocalLog, recoverySnapshotId);
+        return new KvRecovery(snapshot, initializeLocalLog);
     }
 
     private enum BulkLoadRecoveryState {
@@ -1244,19 +1245,17 @@ public final class Replica {
     private static final class KvRecovery {
         private final Optional<CompletedSnapshot> snapshot;
         private final boolean initializeLocalLog;
-        private final @Nullable Long recoverySnapshotId;
 
-        private KvRecovery(
-                Optional<CompletedSnapshot> snapshot,
-                boolean initializeLocalLog,
-                @Nullable Long recoverySnapshotId) {
+        private KvRecovery(Optional<CompletedSnapshot> snapshot, boolean initializeLocalLog) {
             this.snapshot = snapshot;
             this.initializeLocalLog = initializeLocalLog;
-            this.recoverySnapshotId = recoverySnapshotId;
         }
     }
 
     private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
+        if (isHistoricalPartition()) {
+            return Optional.empty();
+        }
         try {
             return Optional.ofNullable(
                     snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
