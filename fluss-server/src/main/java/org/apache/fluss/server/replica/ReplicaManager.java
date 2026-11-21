@@ -1324,9 +1324,7 @@ public class ReplicaManager implements ServerReconfigurable {
         for (TableBucket tb : tableBuckets) {
             try {
                 Replica replica = getReplicaOrException(tb);
-                result.add(
-                        new ListOffsetsResultForBucket(
-                                tb, replica.getOffset(remoteLogManager, listOffsetsParam)));
+                result.add(replica.listOffsets(remoteLogManager, listOffsetsParam));
             } catch (Exception e) {
                 LOG.error("Error processing list offsets operation on replica {}", tb, e);
                 result.add(new ListOffsetsResultForBucket(tb, ApiError.fromThrowable(e)));

@@ -53,6 +53,7 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -2134,7 +2135,8 @@ public final class Replica {
                 && !tableConfig.getKvTTL().isPresent();
     }
 
-    public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
+    public ListOffsetsResultForBucket listOffsets(
+            RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
             throws IOException {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -2147,23 +2149,28 @@ public final class Replica {
                     }
 
                     int offsetType = listOffsetsParam.getOffsetType();
+                    if (offsetType == ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE) {
+                        long highWatermark = logTablet.getHighWatermark();
+                        return new ListOffsetsResultForBucket(
+                                tableBucket, logTablet.localLogEndOffset(), highWatermark);
+                    }
+                    long offset;
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
-                        return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
+                        offset = getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
                     } else if (offsetType == ListOffsetsParam.EARLIEST_OFFSET_TYPE) {
-                        if (listOffsetsParam.getFollowerServerId() < 0) {
-                            // the request is come from client, return available start offset
-                            return logTablet.logStartOffset();
-                        } else {
-                            return logTablet.localLogStartOffset();
-                        }
+                        offset =
+                                listOffsetsParam.getFollowerServerId() < 0
+                                        ? logTablet.logStartOffset()
+                                        : logTablet.localLogStartOffset();
                     } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
-                        return getLatestOffset(listOffsetsParam.getFollowerServerId());
+                        offset = getLatestOffset(listOffsetsParam.getFollowerServerId());
                     } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
-                        return logTablet.getLeaderEndOffsetSnapshot();
+                        offset = logTablet.getLeaderEndOffsetSnapshot();
                     } else {
                         throw new IllegalArgumentException(
                                 "Invalid list offset type: " + offsetType);
                     }
+                    return new ListOffsetsResultForBucket(tableBucket, offset);
                 });
     }
 

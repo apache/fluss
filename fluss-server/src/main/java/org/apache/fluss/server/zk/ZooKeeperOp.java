@@ -45,7 +45,10 @@ public class ZooKeeperOp {
         return updateOp(path, data, ZkVersion.MATCH_ANY_VERSION.getVersion());
     }
 
-    /** Creates an update that requires the given znode version. */
+    /**
+     * Creates an update that requires the given znode version, unless it is {@link
+     * ZkVersion#MATCH_ANY_VERSION}.
+     */
     public CuratorOp updateOp(String path, byte[] data, int expectedZkVersion) throws Exception {
         return zkClient.transactionOp()
                 .setData()

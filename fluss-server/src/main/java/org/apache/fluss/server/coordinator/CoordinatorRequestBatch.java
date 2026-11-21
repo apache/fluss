@@ -459,7 +459,7 @@ public class CoordinatorRequestBatch {
                         });
     }
 
-    private void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch) {
+    void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch) {
         for (Map.Entry<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
                 notifyRequestEntry : notifyLeaderAndIsrRequestMap.entrySet()) {
             // send request for each tablet server

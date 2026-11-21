@@ -576,7 +576,7 @@ pub struct ListOffsetsRequest {
     /// value -1 indicate the request from client.
     #[prost(int32, required, tag = "1")]
     pub follower_server_id: i32,
-    /// value can be 0,1,2 (see ListOffsetsParam for more details)
+    /// See ListOffsetsParam.
     #[prost(int32, required, tag = "2")]
     pub offset_type: i32,
     #[prost(int64, required, tag = "3")]
@@ -1734,6 +1734,8 @@ pub struct PbListOffsetsRespForBucket {
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(int64, optional, tag = "4")]
     pub offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "5")]
+    pub high_watermark: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrReqForBucket {

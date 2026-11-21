@@ -410,7 +410,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     manager.commitBucketSnapshot(
                             handle.getBulkLoadId(),
                             bucket,
-                            this::fetchLeaderLogEndOffset,
+                            target ->
+                                    processor
+                                            .getCoordinatorChannelManager()
+                                            .bulkLoadCommitOffsets(
+                                                    getBulkLoadLeader(target), target),
                             processor.completedSnapshotStoreManager(),
                             () -> processor.requestBulkLoadRecovery(bucket));
                     return new CommitBulkLoadBucketSnapshotResponse();
@@ -429,17 +433,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private long fetchLeaderLogEndOffset(TableBucket bucket) throws Exception {
-        int leader =
-                zkClient.getLeaderAndIsr(bucket)
-                        .orElseThrow(
-                                () ->
-                                        new NotLeaderOrFollowerException(
-                                                "BulkLoad bucket has no leader: " + bucket))
-                        .leader();
         return coordinatorEventProcessorSupplier
                 .get()
                 .getCoordinatorChannelManager()
-                .bulkLoadLogEndOffset(leader, bucket);
+                .bulkLoadLogEndOffset(getBulkLoadLeader(bucket), bucket);
+    }
+
+    private int getBulkLoadLeader(TableBucket bucket) throws Exception {
+        return zkClient.getLeaderAndIsr(bucket)
+                .orElseThrow(
+                        () ->
+                                new NotLeaderOrFollowerException(
+                                        "BulkLoad bucket has no leader: " + bucket))
+                .leader();
     }
 
     private <T> CompletableFuture<T> submitBulkLoadOperation(

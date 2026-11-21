@@ -24,6 +24,7 @@ import org.apache.fluss.metadata.KvSnapshotFileMetadata;
 import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -39,7 +40,6 @@ import io.github.fluss_contrib.rocksdb.RocksDB;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -55,7 +55,8 @@ final class TestingBulkLoadSnapshot {
             long snapshotId,
             long offset,
             Long rowCount,
-            List<Tuple2<byte[], byte[]>> records)
+            List<Tuple2<byte[], byte[]>> records,
+            boolean shareSst)
             throws Exception {
         FsPath tabletDir =
                 FlussPaths.remoteKvTabletDir(
@@ -80,21 +81,31 @@ final class TestingBulkLoadSnapshot {
                     checkpoint.createCheckpoint(checkpointDir.toString());
                 }
             }
-            List<KvSnapshotFileMetadata.FileHandle> files = new ArrayList<>();
+            FileSystem fs = snapshotDir.getFileSystem();
+            fs.mkdirs(snapshotDir);
+            FsPath sharedDir = FlussPaths.remoteKvSharedDir(tabletDir);
+            if (shareSst) {
+                fs.mkdirs(sharedDir);
+            }
+            List<KvSnapshotFileMetadata.FileHandle> sharedFiles = new ArrayList<>();
+            List<KvSnapshotFileMetadata.FileHandle> privateFiles = new ArrayList<>();
             long size = 0;
             try (Stream<Path> paths = Files.list(checkpointDir)) {
                 for (Path local : paths.filter(Files::isRegularFile).collect(Collectors.toList())) {
-                    FsPath remote = new FsPath(snapshotDir, local.getFileName().toString());
-                    remote.getFileSystem().mkdirs(remote.getParent());
-                    try (FSDataOutputStream out =
-                            remote.getFileSystem()
-                                    .create(remote, FileSystem.WriteMode.NO_OVERWRITE)) {
-                        Files.copy(local, out);
+                    String name = local.getFileName().toString();
+                    boolean shared = shareSst && name.endsWith(".sst");
+                    FsPath remote = new FsPath(shared ? sharedDir : snapshotDir, name);
+                    if (!shared || !fs.exists(remote)) {
+                        try (FSDataOutputStream out =
+                                fs.create(remote, FileSystem.WriteMode.NO_OVERWRITE)) {
+                            Files.copy(local, out);
+                        }
                     }
-                    long length = Files.size(local);
-                    files.add(
-                            new KvSnapshotFileMetadata.FileHandle(
-                                    remote.toString(), length, local.getFileName().toString()));
+                    long length = fs.getFileStatus(remote).getLen();
+                    (shared ? sharedFiles : privateFiles)
+                            .add(
+                                    new KvSnapshotFileMetadata.FileHandle(
+                                            remote.toString(), length, name));
                     size += length;
                 }
             }
@@ -104,25 +115,19 @@ final class TestingBulkLoadSnapshot {
                                     bucket,
                                     snapshotId,
                                     snapshotDir.toString(),
-                                    Collections.emptyList(),
-                                    files,
+                                    sharedFiles,
+                                    privateFiles,
                                     size,
                                     offset,
                                     rowCount,
                                     null));
-            FsPath metadata = new FsPath(snapshotDir, "_METADATA");
-            writeBytes(metadata, bytes);
+            FsPath metadata = CompletedSnapshot.getMetadataFilePath(snapshotDir);
+            try (FSDataOutputStream out = fs.create(metadata, FileSystem.WriteMode.NO_OVERWRITE)) {
+                out.write(bytes);
+            }
             return new CompletedSnapshotHandle(snapshotId, metadata, offset);
         } finally {
             FileUtils.deleteDirectoryQuietly(work.toFile());
-        }
-    }
-
-    private static void writeBytes(FsPath path, byte[] bytes) throws Exception {
-        path.getFileSystem().mkdirs(path.getParent());
-        try (FSDataOutputStream out =
-                path.getFileSystem().create(path, FileSystem.WriteMode.NO_OVERWRITE)) {
-            out.write(bytes);
         }
     }
 }

@@ -135,6 +135,7 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -1574,39 +1575,55 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                         false);
         verifyTableCreated(tableId, assignment, 1, 1);
         TableBucket bucket = new TableBucket(tableId, 0);
-        int leader =
-                fromCtx(
-                        ctx -> {
-                            ctx.addPendingLeaderActivation(bucket);
-                            return ctx.getBucketLeaderAndIsr(bucket).get().leader();
-                        });
+        int leader = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(bucket).get().leader());
         // Record only the traffic sent after the initial role notification.
-        initCoordinatorChannel();
+        ConcurrentLinkedDeque<PendingNotify> pending = new ConcurrentLinkedDeque<>();
+        installBlockingNotifyGateways(pending);
         TestTabletServerGateway observer =
                 (TestTabletServerGateway)
                         testCoordinatorChannelManager.getTabletServerGateway(1).get();
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(
-                        new NotifyLeaderAndIsrResponseReceivedEvent(
-                                Collections.singletonList(
-                                        new NotifyLeaderAndIsrResultForBucket(
-                                                bucket,
-                                                new ApiError(
-                                                        Errors.KV_RECOVERY_IN_PROGRESS, null))),
-                                leader));
+        try {
+            eventProcessor
+                    .getCoordinatorEventManager()
+                    .put(
+                            new NotifyLeaderAndIsrResponseReceivedEvent(
+                                    Collections.singletonList(
+                                            new NotifyLeaderAndIsrResultForBucket(
+                                                    bucket,
+                                                    new ApiError(
+                                                            Errors.KV_RECOVERY_IN_PROGRESS, null))),
+                                    leader));
 
-        fromCtx(
-                ctx -> {
-                    assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
-                    return null;
-                });
-        retryVerifyContext(
-                ctx -> {
-                    assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
-                    assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
-                });
-        assertThat(observer.pendingRequestSize()).isZero();
+            retry(
+                    Duration.ofSeconds(10),
+                    () ->
+                            assertThat(pending)
+                                    .singleElement()
+                                    .satisfies(
+                                            retry -> {
+                                                assertThat(retry.getResponseServerId())
+                                                        .isEqualTo(leader);
+                                                assertThat(
+                                                                retry.getRequest()
+                                                                        .getNotifyBucketsLeaderReqsList())
+                                                        .extracting(
+                                                                request ->
+                                                                        toTableBucket(
+                                                                                request
+                                                                                        .getTableBucket()))
+                                                        .containsExactly(bucket);
+                                            }));
+            boolean online = fromCtx(ctx -> ctx.isReplicaOnline(leader, bucket));
+            assertThat(online).isTrue();
+            assertThat(observer.pendingRequestSize()).isZero();
+            completePendingNotifyTrigger(pending, leader);
+            retryVerifyContext(
+                    ctx ->
+                            assertThat(ctx.getPendingLeaderActivationBuckets())
+                                    .doesNotContain(bucket));
+        } finally {
+            drainPendingNotifyTriggers(pending);
+        }
     }
 
     private void putFailedNotifyResponse(

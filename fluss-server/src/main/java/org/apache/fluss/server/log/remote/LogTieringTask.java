@@ -138,7 +138,6 @@ public class LogTieringTask implements Runnable {
             // clean up.
             List<EnrichedLogSegment> candidateToCopySegments =
                     candidateToCopyLogSegments(logTablet);
-            // Only delete segments that have been tiered to lake to ensure data safety
             TableConfig tableConfig = replica.getTableInfo().getTableConfig();
             Long cleanupOffset =
                     tableConfig.isDataLakeEnabled() ? logTablet.getLakeLogEndOffset() : null;

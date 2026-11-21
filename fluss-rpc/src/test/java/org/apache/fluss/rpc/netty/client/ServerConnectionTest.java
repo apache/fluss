@@ -694,6 +694,7 @@ public class ServerConnectionTest {
         @Override
         public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
                 NotifyLeaderAndIsrRequest request) {
+            assertThat(currentApiVersion()).isZero();
             return CompletableFuture.completedFuture(new NotifyLeaderAndIsrResponse());
         }
     }

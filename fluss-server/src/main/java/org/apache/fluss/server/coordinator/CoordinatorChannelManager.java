@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
@@ -378,8 +379,25 @@ public class CoordinatorChannelManager {
                 "Timed out waiting for the BulkLoad recovery notification response.");
     }
 
-    /** Reads the leader's WAL end offset for BulkLoad bucket allocation and commit. */
+    /** Reads the leader's WAL end offset for BulkLoad bucket allocation. */
     public long bulkLoadLogEndOffset(int leader, TableBucket bucket) throws Exception {
+        return listBulkLoadOffsets(leader, bucket, ListOffsetsParam.LATEST_OFFSET_TYPE).getOffset();
+    }
+
+    /** Reads the leader's WAL end offset and high watermark in one request. */
+    public ListOffsetsResultForBucket bulkLoadCommitOffsets(int leader, TableBucket bucket)
+            throws Exception {
+        PbListOffsetsRespForBucket response =
+                listBulkLoadOffsets(leader, bucket, ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE);
+        if (!response.hasHighWatermark()) {
+            throw new UnknownServerException("Leader did not return the BulkLoad high watermark.");
+        }
+        return new ListOffsetsResultForBucket(
+                bucket, response.getOffset(), response.getHighWatermark());
+    }
+
+    private PbListOffsetsRespForBucket listBulkLoadOffsets(
+            int leader, TableBucket bucket, int offsetType) throws Exception {
         TabletServerGateway gateway =
                 getTabletServerGateway(leader)
                         .orElseThrow(
@@ -390,7 +408,7 @@ public class CoordinatorChannelManager {
         ListOffsetsRequest request =
                 makeListOffsetsRequest(
                         leader,
-                        ListOffsetsParam.LATEST_OFFSET_TYPE,
+                        offsetType,
                         bucket.getTableId(),
                         bucket.getPartitionId(),
                         bucket.getBucket());
@@ -412,7 +430,7 @@ public class CoordinatorChannelManager {
             throw new UnknownServerException(
                     "Leader did not return the requested BulkLoad bucket offset.");
         }
-        return response.getOffset();
+        return response;
     }
 
     /** A functional interface to send request via TabletServerGateway. */

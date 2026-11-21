@@ -22,8 +22,10 @@ import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidRequestException;
+import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -218,7 +220,8 @@ public final class BulkLoadManager {
     public void commitBucketSnapshot(
             String bulkLoadId,
             TableBucket bucket,
-            FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher,
+            FunctionWithException<TableBucket, ListOffsetsResultForBucket, Exception>
+                    fetchLeaderOffsets,
             CompletedSnapshotStoreManager snapshots,
             Runnable requestRecovery)
             throws Exception {
@@ -246,8 +249,8 @@ public final class BulkLoadManager {
                 BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
         CompletedSnapshotStore snapshotStore =
                 snapshots.getOrCreateCompletedSnapshotStore(table.getTablePath(), bucket);
-        validateLogEndOffset(
-                bucket, allocation.data().logOffset, leaderLogEndOffsetFetcher.apply(bucket));
+        validateCommitOffsets(
+                bucket, allocation.data().logOffset, fetchLeaderOffsets.apply(bucket));
 
         BucketSnapshot snapshotReference =
                 new BucketSnapshot(
@@ -301,8 +304,9 @@ public final class BulkLoadManager {
         }
     }
 
-    private static void validateLogEndOffset(
-            TableBucket bucket, long allocatedOffset, long currentLogEndOffset) {
+    private static void validateCommitOffsets(
+            TableBucket bucket, long allocatedOffset, ListOffsetsResultForBucket offsets) {
+        long currentLogEndOffset = offsets.getOffset();
         // The caller pauses writes through publication. The offset check detects earlier appends.
         if (currentLogEndOffset != allocatedOffset) {
             throw new BulkLoadConflictException(
@@ -311,6 +315,14 @@ public final class BulkLoadManager {
                                     + "from %d at allocation to %d. Resolve concurrent writes "
                                     + "and allocate the bucket in a new BulkLoad transaction.",
                             bucket, allocatedOffset, currentLogEndOffset));
+        }
+        long highWatermark = offsets.getHighWatermark();
+        if (highWatermark < allocatedOffset) {
+            throw new NotEnoughReplicasException(
+                    String.format(
+                            "Cannot commit BulkLoad for %s: the leader WAL high watermark %d "
+                                    + "has not reached %d. Retry with the same allocation.",
+                            bucket, highWatermark, allocatedOffset));
         }
     }
 

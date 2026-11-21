@@ -1423,7 +1423,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                                             role);
                                                 }
                                             }
-                                            coordinatorRequestBatch.sendRequestToTabletServers(
+                                            coordinatorRequestBatch.sendNotifyLeaderAndIsrRequest(
                                                     coordinatorEpoch);
                                             return null;
                                         })),
