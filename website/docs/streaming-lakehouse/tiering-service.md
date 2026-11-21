@@ -96,6 +96,60 @@ The following `table.datalake.*` options are configured per table when creating 
 | `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
 | `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
 
+## Embedded Flink Runtime Deployment
+
+Instead of submitting the tiering job to a Flink cluster with `flink run`, the same tiering job can
+run on Flink's embedded runtime inside a single JVM process, so no separate Flink cluster needs to
+be provisioned. The entrypoint for this mode is `EmbeddedFlussLakeTiering`:
+
+```shell
+java --add-opens=java.base/java.nio=ALL-UNNAMED \
+    -cp "${FLINK_HOME}/lib/*" \
+    org.apache.fluss.flink.tiering.EmbeddedFlussLakeTiering \
+    --config.file /path/to/tiering.yaml
+```
+
+The `--add-opens` option allows Arrow to access direct buffers on JDK 17. This option is supported
+on Java 9 and later; omit it when running on Java 8.
+
+The tiering job is unbounded and completely stateless: progress is persisted through lake snapshots
+tracked by Fluss, so no Flink checkpoint storage is needed. On a terminal job failure the process
+exits with a non-zero code, and a container runtime or process supervisor simply starts it again.
+
+### Configuration File and Arguments
+
+Configuration is read from a YAML config file, using the same key-value syntax as Fluss's
+`server.yaml`, and from `--key value` command line arguments, which take precedence over file
+entries. Values are written verbatim into `tiering.yaml` and parsed like `server.yaml`: a value
+containing `#` is truncated at the comment marker (inherited `server.yaml` parser behavior), so
+avoid `#` in configuration values. The tiering service parameters are the same as the Flink job
+arguments above: `fluss.*`,
+`datalake.format`, `datalake.<format>.*`, and `lake.tiering.*` (without the `--` prefix in the
+file). All remaining keys configure the embedded Flink runtime:
+
+```yaml
+# tiering service parameters
+fluss.bootstrap.servers: localhost:9123
+datalake.format: paimon
+datalake.paimon.metastore: filesystem
+datalake.paimon.warehouse: /tmp/paimon
+fluss.tiering.poll.table.interval: 30 s
+
+# embedded Flink runtime parameters
+parallelism.default: 4
+taskmanager.numberOfTaskSlots: 4
+pipeline.name: fluss-lake-tiering
+```
+
+When `taskmanager.numberOfTaskSlots` is set, the parallelism must not exceed the aggregate slot
+capacity: `taskmanager.numberOfTaskSlots` multiplied by `minicluster.number-of-taskmanagers`
+(default `1`). For example, two TaskManagers with one slot each support parallelism `2`, and both
+TaskManagers run inside the same JVM. Startup fails fast if the parallelism exceeds this capacity.
+If `parallelism.default` is unset, the embedded runtime runs the tiering source at the machine's
+CPU core count (Flink's default local parallelism), which must also fit within the aggregate slot
+capacity. If `taskmanager.numberOfTaskSlots` is unset, Flink auto-sizes the slots per TaskManager
+by rounding up the job's maximum parallelism divided by the TaskManager count.
+
 ## Partition Mark-Done
 
 The Tiering Service supports marking idle partitions of Paimon tables done. Enable the job-level option `--lake.tiering.partition.mark-done.enabled true` and configure `partition.idle-time-to-done` on the Paimon table. Runtime checks and actions use the **actual Paimon table options**. Fluss `paimon.*` properties can pass these options to Paimon when creating a table; retained Fluss properties do not override the lake table at runtime.
