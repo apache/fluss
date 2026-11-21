@@ -20,13 +20,16 @@ package org.apache.fluss.client.lookup;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.InternalRow;
 
-import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.concurrent.CompletableFuture;
 
 /**
  * A lookuper performs key-based lookups against a primary key table, using either the full primary
  * key or a prefix of the primary key (when configured via {@code Lookup#lookupBy}).
+ *
+ * <p>An instance can be shared by concurrent callers, including while earlier lookups are still in
+ * flight. Callers must not mutate a lookup key while it is being read by a lookup call.
  *
  * <p>Usage examples:
  *
@@ -39,7 +42,7 @@ import java.util.concurrent.CompletableFuture;
  * @since 0.6
  */
 @PublicEvolving
-@NotThreadSafe
+@ThreadSafe
 public interface Lookuper {
 
     /**
