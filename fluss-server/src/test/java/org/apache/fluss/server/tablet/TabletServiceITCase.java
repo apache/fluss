@@ -26,6 +26,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -193,6 +194,7 @@ public class TabletServiceITCase {
         Configuration expectedProperties =
                 new Configuration()
                         .set(ConfigOptions.TABLE_LOG_FORMAT, LogFormat.COMPACTED)
+                        .set(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.WAL)
                         .set(
                                 ConfigOptions.TABLE_LOG_TTL,
                                 ConfigOptions.OFFSETS_RETENTION.defaultValue())
