@@ -56,7 +56,9 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
 import static org.apache.fluss.rpc.protocol.MessageCodec.encodeServerFailure;
@@ -70,6 +72,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private static final Logger LOG = LoggerFactory.getLogger(NettyServerHandler.class);
 
     private final RequestChannel requestChannel;
+    private final Set<FlussRequest> outstandingRequests = ConcurrentHashMap.newKeySet();
     private final ApiManager apiManager;
     private final boolean isInternal;
     private final String listenerName;
@@ -160,6 +163,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
             } else {
+                outstandingRequests.add(request);
+                request.setQueueRemovalCallback(() -> outstandingRequests.remove(request));
                 requestChannel.putRequest(request);
             }
 
@@ -194,10 +199,20 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         try {
+            switchState(ConnectionState.CLOSE);
             IOUtils.closeQuietly(authenticator);
             // Unregister this channel from its RequestChannel. The RequestChannel will clean up
             // both the association and any paused state.
             requestChannel.unregisterChannel(ctx.channel());
+            for (FlussRequest request : outstandingRequests) {
+                // A worker that already dequeued a request retains exclusive buffer ownership.
+                if (requestChannel.removeRequest(request)) {
+                    request.cancel();
+                    request.releaseBuffer();
+                    request.fail(new NetworkException("Client connection closed before execution"));
+                }
+            }
+            outstandingRequests.clear();
         } finally {
             super.channelInactive(ctx);
         }
@@ -238,12 +253,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {
-        boolean cancelled = request.cancelled();
-        if (cancelled) {
-            request.releaseBuffer();
-        }
-
-        if (state.isActive()) {
+        if (!request.cancelled() && state.isActive()) {
             try {
                 CompletableFuture<ApiMessage> f = request.getResponseFuture();
                 sendSuccessResponse(ctx, request, f.get());
@@ -251,8 +261,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 ExceptionUtils.rethrowIfFatalErrorOrOOM(t);
                 sendError(ctx, request, t);
             }
-        } else {
-            request.releaseBuffer();
         }
     }
 
