@@ -1,0 +1,10 @@
+fluss-spark-3.4
+Copyright 2024-2026 The Apache Software Foundation
+
+This project includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This project bundles the following dependencies under the Apache Software License 2.0 (http://www.apache.org/licenses/LICENSE-2.0.txt)
+
+- org.apache.datasketches:datasketches-java:6.2.0
+- org.apache.datasketches:datasketches-memory:3.0.2

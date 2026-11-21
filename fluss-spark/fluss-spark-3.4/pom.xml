@@ -117,9 +117,28 @@
                                 <includes combine.children="append">
                                     <include>org.apache.fluss:fluss-spark-common_${scala.binary.version}</include>
                                     <include>org.apache.fluss:fluss-client</include>
+                                    <include>org.apache.datasketches:*</include>
                                 </includes>
                             </artifactSet>
-                            <filters>
+                            <relocations combine.children="append">
+                                <relocation>
+                                    <pattern>META-INF.versions.11.org.apache.datasketches</pattern>
+                                    <shadedPattern>META-INF.versions.11.org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.datasketches</pattern>
+                                    <shadedPattern>org.apache.fluss.shaded.org.apache.datasketches</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <filters combine.children="append">
+                                <filter>
+                                    <artifact>org.apache.fluss:fluss-client</artifact>
+                                    <excludes>
+                                        <!-- These inherited entries have unrelocated paths but relocated bytecode. -->
+                                        <exclude>META-INF/versions/**/com/fasterxml/jackson/**</exclude>
+                                        <exclude>META-INF/versions/**/org/yaml/snakeyaml/**</exclude>
+                                    </excludes>
+                                </filter>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>
@@ -127,6 +146,13 @@
                                     </excludes>
                                 </filter>
                             </filters>
+                            <transformers combine.children="append">
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <manifestEntries>
+                                        <Multi-Release>true</Multi-Release>
+                                    </manifestEntries>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>
