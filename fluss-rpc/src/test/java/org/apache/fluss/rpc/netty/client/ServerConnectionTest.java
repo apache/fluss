@@ -484,6 +484,8 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
+                        null,
+                        null,
                         (con, ignore) -> {});
         try {
             NotifyLeaderAndIsrRequest request =
