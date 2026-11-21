@@ -35,7 +35,12 @@ import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.RuntimeExecutionMode;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.Metric;
+import org.apache.flink.metrics.groups.OperatorMetricGroup;
+import org.apache.flink.runtime.testutils.InMemoryReporter;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -164,6 +169,52 @@ abstract class TieringITCase extends FlinkTieringTestBase {
                             - localBytesOutBefore;
             assertThat(localBytesOut).isEqualTo(localTailBytes);
         }
+    }
+
+    @Test
+    @MultiVersionTest
+    void testReportsTieredRecordsAsRecordsIn() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "records_in_metrics_log_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        createTable(tablePath, schema);
+        int recordCount = 30;
+        writeRows(tablePath, createRows(0, recordCount), true);
+
+        InMemoryReporter reporter = InMemoryReporter.createWithRetainedMetrics();
+        StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(
+                        reporter.addToConfiguration(
+                                new org.apache.flink.configuration.Configuration()));
+        env.setParallelism(1).setRuntimeMode(RuntimeExecutionMode.STREAMING);
+        try (TieringJobScope tiering = startTieringJob(env)) {
+            waitUntilFullyTiered(tablePath, recordCount);
+            JobID jobId = tiering.client().getJobID();
+            // other tests' tables are already tiered, so later rounds only emit empty write
+            // results, which must not count
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(sumTieringSourceRecordsIn(reporter, jobId))
+                                    .isEqualTo(recordCount));
+        }
+    }
+
+    /** Sums numRecordsIn of the tiering source over its subtasks. */
+    private static long sumTieringSourceRecordsIn(InMemoryReporter reporter, JobID jobId) {
+        List<OperatorMetricGroup> groups =
+                reporter.findOperatorMetricGroups(jobId, ".*TieringSource.*");
+        assertThat(groups).isNotEmpty();
+        long sum = 0L;
+        for (OperatorMetricGroup group : groups) {
+            Metric metric = reporter.getMetricsByGroup(group).get("numRecordsIn");
+            assertThat(metric).isInstanceOf(Counter.class);
+            sum += ((Counter) metric).getCount();
+        }
+        return sum;
     }
 
     private List<InternalRow> createRows(int start, int count) {

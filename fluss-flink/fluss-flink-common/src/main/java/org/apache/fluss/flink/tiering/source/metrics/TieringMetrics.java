@@ -28,6 +28,8 @@ import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
 import org.apache.flink.metrics.groups.SplitEnumeratorMetricGroup;
 import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /**
  * Metrics for the Flink-based tiering source.
  *
@@ -45,6 +47,16 @@ import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
  *   <li>{@code fluss.tieringService.readersAwaitingSplitRatio} - Gauge: fraction of source readers
  *       waiting for splits, reported by the enumerator.
  * </ul>
+ *
+ * <p>It also feeds the standard source metric {@code numRecordsIn} with the log records consumed,
+ * counted as offsets (rows for snapshot splits), instead of the write results emitted. The source
+ * reader base counts every emitted write result, which is taken back with {@link
+ * #writeResultEmitted()}.
+ *
+ * <p>The tiering work runs on the split fetcher thread, while Flink's counters must only be updated
+ * on the task thread. So the split reader accumulates consumed records with {@link
+ * #recordsConsumed(long)}, and the source reader moves them into {@code numRecordsIn} with {@link
+ * #flushRecordsConsumed()}.
  */
 @Internal
 public class TieringMetrics {
@@ -54,6 +66,10 @@ public class TieringMetrics {
     public static final String TIERING_SERVICE_GROUP = "tieringService";
 
     private final Counter readBytesCounter;
+    private final Counter numRecordsInCounter;
+
+    // written by the split fetcher thread, read by the task thread
+    private final AtomicLong recordsConsumedToFlush = new AtomicLong();
 
     public TieringMetrics(SourceReaderMetricGroup sourceReaderMetricGroup) {
         MetricGroup tieringServiceGroup =
@@ -64,11 +80,37 @@ public class TieringMetrics {
         this.readBytesCounter = tieringServiceGroup.counter(MetricNames.TIERING_SERVICE_READ_BYTES);
         tieringServiceGroup.meter(
                 MetricNames.TIERING_SERVICE_READ_BYTES_RATE, new MeterView(readBytesCounter));
+
+        this.numRecordsInCounter =
+                sourceReaderMetricGroup.getIOMetricGroup().getNumRecordsInCounter();
     }
 
     /** Records bytes read from Fluss records. Called per batch or record processing. */
     public void recordBytesRead(long bytes) {
         readBytesCounter.inc(bytes);
+    }
+
+    /** Adds log records consumed by the split reader. Called from the split fetcher thread. */
+    public void recordsConsumed(long records) {
+        if (records > 0) {
+            recordsConsumedToFlush.addAndGet(records);
+        }
+    }
+
+    /** Moves the records consumed so far into {@code numRecordsIn}. Called from the task thread. */
+    public void flushRecordsConsumed() {
+        long records = recordsConsumedToFlush.getAndSet(0L);
+        if (records > 0) {
+            numRecordsInCounter.inc(records);
+        }
+    }
+
+    /**
+     * Takes back the count the source reader base adds to {@code numRecordsIn} for every emitted
+     * write result, which is not a log record. Called from the task thread.
+     */
+    public void writeResultEmitted() {
+        numRecordsInCounter.dec();
     }
 
     /** Registers the waiting reader ratio and returns a handle to close its metric subgroup. */

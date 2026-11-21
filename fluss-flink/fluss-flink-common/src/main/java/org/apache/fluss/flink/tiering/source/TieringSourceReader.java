@@ -29,11 +29,13 @@ import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 
+import org.apache.flink.api.connector.source.ReaderOutput;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
+import org.apache.flink.core.io.InputStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,6 +58,7 @@ public final class TieringSourceReader<WriteResult>
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceReader.class);
 
     private final Connection connection;
+    private final TieringMetrics tieringMetrics;
 
     public TieringSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
@@ -93,6 +96,25 @@ public final class TieringSourceReader<WriteResult>
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout,
             String[] ioTmpDirs) {
+        this(
+                elementsQueue,
+                context,
+                connection,
+                lakeTieringFactory,
+                pollTimeout,
+                ioTmpDirs,
+                new TieringMetrics(context.metricGroup()));
+    }
+
+    private TieringSourceReader(
+            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                    elementsQueue,
+            SourceReaderContext context,
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            Duration pollTimeout,
+            String[] ioTmpDirs,
+            TieringMetrics tieringMetrics) {
         super(
                 elementsQueue,
                 createFetcherManager(
@@ -101,11 +123,13 @@ public final class TieringSourceReader<WriteResult>
                         connection,
                         lakeTieringFactory,
                         pollTimeout,
-                        ioTmpDirs),
-                new TableBucketWriteResultEmitter<>(),
+                        ioTmpDirs,
+                        tieringMetrics),
+                new TableBucketWriteResultEmitter<>(tieringMetrics),
                 context.getConfiguration(),
                 context);
         this.connection = connection;
+        this.tieringMetrics = tieringMetrics;
     }
 
     private static <WriteResult> TieringSourceFetcherManager<WriteResult> createFetcherManager(
@@ -115,8 +139,8 @@ public final class TieringSourceReader<WriteResult>
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout,
-            String[] ioTmpDirs) {
-        TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
+            String[] ioTmpDirs,
+            TieringMetrics tieringMetrics) {
         ClassLoader userClassLoader = context.getUserCodeClassLoader().asClassLoader();
         return new TieringSourceFetcherManager<>(
                 elementsQueue,
@@ -138,6 +162,14 @@ public final class TieringSourceReader<WriteResult>
         if (getNumberOfCurrentlyAssignedSplits() == 0) {
             context.sendSplitRequest();
         }
+    }
+
+    @Override
+    public InputStatus pollNext(ReaderOutput<TableBucketWriteResult<WriteResult>> output)
+            throws Exception {
+        // every fetch wakes the task thread, so consumed records are counted after each fetch
+        tieringMetrics.flushRecordsConsumed();
+        return super.pollNext(output);
     }
 
     @Override

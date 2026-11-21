@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.tiering.TableBucketWriteResult;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.committer.LakeCommitter;
 
@@ -30,11 +31,20 @@ public class TableBucketWriteResultEmitter<WriteResult>
                 TableBucketWriteResult<WriteResult>,
                 TableBucketWriteResult<WriteResult>,
                 TieringSplitState> {
+
+    private final TieringMetrics tieringMetrics;
+
+    public TableBucketWriteResultEmitter(TieringMetrics tieringMetrics) {
+        this.tieringMetrics = tieringMetrics;
+    }
+
     @Override
     public void emitRecord(
             TableBucketWriteResult<WriteResult> writeResult,
             SourceOutput<TableBucketWriteResult<WriteResult>> sourceOutput,
             TieringSplitState splitState) {
+        // numRecordsIn counts log records, see TieringMetrics
+        tieringMetrics.writeResultEmitted();
         sourceOutput.collect(writeResult);
     }
 }
