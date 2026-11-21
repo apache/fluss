@@ -22,6 +22,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.client.write.RecordAccumulator.RecordAppendResult;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -29,6 +30,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.AutoPartitionStrategy;
@@ -38,6 +40,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -47,7 +50,9 @@ import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
 
@@ -59,9 +64,8 @@ import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
  * turning these records into requests and transmitting them to the cluster. Failure to close the
  * {@link WriterClient} after use will leak these resources.
  *
- * <p>The send method is asynchronous. When called, it adds the log record to a buffer of pending
- * record sends and immediately returns. This allows the wrote record to batch together individual
- * records for efficiency.
+ * <p>The send method buffers records for batching and reports acknowledgements asynchronously. It
+ * may block while resolving metadata or waiting for buffer space.
  */
 @ThreadSafe
 @Internal
@@ -190,6 +194,8 @@ public class WriterClient {
 
             TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
+            PhysicalTablePath targetPath = physicalTablePath;
+            boolean awaitingPartitionCreation = false;
             // Resolve retired partitions before appending so their records target the historical
             // partition.
             if (tableInfo.isPartitioned()) {
@@ -198,15 +204,25 @@ public class WriterClient {
                 if (historicalPartitionEnabled
                         && mayBeExpiredHistoricalPartition(
                                 physicalTablePath, tableInfo, Instant.now())) {
-                    resolveHistoricalWriteTarget(physicalTablePath, tableInfo);
+                    targetPath = resolveHistoricalWriteTarget(physicalTablePath, tableInfo);
                 } else {
-                    dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                            physicalTablePath, tableInfo);
+                    awaitingPartitionCreation =
+                            dynamicPartitionCreator.checkAndCreatePartitionAsync(
+                                    physicalTablePath, tableInfo);
                 }
             }
 
-            RecordAppendResult result =
-                    accumulator.append(record, callback, metadataUpdater.getCluster());
+            Cluster cluster =
+                    record.getBucketId() == null
+                            ? metadataUpdater.getCluster()
+                            : waitForBucketMetadata(
+                                    record,
+                                    targetPath,
+                                    metadataUpdater,
+                                    awaitingPartitionCreation,
+                                    conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT),
+                                    this::throwIfWriterClosed);
+            RecordAppendResult result = accumulator.append(record, callback, cluster);
 
             if (result.batchIsFull || result.newBatchCreated) {
                 LOG.trace(
@@ -215,6 +231,9 @@ public class WriterClient {
                 sender.wakeup();
             }
         } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
             // A partition-creation failure may close the accumulator before this record is
             // registered. Preserve that failure instead of reporting only "Writer closed".
             Throwable fatalError = sender.getFatalError();
@@ -225,6 +244,96 @@ public class WriterClient {
                             sender != null && sender.isRunning() ? "running" : "closed"),
                     fatalError == null ? e : fatalError);
         }
+    }
+
+    /**
+     * Resolves the target layout before validating an explicit bucket. A cached valid bucket takes
+     * the fast path; otherwise refresh metadata before accepting or rejecting the bucket. Unknown
+     * partitions may still be undergoing dynamic creation.
+     *
+     * <p>The timeout prevents starting further requests after the budget expires. Waiting for the
+     * shared metadata lock and an in-progress RPC can exceed it; the RPC has its own timeout.
+     */
+    static Cluster waitForBucketMetadata(
+            WriteRecord record,
+            PhysicalTablePath targetPath,
+            MetadataUpdater metadataUpdater,
+            boolean awaitingPartitionCreation,
+            Duration timeout,
+            Runnable checkWriterState)
+            throws InterruptedException, TimeoutException {
+        Cluster cluster = metadataUpdater.getCluster();
+        Integer bucketCount = getBucketCount(record.getTableInfo(), targetPath, cluster);
+        if (bucketCount != null && record.getBucketId() < bucketCount) {
+            return cluster;
+        }
+
+        long startNanos = System.nanoTime();
+        long timeoutMs = timeout.toMillis();
+        while (true) {
+            checkWriterState.run();
+            try {
+                cluster = metadataUpdater.getCluster();
+                bucketCount = getBucketCount(record.getTableInfo(), targetPath, cluster);
+                if (bucketCount != null && record.getBucketId() < bucketCount) {
+                    return cluster;
+                }
+                synchronized (metadataUpdater) {
+                    // A preceding caller may have resolved this layout while we waited for the
+                    // same lock used by MetadataUpdater's blocking refresh.
+                    checkWriterState.run();
+                    cluster = metadataUpdater.getCluster();
+                    bucketCount = getBucketCount(record.getTableInfo(), targetPath, cluster);
+                    if (bucketCount != null && record.getBucketId() < bucketCount) {
+                        return cluster;
+                    }
+                    remainingMetadataWaitMs(targetPath, timeoutMs, startNanos);
+                    cluster = metadataUpdater.updatePhysicalTableMetadata(targetPath);
+                    if (cluster != null
+                            && getBucketCount(record.getTableInfo(), targetPath, cluster) != null) {
+                        return cluster;
+                    }
+                }
+            } catch (PartitionNotExistException e) {
+                if (!awaitingPartitionCreation) {
+                    throw e;
+                }
+            } catch (FlussRuntimeException e) {
+                if (findThrowable(e, InterruptedException.class).isPresent()) {
+                    Thread.currentThread().interrupt();
+                }
+                throw e;
+            }
+            checkWriterState.run();
+            long remainingMs = remainingMetadataWaitMs(targetPath, timeoutMs, startNanos);
+            Thread.sleep(Math.min(100, remainingMs));
+        }
+    }
+
+    private static long remainingMetadataWaitMs(
+            PhysicalTablePath targetPath, long timeoutMs, long startNanos) throws TimeoutException {
+        long remainingMs =
+                timeoutMs - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        if (remainingMs <= 0) {
+            throw new TimeoutException(
+                    "Could not resolve bucket metadata for "
+                            + targetPath
+                            + " within "
+                            + timeoutMs
+                            + " ms.");
+        }
+        return remainingMs;
+    }
+
+    @Nullable
+    private static Integer getBucketCount(
+            TableInfo tableInfo, PhysicalTablePath targetPath, Cluster cluster) {
+        Long partitionId = cluster.getPartitionId(targetPath).orElse(null);
+        if (tableInfo.isPartitioned() && partitionId == null) {
+            return null;
+        }
+        return cluster.getBucketCount(TableOrPartition.of(tableInfo.getTableId(), partitionId))
+                .orElse(null);
     }
 
     /**
@@ -263,13 +372,14 @@ public class WriterClient {
     }
 
     /** Resolves the physical write target for the original partition. */
-    private void resolveHistoricalWriteTarget(PhysicalTablePath originalPath, TableInfo tableInfo) {
+    private PhysicalTablePath resolveHistoricalWriteTarget(
+            PhysicalTablePath originalPath, TableInfo tableInfo) {
         // Keep refreshing while the target is still the original partition so its retirement can
         // be detected before more records are appended to the stale route. Ideally, the Client
         // should learn the server-authoritative partition status without synchronously refreshing
         // metadata on the per-record path; see https://github.com/apache/fluss/issues/4161.
         if (accumulator.hasHistoricalWriteTarget(originalPath)) {
-            return;
+            return PhysicalTablePath.of(originalPath.getTablePath(), HISTORICAL_PARTITION_VALUE);
         }
 
         PhysicalTablePath targetPath = originalPath;
@@ -296,6 +406,7 @@ public class WriterClient {
 
         long partitionId = metadataUpdater.getCluster().getPartitionIdOrElseThrow(targetPath);
         accumulator.routeWritesTo(tableInfo, originalPath, targetPath, partitionId);
+        return targetPath;
     }
 
     // Verify that writer instance has not been closed. This method throws IllegalStateException if
