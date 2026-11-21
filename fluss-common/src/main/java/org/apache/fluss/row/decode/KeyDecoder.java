@@ -56,6 +56,21 @@ public interface KeyDecoder {
             short kvFormatVersion,
             @Nullable DataLakeFormat lakeFormat,
             boolean isDefaultBucketKey) {
+        return ofPrimaryKeyDecoder(
+                rowType, keyFields, kvFormatVersion, lakeFormat, isDefaultBucketKey, false);
+    }
+
+    /** Creates a primary key decoder using the table's persisted encoding configuration. */
+    static KeyDecoder ofPrimaryKeyDecoder(
+            RowType rowType,
+            List<String> keyFields,
+            short kvFormatVersion,
+            @Nullable DataLakeFormat lakeFormat,
+            boolean isDefaultBucketKey,
+            boolean orderedKeyEnabled) {
+        if (orderedKeyEnabled) {
+            return OrderedKeyDecoder.createKeyDecoder(rowType, keyFields);
+        }
         // Hudi's HudiKeyEncoder is lossy (4-byte hash); primary keys are encoded by
         // CompactedKeyEncoder, so decoding must use CompactedKeyDecoder as well.
         if (lakeFormat == DataLakeFormat.HUDI) {

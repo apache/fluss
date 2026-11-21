@@ -655,6 +655,7 @@ public final class ConsumerGroupManager {
                 Collections.singletonMap(replica.getTableBucket(), batch),
                 null,
                 MergeMode.DEFAULT,
+                ApiKeys.PUT_KV,
                 ApiKeys.PUT_KV.highestSupportedVersion,
                 result::complete);
         return result;

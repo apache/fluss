@@ -35,6 +35,7 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
 
     private final CompletableFuture<byte[]> future;
     private final boolean insertIfNotExists;
+    private final boolean orderedKeys;
 
     LookupQuery(
             TablePath tablePath,
@@ -42,10 +43,17 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
             byte[] key,
             boolean insertIfNotExists,
             @Nullable String originalPartitionName,
-            int bucketCount) {
+            int bucketCount,
+            boolean orderedKeys) {
         super(tablePath, tableBucket, key, originalPartitionName, bucketCount);
         this.future = new CompletableFuture<>();
         this.insertIfNotExists = insertIfNotExists;
+        this.orderedKeys = orderedKeys;
+    }
+
+    /** Whether the key uses the ordered primary-key encoding. */
+    public boolean usesOrderedKeys() {
+        return orderedKeys;
     }
 
     @VisibleForTesting
@@ -55,12 +63,12 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
             byte[] key,
             boolean insertIfNotExists,
             @Nullable String originalPartitionName) {
-        this(tablePath, tableBucket, key, insertIfNotExists, originalPartitionName, 0);
+        this(tablePath, tableBucket, key, insertIfNotExists, originalPartitionName, 0, false);
     }
 
     @VisibleForTesting
     LookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
-        this(tablePath, tableBucket, key, false, null, 0);
+        this(tablePath, tableBucket, key, false, null, 0, false);
     }
 
     @Override

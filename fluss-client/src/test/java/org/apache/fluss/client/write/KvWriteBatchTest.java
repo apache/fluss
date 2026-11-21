@@ -232,7 +232,8 @@ class KvWriteBatchTest {
                 null,
                 MergeMode.DEFAULT,
                 false,
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                false);
     }
 
     private WriteCallback newWriteCallback() {
@@ -330,7 +331,8 @@ class KvWriteBatchTest {
                 null,
                 mergeMode,
                 false,
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                false);
     }
 
     private WriteRecord createWriteRecordWithMergeMode(MergeMode mergeMode) {

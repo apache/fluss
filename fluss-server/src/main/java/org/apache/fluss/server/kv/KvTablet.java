@@ -77,7 +77,9 @@ import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
 import io.github.fluss_contrib.rocksdb.Cache;
 import io.github.fluss_contrib.rocksdb.RateLimiter;
 import io.github.fluss_contrib.rocksdb.ReadOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import io.github.fluss_contrib.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.Slice;
 import io.github.fluss_contrib.rocksdb.Snapshot;
 import io.github.fluss_contrib.rocksdb.WriteBufferManager;
 import org.slf4j.Logger;
@@ -92,6 +94,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -1305,6 +1308,13 @@ public final class KvTablet {
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {
+        return prefixLookup(prefixKey, null, null, false);
+    }
+
+    /** Reads a bounded prefix using a request-local iterator view. */
+    public List<ByteArraySlice> prefixLookup(
+            byte[] prefixKey, @Nullable byte[] startKey, @Nullable byte[] endKey, boolean reverse)
+            throws IOException {
         try (RocksDBKv.PrefixLookup lookup =
                 inReadLock(
                         kvLock,
@@ -1312,7 +1322,7 @@ public final class KvTablet {
                             if (isClosed) {
                                 throw new IOException("KV tablet is closing: " + tableBucket);
                             }
-                            return rocksDBKv.openPrefixLookup(prefixKey);
+                            return rocksDBKv.openPrefixLookup(prefixKey, startKey, endKey, reverse);
                         })) {
             return toValueBodySlices(lookup.readAll());
         }
@@ -1346,6 +1356,18 @@ public final class KvTablet {
      */
     public OpenScanResult openScan(String scannerId, long limit, long initialAccessTimeMs)
             throws IOException {
+        return openScan(scannerId, limit, initialAccessTimeMs, null, null, false);
+    }
+
+    /** Opens a fixed-view scan with an inclusive start and an exclusive end key. */
+    public OpenScanResult openScan(
+            String scannerId,
+            long limit,
+            long initialAccessTimeMs,
+            @Nullable byte[] startKey,
+            @Nullable byte[] endKey,
+            boolean reverse)
+            throws IOException {
         return inReadLock(
                 kvLock,
                 () -> {
@@ -1354,21 +1376,50 @@ public final class KvTablet {
                     Snapshot snapshot = null;
                     ReadOptions readOptions = null;
                     RocksIterator iterator = null;
+                    Slice iteratorBound = null;
                     boolean success = false;
                     try {
                         snapshot = rocksDBKv.getDb().getSnapshot();
                         // Capture under kvLock so the offset matches the data visible through
                         // the snapshot.
                         long capturedLogOffset = flushedLogOffset;
-                        readOptions = new ReadOptions().setSnapshot(snapshot);
+                        readOptions =
+                                new ReadOptions().setSnapshot(snapshot).setTotalOrderSeek(true);
+                        byte[] bound = reverse ? startKey : endKey;
+                        if (bound != null) {
+                            iteratorBound = new Slice(bound);
+                            if (reverse) {
+                                readOptions.setIterateLowerBound(iteratorBound);
+                            } else {
+                                readOptions.setIterateUpperBound(iteratorBound);
+                            }
+                        }
                         iterator =
                                 rocksDBKv
                                         .getDb()
                                         .newIterator(
                                                 rocksDBKv.getDefaultColumnFamilyHandle(),
                                                 readOptions);
-                        iterator.seekToFirst();
+                        if (reverse) {
+                            if (endKey == null) {
+                                iterator.seekToLast();
+                            } else {
+                                iterator.seekForPrev(endKey);
+                                if (iterator.isValid() && Arrays.equals(iterator.key(), endKey)) {
+                                    iterator.prev();
+                                }
+                            }
+                        } else if (startKey == null) {
+                            iterator.seekToFirst();
+                        } else {
+                            iterator.seek(startKey);
+                        }
                         if (!iterator.isValid()) {
+                            try {
+                                iterator.status();
+                            } catch (RocksDBException e) {
+                                throw new IOException("Failed to open KV scan iterator.", e);
+                            }
                             return new OpenScanResult(null, capturedLogOffset);
                         }
                         ScannerContext context =
@@ -1383,13 +1434,16 @@ public final class KvTablet {
                                         limit,
                                         capturedLogOffset,
                                         initialAccessTimeMs,
-                                        kvValueLayout);
+                                        kvValueLayout,
+                                        iteratorBound,
+                                        reverse);
                         success = true;
                         return new OpenScanResult(context, capturedLogOffset);
                     } finally {
                         if (!success) {
                             IOUtils.closeQuietly(iterator);
                             IOUtils.closeQuietly(readOptions);
+                            IOUtils.closeQuietly(iteratorBound);
                             if (snapshot != null) {
                                 try {
                                     rocksDBKv.getDb().releaseSnapshot(snapshot);

@@ -33,8 +33,11 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.ConnectionMetrics;
@@ -450,6 +453,38 @@ final class ServerConnection {
 
     @VisibleForTesting
     void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PUT_KV && version < ApiKeys.ORDERED_KEYS_PUT_KV_MIN_VERSION) {
+            PutKvRequest put = (PutKvRequest) rawRequest;
+            if (put.hasOrderedKeys() && put.isOrderedKeys()) {
+                throw new UnsupportedVersionException(
+                        "The server does not support ordered PUT_KV keys.");
+            }
+        }
+        if (apiKey == ApiKeys.LOOKUP && version < ApiKeys.ORDERED_KEYS_LOOKUP_MIN_VERSION) {
+            LookupRequest lookup = (LookupRequest) rawRequest;
+            if (lookup.hasOrderedKeys() && lookup.isOrderedKeys()) {
+                throw new UnsupportedVersionException(
+                        "The server does not support ordered LOOKUP keys.");
+            }
+        }
+        if (apiKey == ApiKeys.SCAN_KV && version < 1) {
+            ScanKvRequest scan = (ScanKvRequest) rawRequest;
+            if (scan.hasBucketScanReq()
+                    && (scan.getBucketScanReq().hasStartKey()
+                            || scan.getBucketScanReq().hasEndKey()
+                            || scan.getBucketScanReq().hasReverse())) {
+                throw new UnsupportedVersionException(
+                        "Ordered or bounded scans require SCAN_KV version 1 or newer.");
+            }
+        }
+        if (apiKey == ApiKeys.PREFIX_LOOKUP && version < 2) {
+            PrefixLookupRequest lookup = (PrefixLookupRequest) rawRequest;
+            if (lookup.getBucketsReqsList().stream()
+                    .anyMatch(bucket -> bucket.getLookupsCount() > 0)) {
+                throw new UnsupportedVersionException(
+                        "Ordered or bounded prefix lookups require PREFIX_LOOKUP version 2 or newer.");
+            }
+        }
         if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
             ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
             if (hasHistoricalProduce(produceLogRequest)) {

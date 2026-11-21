@@ -18,6 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
+import org.apache.fluss.client.table.ReadDirection;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
@@ -1282,7 +1283,8 @@ public class LookupSenderTest {
 
         // T1: create query with bucketCount=4 (the partition's actual count at lookup time)
         LookupQuery query =
-                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4);
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, null, 4, true);
         // The pinned value is visible on the query object
         assertThat(query.bucketCount()).isEqualTo(4);
 
@@ -1291,6 +1293,7 @@ public class LookupSenderTest {
         // T2: the request must carry the T1-pinned count as routing_bucket_count
         assertThat(receivedRequests).hasSize(1);
         LookupRequest request = receivedRequests.get(0);
+        assertThat(request.isOrderedKeys()).isTrue();
         assertThat(request.getBucketsReqAt(0).hasRoutingBucketCount()).isTrue();
         assertThat(request.getBucketsReqAt(0).getRoutingBucketCount()).isEqualTo(4);
 
@@ -1303,6 +1306,7 @@ public class LookupSenderTest {
         lookupSender.sendLookups(1, LookupType.LOOKUP, Collections.singletonList(legacyQuery));
 
         assertThat(receivedRequests).hasSize(1);
+        assertThat(receivedRequests.get(0).hasOrderedKeys()).isFalse();
         assertThat(receivedRequests.get(0).getBucketsReqAt(0).hasRoutingBucketCount()).isFalse();
     }
 
@@ -1449,6 +1453,105 @@ public class LookupSenderTest {
         return CompletableFuture.completedFuture(response);
     }
 
+    @Test
+    void testPrefixLookupDirectionsWithoutBounds() throws Exception {
+        List<PrefixLookupRequest> requests = new ArrayList<>();
+        gateway.setPrefixLookupHandler(
+                request -> {
+                    requests.add(request);
+                    PrefixLookupResponse response = new PrefixLookupResponse();
+                    PbPrefixLookupRespForBucket bucket =
+                            response.addBucketsResp().setBucketId(TABLE_BUCKET.getBucket());
+                    if (TABLE_BUCKET.getPartitionId() != null) {
+                        bucket.setPartitionId(TABLE_BUCKET.getPartitionId());
+                    }
+                    for (int i = 0; i < 3; i++) {
+                        bucket.addValueList().addValue(new byte[] {(byte) i});
+                    }
+                    return CompletableFuture.completedFuture(response);
+                });
+        PrefixLookupQuery forward =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("p"),
+                        4,
+                        null,
+                        null,
+                        ReadDirection.FORWARD);
+        PrefixLookupQuery reverse =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("p"),
+                        4,
+                        null,
+                        null,
+                        ReadDirection.REVERSE);
+        PrefixLookupQuery legacy =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("q"), 4);
+        lookupSender.sendLookups(
+                1, LookupType.PREFIX_LOOKUP, Arrays.asList(forward, reverse, legacy));
+        assertThat(requests).hasSize(1);
+        org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                requests.get(0).getBucketsReqAt(0);
+        assertThat(bucket.getKeysCount()).isZero();
+        assertThat(bucket.getLookupAt(0).hasReverse()).isTrue();
+        assertThat(bucket.getLookupAt(0).isReverse()).isFalse();
+        assertThat(bucket.getLookupAt(1).isReverse()).isTrue();
+        assertThat(bucket.getLookupAt(2).hasReverse()).isFalse();
+        assertThat(forward.future().get()).containsExactly(new byte[] {0});
+        assertThat(reverse.future().get()).containsExactly(new byte[] {1});
+        assertThat(legacy.future().get()).containsExactly(new byte[] {2});
+    }
+
+    @Test
+    void testPrefixLookupBatchPreservesIndependentBounds() throws Exception {
+        List<PrefixLookupRequest> requests = new ArrayList<>();
+        gateway.setPrefixLookupHandler(
+                request -> {
+                    requests.add(request);
+                    return createSuccessPrefixLookupResponse(request);
+                });
+        PrefixLookupQuery first =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("p"),
+                        4,
+                        bytes("p1"),
+                        bytes("p2"),
+                        null);
+        PrefixLookupQuery second =
+                new PrefixLookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("p"),
+                        4,
+                        bytes("p3"),
+                        bytes("p4"),
+                        null);
+        PrefixLookupQuery ordinary =
+                new PrefixLookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("p"), 4);
+        lookupSender.sendLookups(
+                1, LookupType.PREFIX_LOOKUP, Arrays.asList(first, second, ordinary));
+        assertThat(requests).hasSize(1);
+        org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket bucket =
+                requests.get(0).getBucketsReqAt(0);
+        assertThat(bucket.getKeysCount()).isZero();
+        assertThat(bucket.getLookupsCount()).isEqualTo(3);
+        assertThat(bucket.getLookupAt(0).getPrefixKey()).isEqualTo(bytes("p"));
+        assertThat(bucket.getLookupAt(0).getStartKey()).isEqualTo(bytes("p1"));
+        assertThat(bucket.getLookupAt(0).getEndKey()).isEqualTo(bytes("p2"));
+        assertThat(bucket.getLookupAt(1).getStartKey()).isEqualTo(bytes("p3"));
+        assertThat(bucket.getLookupAt(1).getEndKey()).isEqualTo(bytes("p4"));
+        assertThat(bucket.getLookupAt(2).hasStartKey()).isFalse();
+        assertThat(bucket.getLookupAt(2).hasEndKey()).isFalse();
+        assertThat(first.future().get()).isEmpty();
+        assertThat(second.future().get()).isEmpty();
+        assertThat(ordinary.future().get()).isEmpty();
+    }
+
     private CompletableFuture<PrefixLookupResponse> createSuccessPrefixLookupResponse(
             PrefixLookupRequest request) {
         PrefixLookupResponse response = new PrefixLookupResponse();
@@ -1459,7 +1562,9 @@ public class LookupSenderTest {
             bucketResp.setPartitionId(TABLE_BUCKET.getPartitionId());
         }
         // Add empty value list for each prefix key
-        int keyCount = request.getBucketsReqAt(0).getKeysCount();
+        int keyCount =
+                request.getBucketsReqAt(0).getKeysCount()
+                        + request.getBucketsReqAt(0).getLookupsCount();
         for (int i = 0; i < keyCount; i++) {
             bucketResp.addValueList(); // empty list is valid for prefix lookup
         }

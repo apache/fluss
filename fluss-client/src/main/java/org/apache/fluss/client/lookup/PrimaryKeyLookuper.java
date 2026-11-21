@@ -226,7 +226,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         keyBytes,
                         insertIfNotExists,
                         historicalLookup ? originalPartitionName : null,
-                        bucketCount)
+                        bucketCount,
+                        tableInfo.getTableConfig().isOrderedKeyEnabled())
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

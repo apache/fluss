@@ -164,6 +164,7 @@ import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbPhysicalTablePath;
+import org.apache.fluss.rpc.messages.PbPrefixLookupKey;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
@@ -267,6 +268,7 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProdu
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.NON_PARTITIONED_PARTITION_ID;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -1458,10 +1460,10 @@ public class ServerRpcMessageUtils {
         return lookupEntryData;
     }
 
-    public static Map<TableBucket, List<byte[]>> toPrefixLookupData(
+    public static Map<TableBucket, List<PbPrefixLookupKey>> toPrefixLookupData(
             PrefixLookupRequest prefixLookupRequest) {
         long tableId = prefixLookupRequest.getTableId();
-        Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
+        Map<TableBucket, List<PbPrefixLookupKey>> lookupEntryData = new HashMap<>();
         for (PbPrefixLookupReqForBucket lookupReqForBucket :
                 prefixLookupRequest.getBucketsReqsList()) {
             TableBucket tb =
@@ -1471,10 +1473,15 @@ public class ServerRpcMessageUtils {
                                     ? lookupReqForBucket.getPartitionId()
                                     : null,
                             lookupReqForBucket.getBucketId());
-            List<byte[]> keys = new ArrayList<>(lookupReqForBucket.getKeysCount());
+            checkArgument(
+                    lookupReqForBucket.getKeysCount() == 0
+                            || lookupReqForBucket.getLookupsCount() == 0,
+                    "Prefix lookup must use either keys or lookups.");
+            List<PbPrefixLookupKey> keys = new ArrayList<>();
             for (int i = 0; i < lookupReqForBucket.getKeysCount(); i++) {
-                keys.add(lookupReqForBucket.getKeyAt(i));
+                keys.add(new PbPrefixLookupKey().setPrefixKey(lookupReqForBucket.getKeyAt(i)));
             }
+            keys.addAll(lookupReqForBucket.getLookupsList());
             lookupEntryData.put(tb, keys);
         }
         return lookupEntryData;
