@@ -40,8 +40,12 @@ public final class FlussRequest implements RpcRequest {
     private final short apiVersion;
     private final int requestId;
     private final ApiMethod apiMethod;
-    private final ApiMessage message;
-    private final ByteBuf buffer;
+    private volatile ApiMessage message;
+    private ByteBuf buffer;
+    private int requestBodySize = -1;
+    private boolean scheduledMetrics;
+    private boolean scheduledHistorical;
+    private boolean scheduledFromFollower;
     private final String listenerName;
     private final boolean isInternal;
     private final FlussPrincipal principal;
@@ -108,6 +112,41 @@ public final class FlussRequest implements RpcRequest {
     public void releaseBuffer() {
         if (message.isLazilyParsed()) {
             ReferenceCountUtil.safeRelease(buffer);
+        }
+    }
+
+    void snapshotScheduledMetrics(boolean historical, boolean fromFollower) {
+        scheduledMetrics = true;
+        scheduledHistorical = historical;
+        scheduledFromFollower = fromFollower;
+    }
+
+    void setRequestBodySize(int size) {
+        requestBodySize = size;
+    }
+
+    int requestBodySize() {
+        return requestBodySize;
+    }
+
+    boolean hasScheduledMetrics() {
+        return scheduledMetrics;
+    }
+
+    boolean scheduledHistorical() {
+        return scheduledHistorical;
+    }
+
+    boolean scheduledFromFollower() {
+        return scheduledFromFollower;
+    }
+
+    void releaseScheduledInput() {
+        try {
+            releaseBuffer();
+        } finally {
+            buffer = null;
+            message = null;
         }
     }
 

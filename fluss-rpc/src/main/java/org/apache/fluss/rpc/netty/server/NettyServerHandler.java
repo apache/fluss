@@ -151,14 +151,41 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 return;
             }
 
-            future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
-            if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+            boolean authenticate =
+                    apiKey == ApiKeys.AUTHENTICATE.id
+                            || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id);
+            boolean scheduled =
+                    !authenticate && requestChannel instanceof ConnectionRequestScheduler.Queue;
+            request.setRequestBodySize(messageSize);
+            if (scheduled) {
+                request.snapshotScheduledMetrics(
+                        (requestMessage instanceof PutKvRequest
+                                        && hasHistoricalPut((PutKvRequest) requestMessage))
+                                || (requestMessage instanceof LookupRequest
+                                        && hasHistoricalLookup((LookupRequest) requestMessage)),
+                        (requestMessage instanceof FetchLogRequest
+                                        && ((FetchLogRequest) requestMessage).getFollowerServerId()
+                                                >= 0)
+                                || (requestMessage instanceof ListOffsetsRequest
+                                        && ((ListOffsetsRequest) requestMessage)
+                                                        .getFollowerServerId()
+                                                >= 0));
+            }
+            future.whenCompleteAsync(
+                    (r, t) -> sendResponse(ctx, request, !scheduled), ctx.executor());
+            if (authenticate) {
                 // handle to authentication for 3 cases:
                 // 1. the channel is in authing state, and the request is auth request, normal case
                 // 2. the channel is in authentication state, but receive non-auth request, error
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
+            } else if (scheduled) {
+                ConnectionRequestScheduler.Queue channel =
+                        (ConnectionRequestScheduler.Queue) requestChannel;
+                if (!channel.offer(ctx.channel().id(), request)) {
+                    needRelease = true;
+                    request.fail(new NetworkException("Request channel is shutting down"));
+                }
             } else {
                 requestChannel.putRequest(request);
             }
@@ -237,9 +264,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         ctx.close();
     }
 
-    private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {
-        boolean cancelled = request.cancelled();
-        if (cancelled) {
+    private void sendResponse(
+            ChannelHandlerContext ctx, FlussRequest request, boolean releaseInputOnFailure) {
+        if (releaseInputOnFailure && request.cancelled()) {
             request.releaseBuffer();
         }
 
@@ -251,7 +278,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 ExceptionUtils.rethrowIfFatalErrorOrOOM(t);
                 sendError(ctx, request, t);
             }
-        } else {
+        } else if (releaseInputOnFailure) {
             request.releaseBuffer();
         }
     }
@@ -341,7 +368,9 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         optMetrics
                 .get()
                 .recordRequest(
-                        request.getMessage().totalSize(),
+                        request.requestBodySize() >= 0
+                                ? request.requestBodySize()
+                                : request.getMessage().totalSize(),
                         request.getStartTimeMs(),
                         request.getRequestDequeTimeMs(),
                         request.getRequestCompletedTimeMs(),
@@ -349,6 +378,12 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     private Optional<RequestsMetrics.Metrics> getMetrics(FlussRequest request) {
+        if (request.hasScheduledMetrics()) {
+            return requestsMetrics.getMetrics(
+                    request.getApiKey(),
+                    request.scheduledFromFollower(),
+                    request.scheduledHistorical());
+        }
         boolean isFromFollower = false;
         boolean isHistorical = false;
         ApiMessage requestMessage = request.getMessage();

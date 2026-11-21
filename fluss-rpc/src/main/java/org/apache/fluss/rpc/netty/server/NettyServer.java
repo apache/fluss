@@ -61,6 +61,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.netty.NettyUtils.shutdownGroup;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -129,10 +130,6 @@ public final class NettyServer implements RpcServer {
             requestsMetrics.registerKafkaRequestMetrics();
         }
         this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
-        this.externalResources =
-                new ServerRpcResources(conf, service, requestHandlers, requestsMetrics, 0, "");
-        this.resources = new ArrayList<>();
-        resources.add(externalResources);
         boolean hasInternalListener =
                 endpoints.stream()
                         .anyMatch(
@@ -143,7 +140,33 @@ public final class NettyServer implements RpcServer {
                         .anyMatch(
                                 endpoint ->
                                         !internalListenerName.equals(endpoint.getListenerName()));
-        if (hasInternalListener && hasExternalListener) {
+        boolean separateInternalGroup = hasInternalListener && hasExternalListener;
+        String connectionMode = System.getProperty("fluss.poc.connectionScheduling", "legacy");
+        checkArgument(
+                "legacy".equals(connectionMode)
+                        || "whole-fixed".equals(connectionMode)
+                        || "bucket-fixed".equals(connectionMode)
+                        || "whole-handoff".equals(connectionMode)
+                        || "bucket-handoff".equals(connectionMode),
+                "Unknown connection scheduling mode: %s",
+                connectionMode);
+        ConnectionRequestScheduler connections =
+                !"legacy".equals(connectionMode)
+                                && service.providerType() == ServerType.TABLET_SERVER
+                                && isFlussResourceGroup()
+                        ? new ConnectionRequestScheduler(
+                                connectionMode.startsWith("bucket-"),
+                                connectionMode.endsWith("-handoff"))
+                        : null;
+        LOG.info(
+                "TabletServer connection scheduling mode: {}",
+                connections == null ? "legacy" : connectionMode);
+        this.externalResources =
+                new ServerRpcResources(
+                        conf, service, requestHandlers, requestsMetrics, 0, "", connections);
+        this.resources = new ArrayList<>();
+        resources.add(externalResources);
+        if (separateInternalGroup) {
             this.internalResources =
                     new ServerRpcResources(
                             conf,
@@ -151,7 +174,8 @@ public final class NettyServer implements RpcServer {
                             requestHandlers,
                             requestsMetrics,
                             conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                            "-internal");
+                            "-internal",
+                            connections);
             resources.add(internalResources);
         } else {
             this.internalResources = externalResources;
@@ -161,6 +185,13 @@ public final class NettyServer implements RpcServer {
                 () -> resources.stream().mapToInt(ServerRpcResources::requestsCount).sum());
         this.bindChannels = new CopyOnWriteArrayList<>();
         this.bindEndpoints = new CopyOnWriteArrayList<>();
+    }
+
+    private boolean isFlussResourceGroup() {
+        Map<String, NetworkProtocolPlugin> byListenerName = getProtocolsByListenerName();
+        return endpoints.stream()
+                .map(Endpoint::getListenerName)
+                .allMatch(name -> byListenerName.get(name) instanceof FlussProtocolPlugin);
     }
 
     @Override

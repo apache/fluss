@@ -254,6 +254,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -1402,7 +1403,7 @@ public class ServerRpcMessageUtils {
 
     public static Map<TableBucket, List<byte[]>> toLookupData(LookupRequest lookupRequest) {
         long tableId = lookupRequest.getTableId();
-        Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
+        Map<TableBucket, List<byte[]>> lookupEntryData = new LinkedHashMap<>();
         for (PbLookupReqForBucket lookupReqForBucket : lookupRequest.getBucketsReqsList()) {
             if (lookupReqForBucket.hasOriginalPartitionName()) {
                 throw new IllegalArgumentException(
@@ -1461,7 +1462,7 @@ public class ServerRpcMessageUtils {
     public static Map<TableBucket, List<byte[]>> toPrefixLookupData(
             PrefixLookupRequest prefixLookupRequest) {
         long tableId = prefixLookupRequest.getTableId();
-        Map<TableBucket, List<byte[]>> lookupEntryData = new HashMap<>();
+        Map<TableBucket, List<byte[]>> lookupEntryData = new LinkedHashMap<>();
         for (PbPrefixLookupReqForBucket lookupReqForBucket :
                 prefixLookupRequest.getBucketsReqsList()) {
             TableBucket tb =

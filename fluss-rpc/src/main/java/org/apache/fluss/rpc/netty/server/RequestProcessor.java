@@ -67,7 +67,14 @@ final class RequestProcessor implements Runnable {
                             service.name(),
                             request);
                     try {
-                        processRequest(request);
+                        if (request instanceof ConnectionRequestScheduler.Work) {
+                            ((ConnectionRequestScheduler.Work) request)
+                                    .execute(
+                                            (FlussRequestHandler)
+                                                    requestHandlers[RequestType.FLUSS.id]);
+                        } else {
+                            processRequest(request);
+                        }
                     } catch (Throwable t) {
                         LOG.error("Error while processing request.", t);
                     } finally {

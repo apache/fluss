@@ -21,6 +21,9 @@ import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.RequestType;
@@ -31,6 +34,8 @@ import org.slf4j.LoggerFactory;
 import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalLookup;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.utils.ExceptionUtils.stripException;
 
 /** A handler that processes and answers incoming {@link FlussRequest}. */
@@ -48,6 +53,41 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
     @Override
     public RequestType requestType() {
         return RequestType.FLUSS;
+    }
+
+    static boolean canPrepareBucketRequest(ApiMessage message) {
+        if (message instanceof LookupRequest) {
+            LookupRequest lookup = (LookupRequest) message;
+            return !hasHistoricalLookup(lookup)
+                    && (!lookup.hasInsertIfNotExists() || !lookup.isInsertIfNotExists());
+        }
+        return message instanceof PrefixLookupRequest
+                || (message instanceof PutKvRequest && !hasHistoricalPut((PutKvRequest) message));
+    }
+
+    BucketRequestExecution prepareBucketRequest(FlussRequest request) {
+        request.setRequestDequeTimeMs(System.currentTimeMillis());
+        service.setCurrentSession(
+                new Session(
+                        request.getApiVersion(),
+                        request.getListenerName(),
+                        request.isInternal(),
+                        request.getAddress(),
+                        request.getPrincipal()));
+        return service.prepareBucketRequest(request.getMessage());
+    }
+
+    void completeBucketRequest(
+            FlussRequest request, CompletableFuture<? extends ApiMessage> response) {
+        response.whenComplete(
+                (value, error) -> {
+                    request.setRequestCompletedTimeMs(System.currentTimeMillis());
+                    if (error == null) {
+                        request.complete(value);
+                    } else {
+                        request.fail(error);
+                    }
+                });
     }
 
     @Override

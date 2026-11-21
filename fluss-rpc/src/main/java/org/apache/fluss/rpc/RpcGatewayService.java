@@ -18,6 +18,8 @@
 package org.apache.fluss.rpc;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.netty.server.BucketRequestExecution;
 import org.apache.fluss.rpc.netty.server.Session;
 
 // TODO: support MainThreadRpcGateway which ensures that all methods are executed on the main
@@ -75,6 +77,11 @@ public abstract class RpcGatewayService implements RpcGateway {
         } else {
             return session.getListenerName();
         }
+    }
+
+    /** Prepares a request for local execution by bucket, or returns null for a whole RPC. */
+    public BucketRequestExecution prepareBucketRequest(ApiMessage request) {
+        return null;
     }
 
     /** Returns the provider type of this RPC gateway service. */

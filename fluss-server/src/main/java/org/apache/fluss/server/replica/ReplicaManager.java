@@ -811,10 +811,7 @@ public class ReplicaManager implements ServerReconfigurable {
             MergeMode mergeMode,
             short apiVersion,
             Consumer<List<PutKvResultForBucket>> responseCallback) {
-        if (isRequiredAcksInvalid(requiredAcks)) {
-            throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
-        }
-        localDiskManager.ensureWritable();
+        validatePutKv(requiredAcks);
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
@@ -825,8 +822,26 @@ public class ReplicaManager implements ServerReconfigurable {
 
         // maybe do delay write operation to write cdc log to be replicated to other follower
         // replicas.
-        maybeAddDelayedWrite(
+        completePutKv(
                 timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+    }
+
+    /** Validates request-wide preconditions before any bucket is written. */
+    public void validatePutKv(int requiredAcks) {
+        if (isRequiredAcksInvalid(requiredAcks)) {
+            throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
+        }
+        localDiskManager.ensureWritable();
+    }
+
+    /** Completes a normal put after every local bucket operation has a result. */
+    public void completePutKv(
+            int timeoutMs,
+            int requiredAcks,
+            int bucketCount,
+            Map<TableBucket, PutKvResultForBucket> results,
+            Consumer<List<PutKvResultForBucket>> callback) {
+        maybeAddDelayedWrite(timeoutMs, requiredAcks, bucketCount, results, callback);
     }
 
     /** Puts records to historical partition leaders. */
@@ -1693,74 +1708,86 @@ public class ReplicaManager implements ServerReconfigurable {
             short apiVersion) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
-            TableBucket tb = entry.getKey();
-            TableMetricGroup tableMetrics = null;
-            try {
-                LOG.trace("Put records to local kv tablet for table bucket {}", tb);
-                Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
-                tableMetrics = replica.tableMetrics();
-                tableMetrics.totalPutKvRequests().inc();
-                LogAppendInfo appendInfo =
-                        replica.putRecordsToLeader(
-                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
-                LOG.trace(
-                        "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
-                        tb,
-                        appendInfo.firstOffset(),
-                        appendInfo.lastOffset());
-                // Sample the piggyback backpressure pressure right after the write, so the
-                // result is immutable and both the immediate (acks != -1) and the delayed
-                // (acks == -1) response paths carry it without any post-filling.
-                putResultForBucketMap.put(
-                        tb,
-                        new PutKvResultForBucket(
-                                tb, appendInfo.lastOffset() + 1, replica.samplePressure()));
-
-                // metric for kv
-                tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());
-                tableMetrics.incKvBytesIn(entry.getValue().sizeInBytes());
-                // metric for cdc log of kv
-                tableMetrics.incLogBytesIn(appendInfo.validBytes());
-                tableMetrics.incLogMessageIn(appendInfo.numMessages());
-            } catch (Exception e) {
-                if (e instanceof StorageBackpressureException) {
-                    // Fluss application-layer write rejection (L0 headroom or flush budget
-                    // exceeded). This is a designed backpressure signal, not a server failure.
-                    // Increment the backpressure rejection counter; do NOT increment
-                    // failedPutKvRequests or log at ERROR level.
-                    if (tableMetrics != null) {
-                        tableMetrics.incKvBackpressureRejectedRequests();
-                    }
-                    LOG.debug("Write rejected by KV backpressure for table bucket {}", tb);
-                    if (apiVersion < PUT_KV_VERSION_WITH_STORAGE_BACKPRESSURE) {
-                        // Rolling-upgrade compatibility: pre-upgrade clients map the unknown
-                        // error code 72 to the non-retriable UNKNOWN_SERVER_ERROR and would fail
-                        // the write. Downgrade to the retriable KV_STORAGE_EXCEPTION (known since
-                        // 0.1) so their standard retry path backs off, keeping the original
-                        // message for diagnosability.
-                        putResultForBucketMap.put(
-                                tb,
-                                new PutKvResultForBucket(
-                                        tb,
-                                        new ApiError(Errors.KV_STORAGE_EXCEPTION, e.getMessage())));
-                        continue;
-                    }
-                } else if (isUnexpectedException(e)) {
-                    LOG.error("Error put records to local kv on replica {}", tb, e);
-                    // NOTE: Failed put requests metric is not incremented for known exceptions
-                    // since it is supposed to indicate un-expected failure of a server in
-                    // handling a put request
-                    if (tableMetrics != null) {
-                        tableMetrics.failedPutKvRequests().inc();
-                    }
-                }
-                putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, ApiError.fromThrowable(e)));
-            }
+            TableBucket bucket = entry.getKey();
+            putResultForBucketMap.put(
+                    bucket,
+                    putToLocalKv(
+                            bucket,
+                            entry.getValue(),
+                            targetColumns,
+                            mergeMode,
+                            requiredAcks,
+                            apiVersion));
         }
-
         return putResultForBucketMap;
+    }
+
+    /** Executes and records one normal KV bucket write. */
+    public PutKvResultForBucket putToLocalKv(
+            TableBucket tb,
+            KvRecordBatch records,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            int requiredAcks,
+            short apiVersion) {
+        TableMetricGroup tableMetrics = null;
+        try {
+            LOG.trace("Put records to local kv tablet for table bucket {}", tb);
+            Replica replica = getReplicaOrException(tb);
+            validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+            tableMetrics = replica.tableMetrics();
+            tableMetrics.totalPutKvRequests().inc();
+            LogAppendInfo appendInfo =
+                    replica.putRecordsToLeader(records, targetColumns, mergeMode, requiredAcks);
+            LOG.trace(
+                    "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
+                    tb,
+                    appendInfo.firstOffset(),
+                    appendInfo.lastOffset());
+            // Sample the piggyback backpressure pressure right after the write, so the
+            // result is immutable and both the immediate (acks != -1) and the delayed
+            // (acks == -1) response paths carry it without any post-filling.
+            PutKvResultForBucket result =
+                    new PutKvResultForBucket(
+                            tb, appendInfo.lastOffset() + 1, replica.samplePressure());
+
+            // metric for kv
+            tableMetrics.incKvMessageIn(records.getRecordCount());
+            tableMetrics.incKvBytesIn(records.sizeInBytes());
+            // metric for cdc log of kv
+            tableMetrics.incLogBytesIn(appendInfo.validBytes());
+            tableMetrics.incLogMessageIn(appendInfo.numMessages());
+            return result;
+        } catch (Exception e) {
+            if (e instanceof StorageBackpressureException) {
+                // Fluss application-layer write rejection (L0 headroom or flush budget
+                // exceeded). This is a designed backpressure signal, not a server failure.
+                // Increment the backpressure rejection counter; do NOT increment
+                // failedPutKvRequests or log at ERROR level.
+                if (tableMetrics != null) {
+                    tableMetrics.incKvBackpressureRejectedRequests();
+                }
+                LOG.debug("Write rejected by KV backpressure for table bucket {}", tb);
+                if (apiVersion < PUT_KV_VERSION_WITH_STORAGE_BACKPRESSURE) {
+                    // Rolling-upgrade compatibility: pre-upgrade clients map the unknown
+                    // error code 72 to the non-retriable UNKNOWN_SERVER_ERROR and would fail
+                    // the write. Downgrade to the retriable KV_STORAGE_EXCEPTION (known since
+                    // 0.1) so their standard retry path backs off, keeping the original
+                    // message for diagnosability.
+                    return new PutKvResultForBucket(
+                            tb, new ApiError(Errors.KV_STORAGE_EXCEPTION, e.getMessage()));
+                }
+            } else if (isUnexpectedException(e)) {
+                LOG.error("Error put records to local kv on replica {}", tb, e);
+                // NOTE: Failed put requests metric is not incremented for known exceptions
+                // since it is supposed to indicate un-expected failure of a server in
+                // handling a put request
+                if (tableMetrics != null) {
+                    tableMetrics.failedPutKvRequests().inc();
+                }
+            }
+            return new PutKvResultForBucket(tb, ApiError.fromThrowable(e));
+        }
     }
 
     public void getTableStats(

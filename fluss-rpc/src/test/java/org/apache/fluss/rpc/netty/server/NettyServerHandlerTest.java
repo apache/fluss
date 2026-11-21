@@ -19,6 +19,7 @@ package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Meter;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.MetricNames;
@@ -51,10 +52,13 @@ import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
@@ -69,9 +73,11 @@ import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import org.apache.fluss.shaded.netty4.io.netty.channel.DefaultChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
 
@@ -81,18 +87,24 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -169,6 +181,355 @@ final class NettyServerHandlerTest {
     }
 
     @Test
+    void testIdleWorkerTakesWholeConnectionAndItsPressure() {
+        ConnectionRequestScheduler scheduler = new ConnectionRequestScheduler(false, true);
+        ConnectionRequestScheduler.Queue source = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue idle = scheduler.new Queue(100);
+        TestEmbeddedChannel running = new TestEmbeddedChannel(newServerHandler(source));
+        TestEmbeddedChannel movable = new TestEmbeddedChannel(newServerHandler(source));
+        List<Integer> calls = new ArrayList<>();
+        FlussRequestHandler handler =
+                new FlussRequestHandler(
+                        new TestingTabletGatewayService() {
+                            @Override
+                            public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                                calls.add(request.getBucketsReqAt(0).getBucketId());
+                                return CompletableFuture.completedFuture(new PutKvResponse());
+                            }
+                        });
+        try {
+            running.writeInbound(encodeBucketPut(1, 1));
+            ConnectionRequestScheduler.Work held =
+                    (ConnectionRequestScheduler.Work) source.pollRequest(0);
+            movable.writeInbound(encodeBucketPut(2, 2));
+            movable.writeInbound(encodeBucketPut(3, 3));
+            ConnectionRequestScheduler.Work taken =
+                    (ConnectionRequestScheduler.Work) idle.pollRequest(0);
+            assertThat(taken).isNotNull();
+            assertThat(source.requestsCount()).isOne();
+            assertThat(idle.requestsCount()).isEqualTo(2);
+            movable.writeInbound(encodeBucketPut(4, 4));
+            assertThat(idle.requestsCount()).isEqualTo(3);
+            taken.execute(handler);
+            ((ConnectionRequestScheduler.Work) idle.pollRequest(0)).execute(handler);
+            ((ConnectionRequestScheduler.Work) idle.pollRequest(0)).execute(handler);
+            held.execute(handler);
+            assertThat(calls).containsExactly(2, 3, 4, 1);
+            assertThat(source.requestsCount() + idle.requestsCount()).isZero();
+        } finally {
+            running.finishAndReleaseAll();
+            movable.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testTransferUsesDestinationPressureAfterQueuedPause() throws Exception {
+        ConnectionRequestScheduler scheduler = new ConnectionRequestScheduler(false, true);
+        ConnectionRequestScheduler.Queue source = scheduler.new Queue(3);
+        ConnectionRequestScheduler.Queue target = scheduler.new Queue(3);
+        NettyServerHandler blockedHandler = newServerHandler(source);
+        NettyServerHandler movedHandler = newServerHandler(source);
+        TestEmbeddedChannel blocked = new TestEmbeddedChannel(blockedHandler);
+        TestEmbeddedChannel moved = new TestEmbeddedChannel(movedHandler);
+        FlussRequestHandler handler =
+                new FlussRequestHandler(
+                        new TestingTabletGatewayService() {
+                            @Override
+                            public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+                                return CompletableFuture.completedFuture(new PutKvResponse());
+                            }
+                        });
+        try {
+            ChannelHandlerContext blockedContext = blocked.pipeline().context(blockedHandler);
+            ChannelHandlerContext movedContext = moved.pipeline().context(movedHandler);
+            blockedHandler.channelRead(blockedContext, encodeBucketPut(1, 1));
+            ConnectionRequestScheduler.Work held =
+                    (ConnectionRequestScheduler.Work) source.pollRequest(0);
+            blockedHandler.channelRead(blockedContext, encodeBucketPut(2, 1));
+            blockedHandler.channelRead(blockedContext, encodeBucketPut(3, 1));
+            assertThat(source.requestsCount()).isEqualTo(3);
+            blocked.runPendingTasks();
+            assertThat(blocked.config().isAutoRead()).isFalse();
+            movedHandler.channelRead(movedContext, encodeBucketPut(4, 2));
+            assertThat(source.requestsCount()).isEqualTo(3);
+            assertThat(target.requestsCount()).isOne();
+            moved.runPendingTasks();
+            assertThat(moved.config().isAutoRead()).isTrue();
+            ((ConnectionRequestScheduler.Work) target.pollRequest(0)).execute(handler);
+            held.execute(handler);
+            ((ConnectionRequestScheduler.Work) source.pollRequest(0)).execute(handler);
+            ((ConnectionRequestScheduler.Work) source.pollRequest(0)).execute(handler);
+            blocked.runPendingTasks();
+            assertThat(blocked.config().isAutoRead()).isTrue();
+        } finally {
+            blocked.finishAndReleaseAll();
+            moved.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testConcurrentBucketReadsDoNotLetLaterReadsPassAWriter() throws Exception {
+        ConnectionRequestScheduler scheduler = new ConnectionRequestScheduler(true);
+        ConnectionRequestScheduler.Queue first = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue second = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue writer = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue late = scheduler.new Queue(100);
+        TestEmbeddedChannel firstChannel = new TestEmbeddedChannel(newServerHandler(first));
+        TestEmbeddedChannel secondChannel = new TestEmbeddedChannel(newServerHandler(second));
+        TestEmbeddedChannel writerChannel = new TestEmbeddedChannel(newServerHandler(writer));
+        TestEmbeddedChannel lateChannel = new TestEmbeddedChannel(newServerHandler(late));
+        CountDownLatch entered = new CountDownLatch(2);
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        AtomicInteger reads = new AtomicInteger();
+        AtomicInteger writes = new AtomicInteger();
+        FlussRequestHandler handler =
+                new FlussRequestHandler(
+                        new TestingTabletGatewayService() {
+                            @Override
+                            public BucketRequestExecution prepareBucketRequest(ApiMessage message) {
+                                boolean read = message instanceof LookupRequest;
+                                boolean early =
+                                        read && ((LookupRequest) message).getTableId() == 1001;
+                                return new BucketRequestExecution() {
+                                    @Override
+                                    public List<TableBucket> buckets() {
+                                        return Collections.singletonList(new TableBucket(1001, 1));
+                                    }
+
+                                    @Override
+                                    public boolean isRead() {
+                                        return read;
+                                    }
+
+                                    @Override
+                                    public void execute(TableBucket bucket) {
+                                        if (early) {
+                                            entered.countDown();
+                                            release.join();
+                                        }
+                                        if (read) {
+                                            reads.incrementAndGet();
+                                        } else {
+                                            writes.incrementAndGet();
+                                        }
+                                    }
+
+                                    @Override
+                                    public void detachInputs() {}
+
+                                    @Override
+                                    public boolean hasInput(TableBucket bucket) {
+                                        return true;
+                                    }
+
+                                    @Override
+                                    public CompletableFuture<ApiMessage> finish() {
+                                        return CompletableFuture.completedFuture(
+                                                read ? new LookupResponse() : new PutKvResponse());
+                                    }
+                                };
+                            }
+                        });
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            firstChannel.writeInbound(encodeBucketLookup(1, 1001));
+            secondChannel.writeInbound(encodeBucketLookup(2, 1001));
+            ConnectionRequestScheduler.Work firstRead =
+                    (ConnectionRequestScheduler.Work) first.pollRequest(0);
+            ConnectionRequestScheduler.Work secondRead =
+                    (ConnectionRequestScheduler.Work) second.pollRequest(0);
+            Future<?> a = threads.submit(() -> firstRead.execute(handler));
+            Future<?> b = threads.submit(() -> secondRead.execute(handler));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            writerChannel.writeInbound(encodeBucketPut(3, 1));
+            ((ConnectionRequestScheduler.Work) writer.pollRequest(0)).execute(handler);
+            lateChannel.writeInbound(encodeBucketLookup(4, 1002));
+            ((ConnectionRequestScheduler.Work) late.pollRequest(0)).execute(handler);
+            assertThat(writes.get()).isZero();
+            assertThat(late.pollRequest(0)).isNull();
+            release.complete(null);
+            a.get(5, TimeUnit.SECONDS);
+            b.get(5, TimeUnit.SECONDS);
+            assertThat(reads.get()).isEqualTo(2);
+            assertThat(late.pollRequest(0)).isNull();
+            ((ConnectionRequestScheduler.Work) writer.pollRequest(0)).execute(handler);
+            ((ConnectionRequestScheduler.Work) late.pollRequest(0)).execute(handler);
+            assertThat(writes.get()).isOne();
+            assertThat(reads.get()).isEqualTo(3);
+        } finally {
+            release.complete(null);
+            threads.shutdownNow();
+            firstChannel.finishAndReleaseAll();
+            secondChannel.finishAndReleaseAll();
+            writerChannel.finishAndReleaseAll();
+            lateChannel.finishAndReleaseAll();
+        }
+    }
+
+    private static ByteBuf encodeBucketLookup(int requestId, long tableId) {
+        LookupRequest request = new LookupRequest().setTableId(tableId);
+        request.addBucketsReq().setBucketId(1).addKey(new byte[] {1});
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.LOOKUP.id,
+                ApiKeys.LOOKUP.highestSupportedVersion,
+                requestId,
+                request);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPartialPutReleasesFrameAndResumesOnlyRemainingBucket(boolean handoff)
+            throws Exception {
+        ConnectionRequestScheduler scheduler = new ConnectionRequestScheduler(true, handoff);
+        ConnectionRequestScheduler.Queue hotQueue = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue otherQueue = scheduler.new Queue(100);
+        ConnectionRequestScheduler.Queue resumeQueue =
+                handoff ? scheduler.new Queue(100) : otherQueue;
+        TestEmbeddedChannel busy = new TestEmbeddedChannel(newServerHandler(otherQueue));
+        NettyServerHandler hotInput = newServerHandler(hotQueue);
+        NettyServerHandler otherInput = newServerHandler(otherQueue);
+        TestEmbeddedChannel hot = new TestEmbeddedChannel(hotInput);
+        TestEmbeddedChannel other = new TestEmbeddedChannel(otherInput);
+        CompletableFuture<Void> entered = new CompletableFuture<>();
+        CompletableFuture<Void> release = new CompletableFuture<>();
+        List<Integer> completed = new ArrayList<>();
+        AtomicInteger finished = new AtomicInteger();
+        TestingTabletGatewayService service =
+                new TestingTabletGatewayService() {
+                    @Override
+                    public BucketRequestExecution prepareBucketRequest(ApiMessage message) {
+                        PutKvRequest request = (PutKvRequest) message;
+                        Map<TableBucket, ByteBuf> borrowed = new LinkedHashMap<>();
+                        for (PbPutKvReqForBucket item : request.getBucketsReqsList()) {
+                            borrowed.put(
+                                    new TableBucket(1001, item.getBucketId()),
+                                    item.getRecordsSlice());
+                        }
+                        List<TableBucket> buckets = new ArrayList<>(borrowed.keySet());
+                        Map<TableBucket, Byte> owned = new HashMap<>();
+                        boolean hotRequest = buckets.size() == 1;
+                        return new BucketRequestExecution() {
+                            @Override
+                            public List<TableBucket> buckets() {
+                                return buckets;
+                            }
+
+                            @Override
+                            public void execute(TableBucket bucket) {
+                                if (hotRequest) {
+                                    entered.complete(null);
+                                    release.join();
+                                } else {
+                                    ByteBuf buffer = borrowed.remove(bucket);
+                                    byte value =
+                                            buffer == null
+                                                    ? owned.remove(bucket)
+                                                    : buffer.getByte(0);
+                                    completed.add((int) value);
+                                }
+                            }
+
+                            @Override
+                            public void detachInputs() {
+                                borrowed.forEach(
+                                        (bucket, bytes) -> owned.put(bucket, bytes.getByte(0)));
+                                borrowed.clear();
+                            }
+
+                            @Override
+                            public boolean hasInput(TableBucket bucket) {
+                                return owned.containsKey(bucket);
+                            }
+
+                            @Override
+                            public CompletableFuture<PutKvResponse> finish() {
+                                if (!hotRequest) {
+                                    finished.incrementAndGet();
+                                }
+                                return CompletableFuture.completedFuture(new PutKvResponse());
+                            }
+                        };
+                    }
+                };
+        FlussRequestHandler handler = new FlussRequestHandler(service);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            hot.writeInbound(encodeBucketPut(1, 1));
+            ConnectionRequestScheduler.Work hotWork =
+                    (ConnectionRequestScheduler.Work) hotQueue.pollRequest(0);
+            Future<?> task = executor.submit(() -> hotWork.execute(handler));
+            entered.get(5, TimeUnit.SECONDS);
+            ByteBuf original = encodeBucketPut(2, 1, 2);
+            byte[] bytes = new byte[original.readableBytes()];
+            original.readBytes(bytes);
+            original.release();
+            ByteBuf frame = Unpooled.wrappedBuffer(bytes);
+            other.writeInbound(frame);
+            ((ConnectionRequestScheduler.Work) otherQueue.pollRequest(0)).execute(handler);
+            assertThat(completed).containsExactly(2);
+            assertThat(frame.refCnt()).isZero();
+            assertThat(otherQueue.requestsCount()).isOne();
+            assertThat(finished.get()).isZero();
+            Arrays.fill(bytes, (byte) 99);
+
+            other.writeInbound(encodeBucketPut(3, 1, 3));
+            ((ConnectionRequestScheduler.Work) otherQueue.pollRequest(0)).execute(handler);
+            assertThat(completed).containsExactly(2, 3);
+            assertThat(otherQueue.requestsCount()).isEqualTo(2);
+
+            ConnectionRequestScheduler.Work busyWork = null;
+            if (handoff) {
+                busy.writeInbound(encodeBucketPut(4, 4));
+                busyWork = (ConnectionRequestScheduler.Work) otherQueue.pollRequest(0);
+            }
+            release.complete(null);
+            task.get(5, TimeUnit.SECONDS);
+            ((ConnectionRequestScheduler.Work) resumeQueue.pollRequest(0)).execute(handler);
+            ((ConnectionRequestScheduler.Work) resumeQueue.pollRequest(0)).execute(handler);
+            if (handoff) {
+                assertThat(otherQueue.requestsCount()).isOne();
+                busyWork.execute(handler);
+            }
+            other.runPendingTasks();
+            assertThat(completed).containsExactly(2, 3, 1, 1);
+            assertThat(finished.get()).isEqualTo(2);
+            assertThat(otherQueue.requestsCount()).isZero();
+            for (int requestId : Arrays.asList(2, 3)) {
+                ByteBuf response = other.readOutbound();
+                assertThat(response).isNotNull();
+                try {
+                    response.readInt();
+                    response.readByte();
+                    assertThat(response.readInt()).isEqualTo(requestId);
+                } finally {
+                    response.release();
+                }
+            }
+            assertThat((Object) other.readOutbound()).isNull();
+        } finally {
+            release.complete(null);
+            executor.shutdownNow();
+            busy.finishAndReleaseAll();
+            hot.finishAndReleaseAll();
+            other.finishAndReleaseAll();
+        }
+    }
+
+    private static ByteBuf encodeBucketPut(int requestId, int... bucketIds) {
+        PutKvRequest request = new PutKvRequest().setTableId(1001).setAcks(1).setTimeoutMs(1000);
+        for (int bucket : bucketIds) {
+            request.addBucketsReq().setBucketId(bucket).setRecords(new byte[] {(byte) bucket});
+        }
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.PUT_KV.id,
+                ApiKeys.PUT_KV.highestSupportedVersion,
+                requestId,
+                request);
+    }
+
+    @Test
     void testActiveLazyRequestRetainsBufferUntilProcessed() throws Exception {
         TestingRequestChannel channel = new TestingRequestChannel(100);
         NettyServerHandler handler = newServerHandler(channel);
@@ -185,6 +546,82 @@ final class NettyServerHandlerTest {
             assertThat(request).isNotNull();
             request.releaseBuffer();
             assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testOnlyOrdinaryKvRequestsCanBeSplitByBucket() {
+        assertThat(FlussRequestHandler.canPrepareBucketRequest(new PutKvRequest())).isTrue();
+        assertThat(FlussRequestHandler.canPrepareBucketRequest(new LookupRequest())).isTrue();
+        assertThat(
+                        FlussRequestHandler.canPrepareBucketRequest(
+                                new LookupRequest().setInsertIfNotExists(false)))
+                .isTrue();
+        assertThat(FlussRequestHandler.canPrepareBucketRequest(new PrefixLookupRequest())).isTrue();
+        assertThat(
+                        FlussRequestHandler.canPrepareBucketRequest(
+                                new LookupRequest().setInsertIfNotExists(true)))
+                .isFalse();
+        assertThat(
+                        FlussRequestHandler.canPrepareBucketRequest(
+                                new LookupRequest()
+                                        .addAllBucketsReqs(
+                                                Collections.singletonList(
+                                                        new PbLookupReqForBucket()
+                                                                .setOriginalPartitionName("p")))))
+                .isFalse();
+        assertThat(
+                        FlussRequestHandler.canPrepareBucketRequest(
+                                new PutKvRequest()
+                                        .addAllBucketsReqs(
+                                                Collections.singletonList(
+                                                        new PbPutKvReqForBucket()
+                                                                .setOriginalPartitionName("p")))))
+                .isFalse();
+        assertThat(FlussRequestHandler.canPrepareBucketRequest(new FetchLogRequest())).isFalse();
+    }
+
+    @Test
+    void testScheduledLazyInputRemainsOwnedByProcessorAfterCancellation() throws Exception {
+        ConnectionRequestScheduler.Queue channel =
+                new ConnectionRequestScheduler(false).new Queue(100);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            handler.channelRead(embeddedChannel.pipeline().context(handler), requestBuffer);
+            ConnectionRequestScheduler.Work work =
+                    (ConnectionRequestScheduler.Work) channel.pollRequest(0);
+            assertThat(work).isNotNull();
+            embeddedChannel.close();
+            embeddedChannel.runPendingTasks();
+
+            assertThat(requestBuffer.refCnt()).isOne();
+            work.execute(new FlussRequestHandler(new TestingTabletGatewayService()));
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testScheduledLazyInputIsReleasedWhenQueueRejectsDuringShutdown() throws Exception {
+        ConnectionRequestScheduler.Queue channel =
+                new ConnectionRequestScheduler(false).new Queue(100);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            channel.putShutdownRequest();
+            handler.channelRead(embeddedChannel.pipeline().context(handler), requestBuffer);
+            embeddedChannel.runPendingTasks();
+            assertThat(channel.requestsCount()).isZero();
+            assertThat(requestBuffer.refCnt()).isZero();
+            assertThat(channel.pollRequest(0)).isSameAs(ShutdownRequest.INSTANCE);
         } finally {
             embeddedChannel.finishAndReleaseAll();
         }
@@ -938,7 +1375,7 @@ final class NettyServerHandlerTest {
                 new InetSocketAddress("127.0.0.1", 8080);
 
         private TestEmbeddedChannel(NettyServerHandler serverHandler) {
-            super(serverHandler);
+            super(DefaultChannelId.newInstance(), serverHandler);
         }
 
         @Override
