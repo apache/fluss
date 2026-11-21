@@ -44,6 +44,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -98,6 +99,17 @@ public class MetadataUtils {
             @Nullable Collection<PhysicalTablePath> tablePartitions,
             @Nullable Collection<Long> tablePartitionIds)
             throws ExecutionException, InterruptedException, TimeoutException {
+        if (tablePartitions != null && !tablePartitions.isEmpty()) {
+            tablePaths = new HashSet<>(tablePaths == null ? Collections.emptySet() : tablePaths);
+            // Partition responses only carry the table ID, so uncached parents must be requested
+            // together with the partitions to resolve their table paths and legacy bucket counts.
+            for (PhysicalTablePath tablePartition : tablePartitions) {
+                TablePath tablePath = tablePartition.getTablePath();
+                if (originCluster == null || !originCluster.getTableId(tablePath).isPresent()) {
+                    tablePaths.add(tablePath);
+                }
+            }
+        }
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(
                         tablePaths, tablePartitions, tablePartitionIds);
