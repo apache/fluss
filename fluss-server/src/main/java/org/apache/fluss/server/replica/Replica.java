@@ -195,6 +195,7 @@ public final class Replica {
     private final AdjustIsrManager adjustIsrManager;
 
     private final SchemaGetter schemaGetter;
+    private final @Nullable Integer tableMinInSyncReplicas;
     private volatile TableInfo tableInfo;
 
     // Routing state carried with activation: both values are immutable per bucket, so they are
@@ -290,6 +291,7 @@ public final class Replica {
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
         TableConfig tableConfig = tableInfo.getTableConfig();
+        this.tableMinInSyncReplicas = tableConfig.getMinInSyncReplicas().orElse(null);
         String partitionName = physicalPath.getPartitionName();
         this.historicalPartition = HISTORICAL_PARTITION_VALUE.equals(partitionName);
         this.logFormat = tableConfig.getLogFormat();
@@ -445,7 +447,7 @@ public final class Replica {
     }
 
     public boolean isAtMinIsr() {
-        return isLeader() && isrState.isr().size() == minInSyncReplicasSupplier.getAsInt();
+        return isLeader() && isrState.isr().size() == getMinInSyncReplicas();
     }
 
     public BucketMetricGroup bucketMetrics() {
@@ -1209,19 +1211,6 @@ public final class Replica {
                             zkClient.getCuratorClient(),
                             ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
 
-            // todo: it's hack logic for snapshot target
-            // to get bucket/coordinator leader epoch.
-            // and it will happen when the snapshot target
-            // is doing snapshot(leader epoch = 0), and then leader switch to another(leader epoch =
-            // 1),
-            // and again switch to this(leader epoch = 2). The snapshot target will
-            // get the leader epoch = 2, and use the epoch 2 to submit snapshot
-            // which will cause older snapshot overwrite the newer snapshot
-
-            // refactor the snapshot logic in FLUSS-56282058, may should prepare the
-            // bucket/coordinator leader epoch, kv snapshot data in replica
-            // instead of a separate class
-            Supplier<Integer> bucketLeaderEpochSupplier = () -> leaderEpoch;
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
 
             FsPath remoteKvDir = FlussPaths.remoteKvDir(remoteDataDir);
@@ -1241,7 +1230,7 @@ public final class Replica {
                             snapshotIDCounter,
                             kvTablet::getTabletState,
                             logTablet::updateMinRetainOffset,
-                            bucketLeaderEpochSupplier,
+                            leaderEpoch,
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
@@ -1948,7 +1937,7 @@ public final class Replica {
             }
 
             if (logTablet.getHighWatermark() >= requiredOffset) {
-                if (minInSyncReplicasSupplier.getAsInt() <= curMaximalIsr.size()) {
+                if (getMinInSyncReplicas() <= curMaximalIsr.size()) {
                     return Tuple2.of(true, Errors.NONE);
                 } else {
                     return Tuple2.of(true, Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION);
@@ -2579,7 +2568,7 @@ public final class Replica {
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
-        if (inSyncSize < minInSyncReplicasSupplier.getAsInt() && requiredAcks == -1) {
+        if (inSyncSize < getMinInSyncReplicas() && requiredAcks == -1) {
             throw new NotEnoughReplicasException(
                     String.format(
                             "The size of the current ISR %s is insufficient to satisfy "
@@ -2594,7 +2583,13 @@ public final class Replica {
     }
 
     public boolean isUnderMinIsr() {
-        return isLeader() && isrState.isr().size() < minInSyncReplicasSupplier.getAsInt();
+        return isLeader() && isrState.isr().size() < getMinInSyncReplicas();
+    }
+
+    private int getMinInSyncReplicas() {
+        return tableMinInSyncReplicas != null
+                ? tableMinInSyncReplicas
+                : minInSyncReplicasSupplier.getAsInt();
     }
 
     private LogTablet localLogOrThrow(boolean requireLeader) {

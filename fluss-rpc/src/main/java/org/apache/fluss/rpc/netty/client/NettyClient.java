@@ -26,6 +26,8 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.NettyMetrics;
 import org.apache.fluss.rpc.netty.NettyUtils;
+import org.apache.fluss.rpc.netty.ssl.SslConfig;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
@@ -33,11 +35,13 @@ import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
@@ -60,6 +64,13 @@ public final class NettyClient implements RpcClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(NettyClient.class);
 
+    /**
+     * How long a connection that closed with an authentication failure stays in place before the
+     * next request reconnects.
+     */
+    // TODO: replace the fixed hold with a reconnect backoff.
+    private static final long AUTHENTICATION_FAILURE_BACKOFF_MS = 1000L;
+
     /** Netty's Bootstrap. */
     private final Bootstrap bootstrap;
 
@@ -77,21 +88,34 @@ public final class NettyClient implements RpcClient {
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
 
+    /**
+     * Shared by every connection of this client; {@code null} when {@code
+     * client.security.ssl.enabled} is false.
+     */
+    @Nullable private final SslContext sslContext;
+
+    @Nullable private final String endpointIdentificationAlgorithm;
+
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
         this.connections = new ConcurrentHashMap<>();
-
-        // build bootstrap
-        this.eventGroup =
-                NettyUtils.newEventLoopGroup(
-                        conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS),
-                        "fluss-netty-client");
+        this.clientMetricGroup = clientMetricGroup;
+        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
+        SslConfig sslConfig = SslConfig.fromClientConfig(conf).orElse(null);
+        this.sslContext =
+                sslConfig == null ? null : SslContextFactory.createClientSslContext(sslConfig);
+        this.endpointIdentificationAlgorithm =
+                sslConfig == null ? null : sslConfig.endpointIdentificationAlgorithm();
+        int numNetworkThreads = conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS);
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         boolean preferHeap =
                 conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST);
+
+        // build bootstrap
+        this.eventGroup = NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-client");
         PooledByteBufAllocator allocator = PooledByteBufAllocator.DEFAULT;
         this.bootstrap =
                 new Bootstrap()
@@ -102,8 +126,6 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
-        this.clientMetricGroup = clientMetricGroup;
-        this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
@@ -205,31 +227,63 @@ public final class NettyClient implements RpcClient {
                     shutdownFutures.add(conn.getValue().close());
                 }
             }
-            shutdownFutures.add(NettyUtils.shutdownGroup(eventGroup));
-            CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
-                    .get(10, TimeUnit.SECONDS);
+            try {
+                CompletableFuture.allOf(shutdownFutures.toArray(new CompletableFuture<?>[0]))
+                        .get(10, TimeUnit.SECONDS);
+            } finally {
+                // Shut down the event loop only after the connections are closed, as it
+                // terminates without a quiet period. It is shut down even if closing a
+                // connection failed or timed out.
+                NettyUtils.shutdownGroup(eventGroup).get(10, TimeUnit.SECONDS);
+            }
             LOG.info("Netty client was shutdown successfully.");
         } catch (Exception e) {
             LOG.warn("Netty client shutdown failed: ", e);
         }
     }
 
-    private ServerConnection getOrCreateConnection(ServerNode node) {
+    @VisibleForTesting
+    ServerConnection getOrCreateConnection(ServerNode node) {
         ConnectionKey connectionKey = ConnectionKey.from(node);
-        return connections.computeIfAbsent(
-                connectionKey,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    return new ServerConnection(
-                            bootstrap,
-                            node,
-                            clientMetricGroup,
-                            authenticatorSupplier.get(),
-                            // Avoid recursive map updates when connecting fails synchronously.
-                            (con, ignore) ->
-                                    eventGroup.execute(
-                                            () -> connections.remove(connectionKey, con)));
-                });
+        ServerConnection connection =
+                connections.computeIfAbsent(
+                        connectionKey,
+                        ignored -> {
+                            LOG.debug("Creating connection to server {}.", node);
+                            return new ServerConnection(
+                                    bootstrap,
+                                    node,
+                                    clientMetricGroup,
+                                    authenticatorSupplier.get(),
+                                    sslContext,
+                                    endpointIdentificationAlgorithm,
+                                    // A synchronous failure must not update this map recursively.
+                                    (con, cause) -> {
+                                        Runnable remove =
+                                                () -> connections.remove(connectionKey, con);
+                                        if (ServerConnection.isAuthenticationFailure(cause)) {
+                                            // Keep the closed connection for a while so that
+                                            // requests fail at once with its cause instead of
+                                            // reconnecting and repeating the TLS handshake and
+                                            // the failing authentication on every request.
+                                            eventGroup.schedule(
+                                                    remove,
+                                                    AUTHENTICATION_FAILURE_BACKOFF_MS,
+                                                    TimeUnit.MILLISECONDS);
+                                        } else {
+                                            eventGroup.execute(remove);
+                                        }
+                                    });
+                        });
+        // close() may have run before the connection was added and missed it. Its event loop is
+        // then terminated, so the connection would never connect and its requests would never
+        // complete. Close it here, so they fail instead. isClosed is volatile: either this check
+        // sees the client closed, or close() sees the connection.
+        if (isClosed) {
+            connections.remove(connectionKey, connection);
+            connection.close();
+        }
+        return connection;
     }
 
     @VisibleForTesting

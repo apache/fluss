@@ -21,6 +21,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -255,6 +256,13 @@ final class FlussMetadataAccess {
             return listPartitionedOffsets(tablePath, table, buckets, offsetSpec);
         } catch (TableNotExistException | DatabaseNotExistException e) {
             throw tableNotFound(table, e);
+        } catch (FlussRuntimeException e) {
+            Throwable cause = unwrapCompletionException(e.getCause());
+            if (cause instanceof TableNotExistException
+                    || cause instanceof DatabaseNotExistException) {
+                throw tableNotFound(table, e);
+            }
+            throw e;
         }
     }
 

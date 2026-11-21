@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -51,6 +52,8 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
                     .column("f_string", DataTypes.STRING())
                     .primaryKey("f_string")
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     @BeforeAll
     protected static void beforeAll() {
@@ -83,7 +86,7 @@ class TieringFailoverITCase extends FlinkTieringTestBase {
     @Test
     void testTiering() throws Exception {
         // create a pk table, write some records and wait until snapshot finished
-        TablePath t1 = TablePath.of(DEFAULT_DB, "pkTable");
+        TablePath t1 = tableNames.tablePath(DEFAULT_DB, "pkTable");
         long t1Id = createTable(t1, schema);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records

@@ -22,7 +22,9 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
@@ -33,7 +35,10 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbCommitConsumerOffsetsResponseBucket;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -108,8 +113,7 @@ class TabletServiceTest extends ReplicaTestBase {
         if (!empty) {
             request.getTableAt(0).getBucketAt(0).setPartitionId(-1L);
         }
-        assertThatThrownBy(() -> service.commitConsumerOffsets(request).join())
-                .cause()
+        assertThatThrownBy(() -> service.commitConsumerOffsets(request))
                 .isInstanceOf(InvalidConsumerGroupIdException.class);
         assertThat(executor.numQueuedRunnables()).isZero();
     }
@@ -126,17 +130,13 @@ class TabletServiceTest extends ReplicaTestBase {
 
         assertThat(find).isNotDone();
         assertThat(executor.numQueuedRunnables()).isOne();
-        CompletableFuture<?> unavailable = service.commitConsumerOffsets(request);
-        assertThat(unavailable).isCompletedExceptionally();
-        assertThatThrownBy(unavailable::join)
-                .cause()
+        assertThatThrownBy(() -> service.commitConsumerOffsets(request))
                 .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class);
         assertThat(executor.numQueuedRunnables()).isOne();
 
         executor.triggerAll();
         assertThat(find).isCompleted();
-        assertThatThrownBy(() -> service.commitConsumerOffsets(request).join())
-                .cause()
+        assertThatThrownBy(() -> service.commitConsumerOffsets(request))
                 .isInstanceOf(InvalidPartitionException.class);
         assertCommitResult(
                 service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 10L)), Errors.NONE);
@@ -193,16 +193,110 @@ class TabletServiceTest extends ReplicaTestBase {
     }
 
     @Test
+    void testGetConsumerOffsetsAfterFindOwnerUsesInitializedMetadata() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createService();
+
+        CompletableFuture<?> find =
+                service.findConsumerGroupOwner(
+                        new FindConsumerGroupOwnerRequest().setGroupId(GROUP_ID));
+        assertThat(find).isNotDone();
+        executor.triggerAll();
+        assertThat(find).isCompleted();
+
+        GetConsumerOffsetsRequest request =
+                new GetConsumerOffsetsRequest().setGroupId(GROUP_ID).setAllOffsets(true);
+        CompletableFuture<GetConsumerOffsetsResponse> response =
+                service.getConsumerOffsets(request);
+        executor.triggerAll();
+
+        assertThat(response).isCompleted();
+        assertThat(zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)).isTrue();
+    }
+
+    @Test
+    void testGetConsumerOffsetsRejectsInvalidRequestCombination() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createService();
+
+        CompletableFuture<?> find =
+                service.findConsumerGroupOwner(
+                        new FindConsumerGroupOwnerRequest().setGroupId(GROUP_ID));
+        assertThat(find).isNotDone();
+        executor.triggerAll();
+        assertThat(find).isCompleted();
+
+        GetConsumerOffsetsRequest request =
+                new GetConsumerOffsetsRequest().setGroupId(GROUP_ID).setAllOffsets(true);
+        request.addTable().setTableId(1L).addBucket().setBucketId(0);
+        assertThatThrownBy(() -> service.getConsumerOffsets(request))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("all_offsets");
+    }
+
+    @Test
+    void testGetAndDeleteConsumerOffsetsRejectReservedPartitionIdWithoutDeletingOffset()
+            throws Exception {
+        registerOffsetsTable();
+        TabletService service = createInitializedService();
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 10L)), Errors.NONE);
+
+        GetConsumerOffsetsRequest getRequest = new GetConsumerOffsetsRequest().setGroupId(GROUP_ID);
+        getRequest
+                .addTable()
+                .setTableId(SOURCE_BUCKET.getTableId())
+                .addBucket()
+                .setBucketId(SOURCE_BUCKET.getBucket());
+        assertThat(service.getConsumerOffsets(getRequest))
+                .succeedsWithin(WAIT_TIMEOUT)
+                .satisfies(
+                        response ->
+                                assertThat(response.getTableAt(0).getBucketAt(0).getOffset())
+                                        .isEqualTo(10L));
+
+        getRequest.getTableAt(0).getBucketAt(0).setPartitionId(-1L);
+        assertThatThrownBy(() -> service.getConsumerOffsets(getRequest))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1");
+
+        DeleteConsumerOffsetsRequest deleteRequest =
+                new DeleteConsumerOffsetsRequest().setGroupId(GROUP_ID);
+        deleteRequest
+                .addTable()
+                .setTableId(SOURCE_BUCKET.getTableId())
+                .addBucket()
+                .setBucketId(SOURCE_BUCKET.getBucket())
+                .setPartitionId(-1L);
+        assertThatThrownBy(() -> service.deleteConsumerOffsets(deleteRequest))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition_id=-1");
+        assertStoredOffset(GROUP_ID, 10L);
+    }
+
+    @Test
+    void testNegativeCommitDoesNotReplaceStoredOffset() throws Exception {
+        registerOffsetsTable();
+        TabletService service = createInitializedService();
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 42L)), Errors.NONE);
+
+        assertThatThrownBy(() -> service.commitConsumerOffsets(newCommitRequest(GROUP_ID, -1L)))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessageContaining("offset");
+        assertStoredOffset(GROUP_ID, 42L);
+
+        assertCommitResult(
+                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 0L)), Errors.NONE);
+        assertStoredOffset(GROUP_ID, 0L);
+    }
+
+    @Test
     void testCommitBeforeFindDoesNotScheduleInitialization() throws Exception {
         TabletService service = createService();
-        CompletableFuture<CommitConsumerOffsetsResponse> response =
-                service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 10L));
-
-        assertThat(executor.numQueuedRunnables()).isZero();
-        assertThat(response).isCompletedExceptionally();
-        assertThatThrownBy(response::join)
-                .cause()
+        assertThatThrownBy(() -> service.commitConsumerOffsets(newCommitRequest(GROUP_ID, 10L)))
                 .isInstanceOf(ConsumerGroupOwnerNotAvailableException.class);
+        assertThat(executor.numQueuedRunnables()).isZero();
         assertThat(zkClient.tableExist(SystemTables.CONSUMER_OFFSETS)).isFalse();
     }
 
@@ -349,7 +443,7 @@ class TabletServiceTest extends ReplicaTestBase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                groupId,
+                                GroupId.of(groupId),
                                 SOURCE_BUCKET.getTableId(),
                                 SOURCE_BUCKET.getPartitionId(),
                                 SOURCE_BUCKET.getBucket());

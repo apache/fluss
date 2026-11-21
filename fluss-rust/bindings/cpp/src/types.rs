@@ -524,6 +524,73 @@ pub fn resolve_dense_row_types<'a>(
     Ok(Cow::Owned(dense))
 }
 
+/// Resolve and strictly validate a lookup key before accepting an asynchronous
+/// request. Lookup keys cannot contain nulls or values incompatible with their
+/// schema types.
+pub fn resolve_dense_lookup_key_types<'a>(
+    row: &'a fcore::row::GenericRow<'a>,
+    schema: &fcore::metadata::Schema,
+    indices: &[usize],
+) -> Result<Cow<'a, fcore::row::GenericRow<'a>>> {
+    for (dense_idx, &schema_idx) in indices.iter().enumerate() {
+        let datum = row
+            .values
+            .get(schema_idx)
+            .ok_or_else(|| anyhow!("Lookup key field {dense_idx} is missing"))?;
+        let target = schema
+            .columns()
+            .get(schema_idx)
+            .map(|column| column.data_type())
+            .ok_or_else(|| anyhow!("Lookup key field {schema_idx} is out of range"))?;
+        validate_lookup_datum(datum, target, dense_idx)?;
+    }
+    resolve_dense_row_types(row, Some(schema), indices)
+}
+
+fn validate_lookup_datum(
+    datum: &fcore::row::Datum<'_>,
+    target: &fcore::metadata::DataType,
+    index: usize,
+) -> Result<()> {
+    let valid = match (datum, target) {
+        (Datum::Null, _) => false,
+        (Datum::Bool(_), DataType::Boolean(_)) => true,
+        (Datum::Int8(_), DataType::TinyInt(_)) => true,
+        (Datum::Int16(_), DataType::SmallInt(_)) => true,
+        (Datum::Int32(_), DataType::TinyInt(_) | DataType::SmallInt(_) | DataType::Int(_)) => true,
+        (Datum::Int64(_), DataType::BigInt(_)) => true,
+        (Datum::Float32(_), DataType::Float(_)) => true,
+        (Datum::Float64(_), DataType::Double(_)) => true,
+        (Datum::String(_), DataType::Char(_) | DataType::String(_) | DataType::Decimal(_)) => true,
+        (Datum::Blob(_), DataType::Bytes(_) | DataType::Binary(_)) => true,
+        (Datum::Decimal(_), DataType::Decimal(_)) => true,
+        (Datum::Date(_), DataType::Date(_)) => true,
+        (Datum::Time(_), DataType::Time(_)) => true,
+        (Datum::TimestampNtz(_), DataType::Timestamp(_)) => true,
+        (Datum::TimestampLtz(_), DataType::TimestampLTz(_)) => true,
+        (Datum::Array(_), DataType::Array(_)) => true,
+        (Datum::Map(_), DataType::Map(_)) => true,
+        (Datum::Row(row), DataType::Row(row_type)) => {
+            row.values.len() == row_type.fields().len()
+                && row
+                    .values
+                    .iter()
+                    .zip(row_type.fields())
+                    .all(|(value, field)| {
+                        validate_lookup_datum(value, field.data_type(), index).is_ok()
+                    })
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Lookup key field {index} has an incompatible value for type {target}"
+        ))
+    }
+}
+
 /// Whether any field of the row would be changed by `resolve_row_types`:
 /// an Int32 targeted at a narrower integer type, or a String targeted at a
 /// Decimal column (recursively through nested rows).

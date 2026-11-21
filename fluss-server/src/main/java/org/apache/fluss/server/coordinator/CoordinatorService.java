@@ -26,7 +26,6 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -338,8 +337,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(zkClient, FlussConfigUtils.getDefaultRemoteDataDir(conf));
+        this.lakeTableHelper = new LakeTableHelper(zkClient);
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
 
         // Initialize and start the producer snapshot manager
@@ -1415,7 +1413,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 new CommitKvSnapshotData(
                         completedSnapshot,
                         request.getCoordinatorEpoch(),
-                        request.getBucketLeaderEpoch());
+                        request.getBucketLeaderEpoch(),
+                        request.hasPreviousRecoverySnapshotId()
+                                ? request.getPreviousRecoverySnapshotId()
+                                : null);
         eventManagerSupplier.get().put(new CommitKvSnapshotEvent(commitKvSnapshotData, response));
         return response;
     }
@@ -1449,7 +1450,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
         List<AclBindingFilter> filters = toAclBindingFilters(request.getAclFiltersList());
         List<AclDeleteResult> aclDeleteResults = authorizer.dropAcls(currentSession(), filters);
-        return CompletableFuture.completedFuture(makeDropAclsResponse(aclDeleteResults));
+        boolean includeGroupAcls = currentApiVersion() >= 1;
+        return CompletableFuture.completedFuture(
+                makeDropAclsResponse(aclDeleteResults, includeGroupAcls));
     }
 
     @Override
@@ -1483,9 +1486,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     }
                                 }
                                 TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                Optional<TableRegistration> tableRegistration =
+                                        zkClient.getTable(tablePath);
+                                if (!tableRegistration.isPresent()) {
+                                    throw new TableNotExistException(
+                                            String.format(
+                                                    "Try to prepare lake table snapshot for table %s, but table not exist.",
+                                                    tablePath));
+                                }
                                 FsPath fsPath =
                                         lakeTableHelper.storeLakeTableOffsetsFile(
-                                                tablePath, tableBucketOffsets);
+                                                tableRegistration.get().remoteDataDir,
+                                                tablePath,
+                                                tableBucketOffsets);
                                 pbPrepareLakeTableRespForTable.setTableId(tableId);
                                 pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
                                         fsPath.toString());

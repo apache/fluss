@@ -369,15 +369,23 @@ public final class NettyServer implements RpcServer {
 
         isRunning = false;
 
-        List<CompletableFuture<Void>> shutdownFutures = new ArrayList<>();
-        shutdownFutures.add(shutdownGroup(acceptorGroup));
-        bindChannels.forEach(channel -> shutdownFutures.add(NettyUtils.shutdownChannel(channel)));
-        resources.forEach(resource -> shutdownFutures.add(resource.closeAsync()));
+        CompletableFuture<Void> listenersClosed =
+                FutureUtils.completeAll(
+                        bindChannels.stream()
+                                .map(NettyUtils::shutdownChannel)
+                                .collect(Collectors.toList()));
+        CompletableFuture<Void> resourcesClosed =
+                FutureUtils.composeAfterwards(
+                        listenersClosed,
+                        () -> {
+                            List<CompletableFuture<Void>> futures = new ArrayList<>();
+                            futures.add(shutdownGroup(acceptorGroup));
+                            resources.forEach(resource -> futures.add(resource.closeAsync()));
+                            return FutureUtils.completeAll(futures);
+                        });
         // Handlers are shared by both resource groups and outlive all request processors.
         terminationFuture =
-                FutureUtils.runAfterwards(
-                        FutureUtils.completeAll(shutdownFutures),
-                        () -> IOUtils.closeAll(requestHandlers));
+                FutureUtils.runAfterwards(resourcesClosed, () -> IOUtils.closeAll(requestHandlers));
         return terminationFuture;
     }
 }

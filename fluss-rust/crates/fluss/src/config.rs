@@ -136,17 +136,19 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_PREFETCH_NUM)]
     pub scanner_remote_log_prefetch_num: usize,
 
-    /// Maximum concurrent remote log downloads
-    /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM)
+    /// Maximum concurrent remote log downloads per scanner and KV snapshot file downloads
+    /// shared by a connection. These two download paths have separate concurrency budgets.
+    /// Default: 3 (matching Java REMOTE_FILE_DOWNLOAD_THREAD_NUM).
+    /// With `kv-snapshot`, must not exceed `tokio::sync::Semaphore::MAX_PERMITS`.
     #[arg(long, default_value_t = DEFAULT_DOWNLOAD_THREADS)]
     pub remote_file_download_thread_num: usize,
 
-    /// Intra-file remote log read concurrency for each remote segment download.
+    /// Intra-file read concurrency for remote log and KV snapshot downloads.
     /// Download path always uses streaming reader.
     #[arg(long, default_value_t = DEFAULT_SCANNER_REMOTE_LOG_READ_CONCURRENCY)]
     pub scanner_remote_log_read_concurrency: usize,
 
-    /// Parent directory for downloaded remote logs. None uses the OS temporary directory plus `/fluss`.
+    /// Parent directory for downloaded remote logs and KV snapshots. None uses the OS temporary directory plus `/fluss`.
     /// Missing parent directories are created when a remote file is downloaded.
     #[arg(long)]
     pub scanner_io_tmp_dir: Option<String>,
@@ -181,6 +183,11 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET)]
     pub scanner_log_fetch_max_bytes_for_bucket: i32,
 
+    /// Whether to check the CRC of fetched log batches, except the ones the server projected.
+    /// Default: true (matching Java CLIENT_SCANNER_LOG_CHECK_CRC)
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub scanner_log_check_crc: bool,
+
     /// Whether to enable idempotent writes. When enabled, each batch is tagged with
     /// a server-allocated writer ID and per-bucket sequence number so the server can
     /// detect and deduplicate retried batches.
@@ -211,7 +218,8 @@ pub struct Config {
     #[arg(long, default_value_t = DEFAULT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS)]
     pub writer_kv_backpressure_max_throttle_ms: u64,
 
-    /// Connect timeout in milliseconds for TCP transport connect.
+    /// Connection establishment timeout in milliseconds, including TCP connect,
+    /// API negotiation and SASL authentication.
     /// Default: 15000 (15 seconds), matching Java `client.connect-timeout`.
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS)]
     pub connect_timeout_ms: u64,
@@ -235,12 +243,15 @@ pub struct Config {
     #[arg(long, default_value_t = String::new())]
     #[serde(skip_serializing)]
     pub security_sasl_password: String,
-    /// Maximum number of pending lookup operations
+    /// Capacity of the send queue; new lookups wait when it is full.
+    /// Each bucket also holds up to this many lookups while waiting for a
+    /// leader. Additional lookups for that bucket fail with `BufferExhausted`.
+    /// Must be greater than zero.
     /// Default: 25600 (matching Java CLIENT_LOOKUP_QUEUE_SIZE)
     #[arg(long, default_value_t = 25600)]
     pub lookup_queue_size: usize,
 
-    /// Maximum batch size of merging lookup operations to one lookup request
+    /// Maximum number of lookup operations in a batch. Must be greater than zero.
     /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_BATCH_SIZE)
     #[arg(long, default_value_t = 128)]
     pub lookup_max_batch_size: usize,
@@ -250,25 +261,32 @@ pub struct Config {
     #[arg(long, default_value_t = 100)]
     pub lookup_batch_timeout_ms: u64,
 
-    /// Maximum number of unacknowledged lookup requests
+    /// Maximum number of unacknowledged lookup requests. Must be greater than zero.
     /// Default: 128 (matching Java CLIENT_LOOKUP_MAX_INFLIGHT_SIZE)
     #[arg(long, default_value_t = 128)]
     pub lookup_max_inflight_requests: usize,
 
-    /// Maximum number of lookup retries
+    /// Maximum number of times a lookup is resent after a retriable error.
+    /// Waiting for a bucket's leader is not a retry, so this does not bound
+    /// how long a lookup waits for one: it is not a lookup timeout.
     /// Default: i32::MAX (matching Java CLIENT_LOOKUP_MAX_RETRIES)
     #[arg(long, default_value_t = i32::MAX)]
     pub lookup_max_retries: i32,
 
-    /// Initial delay before a lookup that failed with a retriable error is resent.
-    /// The delay doubles per attempt, up to `lookup_retry_max_backoff_ms`, and
-    /// carries +/-20% jitter. 0 resends immediately.
+    /// Initial delay before a lookup that failed with a retriable error is
+    /// resent, doubling with each retry of that lookup. Also the initial delay
+    /// before the metadata of a bucket without a known leader is refreshed
+    /// again, doubling with each refresh of that bucket that finds no leader,
+    /// and shared by all lookups waiting for it. Delays grow up to
+    /// `lookup_retry_max_backoff_ms` and carry +/-20% jitter. 0 resends and
+    /// refreshes immediately.
     /// Default: 100 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF)
     #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_BACKOFF_MS)]
     pub lookup_retry_backoff_ms: u64,
 
-    /// Ceiling for the exponentially growing lookup retry delay, before jitter,
-    /// so a delay can reach 20% above it. Must be >= `lookup_retry_backoff_ms`.
+    /// Ceiling for the exponentially growing delays of
+    /// `lookup_retry_backoff_ms`, before jitter, so a delay can reach 20%
+    /// above it. Must be >= `lookup_retry_backoff_ms`.
     /// Default: 1000 (matching Java CLIENT_LOOKUP_RETRY_BACKOFF_MAX)
     #[arg(long, default_value_t = DEFAULT_LOOKUP_RETRY_MAX_BACKOFF_MS)]
     pub lookup_retry_max_backoff_ms: u64,
@@ -328,6 +346,7 @@ impl std::fmt::Debug for Config {
                 "scanner_log_fetch_max_bytes_for_bucket",
                 &self.scanner_log_fetch_max_bytes_for_bucket,
             )
+            .field("scanner_log_check_crc", &self.scanner_log_check_crc)
             .field(
                 "scanner_log_fetch_wait_max_time_ms",
                 &self.scanner_log_fetch_wait_max_time_ms,
@@ -397,6 +416,7 @@ impl Default for Config {
             scanner_log_fetch_min_bytes: DEFAULT_SCANNER_LOG_FETCH_MIN_BYTES,
             scanner_log_fetch_wait_max_time_ms: DEFAULT_SCANNER_LOG_FETCH_WAIT_MAX_TIME_MS,
             scanner_log_fetch_max_bytes_for_bucket: DEFAULT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET,
+            scanner_log_check_crc: true,
             writer_batch_timeout_ms: DEFAULT_WRITER_BATCH_TIMEOUT_MS,
             writer_enable_idempotence: true,
             writer_max_inflight_requests_per_bucket:
@@ -463,6 +483,13 @@ impl Config {
         if self.remote_file_download_thread_num == 0 {
             return Err("remote_file_download_thread_num must be > 0".to_string());
         }
+        #[cfg(feature = "kv-snapshot")]
+        if self.remote_file_download_thread_num > tokio::sync::Semaphore::MAX_PERMITS {
+            return Err(format!(
+                "remote_file_download_thread_num must be <= {} with kv-snapshot enabled",
+                tokio::sync::Semaphore::MAX_PERMITS
+            ));
+        }
         // scanner_log_max_poll_records: validation intentionally omitted to match Java behavior.
         // Java allows 0 — tracked in https://github.com/apache/fluss/issues/3068
         if self.scanner_log_fetch_min_bytes <= 0 {
@@ -492,6 +519,15 @@ impl Config {
     }
 
     pub fn validate_lookup(&self) -> Result<(), String> {
+        if self.lookup_queue_size == 0 {
+            return Err("lookup_queue_size must be > 0".to_string());
+        }
+        if self.lookup_max_batch_size == 0 {
+            return Err("lookup_max_batch_size must be > 0".to_string());
+        }
+        if self.lookup_max_inflight_requests == 0 {
+            return Err("lookup_max_inflight_requests must be > 0".to_string());
+        }
         if self.lookup_retry_backoff_ms > self.lookup_retry_max_backoff_ms {
             return Err(
                 "lookup_retry_backoff_ms must be <= lookup_retry_max_backoff_ms".to_string(),
@@ -660,6 +696,18 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "kv-snapshot")]
+    fn test_remote_file_download_thread_num_upper_bound() {
+        let mut config = Config {
+            remote_file_download_thread_num: tokio::sync::Semaphore::MAX_PERMITS,
+            ..Config::default()
+        };
+        assert!(config.validate_scanner().is_ok());
+        config.remote_file_download_thread_num += 1;
+        assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
     fn test_scanner_fetch_invalid_ranges() {
         let config = Config {
             scanner_log_fetch_min_bytes: 2,
@@ -667,6 +715,37 @@ mod tests {
             ..Config::default()
         };
         assert!(config.validate_scanner().is_err());
+    }
+
+    #[test]
+    fn test_lookup_zero_capacity_rejected() {
+        for (queue_size, max_batch_size, max_inflight, expected) in [
+            (0, 128, 128, "lookup_queue_size must be > 0"),
+            (25600, 0, 128, "lookup_max_batch_size must be > 0"),
+            (25600, 128, 0, "lookup_max_inflight_requests must be > 0"),
+            (0, 0, 0, "lookup_queue_size must be > 0"),
+        ] {
+            let config = Config {
+                lookup_queue_size: queue_size,
+                lookup_max_batch_size: max_batch_size,
+                lookup_max_inflight_requests: max_inflight,
+                ..Config::default()
+            };
+            assert_eq!(config.validate_lookup(), Err(expected.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_lookup_positive_capacity_valid() {
+        assert!(Config::default().validate_lookup().is_ok());
+        let config = Config {
+            lookup_queue_size: 1,
+            lookup_max_batch_size: 1,
+            lookup_max_inflight_requests: 1,
+            lookup_batch_timeout_ms: 0,
+            ..Config::default()
+        };
+        assert!(config.validate_lookup().is_ok());
     }
 
     #[test]
@@ -704,6 +783,18 @@ mod tests {
             "false"
         ]));
         assert!(parse(&["--writer-dynamic-create-partition-enabled=true"]));
+    }
+
+    #[test]
+    fn test_scanner_log_check_crc_from_cli() {
+        let parse = |args: &[&str]| {
+            Config::try_parse_from(std::iter::once("fluss").chain(args.iter().copied()))
+                .expect("parse")
+                .scanner_log_check_crc
+        };
+        assert!(parse(&[]));
+        assert!(!parse(&["--scanner-log-check-crc", "false"]));
+        assert!(parse(&["--scanner-log-check-crc=true"]));
     }
 
     #[test]

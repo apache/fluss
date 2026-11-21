@@ -53,7 +53,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testSyncLookupEval(boolean schemaNotMatch) throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table-" + schemaNotMatch);
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "sync-lookup-table-" + schemaNotMatch);
         prepareData(tablePath, 3, schemaNotMatch);
 
         RowType flinkRowType =
@@ -92,7 +93,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testAsyncLookupEval(boolean schemaNotMatch) throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "async-lookup-table-" + schemaNotMatch);
+        TablePath tablePath =
+                tableNames.tablePath(DEFAULT_DB, "async-lookup-table-" + schemaNotMatch);
         int rows = 3;
         prepareData(tablePath, rows, schemaNotMatch);
 
@@ -147,7 +149,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
 
     @Test
     void testSchemaChange() throws Exception {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-add-column");
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "sync-add-column");
         prepareData(tablePath, 3, false);
 
         RowType flinkRowType =

@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -70,12 +71,14 @@ import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -128,7 +131,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.Offli
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
+import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -419,7 +422,9 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 new TabletServerRegistration(
                         "rack3",
                         Endpoint.fromListenersString(DEFAULT_LISTENER_NAME + "://host3:1234"),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        TabletServerResource.unknown(),
+                        null);
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
@@ -635,7 +640,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 coordinatorEventManager.put(
                         new CommitKvSnapshotEvent(
                                 new CommitKvSnapshotData(
-                                        completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
+                                        completedSnapshot,
+                                        coordinatorEpoch,
+                                        bucketLeaderEpoch,
+                                        null),
                                 responseCompletableFuture));
 
                 // get the response
@@ -663,7 +671,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, coordinatorEpoch, invalidBucketLeaderEpoch),
+                                completedSnapshot,
+                                coordinatorEpoch,
+                                invalidBucketLeaderEpoch,
+                                null),
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
@@ -676,7 +687,10 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, bucketLeaderEpoch, invalidCoordinatorEpoch),
+                                completedSnapshot,
+                                bucketLeaderEpoch,
+                                invalidCoordinatorEpoch,
+                                null),
                         responseCompletableFuture));
         assertThatThrownBy(responseCompletableFuture::get)
                 .cause()
@@ -763,14 +777,6 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         long tableId =
                 metadataManager.createTable(
                         tablePath, remoteDataDir, getPartitionedTable(), null, false);
-        failingChannelManager.failNextUpdateMetadata(
-                request ->
-                        request.getPartitionMetadatasList().stream()
-                                .anyMatch(
-                                        partitionMetadata ->
-                                                partitionMetadata.getTableId() == tableId
-                                                        && partitionMetadata.getPartitionId()
-                                                                == DELETED_PARTITION_ID));
         Map<Integer, BucketAssignment> assignments =
                 generateAssignment(
                                 N_BUCKETS,
@@ -784,6 +790,16 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
         PartitionIdName partition =
                 preparePartitionAssignment(tablePath, tableId, partitionAssignment).f0;
+        failingChannelManager.failNextUpdateMetadata(
+                request ->
+                        request.getPartitionMetadatasList().stream()
+                                .anyMatch(
+                                        metadata ->
+                                                metadata.getTableId() == tableId
+                                                        && metadata.getPartitionId()
+                                                                == partition.partitionId
+                                                        && DELETED_PARTITION_NAME.equals(
+                                                                metadata.getPartitionName())));
         verifyPartitionCreated(
                 new TablePartition(tableId, partition.partitionId),
                 partitionAssignment,
@@ -1318,15 +1334,29 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         responseCompletableFuture1.get();
         verifyReceiveRequestExceptFor(3, leader, NotifyRemoteLogOffsetsRequest.class);
 
-        // verify CommitKvSnapshot trigger notify offsets request
+        // Successful ordinary commits notify their own flushed offset.
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
-        CompletedSnapshot completedSnapshot = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        CompletedSnapshot selected = mockCompletedSnapshot(tempDir, tableBucket, 0);
+        eventProcessor
+                .completedSnapshotStoreManager()
+                .getOrCreateCompletedSnapshotStore(t1, tableBucket)
+                .add(selected, null, bucketLeaderEpoch);
+        CompletedSnapshot completedSnapshot =
+                new CompletedSnapshot(
+                        tableBucket,
+                        1L,
+                        new FsPath(tempDir.resolve("late-snapshot").toUri()),
+                        KvSnapshotHandle.create(
+                                Collections.emptyList(), Collections.emptyList(), 0),
+                        10L,
+                        null,
+                        null);
         CompletableFuture<CommitKvSnapshotResponse> responseCompletableFuture2 =
                 new CompletableFuture<>();
         coordinatorEventManager.put(
                 new CommitKvSnapshotEvent(
                         new CommitKvSnapshotData(
-                                completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
+                                completedSnapshot, coordinatorEpoch, bucketLeaderEpoch, null),
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
         retry(
@@ -1334,6 +1364,17 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
                 () ->
                         verifyReceiveRequestExceptFor(
                                 3, leader, NotifyKvSnapshotOffsetRequest.class));
+        for (int server = 0; server < 3; server++) {
+            if (server != leader) {
+                TestTabletServerGateway gateway =
+                        (TestTabletServerGateway)
+                                testCoordinatorChannelManager.getTabletServerGateway(server).get();
+                NotifyKvSnapshotOffsetRequest request =
+                        (NotifyKvSnapshotOffsetRequest) gateway.getRequest(0);
+                assertThat(request.getMinRetainOffset())
+                        .isEqualTo(completedSnapshot.getLogOffset());
+            }
+        }
     }
 
     @Test
@@ -2198,9 +2239,13 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
 
         // Register the rebalance. Only the FIRST task should trigger a leader election
         // because subsequent tasks must wait for the NotifyLeaderAndIsr response.
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance("rebalance-leader-sequential", rebalancePlan);
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("rebalance-leader-sequential", rebalancePlan);
+                    return null;
+                });
 
         // === Step 1: Verify only the first task started ===
         // registerRebalance() is synchronous, so after it returns, the first task's
@@ -2237,11 +2282,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         drainPendingNotifyTriggers(pendingTriggers);
 
         // === Step 4: Wait for the rebalance to complete ===
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
 
         // Verify all leaders changed correctly.
         verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
@@ -2700,19 +2741,25 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         }
     }
 
-    private int countInProgressRebalanceTasks(TableBucket... buckets) {
-        int count = 0;
-        for (TableBucket tb : buckets) {
-            if (!RebalanceStatus.FINAL_STATUSES.contains(
-                    eventProcessor
-                            .getRebalanceManager()
-                            .listRebalanceProgress(null)
-                            .progressForBucketMap()
-                            .get(tb)
-                            .status())) {
-                count++;
-            }
-        }
-        return count;
+    private boolean hasInProgressRebalance() throws Exception {
+        return fromCtx(ctx -> eventProcessor.getRebalanceManager().hasInProgressRebalance());
+    }
+
+    private int countInProgressRebalanceTasks(TableBucket... buckets) throws Exception {
+        return fromCtx(
+                ctx -> {
+                    Map<TableBucket, RebalanceResultForBucket> progress =
+                            eventProcessor
+                                    .getRebalanceManager()
+                                    .listRebalanceProgress(null)
+                                    .progressForBucketMap();
+                    int count = 0;
+                    for (TableBucket tb : buckets) {
+                        if (!RebalanceStatus.FINAL_STATUSES.contains(progress.get(tb).status())) {
+                            count++;
+                        }
+                    }
+                    return count;
+                });
     }
 }

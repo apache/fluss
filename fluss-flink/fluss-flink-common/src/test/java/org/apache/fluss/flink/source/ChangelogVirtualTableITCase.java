@@ -20,13 +20,16 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.OffsetMetadata;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -49,6 +52,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -56,7 +61,9 @@ import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
@@ -64,6 +71,7 @@ import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.co
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -77,13 +85,18 @@ abstract class ChangelogVirtualTableITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder()
-                    .setClusterConf(new Configuration())
+                    .setClusterConf(
+                            new Configuration()
+                                    .set(ConfigOptions.OFFSETS_TABLE_NUM_BUCKETS, 1)
+                                    .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 1))
                     .setNumOfTabletServers(1)
                     .setClock(CLOCK)
                     .build();
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = "test_changelog_db";
+    private final TestTableNames tableNames = new TestTableNames();
+
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
     protected Connection conn;
@@ -444,6 +457,43 @@ abstract class ChangelogVirtualTableITCase {
     }
 
     @Test
+    void testConsumerOffsetsChangelogContainsOnlyUpdateAfter() throws Exception {
+        String groupId = "changelog-" + UUID.randomUUID();
+        TableBucket bucket = new TableBucket(1L, 0);
+        // Discover the owner and wait for the system table before issuing either commit.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(admin.listConsumerGroupOffsets(groupId))
+                                .succeedsWithin(Duration.ofSeconds(10))
+                                .isEqualTo(Collections.emptyMap()));
+        for (long offset : new long[] {10L, 20L}) {
+            admin.alterConsumerGroupOffsets(
+                            groupId, Collections.singletonMap(bucket, new OffsetMetadata(offset)))
+                    .all()
+                    .get();
+        }
+
+        String query =
+                "SELECT _change_type, record_type, group_id, bucket_id, `offset` "
+                        + "FROM `sys`.`consumer_offsets$changelog` "
+                        + "/*+ OPTIONS('scan.startup.mode' = 'earliest', 'scan.bounded.mode' = 'latest-offset') */ "
+                        + "WHERE group_id = '"
+                        + groupId
+                        + "'";
+        try (CloseableIterator<Row> rows = tEnv.executeSql(query).collect()) {
+            // Each commit writes one group metadata row (type 2) and one offset row (type 1).
+            assertThat(rows)
+                    .toIterable()
+                    .containsExactlyInAnyOrder(
+                            Row.of("update_after", 2, groupId, -1, -1L),
+                            Row.of("update_after", 1, groupId, 0, 10L),
+                            Row.of("update_after", 2, groupId, -1, -1L),
+                            Row.of("update_after", 1, groupId, 0, 20L));
+        }
+    }
+
+    @Test
     public void testChangelogBoundedRead() throws Exception {
         tEnv.executeSql(
                 "CREATE TABLE bounded_changelog_test ("
@@ -469,6 +519,39 @@ abstract class ChangelogVirtualTableITCase {
                             "+I[insert, 2, Bob]",
                             "+I[update_before, 1, Alice]",
                             "+I[update_after, 1, Alice-2]");
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testProjectedChangelogPreservesUnchangedUpdates(boolean filterUnchangedRows)
+            throws Exception {
+        String tableName = tableNames.tableName("projected_changelog_" + filterUnchangedRows);
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " (id INT NOT NULL, name STRING, age INT, "
+                        + "PRIMARY KEY (id) NOT ENFORCED) WITH ('bucket.num' = '1')");
+        writeRows(
+                conn,
+                TablePath.of(DEFAULT_DB, tableName),
+                Arrays.asList(row(1, "Alice", 10), row(1, "Alice", 20)),
+                false);
+
+        String query =
+                "SELECT _change_type, _log_offset, id, name FROM "
+                        + tableName
+                        + "$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest', "
+                        + "'scan.bounded.mode' = 'latest-offset', "
+                        + "'scan.filter-unchanged-row.enabled' = '"
+                        + filterUnchangedRows
+                        + "') */";
+        try (CloseableIterator<Row> rows = tEnv.executeSql(query).collect()) {
+            assertThat(collectBatchRows(rows))
+                    .containsExactly(
+                            "+I[insert, 0, 1, Alice]",
+                            "+I[update_before, 1, 1, Alice]",
+                            "+I[update_after, 2, 1, Alice]");
         }
     }
 

@@ -17,6 +17,9 @@
 
 package org.apache.fluss.fs.token;
 
+import java.util.Collections;
+import java.util.Set;
+
 /**
  * FileSystem security token receiver API. Currently, instances of {@link SecurityTokenReceiver}s
  * are loaded in client side through service loader.
@@ -25,6 +28,14 @@ public interface SecurityTokenReceiver {
 
     /** Scheme of the filesystem to receive security tokens for. This name should be unique. */
     String scheme();
+
+    /**
+     * Returns the additional URI schemes this receiver supports. Each alias is registered only when
+     * no receiver declares it as its primary scheme via {@link #scheme()}.
+     */
+    default Set<String> getAliasSchemes() {
+        return Collections.emptySet();
+    }
 
     /**
      * Callback function when new security tokens obtained.

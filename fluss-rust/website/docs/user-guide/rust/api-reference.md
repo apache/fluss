@@ -29,7 +29,15 @@ Complete API reference for the Fluss Rust client.
 | `scanner_log_fetch_min_bytes`         | `i32`           | `1`                | Minimum bytes the server must accumulate before returning a fetch response           |
 | `scanner_log_fetch_wait_max_time_ms`  | `i32`           | `500`              | Maximum time (ms) the server may wait to satisfy min-bytes                           |
 | `scanner_log_fetch_max_bytes_for_bucket`| `i32`         | `1048576` (1 MB)   | Maximum bytes per fetch response per bucket for LogScanner                           |
-| `connect_timeout_ms`                  | `u64`           | `15000`            | TCP connect timeout in milliseconds                                                  |
+| `scanner_log_check_crc`               | `bool`          | `true`             | Check the CRC of fetched log batches, so a corrupted batch fails the scan. Batches the server projected are not checked |
+| `lookup_queue_size`                   | `usize`         | `25600`            | Send queue capacity; new lookups wait when it is full. Each bucket also holds up to this many lookups while waiting for a leader; additional lookups for that bucket fail immediately with a buffer exhaustion error |
+| `lookup_max_batch_size`               | `usize`         | `128`              | Maximum number of lookups merged into one request                                    |
+| `lookup_batch_timeout_ms`             | `u64`           | `100`              | Maximum time in ms a lookup waits for its batch to fill                              |
+| `lookup_max_inflight_requests`        | `usize`         | `128`              | Maximum number of unacknowledged lookup requests                                     |
+| `lookup_max_retries`                  | `i32`           | `i32::MAX`         | Maximum number of times a lookup is resent after a retriable error. Waiting for a bucket's leader is not a retry, so this is not a lookup timeout |
+| `lookup_retry_backoff_ms`             | `u64`           | `100`              | Initial delay in ms before a lookup that failed with a retriable error is resent, doubling with each retry of that lookup; also before a bucket without a known leader is refreshed again, doubling with each refresh of that bucket and shared by its lookups. ±20% jitter; `0` resends and refreshes immediately |
+| `lookup_retry_max_backoff_ms`         | `u64`           | `1000`             | Cap in ms for the lookup retry delay and the refresh delay of a bucket without a known leader, applied before jitter; must be >= `lookup_retry_backoff_ms` |
+| `connect_timeout_ms`                  | `u64`           | `15000`            | Connection establishment timeout in milliseconds, including TCP connect, API negotiation and SASL authentication |
 | `connection_max_idle_time_ms`         | `u64`           | `600000` (10 min)  | Idle cached connections are closed after this many milliseconds, failing the requests still waiting on them with a retriable error; `0` disables closing idle connections |
 | `security_protocol`                   | `String`        | `"PLAINTEXT"`      | `PLAINTEXT` (default) or `sasl` for SASL auth                                        |
 | `security_sasl_mechanism`             | `String`        | `"PLAIN"`          | SASL mechanism (only `PLAIN` is supported)                                           |
@@ -152,6 +160,7 @@ series are shared by `AppendWriter` (log tables) and `UpsertWriter` (PK tables).
 | `fn filter(self, predicate: Predicate) -> Result<Self>`                     | Push a predicate down to log scanners; whole batches are pruned by statistics, and returned batches can still hold non-matching rows (see [Filter Pushdown](example/filter-pushdown.md); rejected by `create_bucket_batch_scanner`) |
 | `fn create_log_scanner(self) -> Result<LogScanner>`                         | Create a record-based log scanner; on a primary-key table, subscribes to its CDC changelog (per-record `ChangeType`) |
 | `fn create_record_batch_log_scanner(self) -> Result<RecordBatchLogScanner>` | Create an Arrow batch-based log scanner (log tables only — no per-record change types) |
+| `async fn create_bounded_log_reader(self, ranges: Vec<BoundedLogReadRange>) -> Result<RecordBatchLogReader>` | Read frozen ranges of an append log or a primary-key changelog. Use `ScanBatch::change_types` for CDC. |
 | `fn create_bucket_batch_scanner(self, bucket: TableBucket) -> Result<LimitBatchScanner>` | Bounded scan of one bucket (requires `limit`; runs on first `next_batch`) |
 
 ## `LogScanner`
@@ -235,8 +244,8 @@ thread that belongs to the same runtime** — nested `block_on` panics. Prefer
 `RecordBatchLogReader::next_batch` in async Rust code; use this adapter only at
 sync/FFI boundaries.
 
-Bucket and offset metadata carried by `ScanBatch` is **dropped** here, because
-the Arrow trait contract yields plain `RecordBatch`. If you need offsets or
+Bucket, offset, and change-type metadata carried by `ScanBatch` is **dropped** here, because
+the Arrow trait contract yields plain `RecordBatch`. If you need offsets, change types, or
 bucket identity per batch, use `next_batch` instead.
 
 | Method                                                          | Description                                      |
@@ -288,8 +297,9 @@ existing key emits `-U` then `+U`; the `WAL` mode emits only `+U`.
 | Method                                                                   | Description                       |
 |--------------------------------------------------------------------------|-----------------------------------|
 | `fn count(&self) -> usize`                                               | Number of records                 |
-| `fn is_empty(&self) -> bool`                                             | Whether the result set is empty   |
+| `fn is_empty(&self) -> bool`                                             | True if no bucket returned records or advanced   |
 | `fn records(&self, bucket: &TableBucket) -> &[ScanRecord]`               | Get records for a specific bucket |
+| `fn consumed_up_to_offset(&self, bucket: &TableBucket) -> Option<i64>` | Exclusive offset consumed in this poll; can advance even if the bucket returned no records |
 | `fn records_by_buckets(&self) -> &HashMap<TableBucket, Vec<ScanRecord>>` | Get all records grouped by bucket |
 
 `ScanRecords` also implements `IntoIterator`, so you can iterate over all records directly:
@@ -307,6 +317,7 @@ for record in records {
 | `fn bucket(&self) -> &TableBucket`  | Bucket this batch belongs to      |
 | `fn batch(&self) -> &RecordBatch`   | Arrow RecordBatch data            |
 | `fn base_offset(&self) -> i64`      | First record offset               |
+| `fn change_types(&self) -> Option<&[ChangeType]>` | One change type per CDC row; absent for append-only batches |
 | `fn last_offset(&self) -> i64`      | Last record offset                |
 | `fn commit_timestamp(&self) -> i64` | Commit time in epoch milliseconds |
 | `fn schema_id(&self) -> i32`      | Schema ID from the source log batch |
@@ -350,6 +361,16 @@ batches into one.
 |------------------------------------------------------------------------------|-----------------------------|
 | `async fn lookup(&self, key: &impl InternalRow) -> Result<LookupResult>`     | Lookup a row by primary key |
 
+A lookup whose bucket has no known leader waits while the client refreshes the bucket's
+metadata, backing off with `lookup_retry_backoff_ms`. Up to `lookup_queue_size` lookups wait per
+bucket; further ones fail with `Error::BufferExhausted`. A waiting lookup fails with the API error
+`TableNotExist` if its table was dropped or recreated, `PartitionNotExists` if its partition was
+dropped, or `AuthorizationException` if the client may not access its table's metadata. Rejected
+credentials or API versions also fail it; other refresh errors, e.g. for a schema that is not
+visible yet or a server that does not answer the metadata request within 30 seconds, keep it
+waiting. Lookups to a closed client, lookups still without a leader after the final refresh on
+close, and lookups left unfinished when the close times out fail with `Error::LookupClosed`.
+
 ## `LookupResult`
 
 | Method                                                         |  Description                     |
@@ -367,7 +388,7 @@ batches into one.
 Usage:
 
 ```rust
-// Fire-and-forget (batched)
+// Fire-and-forget (batched), flush() doesn't return the error of a failed write
 writer.append(&row)?;
 writer.flush().await?;
 

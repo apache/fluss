@@ -18,7 +18,6 @@
 package org.apache.fluss.trino;
 
 import io.trino.spi.connector.ConnectorPageSource;
-import io.trino.spi.connector.ConnectorSession;
 import io.trino.spi.connector.DynamicFilter;
 import io.trino.spi.connector.MemoryContext;
 import io.trino.spi.predicate.TupleDomain;
@@ -27,15 +26,20 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.Optional;
 
+import static io.trino.testing.TestingConnectorSession.SESSION;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 /** Verifies that provider creation leaves reading and validation to the lazy page source. */
 final class FlussPageSourceProviderTest {
     @Test
     void testCreatesLazyPageSourceForBothScanTypes() throws Exception {
-        FlussClientManager clients = mock(FlussClientManager.class);
+        FlussClientManager clients =
+                new FlussClientManager(
+                        new FlussConfig().setBootstrapServers("localhost:9123"),
+                        configuration -> {
+                            throw new AssertionError(
+                                    "Creating and closing an unread page source must not connect");
+                        });
         FlussTableHandle table =
                 new FlussTableHandle("sales", "users", "Sales", "Users", 42, 1, TupleDomain.all());
         FlussBucketHandle bucket = new FlussBucketHandle(42, Optional.empty(), 0);
@@ -45,7 +49,7 @@ final class FlussPageSourceProviderTest {
             try (ConnectorPageSource source =
                     provider.createPageSource(
                             FlussTransactionHandle.INSTANCE,
-                            mock(ConnectorSession.class),
+                            SESSION,
                             split,
                             table,
                             Optional.empty(),
@@ -57,6 +61,6 @@ final class FlussPageSourceProviderTest {
                 assertThat(source.isBlocked().isDone()).isTrue();
             }
         }
-        verifyNoInteractions(clients);
+        clients.close();
     }
 }

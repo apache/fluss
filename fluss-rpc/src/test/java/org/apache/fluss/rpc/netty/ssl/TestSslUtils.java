@@ -21,11 +21,27 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
 
+import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.Extension;
+import org.bouncycastle.asn1.x509.GeneralName;
+import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.cert.X509CertificateHolder;
+import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
+import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
+import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+
 import java.io.OutputStream;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.KeyStore;
+import java.security.PrivateKey;
 import java.security.cert.Certificate;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 
 /**
  * Test helpers for generating self-signed certificates and JKS keystores/truststores on the fly, so
@@ -49,6 +65,45 @@ public class TestSslUtils {
         return new SelfSignedCertificate(fqdn);
     }
 
+    /**
+     * Generate a self-signed key and certificate for {@code fqdn} that lists {@code fqdn} and the
+     * given IP addresses as subject alternative names (SAN).
+     *
+     * <p>{@link #generateCertificate} sets no SAN, and hostname verification matches an IP address
+     * only against an IP SAN. A client that connects by IP address needs this variant.
+     */
+    public static KeyStore.PrivateKeyEntry generateCertificateWithSans(
+            String fqdn, String... ipAddresses) throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair keyPair = generator.generateKeyPair();
+        X500Name name = new X500Name("CN=" + fqdn);
+        long now = System.currentTimeMillis();
+        List<GeneralName> sans = new ArrayList<>();
+        sans.add(new GeneralName(GeneralName.dNSName, fqdn));
+        for (String ipAddress : ipAddresses) {
+            sans.add(new GeneralName(GeneralName.iPAddress, ipAddress));
+        }
+        X509CertificateHolder holder =
+                new JcaX509v3CertificateBuilder(
+                                name,
+                                BigInteger.valueOf(now),
+                                new Date(now - 86_400_000L),
+                                new Date(now + 86_400_000L),
+                                name,
+                                keyPair.getPublic())
+                        .addExtension(
+                                Extension.subjectAlternativeName,
+                                false,
+                                new GeneralNames(sans.toArray(new GeneralName[0])))
+                        .build(
+                                new JcaContentSignerBuilder("SHA256withRSA")
+                                        .build(keyPair.getPrivate()));
+        return new KeyStore.PrivateKeyEntry(
+                keyPair.getPrivate(),
+                new Certificate[] {new JcaX509CertificateConverter().getCertificate(holder)});
+    }
+
     /** Create a JKS keystore file holding the private key and certificate of {@code cert}. */
     public static Path createKeyStore(Path dir, String fileName, SelfSignedCertificate cert)
             throws Exception {
@@ -62,10 +117,18 @@ public class TestSslUtils {
     public static Path createKeyStore(
             Path dir, String fileName, String storeType, SelfSignedCertificate cert)
             throws Exception {
+        return createKeyStore(dir, fileName, storeType, cert.key(), cert.cert());
+    }
+
+    /**
+     * Create a keystore file of the given {@code storeType} holding {@code key} and {@code cert}.
+     */
+    public static Path createKeyStore(
+            Path dir, String fileName, String storeType, PrivateKey key, Certificate cert)
+            throws Exception {
         KeyStore keyStore = KeyStore.getInstance(storeType);
         keyStore.load(null, null);
-        keyStore.setKeyEntry(
-                "key", cert.key(), PASSWORD.toCharArray(), new Certificate[] {cert.cert()});
+        keyStore.setKeyEntry("key", key, PASSWORD.toCharArray(), new Certificate[] {cert});
         return store(dir, fileName, keyStore);
     }
 
@@ -82,9 +145,15 @@ public class TestSslUtils {
     public static Path createTrustStore(
             Path dir, String fileName, String storeType, SelfSignedCertificate cert)
             throws Exception {
+        return createTrustStore(dir, fileName, storeType, cert.cert());
+    }
+
+    /** Create a truststore file of the given {@code storeType} trusting {@code cert}. */
+    public static Path createTrustStore(
+            Path dir, String fileName, String storeType, Certificate cert) throws Exception {
         KeyStore trustStore = KeyStore.getInstance(storeType);
         trustStore.load(null, null);
-        trustStore.setCertificateEntry("cert", cert.cert());
+        trustStore.setCertificateEntry("cert", cert);
         return store(dir, fileName, trustStore);
     }
 

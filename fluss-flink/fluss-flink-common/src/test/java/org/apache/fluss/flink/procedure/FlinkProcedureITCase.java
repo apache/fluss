@@ -27,15 +27,22 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.security.acl.AccessControlEntryFilter;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceFilter;
+import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.testutils.common.MultiVersionTest;
 
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -90,6 +97,8 @@ public abstract class FlinkProcedureITCase {
     static String bootstrapServers;
     static Connection conn;
     static Admin admin;
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     TableEnvironment tEnv;
 
@@ -186,7 +195,7 @@ public abstract class FlinkProcedureITCase {
 
     @Test
     void testListPartitionInfos() throws Exception {
-        String tableName = "partition_infos_table";
+        String tableName = tableNames.tableName("partition_infos_table");
         tEnv.executeSql(
                 String.format(
                         "create table %s (a int, b varchar) partitioned by (b) "
@@ -295,6 +304,117 @@ public abstract class FlinkProcedureITCase {
                                         .wait())
                 .hasMessageContaining(
                         "Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"default-consumer", "Default_consumer-1", "group1", "fluss-cluster"})
+    void testConsumerGroupAcls(String groupId) throws Exception {
+        String sqlResource = "group:" + groupId;
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('group:%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, groupId))
+                .await();
+        AclBindingFilter filter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, groupId),
+                        AccessControlEntryFilter.ANY);
+        assertThat(admin.listAcls(filter).get())
+                .singleElement()
+                .satisfies(
+                        binding ->
+                                assertThat(binding.getResource())
+                                        .isEqualTo(Resource.group(groupId)));
+
+        String listAcl = String.format("CALL %s.sys.list_acl('%s')", CATALOG_NAME, sqlResource);
+        try (CloseableIterator<Row> rows = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(
+                    rows,
+                    new String[] {
+                        String.format(
+                                "+I[resource=\"%s\";permission=\"ALLOW\";principal=\"User:group-consumer\";operation=\"DESCRIBE\";host=\"*\"]",
+                                sqlResource)
+                    });
+        }
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, sqlResource))
+                .await();
+        assertThat(admin.listAcls(filter).get()).isEmpty();
+        try (CloseableIterator<Row> rows = tEnv.executeSql(listAcl).collect()) {
+            assertCallResult(rows, new String[0]);
+        }
+    }
+
+    @Test
+    void testGroupWildcardAclRevocationLeavesNamedGroupAcls() throws Exception {
+        String wildcardResource = "group:*";
+        String namedResource = "group:named-group";
+        String principal = "User:group-consumer";
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, wildcardResource, principal))
+                .await();
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.add_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, namedResource, principal))
+                .await();
+
+        AclBindingFilter wildcardFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, Resource.WILDCARD_RESOURCE),
+                        AccessControlEntryFilter.ANY);
+        AclBindingFilter namedFilter =
+                new AclBindingFilter(
+                        new ResourceFilter(ResourceType.GROUP, "named-group"),
+                        AccessControlEntryFilter.ANY);
+        assertThat(admin.listAcls(wildcardFilter).get()).hasSize(1);
+        assertThat(admin.listAcls(namedFilter).get()).hasSize(1);
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, wildcardResource, principal))
+                .await();
+
+        assertThat(admin.listAcls(wildcardFilter).get()).isEmpty();
+        assertThat(admin.listAcls(namedFilter).get()).hasSize(1);
+
+        tEnv.executeSql(
+                        String.format(
+                                "CALL %s.sys.drop_acl('%s', 'ALLOW', '%s', 'DESCRIBE', '*')",
+                                CATALOG_NAME, namedResource, principal))
+                .await();
+        assertThat(admin.listAcls(namedFilter).get()).isEmpty();
+    }
+
+    @Test
+    void testInvalidConsumerGroupAclNames() {
+        for (String groupId :
+                Arrays.asList(
+                        "",
+                        "__internal",
+                        "default-*",
+                        "a*b",
+                        "default.consumer",
+                        "default/consumer",
+                        "default:consumer",
+                        "消费组")) {
+            for (String procedure : Arrays.asList("add_acl", "drop_acl", "list_acl")) {
+                String sql =
+                        String.format(
+                                "CALL %s.sys.%s('group:%s', 'ALLOW', 'User:group-consumer', 'DESCRIBE', '*')",
+                                CATALOG_NAME, procedure, groupId);
+                assertThatThrownBy(() -> tEnv.executeSql(sql).await())
+                        .rootCause()
+                        .isInstanceOf(InvalidConsumerGroupIdException.class);
+            }
+        }
     }
 
     @Test
@@ -886,7 +1006,7 @@ public abstract class FlinkProcedureITCase {
 
         // first create some unbalance assignment table.
         for (int i = 0; i < 2; i++) {
-            String tableName = "reblance_test_tab_" + i;
+            String tableName = tableNames.tableName("reblance_test_tab_" + i);
             tEnv.executeSql(
                     String.format(
                             "create table %s (a int, b varchar, c bigint, d int ) "
@@ -979,7 +1099,7 @@ public abstract class FlinkProcedureITCase {
 
         // first create some unbalance assignment table.
         for (int i = 0; i < 10; i++) {
-            String tableName = "reblance_test_tab_" + i;
+            String tableName = tableNames.tableName("reblance_test_tab_" + i);
             tEnv.executeSql(
                     String.format(
                             "create table %s (a int, b varchar, c bigint, d int ) "

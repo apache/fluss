@@ -52,7 +52,7 @@ except fluss.FlussError as e:
 | `ErrorCode.PARTITION_NOT_EXISTS`             | 36   | Partition does not exist            |
 | `ErrorCode.PARTITION_ALREADY_EXISTS`         | 42   | Partition already exists            |
 | `ErrorCode.PARTITION_SPEC_INVALID_EXCEPTION` | 43   | Invalid partition spec              |
-| `ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for partition   |
+| `ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION`   | 44   | No leader available for bucket      |
 | `ErrorCode.AUTHENTICATE_EXCEPTION`           | 46   | Authentication failed (bad credentials) |
 
 See `fluss.ErrorCode` for the full list of named constants.
@@ -93,7 +93,11 @@ except fluss.FlussError as e:
 | `ErrorCode.STORAGE_EXCEPTION`                               | 26   | Transient storage error                   |
 | `ErrorCode.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION`      | 28   | Wrote to server but with low ISR size     |
 | `ErrorCode.NOT_ENOUGH_REPLICAS_EXCEPTION`                   | 29   | Low ISR size at write time                |
-| `ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION`                  | 44   | No leader available for partition         |
+| `ErrorCode.LEADER_NOT_AVAILABLE_EXCEPTION`                  | 44   | No leader available for bucket            |
+| `ErrorCode.NOT_COORDINATOR_LEADER_EXCEPTION`                | 65   | Coordinator is not the leader             |
+| `ErrorCode.DISK_WRITE_LOCKED`                               | 70   | Data disk reached the write limit         |
+| `ErrorCode.STORAGE_BACKPRESSURE_EXCEPTION`                  | 72   | KV storage engine backpressure            |
+| `ErrorCode.HISTORICAL_PARTITION_THROTTLED`                  | 73   | Too many historical partition requests    |
 
 Client-side errors (`ErrorCode.CLIENT_ERROR`, code -2) always return `False` from `is_retriable`.
 

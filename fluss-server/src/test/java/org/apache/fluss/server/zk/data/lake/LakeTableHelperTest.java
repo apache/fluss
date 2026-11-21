@@ -40,9 +40,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.api.io.TempDir;
 
-import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -81,14 +79,14 @@ class LakeTableHelperTest {
     }
 
     @Test
-    void testRegisterLakeTableSnapshotCompatibility(@TempDir Path tempDir) throws Exception {
+    void testRegisterLakeTableSnapshotCompatibility() throws Exception {
         // Create a ZooKeeperClient with REMOTE_DATA_DIR configuration
         Configuration conf = new Configuration();
         conf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient);
         try (ZooKeeperClient zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(conf, NOPErrorHandler.INSTANCE)) {
             // first create a table
@@ -124,7 +122,9 @@ class LakeTableHelperTest {
             long snapshot2Id = 2L;
             FsPath tieredOffsetsPath =
                     lakeTableHelper.storeLakeTableOffsetsFile(
-                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+                            tableReg.remoteDataDir,
+                            tablePath,
+                            new TableBucketOffsets(tableId, newBucketLogEndOffset));
             lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
@@ -159,7 +159,9 @@ class LakeTableHelperTest {
             long snapshot3Id = 3L;
             tieredOffsetsPath =
                     lakeTableHelper.storeLakeTableOffsetsFile(
-                            tablePath, new TableBucketOffsets(tableId, newBucketLogEndOffset));
+                            tableReg.remoteDataDir,
+                            tablePath,
+                            new TableBucketOffsets(tableId, newBucketLogEndOffset));
             lakeTableHelper.registerLakeTableSnapshotV2(
                     tableId,
                     new LakeTable.LakeSnapshotMetadata(
@@ -170,8 +172,8 @@ class LakeTableHelperTest {
     }
 
     @Test
-    void testRegisterLakeTableSnapshotWithRetention(@TempDir Path tempDir) throws Exception {
-        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+    void testRegisterLakeTableSnapshotWithRetention() throws Exception {
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient);
         long tableId = 1L;
         TablePath tablePath = TablePath.of("test_db", "retention_test");
 
@@ -258,7 +260,8 @@ class LakeTableHelperTest {
             LakeTableHelper helper, TablePath path, long tableId, long offset) throws Exception {
         Map<TableBucket, Long> offsets = new HashMap<>();
         offsets.put(new TableBucket(tableId, 0), offset);
-        return helper.storeLakeTableOffsetsFile(path, new TableBucketOffsets(tableId, offsets));
+        return helper.storeLakeTableOffsetsFile(
+                remoteDataDir, path, new TableBucketOffsets(tableId, offsets));
     }
 
     /** Helper to create a basic TableRegistration. */

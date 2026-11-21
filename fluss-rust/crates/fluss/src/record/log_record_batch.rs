@@ -505,24 +505,34 @@ impl LogRecordBatch {
         LittleEndian::read_i32(&self.data[offset..offset + BATCH_SEQUENCE_LENGTH])
     }
 
+    /// Fails when the batch is shorter than its header or its CRC doesn't match its
+    /// content, like Java `DefaultLogRecordBatch.ensureValid`.
     pub fn ensure_valid(&self) -> Result<()> {
-        // TODO enable validation once checksum handling is corrected.
+        let header_size = self.ensure_header_complete()?;
+        let size_in_bytes = self.size_in_bytes();
+        if size_in_bytes < header_size {
+            return Err(Error::corrupt_message(format!(
+                "Record batch is corrupt (the size {size_in_bytes} is smaller than the minimum allowed overhead {header_size})"
+            )));
+        }
+        let stored = self.checksum();
+        let computed = self.compute_checksum();
+        if stored != computed {
+            return Err(Error::corrupt_message(format!(
+                "Record batch is corrupt (stored crc = {stored}, computed crc = {computed})"
+            )));
+        }
         Ok(())
     }
 
     pub fn is_valid(&self) -> bool {
-        match self.ensure_header_complete() {
-            Ok(header_size) => {
-                self.size_in_bytes() >= header_size && self.checksum() == self.compute_checksum()
-            }
-            Err(_) => false,
-        }
+        self.ensure_valid().is_ok()
     }
 
     /// Rejects unsupported magic versions and batches shorter than their
     /// magic's fixed header, so the fixed-offset accessors cannot slice past
     /// the buffer. Mirrors the guard in Java's `DefaultLogRecordBatch`.
-    fn ensure_header_complete(&self) -> Result<usize> {
+    pub(crate) fn ensure_header_complete(&self) -> Result<usize> {
         if self.data.len() <= MAGIC_OFFSET {
             return Err(Error::UnexpectedError {
                 message: format!(
@@ -644,6 +654,14 @@ impl LogRecordBatch {
                 source: None,
             })?;
 
+        let record_count = self.record_count();
+        if record_count < 0 {
+            return Err(Error::UnexpectedError {
+                message: format!("Corrupt log record batch: negative record count {record_count}"),
+                source: None,
+            });
+        }
+
         if self.is_append_only() {
             return Ok((
                 BatchChangeTypes::Uniform(ChangeType::AppendOnly),
@@ -651,13 +669,6 @@ impl LogRecordBatch {
             ));
         }
 
-        let record_count = self.record_count();
-        if record_count < 0 {
-            return Err(Error::UnexpectedError {
-                message: format!("Corrupt changelog batch: negative record count {record_count}"),
-                source: None,
-            });
-        }
         let record_count = record_count as usize;
         let (change_type_bytes, _) =
             body.split_at_checked(record_count)
@@ -684,16 +695,25 @@ impl LogRecordBatch {
         Ok((BatchChangeTypes::PerRecord(change_types), arrow_data))
     }
 
+    fn ensure_record_count(&self, arrow_row_count: usize) -> Result<()> {
+        let record_count = self.record_count();
+        if arrow_row_count != record_count as usize {
+            return Err(Error::UnexpectedError {
+                message: format!(
+                    "Arrow row count {arrow_row_count} does not match log batch record count {record_count}"
+                ),
+                source: None,
+            });
+        }
+        Ok(())
+    }
+
     pub fn records(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        // Gate on the magic and length first: header offsets of an unsupported
-        // version or a truncated batch must not be interpreted with this layout.
         self.ensure_header_complete()?;
         if self.record_count() == 0 {
             return Ok(LogRecordIterator::empty());
         }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch(arrow_data)?;
+        let (record_batch, change_types) = self.decode_record_batch(read_context)?;
         let arrow_reader = ArrowReader::new_with_fluss_row_type(
             Arc::new(record_batch),
             read_context.row_type_arc(),
@@ -709,47 +729,35 @@ impl LogRecordBatch {
         Ok(LogRecordIterator::Arrow(iterator))
     }
 
-    pub fn records_for_remote_log(&self, read_context: &ReadContext) -> Result<LogRecordIterator> {
-        self.ensure_header_complete()?;
-        if self.record_count() == 0 {
-            return Ok(LogRecordIterator::empty());
-        }
-
-        let (change_types, arrow_data) = self.decode_change_types()?;
-        let record_batch = read_context.record_batch_for_remote_log(arrow_data)?;
-        let log_record_iterator = match record_batch {
-            None => LogRecordIterator::empty(),
-            Some(record_batch) => {
-                let arrow_reader = ArrowReader::new_with_fluss_row_type(
-                    Arc::new(record_batch),
-                    read_context.row_type_arc(),
-                    read_context.fluss_row_type().cloned(),
-                )?;
-                let iterator = ArrowLogRecordIterator::new(
-                    arrow_reader,
-                    self.base_log_offset(),
-                    self.commit_timestamp(),
-                    change_types,
-                )?;
-                LogRecordIterator::Arrow(iterator)
-            }
-        };
-        Ok(log_record_iterator)
-    }
-
     /// Returns the record batch directly without creating an iterator.
     /// This is more efficient when you need the entire batch rather than
     /// iterating row-by-row.
     pub fn record_batch(&self, read_context: &ReadContext) -> Result<RecordBatch> {
+        Ok(self.record_batch_with_changes(read_context)?.0)
+    }
+
+    pub(crate) fn record_batch_with_changes(
+        &self,
+        read_context: &ReadContext,
+    ) -> Result<(RecordBatch, BatchChangeTypes)> {
         self.ensure_header_complete()?;
         if self.record_count() == 0 {
-            // Return empty batch with correct schema
-            return Ok(RecordBatch::new_empty(read_context.target_schema()));
+            return Ok((
+                RecordBatch::new_empty(read_context.target_schema()),
+                BatchChangeTypes::Uniform(ChangeType::AppendOnly),
+            ));
         }
+        self.decode_record_batch(read_context)
+    }
 
-        // Batch access drops the change-type vector; use `records()` for CDC.
-        let (_, arrow_data) = self.decode_change_types()?;
-        read_context.record_batch(arrow_data)
+    fn decode_record_batch(
+        &self,
+        read_context: &ReadContext,
+    ) -> Result<(RecordBatch, BatchChangeTypes)> {
+        let (changes, arrow_data) = self.decode_change_types()?;
+        let record_batch = read_context.record_batch(arrow_data)?;
+        self.ensure_record_count(record_batch.num_rows())?;
+        Ok((record_batch, changes))
     }
 }
 
@@ -800,7 +808,7 @@ impl BatchChangeTypes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
+    use crate::error::{FlussError, Result};
     use crate::metadata::{DataField, DataTypes, RowType};
     use crate::record::{MemoryLogRecordsArrowBuilder, to_arrow_schema};
     use crate::row::DataGetters;
@@ -808,8 +816,101 @@ mod tests {
 
     use crate::test_utils::{
         build_append_only_batch, build_table_info, splice_change_type_vector,
-        splice_statistics_section, uncompressed_arrow_batch_config,
+        splice_statistics_section, uncompressed_arrow_batch_config, update_crc,
     };
+    #[test]
+    fn rejects_invalid_arrow_record_counts() -> Result<()> {
+        let (row_type, data) = build_append_only_batch(&[(1, "a"), (2, "b")]);
+        let schema = to_arrow_schema(&row_type)?;
+        let row_type = Arc::new(row_type);
+        let contexts =
+            [
+                ReadContext::new(schema.clone(), row_type.clone(), false),
+                ReadContext::with_projection_pushdown(
+                    schema.clone(),
+                    Arc::new(row_type.project(&[1])?),
+                    vec![1],
+                    true,
+                )?,
+                ReadContext::new(schema.clone(), row_type.clone(), true)
+                    .with_target_schema_alignment(schema.clone(), Arc::from([-1, 1]), true),
+                ReadContext::new(schema.clone(), row_type, true).with_target_schema_alignment(
+                    schema,
+                    Arc::from([-1, -1]),
+                    true,
+                ),
+            ];
+        for count in [1_i32, 3, -1, 2] {
+            for changelog in [false, true] {
+                let mut bytes = if changelog {
+                    // Keep the Arrow payload intact so only the row count is inconsistent.
+                    splice_change_type_vector(
+                        &data,
+                        &vec![ChangeType::Insert; count.max(0) as usize],
+                    )
+                } else {
+                    data.clone()
+                };
+                bytes[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH]
+                    .copy_from_slice(&count.to_le_bytes());
+                let crc = crc32c(&bytes[SCHEMA_ID_OFFSET..]);
+                bytes[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+                let v1 = splice_statistics_section(&bytes, &[0xAB; 8]);
+                let v2 = splice_leader_epoch(&v1, 7);
+                for bytes in [bytes, v1, v2] {
+                    let batch = LogRecordBatch::new(Bytes::from(bytes));
+                    assert!(batch.is_valid(), "the checksum must not cause the failure");
+                    for context in &contexts {
+                        if count == 2 {
+                            assert_eq!(batch.records(context)?.count(), 2);
+                            assert_eq!(batch.record_batch(context)?.num_rows(), 2);
+                            continue;
+                        }
+                        let row_error = batch.records(context).err();
+                        let batch_error = batch.record_batch(context).err();
+                        assert!(
+                            row_error.is_some() && batch_error.is_some(),
+                            "count={count}, changelog={changelog}, magic={}: row={row_error:?}, batch={batch_error:?}",
+                            batch.magic()
+                        );
+                        for error in [row_error.unwrap(), batch_error.unwrap()] {
+                            assert!(error.to_string().contains("record count"), "{error}");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_header_only_empty_batches() -> Result<()> {
+        let (row_type, mut bytes) = build_append_only_batch(&[(1, "a")]);
+        let context = ReadContext::new(to_arrow_schema(&row_type)?, Arc::new(row_type), false);
+        bytes.truncate(RECORDS_OFFSET);
+        bytes[RECORDS_COUNT_OFFSET..RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH]
+            .copy_from_slice(&0_i32.to_le_bytes());
+        bytes[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
+            .copy_from_slice(&((RECORDS_OFFSET - LOG_OVERHEAD) as i32).to_le_bytes());
+        for append_only in [false, true] {
+            bytes[ATTRIBUTES_OFFSET] = u8::from(append_only) * APPEND_ONLY_FLAG_MASK;
+            let crc = crc32c(&bytes[SCHEMA_ID_OFFSET..]);
+            bytes[CRC_OFFSET..CRC_OFFSET + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+            let v1 = splice_statistics_section(&bytes, &[]);
+            let v2 = splice_leader_epoch(&v1, 7);
+            for bytes in [bytes.clone(), v1, v2] {
+                let batch = LogRecordBatch::new(Bytes::from(bytes));
+                assert!(batch.is_valid());
+                assert_eq!(batch.next_log_offset(), 1);
+                assert_eq!(batch.records(&context)?.count(), 0);
+                let decoded = batch.record_batch(&context)?;
+                assert_eq!(decoded.num_rows(), 0);
+                assert_eq!(decoded.schema(), context.target_schema());
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn checksum_and_schema_id_read_minimum_header() {
         // Header-only batches with record_count == 0 are valid; this covers the minimal bytes
@@ -1175,6 +1276,40 @@ mod tests {
         assert!(!LogRecordBatch::new(Bytes::from(data)).is_valid());
     }
 
+    #[test]
+    fn ensure_valid_rejects_a_batch_whose_bytes_changed() {
+        let (_, append_only) = build_append_only_batch(&[(1, "a")]);
+        LogRecordBatch::new(Bytes::from(append_only.clone()))
+            .ensure_valid()
+            .unwrap();
+
+        // One flipped bit.
+        let mut data = append_only.clone();
+        let last = data.len() - 1;
+        data[last] ^= 1;
+        let err = LogRecordBatch::new(Bytes::from(data))
+            .ensure_valid()
+            .unwrap_err();
+        assert_eq!(err.api_error(), Some(FlussError::CorruptMessage));
+        assert!(
+            err.to_string()
+                .contains("Record batch is corrupt (stored crc = "),
+            "{err}"
+        );
+
+        // A length field that ends the batch inside its own header.
+        let mut data = append_only;
+        data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH].copy_from_slice(&0_i32.to_le_bytes());
+        let err = LogRecordBatch::new(Bytes::from(data))
+            .ensure_valid()
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("smaller than the minimum allowed overhead"),
+            "{err}"
+        );
+    }
+
     /// Turns a V1 batch into a wire-valid V2 batch by inserting the leader
     /// epoch before the CRC and fixing up the magic, length field and CRC.
     fn splice_leader_epoch(v1_batch: &[u8], leader_epoch: i32) -> Vec<u8> {
@@ -1188,9 +1323,7 @@ mod tests {
         let new_length = (data.len() - LOG_OVERHEAD) as i32;
         data[LENGTH_OFFSET..LENGTH_OFFSET + LENGTH_LENGTH]
             .copy_from_slice(&new_length.to_le_bytes());
-        let crc_offset = CRC_OFFSET + LEADER_EPOCH_LENGTH;
-        let crc = crc32c(&data[SCHEMA_ID_OFFSET + LEADER_EPOCH_LENGTH..]);
-        data[crc_offset..crc_offset + CRC_LENGTH].copy_from_slice(&crc.to_le_bytes());
+        update_crc(&mut data);
         data
     }
 

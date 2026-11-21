@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,25 +15,16 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event;
+package org.apache.fluss.exception;
 
-import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
+import org.apache.fluss.annotation.PublicEvolving;
 
-/** An event fired when a rebalance task exceeds the timeout without completing. */
-public class RebalanceTaskTimeoutEvent implements CoordinatorEvent {
+/** Thrown when a request contains an invalid combination or value of parameters. */
+@PublicEvolving
+public class InvalidRequestException extends ApiException {
+    private static final long serialVersionUID = 1L;
 
-    private final RebalanceExecutionKey executionKey;
-
-    public RebalanceTaskTimeoutEvent(RebalanceExecutionKey executionKey) {
-        this.executionKey = executionKey;
-    }
-
-    public RebalanceExecutionKey getExecutionKey() {
-        return executionKey;
-    }
-
-    @Override
-    public String toString() {
-        return "RebalanceTaskTimeoutEvent{executionKey=" + executionKey + "}";
+    public InvalidRequestException(String message) {
+        super(message);
     }
 }

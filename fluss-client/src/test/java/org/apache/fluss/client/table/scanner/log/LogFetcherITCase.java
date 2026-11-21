@@ -30,14 +30,17 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.testutils.DataTestUtils;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +62,6 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
@@ -71,6 +73,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT test for {@link LogFetcher}. */
 public class LogFetcherITCase extends ClientToServerITCaseBase {
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
     private LogFetcher logFetcher;
     private long tableId;
     private TableInfo tableInfo;
@@ -86,12 +91,12 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         super.setup();
 
         // We create table data1NonPkTablePath previously.
-        tableId = createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        tableId = createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
         metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
-        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(data1TablePath));
 
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
         // add bucket 0 and bucket 1 to log scanner status.
@@ -101,7 +106,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         logScannerStatus.assignScanBuckets(scanBuckets);
         admin = new FlussAdmin(rpcClient, metadataUpdater);
         clientSchemaGetter =
-                new ClientSchemaGetter(DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 1), admin);
+                new ClientSchemaGetter(data1TablePath, new SchemaInfo(DATA1_SCHEMA, 1), admin);
         logFetcher =
                 new LogFetcher(
                         "default-scanner",
@@ -113,7 +118,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         LogRecordReadContext.SchemaResolution.TARGET);
         tableInfo =
                 TableInfo.of(
-                        DATA1_TABLE_PATH,
+                        data1TablePath,
                         tableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
@@ -131,7 +136,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
 
         // add new column(which equals to DATA2_ROW_TYPE)
         admin.alterTable(
-                        DATA1_TABLE_PATH,
+                        data1TablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "c",
@@ -187,7 +192,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         newSchemaLogFetcher.registerTable(
                 new TableScanSpec(
                         new TableInfo(
-                                DATA1_TABLE_INFO.getTablePath(),
+                                data1TablePath,
                                 tableId,
                                 2,
                                 DATA2_SCHEMA,
@@ -264,9 +269,9 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
         MetadataUpdater metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
-        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(data1TablePath));
 
-        int leaderNode = metadataUpdater.leaderFor(DATA1_TABLE_PATH, tb0);
+        int leaderNode = metadataUpdater.leaderFor(data1TablePath, tb0);
 
         // now, remove leader nodd ,so that fetch destination
         // server node is null
@@ -290,13 +295,13 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
 
         ClientSchemaGetter clientSchemaGetter =
                 new ClientSchemaGetter(
-                        DATA1_TABLE_PATH,
+                        data1TablePath,
                         new SchemaInfo(DATA1_SCHEMA, 1),
                         new FlussAdmin(rpcClient, metadataUpdater));
 
         LogFetcher logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_PATH.toString(),
+                        data1TablePath.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -331,12 +336,12 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new MetadataUpdater(clientConf, FLUSS_CLUSTER_EXTENSION.getRpcClient());
         ClientSchemaGetter clientSchemaGetter =
                 new ClientSchemaGetter(
-                        DATA1_TABLE_PATH,
+                        data1TablePath,
                         new SchemaInfo(DATA1_SCHEMA, 1),
                         new FlussAdmin(FLUSS_CLUSTER_EXTENSION.getRpcClient(), metadataUpdater1));
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_PATH.toString(),
+                        data1TablePath.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater1,

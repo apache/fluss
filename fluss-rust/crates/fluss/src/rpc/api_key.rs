@@ -96,7 +96,6 @@ impl ApiKey {
             | ApiKey::FetchLog
             | ApiKey::ListOffsets
             | ApiKey::GetLatestKvSnapshots
-            | ApiKey::GetKvSnapshotMetadata
             | ApiKey::GetFileSystemSecurityToken
             | ApiKey::InitWriter
             | ApiKey::GetLakeSnapshot
@@ -127,6 +126,11 @@ impl ApiKey {
             | ApiKey::GetClusterHealth
             | ApiKey::ListRemoteLogManifests
             | ApiKey::ListKvSnapshots => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(0))),
+            // v1 declares that the client can decode tagged persisted KV values.
+            ApiKey::GetKvSnapshotMetadata => Some(ApiVersionRange::new(
+                ApiVersion(0),
+                ApiVersion(if cfg!(feature = "kv-snapshot") { 1 } else { 0 }),
+            )),
             // AlterTable v1 adds modify_bucket_count.
             ApiKey::AlterTable => Some(ApiVersionRange::new(ApiVersion(0), ApiVersion(1))),
             // ProduceLog v1 adds historical partition context to requests and responses.

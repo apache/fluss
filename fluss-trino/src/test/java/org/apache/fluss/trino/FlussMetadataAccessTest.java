@@ -17,137 +17,142 @@
 
 package org.apache.fluss.trino;
 
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.connector.TableNotFoundException;
-import io.trino.spi.predicate.TupleDomain;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_CHANGED;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_METADATA_ERROR;
 import static org.apache.fluss.trino.FlussErrorCode.FLUSS_SPLIT_ERROR;
-import static org.apache.fluss.trino.TestingFlussMetadata.metadataAccess;
 import static org.apache.fluss.trino.TestingFlussMetadata.usersTable;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
-import static org.mockito.Mockito.when;
 
 /** Tests physical name resolution and catalog failure translation at the Admin boundary. */
-final class FlussMetadataAccessTest {
-    private final Admin admin = mock(Admin.class);
-    private final FlussMetadataAccess access = metadataAccess(admin);
+final class FlussMetadataAccessTest extends FlussTrinoTestBase {
+    private TablePath tablePath;
+
+    @BeforeEach
+    void setUpTablePath() {
+        tablePath = TablePath.of(databaseName("Sales"), "Users");
+    }
 
     @Test
-    void testSchemaNamesAreCanonicalAndDistinct() {
-        when(admin.listDatabases())
-                .thenReturn(completedFuture(Arrays.asList("Sales", "sales", "Inventory")));
-        assertThat(access.listSchemaNames()).containsExactlyInAnyOrder("sales", "inventory");
-        assertThat(access.resolveSchema("INVENTORY"))
+    void testSchemaNamesAreCanonicalAndDistinct() throws Exception {
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        createDatabase(databaseName("Inventory"));
+        assertThat(access.listSchemaNames())
+                .contains(databaseName("sales"), databaseName("inventory"))
+                .doesNotHaveDuplicates();
+        assertThat(access.resolveSchema(databaseName("INVENTORY")))
                 .hasValueSatisfying(
                         schema -> {
-                            assertThat(schema.getTrinoName()).isEqualTo("inventory");
-                            assertThat(schema.getFlussName()).isEqualTo("Inventory");
+                            assertThat(schema.getTrinoName()).isEqualTo(databaseName("inventory"));
+                            assertThat(schema.getFlussName()).isEqualTo(databaseName("Inventory"));
                         });
     }
 
     @Test
-    void testAmbiguousSchema() {
-        when(admin.listDatabases()).thenReturn(completedFuture(Arrays.asList("sales", "Sales")));
-        assertThatThrownBy(() -> access.resolveSchema("sales"))
+    void testAmbiguousSchema() throws Exception {
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        assertThatThrownBy(() -> access.resolveSchema(databaseName("sales")))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(NOT_SUPPORTED.toErrorCode()))
-                .hasMessage("Ambiguous Fluss database 'sales': Sales, sales");
+                .hasMessage(
+                        "Ambiguous Fluss database '%s': %s, %s",
+                        databaseName("sales"), databaseName("Sales"), databaseName("sales"));
         assertThatThrownBy(() -> access.listTableNameMappings(Optional.empty()))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("Ambiguous Fluss database");
     }
 
     @Test
-    void testResolvePhysicalTableName() {
-        when(admin.listDatabases()).thenReturn(completedFuture(Collections.singletonList("Sales")));
-        when(admin.listTables("Sales"))
-                .thenReturn(completedFuture(Collections.singletonList("Users")));
-        assertThat(access.resolveTable(new SchemaTableName("sales", "users")))
+    void testResolvePhysicalTableName() throws Exception {
+        createTable(tablePath, usersTable().toTableDescriptor());
+        assertThat(access.resolveTable(new SchemaTableName(databaseName("sales"), "users")))
                 .hasValueSatisfying(
                         table -> {
                             assertThat(table.getTrinoName())
-                                    .isEqualTo(new SchemaTableName("sales", "users"));
-                            assertThat(table.getFlussDatabaseName()).isEqualTo("Sales");
+                                    .isEqualTo(new SchemaTableName(databaseName("sales"), "users"));
+                            assertThat(table.getFlussDatabaseName())
+                                    .isEqualTo(databaseName("Sales"));
                             assertThat(table.getFlussTableName()).isEqualTo("Users");
                         });
-        verify(admin).listTables("Sales");
     }
 
     @Test
-    void testCatalogWideListingResolvesEachPhysicalDatabase() {
-        when(admin.listDatabases())
-                .thenReturn(completedFuture(Arrays.asList("Sales", "Inventory")));
-        when(admin.listTables("Sales"))
-                .thenReturn(completedFuture(Collections.singletonList("Users")));
-        when(admin.listTables("Inventory"))
-                .thenReturn(completedFuture(Collections.singletonList("Products")));
+    void testCatalogWideListingResolvesEachPhysicalDatabase() throws Exception {
+        createTable(tablePath, usersTable().toTableDescriptor());
+        createTable(
+                TablePath.of(databaseName("Inventory"), "Products"),
+                usersTable().toTableDescriptor());
         assertThat(access.listTableNameMappings(Optional.empty()))
                 .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
-                .containsExactly(
-                        new SchemaTableName("sales", "users"),
-                        new SchemaTableName("inventory", "products"));
+                .containsExactlyInAnyOrder(
+                        new SchemaTableName(databaseName("sales"), "users"),
+                        new SchemaTableName(databaseName("inventory"), "products"));
     }
 
     @Test
-    void testTargetedListingIgnoresUnrelatedSchemaAmbiguity() {
-        when(admin.listDatabases())
-                .thenReturn(completedFuture(Arrays.asList("Sales", "sales", "Inventory")));
-        when(admin.listTables("Inventory"))
-                .thenReturn(completedFuture(Collections.singletonList("Products")));
-        assertThat(access.listTableNameMappings(Optional.of("inventory")))
+    void testTargetedListingIgnoresUnrelatedSchemaAmbiguity() throws Exception {
+        createDatabase(databaseName("Sales"));
+        createDatabase(databaseName("sales"));
+        createTable(
+                TablePath.of(databaseName("Inventory"), "Products"),
+                usersTable().toTableDescriptor());
+        assertThat(access.listTableNameMappings(Optional.of(databaseName("inventory"))))
                 .flatExtracting(FlussMetadataAccess.TableNameMapping::listTableNames)
-                .containsExactly(new SchemaTableName("inventory", "products"));
+                .containsExactly(new SchemaTableName(databaseName("inventory"), "products"));
     }
 
     @Test
-    void testMissingSchema() {
-        when(admin.listDatabases()).thenReturn(completedFuture(Collections.emptyList()));
+    void testMissingSchema() throws Exception {
         assertThat(access.resolveSchema("missing")).isEmpty();
         assertThat(access.resolveTable(new SchemaTableName("missing", "users"))).isEmpty();
         assertThat(access.listTableNameMappings(Optional.of("missing"))).isEmpty();
     }
 
     @Test
-    void testTableIndexResolvesOnlyRequestedNames() {
-        when(admin.listTables("Sales"))
-                .thenReturn(completedFuture(Arrays.asList("Users", "Order", "oRder")));
+    void testTableIndexResolvesOnlyRequestedNames() throws Exception {
+        for (String name : Arrays.asList("Users", "Order", "oRder")) {
+            createTable(
+                    TablePath.of(databaseName("Sales"), name), usersTable().toTableDescriptor());
+        }
         FlussMetadataAccess.TableNameMapping index =
-                access.loadTableNameMapping(new ResolvedSchemaName("sales", "Sales"));
+                access.loadTableNameMapping(
+                        new ResolvedSchemaName(databaseName("sales"), databaseName("Sales")));
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThat(index.listTableNames())
-                .containsExactly(
-                        new SchemaTableName("sales", "users"),
-                        new SchemaTableName("sales", "order"));
+                .containsExactlyInAnyOrder(
+                        new SchemaTableName(databaseName("sales"), "users"),
+                        new SchemaTableName(databaseName("sales"), "order"));
         assertThat(index.resolveTable("USERS"))
                 .hasValueSatisfying(
                         table -> assertThat(table.getFlussTableName()).isEqualTo("Users"));
@@ -155,146 +160,123 @@ final class FlussMetadataAccessTest {
         assertThatThrownBy(() -> index.resolveTable("order"))
                 .isInstanceOf(TrinoException.class)
                 .hasMessage("Ambiguous Fluss table 'order': Order, oRder");
-        verify(admin, times(1)).listTables("Sales");
     }
 
     @Test
-    void testDatabaseDroppedBeforeListingTables() {
-        when(admin.listTables("Sales"))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(
-                                new DatabaseNotExistException("dropped")));
-        assertThat(
-                        access.loadTableNameMapping(new ResolvedSchemaName("sales", "Sales"))
-                                .listTableNames())
-                .isEmpty();
+    void testDatabaseDroppedBeforeListingTables() throws Exception {
+        createDatabase(databaseName("Sales"));
+        ResolvedSchemaName schema = access.resolveSchema(databaseName("sales")).get();
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
+        assertThat(access.loadTableNameMapping(schema).listTableNames()).isEmpty();
     }
 
     @Test
-    void testDiscoverySkipsDroppedTableOrDatabase() {
-        TablePath path = TablePath.of("Sales", "Users");
-        when(admin.getTableInfo(path))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")),
-                        FutureUtils.completedExceptionally(
-                                new DatabaseNotExistException("dropped")));
+    void testDiscoverySkipsDroppedTableOrDatabase() throws Exception {
+        createTable(tablePath, usersTable().toTableDescriptor());
         ResolvedTableName table =
-                new ResolvedTableName(new SchemaTableName("sales", "users"), "Sales", "Users");
+                access.resolveTable(new SchemaTableName(databaseName("sales"), "users")).get();
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
         assertThat(access.findTableInfo(table)).isEmpty();
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
         assertThat(access.findTableInfo(table)).isEmpty();
     }
 
     @Test
-    void testExistingHandleReportsDroppedTable() {
-        TableNotExistException failure = new TableNotExistException("dropped");
-        when(admin.getTableInfo(TablePath.of("Sales", "Users")))
-                .thenReturn(FutureUtils.completedExceptionally(failure));
-        assertThatThrownBy(
-                        () ->
-                                access.getTableInfo(
-                                        new FlussTableHandle(
-                                                "sales",
-                                                "users",
-                                                "Sales",
-                                                "Users",
-                                                42,
-                                                3,
-                                                TupleDomain.all())))
+    void testExistingHandleReportsDroppedTable() throws Exception {
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> access.getTableInfo(handle))
                 .isInstanceOf(TableNotFoundException.class)
-                .hasCause(failure)
-                .hasMessageContaining("sales.users");
+                .hasCauseInstanceOf(TableNotExistException.class)
+                .hasMessageContaining(databaseName("sales") + ".users");
     }
 
     @Test
-    void testValidateTableAndSchemaIdentity() {
-        TableInfo info = usersTable();
-        when(admin.getTableInfo(TablePath.of("Sales", "Users"))).thenReturn(completedFuture(info));
-        assertThat(
-                        access.getTableInfo(
-                                new FlussTableHandle(
-                                        "sales",
-                                        "users",
-                                        "Sales",
-                                        "Users",
-                                        42,
-                                        3,
-                                        TupleDomain.all())))
-                .isSameAs(info);
-        assertThatThrownBy(
-                        () ->
-                                access.getTableInfo(
-                                        new FlussTableHandle(
-                                                "sales",
-                                                "users",
-                                                "Sales",
-                                                "Users",
-                                                41,
-                                                3,
-                                                TupleDomain.all())))
+    void testValidateTableAndSchemaIdentity() throws Exception {
+        TableInfo info = createTable(tablePath, usersTable().toTableDescriptor());
+        FlussTableHandle handle = tableHandle(info);
+        assertThat(access.getTableInfo(handle)).isEqualTo(info);
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "extra",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> access.getTableInfo(handle))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         failure ->
                                 assertThat(failure.getErrorCode())
                                         .isEqualTo(FLUSS_METADATA_CHANGED.toErrorCode()))
                 .hasMessageContaining("changed");
-        assertThatThrownBy(
-                        () ->
-                                access.getTableInfo(
-                                        new FlussTableHandle(
-                                                "sales",
-                                                "users",
-                                                "Sales",
-                                                "Users",
-                                                42,
-                                                2,
-                                                TupleDomain.all())))
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
+        createTable(tablePath, usersTable().toTableDescriptor());
+        assertThatThrownBy(() -> access.getTableInfo(handle))
                 .isInstanceOf(TrinoException.class)
                 .hasMessageContaining("changed");
     }
 
     @Test
-    void testListScanPartitionsPreservesPhysicalIdentityAndCounts() {
-        TablePath path = TablePath.of("Sales", "Users");
-        List<PartitionInfo> infos =
-                new ArrayList<>(
-                        Arrays.asList(partitionInfo(0, "east", 2), partitionInfo(20, "west", 4)));
-        when(admin.listPartitionInfos(path)).thenReturn(completedFuture(infos));
-
-        List<PartitionInfo> partitions = access.listScanPartitions(scanHandle(), Optional.empty());
-
-        assertThat(partitions).containsExactlyElementsOf(infos);
+    void testListScanPartitionsPreservesPhysicalIdentityAndCounts() throws Exception {
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
+        PartitionSpec east = new PartitionSpec(Collections.singletonMap("Region", "east"));
+        admin.createPartition(tablePath, east, false).get(30, TimeUnit.SECONDS);
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(TableChange.modifyBucketCount(2)),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        admin.createPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("Region", "west")),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        List<PartitionInfo> partitions = access.listScanPartitions(handle, Optional.empty());
+        assertThat(partitions)
+                .extracting(PartitionInfo::getBucketCount)
+                .containsExactlyInAnyOrder(4, 2);
+        assertThat(partitions).extracting(PartitionInfo::getPartitionId).doesNotHaveDuplicates();
         assertThatThrownBy(() -> partitions.add(partitionInfo(30, "north", 8)))
                 .isInstanceOf(UnsupportedOperationException.class);
-        infos.clear();
+        admin.dropPartition(tablePath, east, false).get(30, TimeUnit.SECONDS);
         assertThat(partitions).hasSize(2);
-        verify(admin).listPartitionInfos(path);
-        verifyNoMoreInteractions(admin);
+        assertThat(access.listScanPartitions(handle, Optional.empty())).hasSize(1);
     }
 
     @Test
-    void testListScanPartitionsUsesPartitionSpec() {
-        TablePath path = TablePath.of("Sales", "Users");
-        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("region", "east"));
-        PartitionInfo info = partitionInfo(10, "east", 2);
-        when(admin.listPartitionInfos(path, spec))
-                .thenReturn(completedFuture(Collections.singletonList(info)));
-
-        assertThat(access.listScanPartitions(scanHandle(), Optional.of(spec)))
-                .containsExactly(info);
-        verify(admin).listPartitionInfos(path, spec);
-        verifyNoMoreInteractions(admin);
+    void testListScanPartitionsUsesPartitionSpec() throws Exception {
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
+        PartitionSpec spec = new PartitionSpec(Collections.singletonMap("Region", "east"));
+        admin.createPartition(tablePath, spec, false).get(30, TimeUnit.SECONDS);
+        admin.createPartition(
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("Region", "west")),
+                        false)
+                .get(30, TimeUnit.SECONDS);
+        assertThat(access.listScanPartitions(handle, Optional.of(spec)))
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactly("east");
     }
 
     @Test
-    void testListScanPartitionsRejectsDuplicateIdentities() {
-        TablePath path = TablePath.of("Sales", "Users");
-        List<List<PartitionInfo>> responses =
+    void testListScanPartitionsRejectsDuplicateIdentities() throws Exception {
+        for (List<PartitionInfo> response :
                 Arrays.asList(
                         Arrays.asList(partitionInfo(10, "east", 2), partitionInfo(10, "west", 4)),
-                        Arrays.asList(partitionInfo(10, "east", 2), partitionInfo(20, "east", 4)));
-        for (List<PartitionInfo> response : responses) {
-            when(admin.listPartitionInfos(path)).thenReturn(completedFuture(response));
-            assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+                        Arrays.asList(
+                                partitionInfo(10, "east", 2), partitionInfo(20, "east", 4)))) {
+            usePartitions(response);
+            assertThatThrownBy(
+                            () ->
+                                    access.listScanPartitions(
+                                            tableHandle(usersTable()), Optional.empty()))
                     .isInstanceOfSatisfying(
                             TrinoException.class,
                             e ->
@@ -305,14 +287,13 @@ final class FlussMetadataAccessTest {
     }
 
     @Test
-    void testListScanPartitionsRejectsInvalidCount() {
-        TablePath path = TablePath.of("Sales", "Users");
+    void testListScanPartitionsRejectsInvalidCount() throws Exception {
         for (int count : new int[] {0, -1}) {
-            when(admin.listPartitionInfos(path))
-                    .thenReturn(
-                            completedFuture(
-                                    Collections.singletonList(partitionInfo(10, "east", count))));
-            assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+            usePartitions(Collections.singletonList(partitionInfo(10, "east", count)));
+            assertThatThrownBy(
+                            () ->
+                                    access.listScanPartitions(
+                                            tableHandle(usersTable()), Optional.empty()))
                     .isInstanceOfSatisfying(
                             TrinoException.class,
                             e ->
@@ -323,13 +304,12 @@ final class FlussMetadataAccessTest {
     }
 
     @Test
-    void testListScanPartitionsRejectsNegativePartitionId() {
-        TablePath path = TablePath.of("Sales", "Users");
-        when(admin.listPartitionInfos(path))
-                .thenReturn(
-                        completedFuture(Collections.singletonList(partitionInfo(-1, "east", 2))));
-
-        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
+    void testListScanPartitionsRejectsNegativePartitionId() throws Exception {
+        usePartitions(Collections.singletonList(partitionInfo(-1, "east", 2)));
+        assertThatThrownBy(
+                        () ->
+                                access.listScanPartitions(
+                                        tableHandle(usersTable()), Optional.empty()))
                 .isInstanceOfSatisfying(
                         TrinoException.class,
                         e ->
@@ -339,51 +319,43 @@ final class FlussMetadataAccessTest {
     }
 
     @Test
-    void testListScanPartitionsRpcFailureTranslation() {
-        TablePath path = TablePath.of("Sales", "Users");
-        PartitionNotExistException expired = new PartitionNotExistException("expired");
-        when(admin.listPartitionInfos(path))
-                .thenReturn(FutureUtils.completedExceptionally(expired));
-        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
-                .isInstanceOfSatisfying(
-                        TrinoException.class,
-                        e ->
-                                assertThat(e.getErrorCode())
-                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
-                .hasCause(expired);
-        when(admin.listPartitionInfos(path))
-                .thenReturn(
-                        FutureUtils.completedExceptionally(new TableNotExistException("dropped")),
-                        FutureUtils.completedExceptionally(
-                                new DatabaseNotExistException("dropped")));
-        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
-                .isInstanceOf(TableNotFoundException.class);
-        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
-                .isInstanceOf(TableNotFoundException.class);
-        RuntimeException failure = new RuntimeException("RPC failed");
-        when(admin.listPartitionInfos(path))
-                .thenReturn(FutureUtils.completedExceptionally(failure));
-        assertThatThrownBy(() -> access.listScanPartitions(scanHandle(), Optional.empty()))
-                .isInstanceOfSatisfying(
-                        TrinoException.class,
-                        e ->
-                                assertThat(e.getErrorCode())
-                                        .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
-                .hasCause(failure);
+    void testListScanPartitionsRpcFailureTranslation() throws Exception {
+        for (RuntimeException failure :
+                Arrays.asList(
+                        new PartitionNotExistException("expired"),
+                        new IllegalStateException("RPC failed"))) {
+            useAdmin(
+                    new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                        @Override
+                        public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+                                TablePath path) {
+                            return FutureUtils.completedExceptionally(failure);
+                        }
+                    });
+            assertThatThrownBy(
+                            () ->
+                                    access.listScanPartitions(
+                                            tableHandle(usersTable()), Optional.empty()))
+                    .isInstanceOfSatisfying(
+                            TrinoException.class,
+                            e ->
+                                    assertThat(e.getErrorCode())
+                                            .isEqualTo(FLUSS_SPLIT_ERROR.toErrorCode()))
+                    .hasCause(failure);
+        }
     }
 
     @Test
-    void testListScanPartitionsReturnsEmptyList() {
-        TablePath path = TablePath.of("Sales", "Users");
-        when(admin.listPartitionInfos(path)).thenReturn(completedFuture(Collections.emptyList()));
-
-        assertThat(access.listScanPartitions(scanHandle(), Optional.empty())).isEmpty();
-        verify(admin).listPartitionInfos(path);
-        verifyNoMoreInteractions(admin);
-    }
-
-    private static FlussTableHandle scanHandle() {
-        return new FlussTableHandle("sales", "users", "Sales", "Users", 42, 3, TupleDomain.all());
+    void testListScanPartitionsReturnsEmptyList() throws Exception {
+        FlussTableHandle handle =
+                tableHandle(createTable(tablePath, usersTable().toTableDescriptor()));
+        assertThat(access.listScanPartitions(handle, Optional.empty())).isEmpty();
+        admin.dropTable(tablePath, false).get(30, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> access.listScanPartitions(handle, Optional.empty()))
+                .isInstanceOf(TableNotFoundException.class);
+        admin.dropDatabase(databaseName("Sales"), false, true).get(30, TimeUnit.SECONDS);
+        assertThatThrownBy(() -> access.listScanPartitions(handle, Optional.empty()))
+                .isInstanceOf(TableNotFoundException.class);
     }
 
     private static PartitionInfo partitionInfo(long id, String name, int count) {
@@ -392,31 +364,54 @@ final class FlussMetadataAccessTest {
     }
 
     @Test
-    void testUnexpectedFailurePreservesCause() {
-        RuntimeException failure = new RuntimeException("RPC failed");
-        when(admin.listDatabases()).thenReturn(FutureUtils.completedExceptionally(failure));
+    void testUnexpectedFailurePreservesCause() throws Exception {
+        RuntimeException failure = new IllegalStateException("RPC failed");
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public CompletableFuture<List<String>> listDatabases() {
+                        return FutureUtils.completedExceptionally(failure);
+                    }
+                });
         assertThatThrownBy(access::listSchemaNames)
                 .isInstanceOfSatisfying(
                         TrinoException.class,
-                        exception ->
-                                assertThat(exception.getErrorCode())
+                        e ->
+                                assertThat(e.getErrorCode())
                                         .isEqualTo(FLUSS_METADATA_ERROR.toErrorCode()))
                 .hasCause(failure);
     }
 
     @Test
-    void testDiscoveryDoesNotHideUnexpectedFailure() {
-        RuntimeException failure = new RuntimeException("permission denied");
-        when(admin.getTableInfo(TablePath.of("Sales", "Users")))
-                .thenReturn(FutureUtils.completedExceptionally(failure));
+    void testDiscoveryDoesNotHideUnexpectedFailure() throws Exception {
+        RuntimeException failure = new IllegalStateException("permission denied");
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public CompletableFuture<TableInfo> getTableInfo(TablePath path) {
+                        return FutureUtils.completedExceptionally(failure);
+                    }
+                });
         assertThatThrownBy(
                         () ->
                                 access.findTableInfo(
                                         new ResolvedTableName(
-                                                new SchemaTableName("sales", "users"),
-                                                "Sales",
+                                                new SchemaTableName(databaseName("sales"), "users"),
+                                                databaseName("Sales"),
                                                 "Users")))
                 .isInstanceOf(TrinoException.class)
                 .hasCause(failure);
+    }
+
+    private void usePartitions(List<PartitionInfo> partitions) throws Exception {
+        // Only malformed server responses bypass the real catalog, which rejects these values.
+        useAdmin(
+                new TestingAdmin(testMetadataUpdater(), sharedRpcClient()) {
+                    @Override
+                    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
+                            TablePath path) {
+                        return completedFuture(partitions);
+                    }
+                });
     }
 }

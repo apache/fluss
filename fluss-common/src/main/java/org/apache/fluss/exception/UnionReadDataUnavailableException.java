@@ -15,22 +15,26 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.event;
+package org.apache.fluss.exception;
 
-/** An event that retries persisting the final state of a rebalance. */
-public final class FinalizeRebalanceEvent implements CoordinatorEvent {
-    private final String rebalanceId;
+import org.apache.fluss.annotation.PublicEvolving;
 
-    public FinalizeRebalanceEvent(String rebalanceId) {
-        this.rebalanceId = rebalanceId;
-    }
+/**
+ * A bounded UnionRead cannot capture consistent source boundaries or reconstruct the requested
+ * state from available snapshots and logs.
+ *
+ * <p>Metadata changes may be resolved by capturing new boundaries; missing retained data may not be
+ * recoverable by retrying.
+ *
+ * @since 1.1
+ */
+@PublicEvolving
+public class UnionReadDataUnavailableException extends FlussRuntimeException {
 
-    public String getRebalanceId() {
-        return rebalanceId;
-    }
+    private static final long serialVersionUID = 1L;
 
-    @Override
-    public String toString() {
-        return "FinalizeRebalanceEvent{rebalanceId='" + rebalanceId + "'}";
+    /** Creates an exception describing the unavailable source data or inconsistent boundaries. */
+    public UnionReadDataUnavailableException(String message) {
+        super(message);
     }
 }

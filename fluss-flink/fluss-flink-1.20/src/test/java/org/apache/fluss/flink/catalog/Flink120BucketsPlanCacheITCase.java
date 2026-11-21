@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.table.data.RowData;
@@ -77,6 +78,8 @@ public class Flink120BucketsPlanCacheITCase {
 
     private static SqlGatewayServiceImpl service;
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private SessionHandle sessionHandle;
 
     @BeforeAll
@@ -115,7 +118,7 @@ public class Flink120BucketsPlanCacheITCase {
 
     @Test
     void testCachedPlanLoadsFreshBucketMetadata() throws Exception {
-        String tableName = "cached_plan_buckets";
+        String tableName = tableNames.tableName("cached_plan_buckets");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         executeUpdate(
                 "CREATE TABLE "

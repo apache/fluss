@@ -131,6 +131,7 @@ defmodule Fluss.Error do
     :not_enough_replicas_after_append_exception,
     :not_enough_replicas_exception,
     :leader_not_available_exception,
+    :not_coordinator_leader_exception,
     :storage_backpressure_exception,
     :disk_write_locked,
     :historical_partition_throttled

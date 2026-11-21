@@ -65,9 +65,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
-import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
@@ -78,6 +76,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyRemo
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A request sender for coordinator server to request to tablet server by batch. */
 public class CoordinatorRequestBatch {
@@ -316,13 +315,9 @@ public class CoordinatorRequestBatch {
      *       none-partitioned table
      *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
      *       created partitioned table
-     *   <li>case4: Table is queued for deletion, in this case we will set an empty tableBucket set
-     *       and tableId set to {@link TableMetadata#DELETED_TABLE_ID} to avoid send unless info to
-     *       tabletServer
+     *   <li>case4: Table deletion sends the original table ID and the legacy deletion marker.
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
-     *   <li>case6: Partition is queued for deletion, in this case we will set an empty tableBucket
-     *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
-     *       send unless info to tabletServer
+     *   <li>case6: Partition deletion sends the original partition ID and the deletion name.
      *   <li>case7: Leader and isr is changed for these input tableBuckets
      *   <li>case8: One newly tabletServer added into cluster
      *   <li>case9: One tabletServer is removed from cluster
@@ -721,60 +716,39 @@ public class CoordinatorRequestBatch {
     private UpdateMetadataRequest buildUpdateMetadataRequest() {
         List<TableMetadata> tableMetadataList = new ArrayList<>();
         updateMetadataRequestBucketMap.forEach(
-                (tableId, bucketMetadataList) -> {
-                    TableInfo tableInfo = getTableInfo(tableId);
-                    if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
-                    }
-                });
+                (tableId, buckets) -> addTableMetadata(tableMetadataList, tableId, buckets));
 
         List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
         updateMetadataRequestPartitionMap.forEach(
                 (tableId, partitionIdToBucketMetadataMap) -> {
-                    for (Map.Entry<Long, List<BucketMetadata>> kvEntry :
+                    boolean includeTable = coordinatorContext.isTableQueuedForDeletion(tableId);
+                    for (Map.Entry<Long, List<BucketMetadata>> entry :
                             partitionIdToBucketMetadataMap.entrySet()) {
-                        Long partitionId = kvEntry.getKey();
-                        boolean partitionQueuedForDeletion =
-                                coordinatorContext.isPartitionQueuedForDeletion(
-                                        new TablePartition(tableId, partitionId));
-                        String partitionName = coordinatorContext.getPartitionName(partitionId);
-                        // Count belongs to the registered layout, not the incremental locations.
-                        Integer bucketCount =
-                                coordinatorContext.getPartitionBucketCount(
-                                        new TablePartition(tableId, partitionId));
-                        PartitionMetadata partitionMetadata;
-                        if (partitionName == null) {
-                            if (partitionQueuedForDeletion) {
-                                partitionMetadata =
-                                        new PartitionMetadata(
-                                                tableId,
-                                                DELETED_PARTITION_NAME,
-                                                partitionId,
-                                                kvEntry.getValue(),
-                                                bucketCount);
-                            } else {
-                                throw new IllegalStateException(
-                                        "Partition name is null for partition " + partitionId);
-                            }
+                        long partitionId = entry.getKey();
+                        TablePartition partition = new TablePartition(tableId, partitionId);
+                        String name;
+                        if (coordinatorContext.isPartitionQueuedForDeletion(partition)) {
+                            name = DELETED_PARTITION_NAME;
                         } else {
-                            partitionMetadata =
-                                    new PartitionMetadata(
-                                            tableId,
-                                            partitionName,
-                                            partitionQueuedForDeletion
-                                                    ? DELETED_PARTITION_ID
-                                                    : partitionId,
-                                            kvEntry.getValue(),
-                                            bucketCount);
+                            name = coordinatorContext.getPartitionName(partitionId);
+                            checkState(
+                                    name != null,
+                                    "Partition name is null for partition %s",
+                                    partitionId);
+                            includeTable = true;
                         }
-                        // table
-                        partitionMetadataList.add(partitionMetadata);
+                        partitionMetadataList.add(
+                                new PartitionMetadata(
+                                        tableId,
+                                        name,
+                                        partitionId,
+                                        entry.getValue(),
+                                        coordinatorContext.getPartitionBucketCount(partition)));
                     }
-                    // no bucket metadata, use empty metadata list
-                    TableInfo tableInfo = getTableInfo(tableId);
-                    if (tableInfo != null) {
-                        tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                    // An ID-only partition deletion needs no parent metadata. Re-sending it
+                    // could restore an old table if the deletion arrives after recreation.
+                    if (includeTable) {
+                        addTableMetadata(tableMetadataList, tableId, Collections.emptyList());
                     }
                 });
 
@@ -788,39 +762,22 @@ public class CoordinatorRequestBatch {
                 partitionMetadataList);
     }
 
-    @Nullable
-    private TableInfo getTableInfo(long tableId) {
+    private void addTableMetadata(
+            List<TableMetadata> result, long tableId, List<BucketMetadata> buckets) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
-        boolean tableQueuedForDeletion = coordinatorContext.isTableQueuedForDeletion(tableId);
-        if (tableInfo == null) {
-            if (tableQueuedForDeletion) {
-                return TableInfo.of(
-                        DELETED_TABLE_PATH,
-                        tableId,
-                        0,
-                        EMPTY_TABLE_DESCRIPTOR,
-                        EMPTY_REMOTE_DATA_DIR,
-                        -1L,
-                        -1L);
-            } else {
-                // it may happen that the table is dropped, but the partition still exists
-                // when coordinator restarts, it won't consider it as deleted table,
-                // and will still send partition bucket metadata to tablet server after startup,
-                // which will fail into this code patch, not throw exception, just return null.
-                // TODO: FIX ME, it shouldn't come into here
-                return null;
-            }
-        } else {
-            return tableQueuedForDeletion
-                    ? TableInfo.of(
-                            tableInfo.getTablePath(),
-                            DELETED_TABLE_ID,
+        if (coordinatorContext.isTableQueuedForDeletion(tableId)) {
+            TableInfo tombstone =
+                    TableInfo.of(
+                            tableInfo == null ? DELETED_TABLE_PATH : tableInfo.getTablePath(),
+                            tableId,
                             0,
                             EMPTY_TABLE_DESCRIPTOR,
                             EMPTY_REMOTE_DATA_DIR,
                             -1L,
-                            -1L)
-                    : tableInfo;
+                            -1L);
+            result.add(new TableMetadata(tombstone, buckets, true));
+        } else if (tableInfo != null) {
+            result.add(new TableMetadata(tableInfo, buckets));
         }
     }
 }

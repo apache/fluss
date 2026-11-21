@@ -211,9 +211,10 @@ mod tests {
         assert_eq!((code, answer), (0, 42));
         drop(capture);
         assert!(weak.upgrade().is_none());
+        // Receiving the message can precede the callback's return and sender drop.
         assert!(matches!(
-            rx.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
+            rx.recv_timeout(Duration::from_secs(10)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
         ));
     }
 

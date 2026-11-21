@@ -30,9 +30,10 @@ on:
     paths:
       - 'website/**'
 
+# Runs on arm64, whose queue stays short at peak hours. Release branches stay on x86.
 jobs:
   test-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ startsWith(github.ref, 'refs/heads/release-') && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     defaults:
       run:
         working-directory: ./website

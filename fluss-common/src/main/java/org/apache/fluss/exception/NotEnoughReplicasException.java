@@ -21,8 +21,9 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.ConfigOptions;
 
 /**
- * Number of inSync replicas for the table bucket is lower than the conf {@link
- * ConfigOptions#LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER}.
+ * Number of in-sync replicas for the table bucket is lower than the minimum configured by {@link
+ * ConfigOptions#TABLE_MIN_IN_SYNC_REPLICAS}, or {@link
+ * ConfigOptions#LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER} if no table override is set.
  *
  * @since 0.1
  */

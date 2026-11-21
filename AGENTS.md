@@ -118,6 +118,11 @@ assertThatThrownBy(() -> doSomething()).isInstanceOf(IllegalArgumentException.cl
 **Usage:** `@PublicStable` for core APIs (`Connection`, `Admin`); `@PublicEvolving` for new features; `@Internal` for RPC/internals
 **Reference:** `fluss-common/src/main/java/org/apache/fluss/annotation/`
 
+### Extending Methods and Constructors
+
+- **Internal interfaces/classes:** Prefer changing existing methods or constructors and updating usages directly. Backward compatibility is not required; avoid compatibility overloads unless migration would require exceptionally large changes. Java `public` visibility alone does not make an API public.
+- **Public APIs (`@PublicStable` / `@PublicEvolving`):** Preserve existing signatures and contracts, including compatibility with existing implementations; extend through compatible new methods or overloads.
+
 ### Builder Pattern
 
 ```java
@@ -301,6 +306,14 @@ fluss/
 - Test contracts, results, observable state, and failure behavior. Verify call counts or ordering only when those interactions are part of the contract.
 - When modifying existing tests, do not expand Mockito usage. Existing Mockito usage does not justify new usage, and unrelated Mockito tests do not need to be rewritten.
 - Keep changes focused; do not introduce unrelated production refactoring solely to avoid Mockito.
+
+### Table Names in Shared Test Clusters
+
+- Ordinary test invocations sharing a Fluss cluster must use distinct fully qualified table paths, including parameterized and repeated invocations. Waiting for a drop future does not imply that every metadata cache has observed the deletion.
+- Prefer an instance-scoped `TestTableNames` in JUnit's per-method lifecycle, or a name derived from the test method and all invocation parameters. Keep the generated path and use it consistently for DDL, reads, writes, SQL, and assertions; do not put generated names in static fields shared by test methods.
+- When a framework reuses the test instance, such as JUnit `PER_CLASS` or ScalaTest suites, create a fresh naming scope in each test's setup before deriving names. A final helper initialized once for the suite does not isolate its test methods.
+- Preserve deliberate name reuse in tests of table recreation, duplicate creation, catalog behavior, or metadata recovery. Reuse one scoped name within the invocation when exercising those contracts. Tests using a fresh cluster per invocation, and metadata-only unit tests, do not need globally unique names.
+- Name isolation prevents unrelated tests from interfering; it does not replace regression coverage or fixes for table recreation in production. Do not add a blanket duplicate-name assertion that rejects intentional reuse.
 
 ### Test Design
 

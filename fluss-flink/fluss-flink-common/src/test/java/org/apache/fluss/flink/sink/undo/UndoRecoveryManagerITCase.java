@@ -41,6 +41,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.AfterAll;
@@ -137,6 +138,8 @@ public class UndoRecoveryManagerITCase {
                     .column("pt", DataTypes.STRING())
                     .primaryKey("id", "pt")
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
 
     // ==================== Full Update Tests ====================
 
@@ -940,7 +943,7 @@ public class UndoRecoveryManagerITCase {
     // ==================== Helper Methods ====================
 
     private TablePath createTestTablePath(String prefix) {
-        return TablePath.of(DEFAULT_DB, prefix + "_" + System.currentTimeMillis());
+        return tableNames.tablePath(DEFAULT_DB, prefix + "_" + System.currentTimeMillis());
     }
 
     private PartitionSpec newPartitionSpec(String key, String value) {

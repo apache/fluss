@@ -20,23 +20,27 @@ package org.apache.fluss.server.tablet.consumer.group;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
-import org.apache.fluss.exception.InvalidConsumerGroupIdException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.memory.UnmanagedPagedOutputView;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordBatchBuilder;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -46,7 +50,6 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -57,6 +60,8 @@ import org.apache.fluss.server.replica.ReplicaManager.HostedReplica;
 import org.apache.fluss.server.replica.ReplicaManager.OnlineReplica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +69,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -75,13 +81,14 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
-import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
+import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.GROUP_METADATA_PREFIX;
+import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.GROUP_METADATA_RECORD_TYPE;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE;
 import static org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig.OFFSET_COMMIT_REQUIRED_ACKS;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.NO_LEADER;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Discovers consumer group owners and commits offsets to the local leader replica. */
+/** Discovers consumer group owners and reads and commits their offsets on local leaders. */
 @ThreadSafe
 @Internal
 public final class ConsumerGroupManager {
@@ -101,6 +108,7 @@ public final class ConsumerGroupManager {
     private final Executor ioExecutor;
     private final AtomicReference<CompletableFuture<TableInfo>> tableInitFuture =
             new AtomicReference<>();
+    @Nullable private volatile CachedValueDecoder cachedValueDecoder;
 
     /** Creates a manager for consumer groups on this tablet server. */
     public ConsumerGroupManager(
@@ -126,8 +134,7 @@ public final class ConsumerGroupManager {
     }
 
     /** Finds the owner of a group, initializing the offsets table on first discovery. */
-    public CompletableFuture<ServerNode> findOwner(String groupId, String listenerName) {
-        checkGroupId(groupId);
+    public CompletableFuture<ServerNode> findOwner(GroupId groupId, String listenerName) {
         return ensureTableAsync()
                 .thenCompose(
                         info ->
@@ -140,7 +147,13 @@ public final class ConsumerGroupManager {
     public void onTableMetadataUpdate(List<TableMetadata> tables) {
         for (TableMetadata table : tables) {
             TableInfo info = table.getTableInfo();
-            if (SystemTables.CONSUMER_OFFSETS.equals(info.getTablePath())) {
+            if (table.isDeleted() && info.getTableId() != DELETED_TABLE_ID) {
+                CompletableFuture<TableInfo> current = tableInitFuture.get();
+                TableInfo cached = getInitializedTableOrNull(current);
+                if (cached != null && cached.getTableId() == info.getTableId()) {
+                    tableInitFuture.compareAndSet(current, null);
+                }
+            } else if (SystemTables.CONSUMER_OFFSETS.equals(info.getTablePath())) {
                 if (info.getTableId() == DELETED_TABLE_ID) {
                     tableInitFuture.set(null);
                 } else if (metadataCache.getBucketCountEpoch(info.getTableId()).orElse(-1L)
@@ -148,43 +161,35 @@ public final class ConsumerGroupManager {
                     // Use only a bucket layout accepted by the metadata cache.
                     tableInitFuture.set(CompletableFuture.completedFuture(info));
                 }
-            } else if (DELETED_TABLE_PATH.equals(info.getTablePath())) {
-                CompletableFuture<TableInfo> current = tableInitFuture.get();
-                TableInfo cached = getInitializedTable(current);
-                if (cached != null && cached.getTableId() == info.getTableId()) {
-                    tableInitFuture.compareAndSet(current, null);
-                }
             }
         }
     }
 
     /** Returns the local leader replica or throws a request-level group error. */
-    public Replica validateGroupId(String groupId) {
-        checkGroupId(groupId);
-        TableInfo info = getInitializedTable(tableInitFuture.get());
-        if (info == null) {
-            throw new ConsumerGroupOwnerNotAvailableException(
-                    "Table metadata for "
-                            + SystemTables.CONSUMER_OFFSETS
-                            + " is not available yet.");
-        }
+    public Replica validateGroupId(GroupId groupId) {
+        TableInfo info = getInitializedTableOrThrow();
         return checkOwnership(
                 new TableBucket(
                         info.getTableId(), offsetSchema.bucketFor(groupId, info.getNumBuckets())));
     }
 
     @Nullable
-    private static TableInfo getInitializedTable(@Nullable CompletableFuture<TableInfo> current) {
-        return current != null && current.isDone() && !current.isCompletedExceptionally()
-                ? current.getNow(null)
-                : null;
+    private static TableInfo getInitializedTableOrNull(
+            @Nullable CompletableFuture<TableInfo> current) {
+        return current == null
+                ? null
+                : current.handle((tableInfo, error) -> tableInfo).getNow(null);
     }
 
-    private static void checkGroupId(String groupId) {
-        if (groupId == null || groupId.isEmpty()) {
-            throw new InvalidConsumerGroupIdException(
-                    "Consumer group id must not be null or empty.");
+    private TableInfo getInitializedTableOrThrow() {
+        TableInfo info = getInitializedTableOrNull(tableInitFuture.get());
+        if (info == null) {
+            throw new ConsumerGroupOwnerNotAvailableException(
+                    "Table metadata for "
+                            + SystemTables.CONSUMER_OFFSETS
+                            + " is not available yet.");
         }
+        return info;
     }
 
     /**
@@ -248,14 +253,7 @@ public final class ConsumerGroupManager {
                                                     "Group owner node "
                                                             + leaderId
                                                             + " is not registered in ZooKeeper"));
-            ServerNode owner =
-                    new ServerInfo(
-                                    leaderId,
-                                    registration.getRack(),
-                                    registration.getEndpoints(),
-                                    ServerType.TABLET_SERVER,
-                                    registration.getResource())
-                            .node(listenerName);
+            ServerNode owner = registration.toServerInfo(leaderId).node(listenerName);
             if (owner == null) {
                 throw new ConsumerGroupOwnerNotAvailableException(
                         "Group owner node "
@@ -361,6 +359,7 @@ public final class ConsumerGroupManager {
                             .schema(ConsumerOffsetSchema.getTableSchema())
                             .logFormat(LogFormat.COMPACTED)
                             .distributedBy(bucketCount, ConsumerOffsetSchema.getBucketKeyColumn())
+                            .property(ConfigOptions.TABLE_CHANGELOG_IMAGE, ChangelogImage.WAL)
                             .property(
                                     ConfigOptions.TABLE_LOG_TTL,
                                     offsetsConfig.getOffsetsRetention())
@@ -388,9 +387,12 @@ public final class ConsumerGroupManager {
         }
     }
 
-    /** Appends on the calling worker and completes the result when the write is acknowledged. */
+    /**
+     * Appends on the calling worker and completes the result when the write is acknowledged. A
+     * successful batch also upserts the group metadata row used by listing and deletion.
+     */
     public CompletableFuture<Map<TableBucket, Errors>> handleCommitConsumerOffsets(
-            String groupId,
+            GroupId groupId,
             Replica offsetsReplica,
             Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
         long maxMetadataBytes = offsetsConfig.getMaxMetadataSize().getBytes();
@@ -409,31 +411,269 @@ public final class ConsumerGroupManager {
             return CompletableFuture.completedFuture(results);
         }
 
-        CompletableFuture<List<PutKvResultForBucket>> write = new CompletableFuture<>();
         try {
-            KvRecordBatch batch =
-                    buildUpsertBatch(
-                            groupId, validOffsets, offsetsReplica.getTableInfo().getSchemaId());
-            Map<TableBucket, KvRecordBatch> batchByBucket =
-                    Collections.singletonMap(offsetsReplica.getTableBucket(), batch);
-            replicaManager.putRecordsToKv(
-                    offsetsConfig.getOffsetCommitTimeoutMs(),
-                    OFFSET_COMMIT_REQUIRED_ACKS,
-                    batchByBucket,
-                    null,
-                    MergeMode.DEFAULT,
-                    ApiKeys.PUT_KV.highestSupportedVersion,
-                    write::complete);
+            KvRecordBatch batch = buildUpsertBatch(groupId, validOffsets, offsetsReplica);
+            return writeBatch(offsetsReplica, batch)
+                    .thenApply(
+                            writeResults -> handleWriteCompletion(groupId, results, writeResults));
         } catch (Exception e) {
             return CompletableFuture.completedFuture(handleCommitFailure(groupId, results, e));
         }
-        return write.thenApply(
-                writeResults -> handleWriteCompletion(groupId, results, writeResults));
+    }
+
+    /**
+     * Deletes selected committed offsets. Missing offsets are successful no-ops; the KV write path
+     * skips tombstones whose previous value does not exist.
+     */
+    public CompletableFuture<Map<TableBucket, Errors>> handleDeleteConsumerOffsets(
+            GroupId groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
+        List<byte[]> keys = new ArrayList<>(requestedBuckets.size());
+        Map<TableBucket, Errors> results = new HashMap<>();
+        for (TableBucket tableBucket : requestedBuckets) {
+            keys.add(
+                    offsetSchema.encodeOffsetKey(
+                            groupId,
+                            tableBucket.getTableId(),
+                            tableBucket.getPartitionId(),
+                            tableBucket.getBucket()));
+            results.put(tableBucket, Errors.NONE);
+        }
+
+        return deleteKeys(offsetsReplica, keys)
+                .handle(
+                        (ignored, error) -> {
+                            if (error == null) {
+                                return results;
+                            }
+
+                            Errors writeError = Errors.forException(error);
+                            for (TableBucket tableBucket : requestedBuckets) {
+                                results.put(tableBucket, writeError);
+                            }
+                            return results;
+                        });
+    }
+
+    /**
+     * Reads all or selected committed offsets from the local leader replica on the calling thread.
+     */
+    public CompletableFuture<Map<TableBucket, ConsumerOffsetAndMetadata>> handleGetConsumerOffsets(
+            GroupId groupId, Replica offsetsReplica, List<TableBucket> requestedBuckets) {
+        Map<TableBucket, ConsumerOffsetAndMetadata> offsets = new HashMap<>();
+        try {
+            ValueDecoder decoder = getValueDecoder(offsetsReplica.getSchemaGetter());
+            if (requestedBuckets == null) {
+                populateAllOffsets(
+                        offsetsReplica.prefixLookup(offsetSchema.encodeOffsetCommitPrefix(groupId)),
+                        decoder,
+                        offsets);
+            } else {
+                List<byte[]> keys = new ArrayList<>(requestedBuckets.size());
+                for (TableBucket tableBucket : requestedBuckets) {
+                    keys.add(
+                            offsetSchema.encodeOffsetKey(
+                                    groupId,
+                                    tableBucket.getTableId(),
+                                    tableBucket.getPartitionId(),
+                                    tableBucket.getBucket()));
+                }
+                populateSelectedOffsets(
+                        requestedBuckets, offsetsReplica.lookups(keys), decoder, offsets);
+            }
+            return CompletableFuture.completedFuture(offsets);
+        } catch (Exception e) {
+            LOG.warn("Failed to read offsets for group {}.", groupId, e);
+            ApiException exception =
+                    e instanceof ApiException
+                            ? (ApiException) e
+                            : Errors.forException(e).exception(e.getMessage());
+            return FutureUtils.completedExceptionally(exception);
+        }
+    }
+
+    @VisibleForTesting
+    ValueDecoder getValueDecoder(SchemaGetter schemaGetter) {
+        CachedValueDecoder cached = cachedValueDecoder;
+        if (cached == null || cached.schemaGetter != schemaGetter) {
+            // Concurrent misses may create two decoders. Each caller keeps its matching pair.
+            cached = new CachedValueDecoder(schemaGetter);
+            cachedValueDecoder = cached;
+        }
+        return cached.decoder;
+    }
+
+    @VisibleForTesting
+    static void populateAllOffsets(
+            List<ByteArraySlice> values,
+            ValueDecoder valueDecoder,
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        for (ByteArraySlice value : values) {
+            InternalRow row = valueDecoder.decodeValue(value.toByteArray()).row;
+            offsets.put(
+                    ConsumerOffsetSchema.toTableBucket(row),
+                    ConsumerOffsetSchema.toOffsetAndMetadata(row));
+        }
+    }
+
+    @VisibleForTesting
+    static void populateSelectedOffsets(
+            List<TableBucket> requestedBuckets,
+            List<ByteArraySlice> values,
+            ValueDecoder valueDecoder,
+            Map<TableBucket, ConsumerOffsetAndMetadata> offsets) {
+        for (int i = 0; i < requestedBuckets.size(); i++) {
+            ByteArraySlice value = values.get(i);
+            if (value == null) {
+                offsets.put(requestedBuckets.get(i), null);
+                continue;
+            }
+            InternalRow row = valueDecoder.decodeValue(value.toByteArray()).row;
+            offsets.put(requestedBuckets.get(i), ConsumerOffsetSchema.toOffsetAndMetadata(row));
+        }
+    }
+
+    /**
+     * Lists distinct consumer groups from consumer-offset buckets led by this server. Listing does
+     * not initialize the offsets table; prefix reads run on the RPC worker thread.
+     */
+    public List<String> handleListConsumerGroups() {
+        TableInfo offsetsTableInfo = getInitializedTableOrThrow();
+        List<String> groupIds = new ArrayList<>();
+        for (int bucketId = 0; bucketId < offsetsTableInfo.getNumBuckets(); bucketId++) {
+            Replica replica =
+                    localLeaderReplica(new TableBucket(offsetsTableInfo.getTableId(), bucketId));
+            if (replica == null) {
+                continue;
+            }
+            List<ByteArraySlice> groupMetadataList = replica.prefixLookup(GROUP_METADATA_PREFIX);
+            ValueDecoder valueDecoder = getValueDecoder(replica.getSchemaGetter());
+            for (ByteArraySlice groupMetadata : groupMetadataList) {
+                InternalRow row = valueDecoder.decodeValue(groupMetadata.toByteArray()).row;
+                if (row.getInt(0) == GROUP_METADATA_RECORD_TYPE) {
+                    groupIds.add(row.getString(1).toString());
+                }
+            }
+        }
+        return groupIds;
+    }
+
+    /**
+     * Deletes consumer-group metadata and all committed offsets owned by this server. Callers are
+     * expected to route each group to its owner. Reads run on the calling thread and tombstone
+     * writes are asynchronous. A later offset commit recreates the group; deletion is not fenced
+     * against concurrent commits.
+     */
+    public CompletableFuture<Map<String, Errors>> handleDeleteConsumerGroups(
+            Map<GroupId, Replica> offsetsReplicasByGroup) {
+        List<CompletableFuture<Errors>> deletions = new ArrayList<>(offsetsReplicasByGroup.size());
+        for (Map.Entry<GroupId, Replica> entry : offsetsReplicasByGroup.entrySet()) {
+            GroupId groupId = entry.getKey();
+            Replica replica = entry.getValue();
+            try {
+                ValueDecoder valueDecoder = getValueDecoder(replica.getSchemaGetter());
+                byte[] metadataKey = offsetSchema.encodeGroupMetadataKey(groupId);
+                List<byte[]> offsetKeys =
+                        encodeOffsetRowKeys(
+                                groupId,
+                                replica.prefixLookup(
+                                        offsetSchema.encodeOffsetCommitPrefix(groupId)),
+                                valueDecoder);
+                List<byte[]> keys = new ArrayList<>(offsetKeys.size() + 1);
+                keys.add(metadataKey);
+                keys.addAll(offsetKeys);
+                deletions.add(
+                        deleteKeys(replica, keys)
+                                .handle(
+                                        (ignored, error) ->
+                                                error == null
+                                                        ? Errors.NONE
+                                                        : Errors.forException(error)));
+            } catch (Exception e) {
+                deletions.add(CompletableFuture.completedFuture(Errors.forException(e)));
+            }
+        }
+        return CompletableFuture.allOf(deletions.toArray(new CompletableFuture[0]))
+                .thenApply(
+                        allDone -> {
+                            Map<String, Errors> results = new HashMap<>();
+                            int i = 0;
+                            for (GroupId groupId : offsetsReplicasByGroup.keySet()) {
+                                results.put(groupId.getGroupId(), deletions.get(i++).join());
+                            }
+                            return results;
+                        });
+    }
+
+    @VisibleForTesting
+    List<byte[]> encodeOffsetRowKeys(
+            GroupId groupId, List<ByteArraySlice> values, ValueDecoder valueDecoder) {
+        List<byte[]> keys = new ArrayList<>();
+        for (ByteArraySlice value : values) {
+            InternalRow row = valueDecoder.decodeValue(value.toByteArray()).row;
+            if (row.getInt(0) != OFFSET_COMMIT_RECORD_TYPE) {
+                continue;
+            }
+            TableBucket tableBucket = ConsumerOffsetSchema.toTableBucket(row);
+            keys.add(
+                    offsetSchema.encodeOffsetKey(
+                            groupId,
+                            tableBucket.getTableId(),
+                            tableBucket.getPartitionId(),
+                            tableBucket.getBucket()));
+        }
+        return keys;
+    }
+
+    private CompletableFuture<Void> deleteKeys(Replica replica, List<byte[]> keys) {
+        try {
+            KvRecordBatchBuilder builder = createBatchBuilder(replica);
+            for (byte[] key : keys) {
+                builder.append(key, null);
+            }
+            KvRecordBatch batch = DefaultKvRecordBatch.pointToBytesView(builder.build());
+            return writeBatch(replica, batch)
+                    .thenAccept(
+                            writeResults -> {
+                                for (PutKvResultForBucket writeResult : writeResults) {
+                                    Errors error = writeResult.getError().error();
+                                    if (error != Errors.NONE) {
+                                        throw mapCommitError(error).exception();
+                                    }
+                                }
+                            });
+        } catch (Exception e) {
+            return FutureUtils.completedExceptionally(e);
+        }
+    }
+
+    private CompletableFuture<List<PutKvResultForBucket>> writeBatch(
+            Replica replica, KvRecordBatch batch) {
+        CompletableFuture<List<PutKvResultForBucket>> result = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                offsetsConfig.getOffsetCommitTimeoutMs(),
+                OFFSET_COMMIT_REQUIRED_ACKS,
+                Collections.singletonMap(replica.getTableBucket(), batch),
+                null,
+                MergeMode.DEFAULT,
+                ApiKeys.PUT_KV.highestSupportedVersion,
+                result::complete);
+        return result;
+    }
+
+    private Replica localLeaderReplica(TableBucket offsetTableBucket) {
+        HostedReplica hostedReplica = replicaManager.getReplica(offsetTableBucket);
+        if (hostedReplica instanceof OnlineReplica) {
+            Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+            if (replica.isLeader()) {
+                return replica;
+            }
+        }
+        return null;
     }
 
     @VisibleForTesting
     static Map<TableBucket, Errors> handleWriteCompletion(
-            String groupId,
+            GroupId groupId,
             Map<TableBucket, Errors> results,
             List<PutKvResultForBucket> writeResults) {
         try {
@@ -450,26 +690,27 @@ public final class ConsumerGroupManager {
     }
 
     private static Map<TableBucket, Errors> handleCommitFailure(
-            String groupId, Map<TableBucket, Errors> results, Exception exception) {
+            GroupId groupId, Map<TableBucket, Errors> results, Exception exception) {
         LOG.error("Failed to commit offsets for group {}.", groupId, exception);
         return applyWriteError(results, mapCommitError(Errors.forException(exception)));
     }
 
     private KvRecordBatch buildUpsertBatch(
-            String groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets, int schemaId)
+            GroupId groupId, Map<TableBucket, ConsumerOffsetAndMetadata> offsets, Replica replica)
             throws Exception {
-        KvRecordBatchBuilder builder =
-                KvRecordBatchBuilder.builder(
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        new UnmanagedPagedOutputView(OFFSET_COMMIT_PAGE_SIZE),
-                        KvFormat.COMPACTED);
+        KvRecordBatchBuilder builder = createBatchBuilder(replica);
+
+        // Keep a metadata row for every group that has committed offsets. Listing and deleting
+        // groups depend on this row; upserting it on each commit is idempotent.
+        CompactedRow metadataRow = offsetSchema.encodeGroupMetadataRow(groupId);
+        builder.append(offsetSchema.encodeGroupMetadataKey(groupId), metadataRow);
+
         for (Map.Entry<TableBucket, ConsumerOffsetAndMetadata> entry : offsets.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             CompactedRow row =
                     offsetSchema.encodeOffsetRow(
-                            groupId,
                             OFFSET_COMMIT_RECORD_TYPE,
+                            groupId,
                             tableBucket.getTableId(),
                             tableBucket.getPartitionId(),
                             tableBucket.getBucket(),
@@ -478,6 +719,14 @@ public final class ConsumerGroupManager {
             builder.append(key, row);
         }
         return DefaultKvRecordBatch.pointToBytesView(builder.build());
+    }
+
+    private static KvRecordBatchBuilder createBatchBuilder(Replica replica) {
+        return KvRecordBatchBuilder.builder(
+                replica.getTableInfo().getSchemaId(),
+                Integer.MAX_VALUE,
+                new UnmanagedPagedOutputView(OFFSET_COMMIT_PAGE_SIZE),
+                KvFormat.COMPACTED);
     }
 
     /**
@@ -525,6 +774,16 @@ public final class ConsumerGroupManager {
                 return Errors.NOT_CONSUMER_GROUP_OWNER;
             default:
                 return error;
+        }
+    }
+
+    private static final class CachedValueDecoder {
+        private final SchemaGetter schemaGetter;
+        private final ValueDecoder decoder;
+
+        private CachedValueDecoder(SchemaGetter schemaGetter) {
+            this.schemaGetter = schemaGetter;
+            this.decoder = ConsumerOffsetSchema.createValueDecoder(schemaGetter);
         }
     }
 }

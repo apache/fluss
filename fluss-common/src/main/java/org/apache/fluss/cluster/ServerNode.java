@@ -41,6 +41,7 @@ public class ServerNode {
     private final @Nullable String rack;
 
     private final @Nullable ServerTag serverTag;
+    private final @Nullable String softwareVersion;
 
     // Cache hashCode as it is called in performance sensitive parts of the code (e.g.
     // RecordAccumulator.ready)
@@ -61,12 +62,25 @@ public class ServerNode {
             ServerType serverType,
             @Nullable String rack,
             @Nullable ServerTag serverTag) {
+        this(id, host, port, serverType, rack, serverTag, null);
+    }
+
+    /** Creates a node with the optional attributes reported by cluster inspection. */
+    public ServerNode(
+            int id,
+            String host,
+            int port,
+            ServerType serverType,
+            @Nullable String rack,
+            @Nullable ServerTag serverTag,
+            @Nullable String softwareVersion) {
         this.id = id;
         this.host = host;
         this.port = port;
         this.serverType = serverType;
         this.rack = rack;
         this.serverTag = serverTag;
+        this.softwareVersion = softwareVersion;
         if (serverType == ServerType.COORDINATOR) {
             this.uid = "cs-" + id;
         } else {
@@ -116,6 +130,14 @@ public class ServerNode {
     }
 
     /**
+     * Returns the software version reported for a live tablet server by cluster inspection, or null
+     * if unavailable. This is a display value and does not describe feature support.
+     */
+    public @Nullable String softwareVersion() {
+        return softwareVersion;
+    }
+
+    /**
      * Check whether this node is empty, which may be the case if noNode() is used as a placeholder
      * in a response payload with an error.
      *
@@ -160,6 +182,7 @@ public class ServerNode {
     @Override
     public String toString() {
         String tag = serverTag == null ? "" : ", tag: " + serverTag;
-        return host + ":" + port + " (id: " + uid + ", rack: " + rack + tag + ")";
+        String version = softwareVersion == null ? "" : ", version: " + softwareVersion;
+        return host + ":" + port + " (id: " + uid + ", rack: " + rack + tag + version + ")";
     }
 }

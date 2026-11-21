@@ -85,7 +85,9 @@ fn build_remote_file_io_builder(
 
     // Handle both URL (e.g., "s3://bucket/path") and local file paths.
     // If the path doesn't contain "://", treat it as a local file path.
-    let remote_log_tablet_dir_url = if normalized_remote_log_tablet_dir.contains("://") {
+    let remote_log_tablet_dir_url = if normalized_remote_log_tablet_dir.contains("://")
+        || normalized_remote_log_tablet_dir.starts_with("file:/")
+    {
         normalized_remote_log_tablet_dir
     } else {
         Cow::Owned(format!("file://{normalized_remote_log_tablet_dir}"))
@@ -959,7 +961,7 @@ impl Drop for RemoteLogDownloader {
 
 impl RemoteLogDownloader {
     /// Download a file from remote storage to local using streaming read/write.
-    async fn download_file(
+    pub(super) async fn download_file(
         remote_log_tablet_dir: &str,
         remote_path: &str,
         local_path: &Path,

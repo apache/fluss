@@ -419,3 +419,23 @@ Usage:
 {{- end -}}
 {{- join "\n" $msgs -}}
 {{- end -}}
+
+{{/*
+Env entries publishing the advertised address of the in-cluster listeners as
+FLUSS_ADVERTISED_LISTENER_<NAME>=<host>:<port>.
+INTERNAL is not part of advertised.listeners, so Fluss advertises its bind
+address, the pod IP. CLIENT is the same address "fluss.listeners.advertised"
+writes. EXTERNAL is not published: its address can depend on the pod ordinal,
+which is known only at pod start.
+The values reference POD_* via $(VAR), so they must be rendered after those entries.
+Usage:
+  include "fluss.listeners.advertisedEnv" (dict "ctx" . "component" "tablet")
+*/}}
+{{- define "fluss.listeners.advertisedEnv" -}}
+{{- $ctx := .ctx -}}
+{{- $svcTemplate := ternary "fluss.tablet.serviceName" "fluss.coordinator.serviceName" (eq .component "tablet") -}}
+- name: FLUSS_ADVERTISED_LISTENER_INTERNAL
+  value: $(POD_IP):{{ $ctx.Values.listeners.internal.port }}
+- name: FLUSS_ADVERTISED_LISTENER_CLIENT
+  value: $(POD_NAME).{{ include $svcTemplate $ctx }}.$(POD_NAMESPACE).svc.{{ include "fluss.listeners.clusterDomain" $ctx }}:{{ $ctx.Values.listeners.client.port }}
+{{- end -}}

@@ -67,7 +67,14 @@ class RequestsMetricsTest {
                         "fetchLogClient",
                         "fetchLogFollower",
                         "prefixLookup",
-                        "metadata");
+                        "metadata",
+                        "listOffsetsClient",
+                        "listOffsetsFollower",
+                        "limitScan",
+                        "scanKv",
+                        "tableStats",
+                        "notifyLeaderAndIsr",
+                        "stopReplica");
     }
 
     @Test
@@ -197,6 +204,24 @@ class RequestsMetricsTest {
                                     .containsEntry("error", Errors.UNKNOWN_SERVER_ERROR.name());
                             assertThat(((Meter) registered.metric).getCount()).isEqualTo(1);
                         });
+    }
+
+    @Test
+    void registersMetricsForAdditionalTabletServerRequests() {
+        RecordingMetricRegistry registry = new RecordingMetricRegistry();
+        MetricGroup serverMetricGroup = new GenericMetricGroup(registry, null, "tabletserver");
+        RequestsMetrics requestsMetrics =
+                RequestsMetrics.createTabletServerRequestMetrics(serverMetricGroup);
+
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIST_OFFSETS.id, true, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.LIMIT_SCAN.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.SCAN_KV.id, false, false)).isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.GET_TABLE_STATS.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.NOTIFY_LEADER_AND_ISR.id, false, false))
+                .isPresent();
+        assertThat(requestsMetrics.getMetrics(ApiKeys.STOP_REPLICA.id, false, false)).isPresent();
     }
 
     static class RecordingMetricRegistry implements MetricRegistry {

@@ -22,6 +22,7 @@ defmodule Fluss.WriteHandle do
   Returned by `Fluss.AppendWriter.append/2`, `Fluss.UpsertWriter.upsert/2` and
   `Fluss.UpsertWriter.delete/2`. Drop for fire-and-forget,
   or call `wait/1` for per-record server acknowledgment.
+  A flush doesn't return the error of a failed write, so a dropped handle hides it.
   """
 
   alias Fluss.Native

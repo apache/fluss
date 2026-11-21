@@ -24,11 +24,11 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
+import org.apache.fluss.metadata.GroupId;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.ValueDecoder;
@@ -45,6 +45,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -82,12 +83,14 @@ class ConsumerOffsetCommitITCase {
                                     .set(ConfigOptions.OFFSETS_TABLE_REPLICATION_FACTOR, 3))
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void testCommitConsumerOffsetsAfterLeaderChange() throws Exception {
         long tableId =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
-                        TablePath.of("test_db", "consumer_offset_source"),
+                        tableNames.tablePath("test_db", "consumer_offset_source"),
                         TableDescriptor.builder()
                                 .schema(
                                         Schema.newBuilder()
@@ -248,7 +251,7 @@ class ConsumerOffsetCommitITCase {
         byte[] key =
                 new ConsumerOffsetSchema()
                         .encodeOffsetKey(
-                                GROUP_ID,
+                                GroupId.of(GROUP_ID),
                                 sourceBucket.getTableId(),
                                 sourceBucket.getPartitionId(),
                                 sourceBucket.getBucket());
@@ -277,9 +280,9 @@ class ConsumerOffsetCommitITCase {
                     assertThat(bucket.getValuesCount()).isEqualTo(1);
                     assertThat(bucket.getValueAt(0).hasValues()).isTrue();
                     InternalRow row = decoder.decodeValue(bucket.getValueAt(0).getValues()).row;
-                    assertThat(row.getString(0).toString()).isEqualTo(GROUP_ID);
-                    assertThat(row.getInt(1))
+                    assertThat(row.getInt(0))
                             .isEqualTo(ConsumerOffsetSchema.OFFSET_COMMIT_RECORD_TYPE);
+                    assertThat(row.getString(1).toString()).isEqualTo(GROUP_ID);
                     assertThat(row.getLong(2)).isEqualTo(sourceBucket.getTableId());
                     assertThat(row.getLong(3))
                             .isEqualTo(ConsumerOffsetSchema.NON_PARTITIONED_PARTITION_ID);

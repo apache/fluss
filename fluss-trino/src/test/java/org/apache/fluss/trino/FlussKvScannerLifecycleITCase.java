@@ -20,6 +20,7 @@ package org.apache.fluss.trino;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.KvBatchScanner;
@@ -66,8 +67,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /** Real-client checks for the difference between local close and remote snapshot reclamation. */
 class FlussKvScannerLifecycleITCase {
@@ -230,8 +229,9 @@ class FlussKvScannerLifecycleITCase {
     }
 
     private KvBatchScanner newScanner(TableInfo info, FaultGateway gateway) {
-        SchemaGetter schemaGetter = mock(SchemaGetter.class);
-        when(schemaGetter.getSchema(info.getSchemaId())).thenReturn(info.getSchema());
+        SchemaGetter schemaGetter =
+                new ClientSchemaGetter(info.getTablePath(), info.getSchemaInfo(), admin);
+
         return new KvBatchScanner(
                 info,
                 new TableBucket(info.getTableId(), 0),

@@ -18,8 +18,10 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -34,7 +36,6 @@ import org.apache.fluss.server.coordinator.TestingControlledNotifyGateway.Pendin
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrRequestContext;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
-import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutionKey;
@@ -110,6 +111,126 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testApplyRebalanceConcurrencyChange() {
+        Configuration newConfig = new Configuration();
+        newConfig.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+
+        eventProcessor.getRebalanceManager().reconfigure(newConfig);
+
+        assertThat(eventProcessor.getRebalanceManager().getMaxInflightRebalanceTasks())
+                .isEqualTo(3);
+    }
+
+    @Test
+    void testLeaderOnlyRebalanceExecutesUpToConfiguredConcurrency() throws Exception {
+        initCoordinatorChannel();
+        List<Integer> replicas = Arrays.asList(0, 1, 2);
+        long tableId = createTableWithReplicas(replicas, 3);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+        TableBucket tb1 = new TableBucket(tableId, 1);
+        TableBucket tb2 = new TableBucket(tableId, 2);
+        installBlockingNotifyGateways(pendingResponses);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        plan.put(tb0, new RebalancePlanForBucket(tb0, 0, 1, replicas, Arrays.asList(1, 0, 2)));
+        plan.put(tb1, new RebalancePlanForBucket(tb1, 0, 2, replicas, Arrays.asList(2, 0, 1)));
+        plan.put(tb2, new RebalancePlanForBucket(tb2, 0, 1, replicas, Arrays.asList(1, 2, 0)));
+
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("parallel-leader-only", plan);
+                    return null;
+                });
+
+        assertThat(rebalanceExecutionKey(tb0)).isNotNull();
+        assertThat(rebalanceExecutionKey(tb1)).isNotNull();
+        assertThat(rebalanceExecutionKey(tb2)).isNull();
+        verifyIsr(tb0, 1, replicas);
+        verifyIsr(tb1, 2, replicas);
+        verifyIsr(tb2, 0, replicas);
+
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(Duration.ofMinutes(1), () -> assertThat(rebalanceExecutionKey(tb2)).isNotNull());
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
+    }
+
+    @Test
+    void testReplicaMigrationsExecuteUpToConfiguredConcurrency() throws Exception {
+        registerTabletServer(3);
+        initCoordinatorChannel();
+        List<Integer> origin = Arrays.asList(0, 1, 3);
+        List<Integer> target = Arrays.asList(0, 1, 2);
+        List<Integer> union = Arrays.asList(0, 1, 2, 3);
+        long tableId = createTableWithReplicas(origin, 3);
+        TableBucket tb0 = new TableBucket(tableId, 0);
+        TableBucket tb1 = new TableBucket(tableId, 1);
+        TableBucket tb2 = new TableBucket(tableId, 2);
+        installBlockingNotifyGateways(pendingResponses);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = new LinkedHashMap<>();
+        plan.put(tb0, new RebalancePlanForBucket(tb0, 0, 0, origin, target));
+        plan.put(tb1, new RebalancePlanForBucket(tb1, 0, 0, origin, target));
+        plan.put(tb2, new RebalancePlanForBucket(tb2, 0, 0, origin, target));
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .reconfigure(
+                                    new Configuration()
+                                            .set(
+                                                    ConfigOptions
+                                                            .COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS,
+                                                    2));
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance("parallel-replica-migration", plan);
+                    return null;
+                });
+
+        TableAssignment assignment = zookeeperClient.getTableAssignment(tableId).get();
+        assertThat(assignment.getBucketAssignment(0)).isEqualTo(new BucketAssignment(union));
+        assertThat(assignment.getBucketAssignment(1)).isEqualTo(new BucketAssignment(union));
+        assertThat(assignment.getBucketAssignment(2)).isEqualTo(new BucketAssignment(origin));
+
+        adjustRebalanceIsr(tb0, union);
+        adjustRebalanceIsr(tb1, union);
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        zookeeperClient
+                                                .getTableAssignment(tableId)
+                                                .get()
+                                                .getBucketAssignment(2))
+                                .isEqualTo(new BucketAssignment(union)));
+
+        adjustRebalanceIsr(tb2, union);
+        drainPendingNotifyTriggers(pendingResponses);
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    drainPendingNotifyTriggers(pendingResponses);
+                    assertThat(hasInProgressRebalance()).isFalse();
+                });
+        assignment = zookeeperClient.getTableAssignment(tableId).get();
+        assertThat(assignment.getBucketAssignment(0)).isEqualTo(new BucketAssignment(target));
+        assertThat(assignment.getBucketAssignment(1)).isEqualTo(new BucketAssignment(target));
+        assertThat(assignment.getBucketAssignment(2)).isEqualTo(new BucketAssignment(target));
+    }
+
+    @Test
     void testTimedOutReassignmentRetriesPhaseAIdempotently() throws Exception {
         registerTabletServer(3);
 
@@ -122,20 +243,22 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         RebalancePlanForBucket plan =
                 new RebalancePlanForBucket(
                         tableBucket, 0, 0, Arrays.asList(0, 1, 3), Arrays.asList(0, 1, 2));
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance(
-                        "timed-out-retry-test", Collections.singletonMap(tableBucket, plan));
-        RebalanceExecutionKey executionKey =
-                eventProcessor.getRebalanceManager().getExecutionKey(tableBucket);
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance(
+                                    "timed-out-retry-test",
+                                    Collections.singletonMap(tableBucket, plan));
+                    return null;
+                });
+        RebalanceExecutionKey executionKey = rebalanceExecutionKey(tableBucket);
         retry(Duration.ofMinutes(1), () -> assertThat(pendingResponses).isNotEmpty());
         int requestsAfterInitialPhaseA = pendingResponses.size();
         int epochAfterInitialPhaseA =
                 fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get().bucketEpoch());
 
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new RebalanceTaskTimeoutEvent(executionKey));
+        timeoutRebalanceTask(executionKey);
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.TIMEOUT));
@@ -157,8 +280,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(pendingResponses.size()).isGreaterThan(requestsAfterFirstRetry));
-        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tableBucket))
-                .isEqualTo(executionKey);
+        assertThat(rebalanceExecutionKey(tableBucket)).isEqualTo(executionKey);
         int epochAfterDuplicateRetry =
                 fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get().bucketEpoch());
         assertThat(epochAfterDuplicateRetry).isEqualTo(epochAfterInitialPhaseA);
@@ -169,13 +291,13 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         drainPendingNotifyTriggers(pendingResponses);
         fromCtx(ctx -> null);
         adjustRebalanceIsr(tableBucket, Arrays.asList(0, 1, 2, 3));
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+        assertThat(hasInProgressRebalance()).isTrue();
 
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ZkData.ServerIdZNode.path(2));
         retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).doesNotContain(2));
         drainPendingNotifyTriggers(pendingResponses);
         fromCtx(ctx -> null);
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+        assertThat(hasInProgressRebalance()).isTrue();
         assertThat(pendingResponses).isEmpty();
         List<Integer> assignmentWhileTargetOffline = fromCtx(ctx -> ctx.getAssignment(tableBucket));
         assertThat(assignmentWhileTargetOffline).containsExactly(0, 1, 2);
@@ -186,11 +308,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         fromCtx(ctx -> null);
         adjustRebalanceIsr(tableBucket, Arrays.asList(0, 1, 2));
         drainPendingNotifyTriggers(pendingResponses);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
         fromCtx(ctx -> null);
         List<Integer> finalAssignment = fromCtx(ctx -> ctx.getAssignment(tableBucket));
         assertThat(finalAssignment).containsExactly(0, 1, 2);
@@ -249,12 +367,16 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         RebalancePlanForBucket plan =
                 new RebalancePlanForBucket(
                         tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 3));
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance(
-                        "delete-during-rebalance", Collections.singletonMap(tableBucket, plan));
-        RebalanceExecutionKey executionKey =
-                eventProcessor.getRebalanceManager().getExecutionKey(tableBucket);
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance(
+                                    "delete-during-rebalance",
+                                    Collections.singletonMap(tableBucket, plan));
+                    return null;
+                });
+        RebalanceExecutionKey executionKey = rebalanceExecutionKey(tableBucket);
 
         retry(Duration.ofMinutes(1), () -> assertThat(pendingResponses).isNotEmpty());
         fromCtx(
@@ -262,15 +384,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                     ctx.queueTableDeletion(Collections.singleton(tableId));
                     return null;
                 });
-        eventProcessor
-                .getCoordinatorEventManager()
-                .put(new RebalanceTaskTimeoutEvent(executionKey));
+        timeoutRebalanceTask(executionKey);
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
         assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.COMPLETED);
     }
 
@@ -287,17 +403,17 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         RebalancePlanForBucket plan =
                 new RebalancePlanForBucket(
                         tableBucket, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(1, 2, 0));
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance(
-                        "partition-delete-during-rebalance",
-                        Collections.singletonMap(tableBucket, plan));
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance(
+                                    "partition-delete-during-rebalance",
+                                    Collections.singletonMap(tableBucket, plan));
+                    return null;
+                });
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
         assertThat(rebalanceStatus(tableBucket)).isEqualTo(RebalanceStatus.COMPLETED);
     }
 
@@ -363,16 +479,14 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         assertThat(oldRequest.getNotifyBucketsLeaderReqsList()).hasSize(1);
         PbNotifyLeaderAndIsrReqForBucket oldBucketRequest =
                 oldRequest.getNotifyBucketsLeaderReqsList().get(0);
-        RebalanceExecutionKey executionKey =
-                eventProcessor.getRebalanceManager().getExecutionKey(tableBucket);
+        RebalanceExecutionKey executionKey = rebalanceExecutionKey(tableBucket);
 
         // Restart must resume the persisted plan without explicit registration.
         restartCoordinator(recoveredResponses);
         assertThat(eventProcessor.getCoordinatorEpoch())
                 .isGreaterThan(oldRequest.getCoordinatorEpoch());
         fromCtx(ctx -> null);
-        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(tableBucket))
-                .isEqualTo(executionKey);
+        assertThat(rebalanceExecutionKey(tableBucket)).isEqualTo(executionKey);
         verifyIsr(tableBucket, targetLeader, intermediateIsr);
         LeaderAndIsr afterRecovery = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
         assertThat(afterRecovery.leaderEpoch()).isEqualTo(beforeRestart.leaderEpoch());
@@ -415,8 +529,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 Duration.ofMinutes(1),
                 () -> {
                     drainPendingNotifyTriggers(recoveredResponses);
-                    assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                            .isFalse();
+                    assertThat(hasInProgressRebalance()).isFalse();
                     assertThat(zookeeperClient.getRebalanceTask())
                             .hasValue(
                                     new RebalanceTask(
@@ -458,8 +571,8 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                     .cleanupPath(ZkData.ServerIdZNode.path(3));
             retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).doesNotContain(3));
         }
-        RebalanceExecutionKey key = eventProcessor.getRebalanceManager().getExecutionKey(bucket);
-        eventProcessor.getCoordinatorEventManager().put(new RebalanceTaskTimeoutEvent(key));
+        RebalanceExecutionKey key = rebalanceExecutionKey(bucket);
+        timeoutRebalanceTask(key);
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.TIMEOUT));
@@ -470,7 +583,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.FAILED));
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isFalse();
+        assertThat(hasInProgressRebalance()).isFalse();
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
                 .isEqualTo(RebalanceStatus.FAILED);
         assertThat(
@@ -492,13 +605,12 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                                 Collections.singletonList(new ReplicaDistributionGoal()),
                                 response));
         response.get();
-        assertThat(eventProcessor.getRebalanceManager().getRebalanceId()).isNotEqualTo(failedId);
+        assertThat(currentRebalanceId()).isNotEqualTo(failedId);
         retry(
                 Duration.ofMinutes(1),
                 () -> {
                     assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.COMPLETED);
-                    assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                            .isFalse();
+                    assertThat(hasInProgressRebalance()).isFalse();
                     assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
                             .isEqualTo(RebalanceStatus.COMPLETED);
                 });
@@ -543,16 +655,12 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 });
         assertThat(rebalanceStatus(pending)).isEqualTo(RebalanceStatus.CANCELED);
         assertThat(zookeeperClient.getRebalanceTask().get().isCancelRequested()).isTrue();
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+        assertThat(hasInProgressRebalance()).isTrue();
 
         restartCoordinator(recoveredResponses);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(running))
-                                .isNotNull());
+        retry(Duration.ofMinutes(1), () -> assertThat(rebalanceExecutionKey(running)).isNotNull());
         assertThat(rebalanceStatus(pending)).isEqualTo(RebalanceStatus.CANCELED);
-        assertThat(eventProcessor.getRebalanceManager().getExecutionKey(pending)).isNull();
+        assertThat(rebalanceExecutionKey(pending)).isNull();
         assertThat(zookeeperClient.getTableAssignment(tableId).get().getBucketAssignment(1))
                 .isEqualTo(new BucketAssignment(origin));
         verifyIsr(pending, pendingLeader, pendingIsr);
@@ -570,8 +678,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 Duration.ofMinutes(1),
                 () -> {
                     drainPendingNotifyTriggers(recoveredResponses);
-                    assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                            .isFalse();
+                    assertThat(hasInProgressRebalance()).isFalse();
                 });
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
                 .isEqualTo(RebalanceStatus.CANCELED);
@@ -598,8 +705,8 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         }
         String rebalanceId = "review-cancel-after-restart";
         registerRebalance(rebalanceId, plans);
-        RebalanceExecutionKey key = eventProcessor.getRebalanceManager().getExecutionKey(first);
-        eventProcessor.getCoordinatorEventManager().put(new RebalanceTaskTimeoutEvent(key));
+        RebalanceExecutionKey key = rebalanceExecutionKey(first);
+        timeoutRebalanceTask(key);
         fromCtx(ctx -> null);
         for (TableBucket bucket : plans.keySet()) {
             assertThat(
@@ -611,14 +718,20 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         }
 
         restartCoordinator(recoveredResponses);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().getRebalanceId())
-                                .isEqualTo(rebalanceId));
+        retry(Duration.ofMinutes(1), () -> assertThat(currentRebalanceId()).isEqualTo(rebalanceId));
+        Map<TableBucket, RebalanceResultForBucket> recoveredProgress =
+                fromCtx(
+                        ctx ->
+                                eventProcessor
+                                        .getRebalanceManager()
+                                        .listRebalanceProgress(null)
+                                        .progressForBucketMap());
         TableBucket recoveredIntermediate =
                 plans.keySet().stream()
-                        .filter(bucket -> rebalanceStatus(bucket) == RebalanceStatus.TIMEOUT)
+                        .filter(
+                                bucket ->
+                                        recoveredProgress.get(bucket).status()
+                                                == RebalanceStatus.TIMEOUT)
                         .findFirst()
                         .get();
         assertThat(
@@ -646,8 +759,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                 Duration.ofMinutes(1),
                 () -> {
                     drainPendingNotifyTriggers(recoveredResponses);
-                    assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                            .isFalse();
+                    assertThat(hasInProgressRebalance()).isFalse();
                 });
         assertThat(zookeeperClient.getRebalanceTask().get().getRebalanceStatus())
                 .isEqualTo(RebalanceStatus.CANCELED);
@@ -677,6 +789,18 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                                                 current.bucketEpoch()))
                                 .succeeded())
                 .isTrue();
+    }
+
+    private void timeoutRebalanceTask(RebalanceExecutionKey executionKey) throws Exception {
+        fromCtx(
+                ctx -> {
+                    assertThat(
+                                    eventProcessor
+                                            .getRebalanceManager()
+                                            .timeoutRebalanceTask(executionKey))
+                            .isTrue();
+                    return null;
+                });
     }
 
     @Test
@@ -972,7 +1096,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         adjustRebalanceIsr(bucket, Arrays.asList(0, 1, 2, 3));
         completeResponsesExceptCurrentLeaderAck(bucket, pendingResponses);
         LeaderAndIsr current = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(bucket).get());
-        RebalanceExecutionKey key = eventProcessor.getRebalanceManager().getExecutionKey(bucket);
+        RebalanceExecutionKey key = rebalanceExecutionKey(bucket);
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(
@@ -994,7 +1118,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                                                 key))));
         fromCtx(ctx -> null);
         assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.REBALANCING);
-        eventProcessor.getCoordinatorEventManager().put(new RebalanceTaskTimeoutEvent(key));
+        timeoutRebalanceTask(key);
         fromCtx(ctx -> null);
         drainPendingNotifyTriggers(pendingResponses);
         fromCtx(ctx -> null);
@@ -1073,8 +1197,8 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         assertThat(waiting.leaderEpoch()).isEqualTo(before.leaderEpoch());
         assertThat(rebalanceStatus(bucket)).isEqualTo(RebalanceStatus.REBALANCING);
 
-        RebalanceExecutionKey key = eventProcessor.getRebalanceManager().getExecutionKey(bucket);
-        eventProcessor.getCoordinatorEventManager().put(new RebalanceTaskTimeoutEvent(key));
+        RebalanceExecutionKey key = rebalanceExecutionKey(bucket);
+        timeoutRebalanceTask(key);
         for (int attempt = 0; attempt < 2; attempt++) {
             eventProcessor.getCoordinatorEventManager().put(new ReconcileRebalanceTaskEvent(key));
             fromCtx(ctx -> null);
@@ -1115,10 +1239,15 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         RebalancePlanForBucket plan =
                 new RebalancePlanForBucket(
                         tableBucket, 0, 1, Arrays.asList(0, 1, 2), Arrays.asList(1, 0, 2));
-        eventProcessor
-                .getRebalanceManager()
-                .registerRebalance(
-                        "stale-response-test", Collections.singletonMap(tableBucket, plan));
+        fromCtx(
+                ctx -> {
+                    eventProcessor
+                            .getRebalanceManager()
+                            .registerRebalance(
+                                    "stale-response-test",
+                                    Collections.singletonMap(tableBucket, plan));
+                    return null;
+                });
         retry(Duration.ofMinutes(1), () -> assertThat(pendingResponses).isNotEmpty());
 
         LeaderAndIsr current = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(tableBucket).get());
@@ -1128,9 +1257,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                         current.leader(),
                         current.leaderEpoch(),
                         current.bucketEpoch() - 1,
-                        eventProcessor.getRebalanceManager().getExecutionKey(tableBucket));
+                        rebalanceExecutionKey(tableBucket));
         notifyLeaderResponse(tableBucket, current.leader(), staleContext);
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+        assertThat(hasInProgressRebalance()).isTrue();
 
         NotifyLeaderAndIsrRequestContext oldAttemptContext =
                 new NotifyLeaderAndIsrRequestContext(
@@ -1140,7 +1269,7 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                         current.bucketEpoch(),
                         new RebalanceExecutionKey("old-rebalance", tableBucket));
         notifyLeaderResponse(tableBucket, current.leader(), oldAttemptContext);
-        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance()).isTrue();
+        assertThat(hasInProgressRebalance()).isTrue();
 
         NotifyLeaderAndIsrRequestContext currentContext =
                 new NotifyLeaderAndIsrRequestContext(
@@ -1148,13 +1277,9 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
                         current.leader(),
                         current.leaderEpoch(),
                         current.bucketEpoch(),
-                        eventProcessor.getRebalanceManager().getExecutionKey(tableBucket));
+                        rebalanceExecutionKey(tableBucket));
         notifyLeaderResponse(tableBucket, current.leader(), currentContext);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventProcessor.getRebalanceManager().hasInProgressRebalance())
-                                .isFalse());
+        retry(Duration.ofMinutes(1), () -> assertThat(hasInProgressRebalance()).isFalse());
         drainPendingNotifyTriggers(pendingResponses);
     }
 
@@ -1172,13 +1297,28 @@ class CoordinatorRebalanceTest extends CoordinatorEventProcessorTestBase {
         fromCtx(ctx -> null);
     }
 
-    private RebalanceStatus rebalanceStatus(TableBucket tableBucket) {
-        return eventProcessor
-                .getRebalanceManager()
-                .listRebalanceProgress(null)
-                .progressForBucketMap()
-                .get(tableBucket)
-                .status();
+    private boolean hasInProgressRebalance() throws Exception {
+        return fromCtx(ctx -> eventProcessor.getRebalanceManager().hasInProgressRebalance());
+    }
+
+    private @Nullable String currentRebalanceId() throws Exception {
+        return fromCtx(ctx -> eventProcessor.getRebalanceManager().getRebalanceId());
+    }
+
+    private @Nullable RebalanceExecutionKey rebalanceExecutionKey(TableBucket tableBucket)
+            throws Exception {
+        return fromCtx(ctx -> eventProcessor.getRebalanceManager().getExecutionKey(tableBucket));
+    }
+
+    private RebalanceStatus rebalanceStatus(TableBucket tableBucket) throws Exception {
+        return fromCtx(
+                ctx ->
+                        eventProcessor
+                                .getRebalanceManager()
+                                .listRebalanceProgress(null)
+                                .progressForBucketMap()
+                                .get(tableBucket)
+                                .status());
     }
 
     private long createTableWithReplicas(List<Integer> replicas, int bucketCount) throws Exception {

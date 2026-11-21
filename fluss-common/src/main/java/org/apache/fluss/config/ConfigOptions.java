@@ -274,6 +274,17 @@ public class ConfigOptions {
                                     + "status. This limits concurrent migrations and reconciliation "
                                     + "work on the coordinator and ZooKeeper. Must be at least 1.");
 
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
+            key("coordinator.rebalance.max-inflight-tasks")
+                    .intType()
+                    .defaultValue(1)
+                    .withDescription(
+                            "The maximum number of bucket-level rebalance tasks that can be "
+                                    + "executed concurrently by the coordinator. A higher value "
+                                    + "can speed up rebalance, while a lower value reduces the "
+                                    + "number of simultaneous bucket movements. Must be at least "
+                                    + "1.");
+
     public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
             key("coordinator.offline-leader.retry-delay")
                     .durationType()
@@ -794,6 +805,15 @@ public class ConfigOptions {
                     .withDescription(
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
+
+    public static final ConfigOption<String> TABLET_SERVER_SOFTWARE_VERSION =
+            key("tablet-server.software-version")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The software version this tablet server reports in Admin.describeCluster(). "
+                                    + "If unset or blank, the server uses the Implementation-Version "
+                                    + "from its JAR manifest. If neither is available, the version is omitted.");
 
     public static final ConfigOption<Double> TABLET_SERVER_ADVERTISED_RESOURCE_CPU_CORES =
             key("tablet-server.advertised-resource.cpu-cores")
@@ -1404,7 +1424,9 @@ public class ConfigOptions {
             key("client.connect-timeout")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(15))
-                    .withDescription("The Netty client connect timeout.");
+                    .withDescription(
+                            "The Netty client connect timeout. With TLS enabled, this option is also used "
+                                    + "for the TLS handshake timeout.");
 
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
             key("bootstrap.servers")
@@ -1700,7 +1722,10 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Whether the client connects over TLS. Must match the listener it "
-                                    + "connects to (`security.ssl.enabled.listeners`).");
+                                    + "connects to (`security.ssl.enabled.listeners`). In the "
+                                    + "server configuration it controls the connections between "
+                                    + "servers, so it must be true exactly when the internal "
+                                    + "listener (`internal.listener.name`) is TLS-enabled.");
 
     public static final ConfigOption<List<String>> CLIENT_SSL_ENABLED_PROTOCOLS =
             key("client.security.ssl.enabled.protocols")
@@ -1982,7 +2007,7 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The password to use for client-side SASL JAAS authentication. "
+                            "The username to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
@@ -1991,9 +2016,18 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The username to use for client-side SASL JAAS authentication. "
+                            "The password to use for client-side SASL JAAS authentication. "
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
+
+    public static final ConfigOption<String> CLIENT_SASL_AUTHORIZATION_ID =
+            key("client.security.sasl.authorization-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The user to act as with SASL/PLAIN. If unset or empty, the authenticated "
+                                    + "account is used. A different user requires a server-side grant "
+                                    + "in 'security.sasl.listener.name.<listener>.plain.proxy-users'.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
@@ -2009,6 +2043,18 @@ public class ConfigOptions {
                                     + ". It should be a positive number and not larger than the number of tablet servers in the "
                                     + "Fluss cluster. A value larger than the number of tablet servers in Fluss cluster "
                                     + "will result in an error when the new table is created.");
+
+    public static final ConfigOption<Integer> TABLE_MIN_IN_SYNC_REPLICAS =
+            key("table.min-in-sync-replicas")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of in-sync replicas, including the leader, required for writes to "
+                                    + "both primary-key and log tables with client.writer.acks set to all (-1). "
+                                    + "If not configured, the table uses the current value of "
+                                    + LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()
+                                    + ". The value must be positive and not larger than table.replication.factor. "
+                                    + "This option can only be configured when creating a table.");
 
     public static final ConfigOption<LogFormat> TABLE_LOG_FORMAT =
             key("table.log.format")
@@ -2569,6 +2615,16 @@ public class ConfigOptions {
                                     + "This applies to primary key tables, does not affect WAL or MANIFEST I/O, "
                                     + "and requires a TabletServer restart to take effect. "
                                     + "The default value is `false`.");
+
+    public static final ConfigOption<MemorySize> KV_COMPACTION_READAHEAD_SIZE =
+            key("kv.rocksdb.compaction.readahead-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.ofMebiBytes(2))
+                    .withDescription(
+                            "The amount of data to prefetch when reading RocksDB SST files during compaction. "
+                                    + "A value of `0` disables compaction readahead. "
+                                    + "This applies to primary key tables and requires a TabletServer restart to take effect. "
+                                    + "The default value is `2MB`.");
 
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")

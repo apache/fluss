@@ -18,6 +18,7 @@
 package org.apache.fluss.trino;
 
 import org.apache.fluss.bucketing.BucketingFunction;
+import org.apache.fluss.client.table.BucketCalculator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
@@ -524,7 +525,7 @@ class FlussBucketPrunerTest {
 
     private static void assertMatchesWriter(
             TableInfo table, GenericRow row, Map<FlussColumnHandle, Domain> domains) {
-        KeyEncoder writerEncoder;
+        BucketCalculator writerCalculator;
         if (table.hasPrimaryKey()) {
             KeyEncoder primaryKeyEncoder =
                     KeyEncoder.ofPrimaryKeyEncoder(
@@ -532,33 +533,19 @@ class FlussBucketPrunerTest {
                             table.getPhysicalPrimaryKeys(),
                             table.getTableConfig(),
                             table.isDefaultBucketKey());
-            writerEncoder =
-                    KeyEncoder.ofBucketKeyEncoder(
-                            table.getRowType(),
-                            table.getBucketKeys(),
-                            table.getTableConfig(),
-                            table.isDefaultBucketKey(),
-                            primaryKeyEncoder);
+            writerCalculator = BucketCalculator.forPrimaryKeyRow(table, primaryKeyEncoder);
         } else {
-            writerEncoder =
-                    KeyEncoder.ofBucketKeyEncoder(
-                            table.getRowType(),
-                            table.getBucketKeys(),
-                            table.getTableConfig().getDataLakeFormat().orElse(null));
+            writerCalculator = BucketCalculator.forAppendRow(table);
         }
 
-        byte[] writerKey = writerEncoder.encodeKey(row);
         FlussBucketPruner pruner =
                 FlussBucketPruner.create(table, TupleDomain.withColumnDomains(domains))
                         .orElseThrow(() -> new AssertionError("Expected bucket pruning"));
 
         int bucketCount = table.isPartitioned() ? 7 : table.getNumBuckets();
+        int expected = writerCalculator.getBucketId(writerCalculator.encodeKey(row), bucketCount);
 
-        int expectedBucketId =
-                BucketingFunction.of(table.getTableConfig().getDataLakeFormat().orElse(null))
-                        .bucketing(writerKey, bucketCount);
-
-        assertThat(pruner.getBucketId(bucketCount)).isEqualTo(expectedBucketId);
+        assertThat(pruner.getBucketId(bucketCount)).isEqualTo(expected);
     }
 
     private static Stream<Arguments> supportedValues() {

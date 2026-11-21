@@ -23,24 +23,97 @@ import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.utils.WrappingProxy;
 import org.apache.fluss.utils.WrappingProxyUtils;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for the {@link FileSystem} base class. */
 class FileSystemTest {
+
+    @AfterEach
+    void resetFileSystems() {
+        FileSystem.initialize(new Configuration(), null);
+    }
+
+    @Test
+    void testAliasSchemeWithoutPrimaryPlugin() throws Exception {
+        TestPluginFileSystemPlugin ossPlugin =
+                new TestPluginFileSystemPlugin(
+                        "oss", new LocalFileSystem(), Collections.singleton("ossj"));
+        initializePlugins(Collections.singletonList(ossPlugin));
+
+        URI uri = URI.create("ossj://bucket/path");
+        FileSystem fileSystem = FileSystem.get(uri);
+        assertThat(WrappingProxyUtils.stripProxy((WrappingProxy<FileSystem>) fileSystem))
+                .isSameAs(ossPlugin.fileSystem);
+        assertThat(ossPlugin.createdUri).isEqualTo(uri);
+        assertThat(FileSystem.get(uri)).isSameAs(fileSystem);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testPrimarySchemeTakesPrecedenceOverAlias(boolean primaryFirst) throws Exception {
+        TestPluginFileSystemPlugin primary =
+                new TestPluginFileSystemPlugin("ossj", new LocalFileSystem());
+        TestPluginFileSystemPlugin ossPlugin =
+                new TestPluginFileSystemPlugin(
+                        "oss", new LocalFileSystem(), Collections.singleton("ossj"));
+        initializePlugins(
+                primaryFirst
+                        ? Arrays.asList(primary, ossPlugin)
+                        : Arrays.asList(ossPlugin, primary));
+
+        assertThat(getFileSystemWithoutSafetyNet("ossj://bucket/path"))
+                .isSameAs(primary.fileSystem);
+        assertThat(ossPlugin.createdUri).isNull();
+        assertThat(getFileSystemWithoutSafetyNet("oss://bucket/path"))
+                .isSameAs(ossPlugin.fileSystem);
+    }
+
+    @Test
+    void testPrimaryPluginFailureDoesNotUseAliasPlugin() {
+        TestPluginFileSystemPlugin primary =
+                new TestPluginFileSystemPlugin("ossj", new LocalFileSystem()) {
+                    @Override
+                    public FileSystem create(URI fsUri, Configuration configuration)
+                            throws IOException {
+                        throw new IOException("Primary plugin initialization failed");
+                    }
+                };
+        TestPluginFileSystemPlugin ossPlugin =
+                new TestPluginFileSystemPlugin(
+                        "oss", new LocalFileSystem(), Collections.singleton("ossj"));
+        initializePlugins(Arrays.asList(primary, ossPlugin));
+
+        assertThatThrownBy(() -> FileSystem.get(URI.create("ossj://bucket/path")))
+                .isInstanceOf(IOException.class)
+                .hasMessage("Primary plugin initialization failed");
+        assertThat(ossPlugin.createdUri).isNull();
+    }
+
+    private static void initializePlugins(List<FileSystemPlugin> plugins) {
+        Map<Class<?>, Iterator<?>> pluginMap = new HashMap<>();
+        pluginMap.put(FileSystemPlugin.class, plugins.iterator());
+        FileSystem.initialize(new Configuration(), new TestingPluginManager(pluginMap));
+    }
 
     @Test
     void testGet() throws URISyntaxException, IOException {
@@ -126,14 +199,15 @@ class FileSystemTest {
         assertThat(fileSystem.rename(path, new FsPath(tempDir.toString(), "test1"))).isFalse();
     }
 
-    @Test
-    void testUnsupportedFS() {
+    @ParameterizedTest
+    @ValueSource(strings = {"unknownfs", "ossj"})
+    void testUnsupportedFS(String scheme) {
         /*
         exception should be:
         org.apache.fluss.fs.UnsupportedFileSystemSchemeException: Could not find a file system implementation
         for scheme 'unknownfs'. The scheme is not directly supported by Fluss and no Hadoop file system to support this
         scheme could be loaded. */
-        assertThatThrownBy(() -> getFileSystemWithoutSafetyNet("unknownfs://authority/"))
+        assertThatThrownBy(() -> getFileSystemWithoutSafetyNet(scheme + "://authority/"))
                 .isInstanceOf(UnsupportedFileSystemSchemeException.class)
                 .hasMessageContaining("not directly supported");
     }
@@ -188,10 +262,18 @@ class FileSystemTest {
 
         private final String scheme;
         private final FileSystem fileSystem;
+        private final Set<String> aliasSchemes;
+        private URI createdUri;
 
         public TestPluginFileSystemPlugin(String scheme, FileSystem fileSystem) {
+            this(scheme, fileSystem, Collections.emptySet());
+        }
+
+        private TestPluginFileSystemPlugin(
+                String scheme, FileSystem fileSystem, Set<String> aliasSchemes) {
             this.scheme = scheme;
             this.fileSystem = fileSystem;
+            this.aliasSchemes = aliasSchemes;
         }
 
         @Override
@@ -200,7 +282,13 @@ class FileSystemTest {
         }
 
         @Override
+        public Set<String> getAliasSchemes() {
+            return aliasSchemes;
+        }
+
+        @Override
         public FileSystem create(URI fsUri, Configuration configuration) throws IOException {
+            createdUri = fsUri;
             return fileSystem;
         }
     }

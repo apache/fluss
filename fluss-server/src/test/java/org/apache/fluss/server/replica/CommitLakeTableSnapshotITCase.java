@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -36,6 +37,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -48,7 +50,6 @@ import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
@@ -66,6 +67,9 @@ class CommitLakeTableSnapshotITCase {
     private static final int BUCKET_NUM = 3;
 
     private static ZooKeeperClient zkClient;
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
 
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
@@ -169,13 +173,13 @@ class CommitLakeTableSnapshotITCase {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .build();
         return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+                FLUSS_CLUSTER_EXTENSION, data1TablePath, tableDescriptor);
     }
 
     @Test
     void testCommitLakeTableSnapshotV2RejectedAfterDropTable() throws Exception {
         long tableId = createLogTable();
-        TablePath tablePath = DATA1_TABLE_PATH;
+        TablePath tablePath = data1TablePath;
 
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         coordinatorGateway

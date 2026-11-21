@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
 import org.apache.fluss.spark.utils.FlussConnectionCache
+import org.apache.fluss.testutils.TestTableNames
 import org.apache.fluss.utils.IOUtils
 
 import org.apache.spark.SparkConf
@@ -43,6 +44,8 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
   protected var conn: Connection = _
   protected var admin: Admin = _
+
+  private var tableNames = new TestTableNames()
 
   protected val flussServer: FlussClusterExtension =
     FlussClusterExtension.builder
@@ -83,6 +86,15 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
       }
     }
   }
+
+  override protected def beforeEach(): Unit = {
+    super.beforeEach()
+    // ScalaTest reuses the suite instance, so each test needs a fresh naming scope.
+    tableNames = new TestTableNames()
+  }
+
+  /** Returns a stable table name within the current test invocation. */
+  protected def scopedTableName(name: String): String = tableNames.tableName(name)
 
   def createTablePath(tableName: String): TablePath = {
     TablePath.of(DEFAULT_DATABASE, tableName)

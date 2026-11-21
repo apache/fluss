@@ -24,6 +24,8 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.configuration.Configuration;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -53,6 +55,30 @@ class FlinkAggFunctionParserTest {
         assertThat(result).isPresent();
         assertThat(result.get().getType()).isEqualTo(AggFunctionType.SUM);
         assertThat(result.get().hasParameters()).isFalse();
+    }
+
+    @Test
+    void testParseHllSketchFunction() {
+        Configuration options = new Configuration();
+        options.setString("fields.user_hll.agg", "hll_sketch");
+
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("user_hll", DataTypes.BYTES(), options);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualTo(AggFunctions.HLL_SKETCH());
+    }
+
+    @Test
+    void testParseKllDoubleSketchFunction() {
+        Configuration options = new Configuration();
+        options.setString("fields.latency_kll.agg", "kll_double_sketch");
+
+        Optional<AggFunction> result =
+                FlinkAggFunctionParser.parseAggFunction("latency_kll", DataTypes.BYTES(), options);
+
+        assertThat(result).isPresent();
+        assertThat(result.get()).isEqualTo(AggFunctions.KLL_DOUBLE_SKETCH());
     }
 
     @Test
@@ -132,6 +158,34 @@ class FlinkAggFunctionParserTest {
     }
 
     @Test
+    void testParseHllSketchFunctionWithInvalidType() {
+        Configuration options = new Configuration();
+        options.setString("fields.user_hll.agg", "hll_sketch");
+
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "user_hll", DataTypes.STRING(), options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid aggregation function configuration")
+                .hasMessageContaining("hll_sketch");
+    }
+
+    @Test
+    void testParseKllDoubleSketchFunctionWithInvalidType() {
+        Configuration options = new Configuration();
+        options.setString("fields.latency_kll.agg", "kll_double_sketch");
+
+        assertThatThrownBy(
+                        () ->
+                                FlinkAggFunctionParser.parseAggFunction(
+                                        "latency_kll", DataTypes.DOUBLE(), options))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Invalid aggregation function configuration")
+                .hasMessageContaining("kll_double_sketch");
+    }
+
+    @Test
     void testParseEmptyFunctionName() {
         Configuration options = new Configuration();
         options.setString("fields.total.agg", "");
@@ -153,6 +207,9 @@ class FlinkAggFunctionParserTest {
         FlinkAggFunctionParser.formatAggFunctionToOptions("col1", AggFunctions.SUM(), options);
         FlinkAggFunctionParser.formatAggFunctionToOptions(
                 "col2", AggFunctions.LISTAGG(";"), options);
+        FlinkAggFunctionParser.formatAggFunctionToOptions(
+                "events", AggFunctions.LAST_N(3, true), options);
+        assertThat(options).containsEntry("fields.events.last_n.distinct", "true");
 
         // Parse them back
         Configuration config = Configuration.fromMap(options);
@@ -167,13 +224,21 @@ class FlinkAggFunctionParserTest {
 
         assertThat(col2Func).isPresent();
         assertThat(col2Func.get()).isEqualTo(AggFunctions.LISTAGG(";"));
+        assertThat(
+                        FlinkAggFunctionParser.parseAggFunction(
+                                "events", DataTypes.ARRAY(DataTypes.STRING()), config))
+                .contains(AggFunctions.LAST_N(3, true));
     }
 
-    @Test
-    void testRejectInvalidCollectDistinctParameter() {
+    @ParameterizedTest
+    @ValueSource(strings = {"collect", "last_n"})
+    void testRejectInvalidDistinctParameter(String function) {
         Configuration options = new Configuration();
-        options.setString("fields.tags.agg", "collect");
-        options.setString("fields.tags.collect.distinct", "yes");
+        options.setString("fields.tags.agg", function);
+        options.setString("fields.tags." + function + ".distinct", "yes");
+        if (function.equals("last_n")) {
+            options.setString("fields.tags.last_n.size", "3");
+        }
         assertThatThrownBy(
                         () ->
                                 FlinkAggFunctionParser.parseAggFunction(

@@ -33,10 +33,6 @@
         The Fluss RPC framework and Netty-based implementation.
     </description>
 
-    <properties>
-        <bouncycastle.version>1.85</bouncycastle.version>
-    </properties>
-
     <dependencies>
         <dependency>
             <groupId>org.apache.fluss</groupId>

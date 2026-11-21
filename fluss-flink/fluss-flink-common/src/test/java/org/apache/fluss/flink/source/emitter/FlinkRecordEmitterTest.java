@@ -18,12 +18,17 @@
 package org.apache.fluss.flink.source.emitter;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
+import org.apache.fluss.flink.source.deserializer.BinlogDeserializationSchema;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.LogSplitState;
+import org.apache.fluss.flink.source.split.SourceSplitState;
 import org.apache.fluss.flink.source.testutils.Order;
 import org.apache.fluss.flink.source.testutils.OrderDeserializationSchema;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
@@ -138,8 +143,109 @@ public class FlinkRecordEmitterTest {
         assertThat(results).isEqualTo(expectedResult);
     }
 
+    @Test
+    void testFilteredUpdateWithLogSplit() throws Exception {
+        TableBucket bucket = new TableBucket(1L, 0);
+        LogSplitState state = new LogSplitState(new LogSplit(bucket, null, 40L, 100L));
+        RowDataDeserializationSchema schema = new RowDataDeserializationSchema();
+        FlinkRecordEmitter<RowData> emitter = new FlinkRecordEmitter<>(schema);
+        TestSourceOutput<RowData> output = new TestSourceOutput<>();
+        emitter.emitRecord(
+                RecordAndPos.filteredUpdate(
+                        new ScanRecord(41L, 100L, ChangeType.UPDATE_AFTER, row(1))),
+                output,
+                state);
+        assertThat(output.getRecords()).isEmpty();
+        assertThat(output.timestamps).isEmpty();
+        LogSplitState restored = new LogSplitState(state.toSourceSplit());
+        assertThat(restored.toSourceSplit()).isEqualTo(new LogSplit(bucket, null, 42L, 100L));
+
+        RowType rowType = RowType.of(DataTypes.INT());
+        schema.open(new DeserializerInitContextImpl(null, null, rowType));
+        emitter.emitRecord(
+                new RecordAndPos(new ScanRecord(42L, 200L, ChangeType.INSERT, row(2))),
+                output,
+                restored);
+        assertThat(output.getRecords())
+                .containsExactly(new FlussRowToFlinkRowConverter(rowType).toFlinkRowData(row(2)));
+        assertThat(output.timestamps).containsExactly(200L);
+        assertThat(restored.toSourceSplit().getStartingOffset()).isEqualTo(43L);
+    }
+
+    @Test
+    void testFilteredUpdateWithHybridSplit() {
+        TableBucket bucket = new TableBucket(1L, 0);
+        HybridSnapshotLogSplitState state =
+                new HybridSnapshotLogSplitState(
+                        new HybridSnapshotLogSplit(bucket, null, 3L, 7L, false, 40L, 100L, false));
+        assertFilteredUpdateSkipped(state);
+        HybridSnapshotLogSplit restored =
+                new HybridSnapshotLogSplitState(state.toSourceSplit()).toSourceSplit();
+        assertThat(restored)
+                .isEqualTo(
+                        new HybridSnapshotLogSplit(bucket, null, 3L, 7L, true, 42L, 100L, false));
+    }
+
+    @Test
+    void testFilteredUpdateWithLakeSplit() {
+        LakeSnapshotAndFlussLogSplitState state =
+                new LakeSnapshotAndFlussLogSplitState(
+                        new LakeSnapshotAndFlussLogSplit(
+                                new TableBucket(1L, 0), null, null, 40L, 100L, 7L, 0, false));
+        assertFilteredUpdateSkipped(state);
+        LakeSnapshotAndFlussLogSplit restored =
+                (LakeSnapshotAndFlussLogSplit)
+                        new LakeSnapshotAndFlussLogSplitState(
+                                        (LakeSnapshotAndFlussLogSplit) state.toSourceSplit())
+                                .toSourceSplit();
+        assertThat(restored.getStartingOffset()).isEqualTo(42L);
+        assertThat(restored.isLakeSplitFinished()).isTrue();
+        assertThat(restored.getRecordsToSkip()).isEqualTo(7L);
+        assertThat(restored.getStoppingOffset()).contains(100L);
+    }
+
+    @Test
+    void testBinlogUpdateBeforeRetainsRecoveryOffset() throws Exception {
+        BinlogDeserializationSchema schema = new BinlogDeserializationSchema();
+        schema.open(new DeserializerInitContextImpl(null, null, RowType.of(DataTypes.INT())));
+        FlinkRecordEmitter<RowData> emitter = new FlinkRecordEmitter<>(schema);
+        LogSplitState state = new LogSplitState(new LogSplit(new TableBucket(1L, 0), null, 40L));
+        TestSourceOutput<RowData> output = new TestSourceOutput<>();
+        emitter.emitRecord(
+                new RecordAndPos(new ScanRecord(40L, 100L, ChangeType.UPDATE_BEFORE, row(1))),
+                output,
+                state);
+        assertThat(output.getRecords()).isEmpty();
+        assertThat(output.timestamps).isEmpty();
+        assertThat(state.toSourceSplit().getStartingOffset()).isEqualTo(40L);
+        emitter.emitRecord(
+                new RecordAndPos(new ScanRecord(41L, 200L, ChangeType.UPDATE_AFTER, row(2))),
+                output,
+                state);
+        assertThat(output.getRecords()).hasSize(1);
+        assertThat(output.getRecords().get(0).getRow(3, 1).getInt(0)).isEqualTo(1);
+        assertThat(output.getRecords().get(0).getRow(4, 1).getInt(0)).isEqualTo(2);
+        assertThat(output.timestamps).containsExactly(200L);
+        assertThat(state.toSourceSplit().getStartingOffset()).isEqualTo(42L);
+    }
+
+    private void assertFilteredUpdateSkipped(SourceSplitState state) {
+        // Deliberately unopened: deserialization of the marker would throw.
+        FlinkRecordEmitter<RowData> emitter =
+                new FlinkRecordEmitter<>(new RowDataDeserializationSchema());
+        TestSourceOutput<RowData> output = new TestSourceOutput<>();
+        emitter.emitRecord(
+                RecordAndPos.filteredUpdate(
+                        new ScanRecord(41L, 100L, ChangeType.UPDATE_AFTER, row(1))),
+                output,
+                state);
+        assertThat(output.getRecords()).isEmpty();
+        assertThat(output.timestamps).isEmpty();
+    }
+
     private static class TestSourceOutput<OUT> implements SourceOutput<OUT> {
         private final List<OUT> records = new ArrayList<>();
+        private final List<Long> timestamps = new ArrayList<>();
 
         @Override
         public void emitWatermark(Watermark watermark) {}
@@ -158,6 +264,7 @@ public class FlinkRecordEmitterTest {
         @Override
         public void collect(OUT record, long timestamp) {
             records.add(record);
+            timestamps.add(timestamp);
         }
 
         public List<OUT> getRecords() {

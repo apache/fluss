@@ -43,6 +43,8 @@ pub struct LookupQueue {
     re_enqueue_rx: mpsc::UnboundedReceiver<QueuedLookup>,
     /// Re-enqueued lookups, earliest retry first.
     retries: BinaryHeap<DelayedLookup>,
+    /// Retains a partially collected batch if `drain` is cancelled by shutdown.
+    pending_batch: Vec<QueuedLookup>,
     /// Keeps retries with the same deadline in the order they were re-enqueued.
     next_retry_seq: u64,
     /// Maximum batch size for draining
@@ -71,6 +73,7 @@ impl LookupQueue {
             lookup_rx,
             re_enqueue_rx,
             retries: BinaryHeap::new(),
+            pending_batch: Vec::with_capacity(max_batch_size),
             next_retry_seq: 0,
             max_batch_size,
             batch_timeout: Duration::from_millis(batch_timeout_ms),
@@ -80,9 +83,9 @@ impl LookupQueue {
         (queue, lookup_tx, re_enqueue_tx)
     }
 
-    /// Drains a batch of lookup queries from the queue.
+    /// Drains a batch of lookup queries from the queue. Cancellation keeps the partial batch
+    /// available to the next drain, including [`Self::drain_all`] during shutdown.
     pub async fn drain(&mut self) -> Vec<QueuedLookup> {
-        let mut lookups = Vec::with_capacity(self.max_batch_size);
         let deadline = Instant::now() + self.batch_timeout;
 
         loop {
@@ -90,12 +93,12 @@ impl LookupQueue {
             let remaining = deadline.saturating_duration_since(now);
 
             // Re-enqueued lookups whose backoff has passed go first. A batch they fill still
-            // takes one new lookup, so retries for a bucket without a leader can't hold back the
-            // other lookups.
-            self.take_due_retries(&mut lookups, now);
-            if lookups.len() >= self.max_batch_size {
+            // takes one new lookup, so retries, e.g. the lookups of a bucket whose leader was just
+            // found, can't hold back the other lookups.
+            self.take_due_retries(now);
+            if self.pending_batch.len() >= self.max_batch_size {
                 if let Ok(lookup) = self.lookup_rx.try_recv() {
-                    lookups.push(lookup);
+                    self.pending_batch.push(lookup);
                 }
                 break;
             }
@@ -107,10 +110,10 @@ impl LookupQueue {
                 maybe = self.lookup_rx.recv() => {
                     match maybe {
                         Some(lookup) => {
-                            lookups.push(lookup);
-                            while lookups.len() < self.max_batch_size {
+                            self.pending_batch.push(lookup);
+                            while self.pending_batch.len() < self.max_batch_size {
                                 match self.lookup_rx.try_recv() {
-                                    Ok(lookup) => lookups.push(lookup),
+                                    Ok(lookup) => self.pending_batch.push(lookup),
                                     Err(_) => break,
                                 }
                             }
@@ -128,7 +131,7 @@ impl LookupQueue {
                     continue;
                 }
                 _ = self.cluster_rx.changed() => {
-                    if !lookups.is_empty() {
+                    if !self.pending_batch.is_empty() {
                         break;
                     }
                 }
@@ -136,26 +139,31 @@ impl LookupQueue {
                 _ = tokio::time::sleep_until(next_retry_at.unwrap_or(now)), if next_retry_at.is_some() => {
                     continue;
                 }
-                _ = sleep, if !self.batch_timeout.is_zero() || !lookups.is_empty() => break,
+                _ = sleep, if !self.batch_timeout.is_zero() || !self.pending_batch.is_empty() => break,
             }
 
             // Even a zero timeout must poll the queues once before ending the batch.
-            if lookups.len() >= self.max_batch_size || Instant::now() >= deadline {
+            if self.pending_batch.len() >= self.max_batch_size || Instant::now() >= deadline {
                 break;
             }
         }
 
-        lookups
+        std::mem::replace(
+            &mut self.pending_batch,
+            Vec::with_capacity(self.max_batch_size),
+        )
     }
 
-    /// Moves re-enqueued lookups due by `now` into `lookups`, up to the batch size.
-    fn take_due_retries(&mut self, lookups: &mut Vec<QueuedLookup>, now: Instant) {
+    /// Moves re-enqueued lookups due by `now` into the pending batch, up to the batch size.
+    fn take_due_retries(&mut self, now: Instant) {
         while let Ok(lookup) = self.re_enqueue_rx.try_recv() {
             self.push_retry(lookup, now);
         }
-        while lookups.len() < self.max_batch_size {
+        while self.pending_batch.len() < self.max_batch_size {
             match self.retries.peek_mut() {
-                Some(retry) if retry.retry_at <= now => lookups.push(PeekMut::pop(retry).lookup),
+                Some(retry) if retry.retry_at <= now => {
+                    self.pending_batch.push(PeekMut::pop(retry).lookup)
+                }
                 _ => break,
             }
         }
@@ -163,7 +171,7 @@ impl LookupQueue {
 
     fn push_retry(&mut self, lookup: QueuedLookup, now: Instant) {
         // A passed deadline counts from now, so a lookup re-enqueued without a new backoff, e.g.
-        // for a bucket without a leader, queues behind the retries already due.
+        // once the leader of its bucket is found, queues behind the retries already due.
         let retry_at = lookup.retry_at().map_or(now, |retry_at| retry_at.max(now));
         self.retries.push(DelayedLookup {
             retry_at,
@@ -173,9 +181,18 @@ impl LookupQueue {
         self.next_retry_seq += 1;
     }
 
+    /// Waits until a lookup is re-enqueued, and keeps it for the next drain.
+    pub async fn wait_for_re_enqueued(&mut self) {
+        match self.re_enqueue_rx.recv().await {
+            Some(lookup) => self.push_retry(lookup, Instant::now()),
+            // The sender holds a handle to re-enqueue lookups while it runs.
+            None => std::future::pending().await,
+        }
+    }
+
     /// Drains all remaining lookups from the queue.
     pub fn drain_all(&mut self) -> Vec<QueuedLookup> {
-        let mut lookups = Vec::new();
+        let mut lookups = std::mem::take(&mut self.pending_batch);
 
         // Drain re-enqueued lookups, whether or not their backoff has passed
         while let Some(retry) = self.retries.pop() {
@@ -195,7 +212,10 @@ impl LookupQueue {
 
     /// Returns true if there are undrained lookups in the queue.
     pub fn has_undrained(&self) -> bool {
-        !self.lookup_rx.is_empty() || !self.re_enqueue_rx.is_empty() || !self.retries.is_empty()
+        !self.pending_batch.is_empty()
+            || !self.lookup_rx.is_empty()
+            || !self.re_enqueue_rx.is_empty()
+            || !self.retries.is_empty()
     }
 }
 
@@ -258,6 +278,31 @@ mod tests {
         };
         query.prepare_retry(Instant::now() + backoff);
         QueuedLookup::Primary(query)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_a_drain_keeps_the_partial_batch_for_close() {
+        let (_cluster_tx, cluster_rx) = watch::channel(0);
+        let (mut queue, lookup_tx, re_enqueue_tx) = LookupQueue::new(8, 8, 100, cluster_rx);
+        lookup_tx.send(lookup(b"new")).await.unwrap();
+        re_enqueue_tx.send(retry(b"retry", Duration::ZERO)).unwrap();
+        {
+            let drain = queue.drain();
+            tokio::pin!(drain);
+            assert!(futures::poll!(&mut drain).is_pending());
+        }
+
+        let mut keys: Vec<_> = queue
+            .drain_all()
+            .into_iter()
+            .map(|query| query.key().clone())
+            .collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [Bytes::from_static(b"new"), Bytes::from_static(b"retry")]
+        );
+        assert!(!queue.has_undrained());
     }
 
     #[tokio::test(start_paused = true)]

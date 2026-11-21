@@ -185,7 +185,7 @@ public class UndoRecoveryOperatorStateTest extends FlinkTestBase {
 
     private AggTable createAggTable(String prefix, int numBuckets) throws Exception {
         TablePath tablePath =
-                TablePath.of(DEFAULT_DB, prefix + "_" + TABLE_SEQUENCE.incrementAndGet());
+                tableNames.tablePath(DEFAULT_DB, prefix + "_" + TABLE_SEQUENCE.incrementAndGet());
         long tableId =
                 createTable(
                         tablePath,

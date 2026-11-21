@@ -18,6 +18,7 @@
 
 package org.apache.fluss.trino;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
@@ -27,6 +28,8 @@ import org.apache.fluss.metadata.TablePath;
 
 import com.google.inject.Inject;
 import jakarta.annotation.PreDestroy;
+
+import java.util.function.Function;
 
 import static org.apache.fluss.utils.ExceptionUtils.firstOrSuppressed;
 import static org.apache.fluss.utils.ExceptionUtils.rethrowException;
@@ -41,6 +44,7 @@ public final class FlussClientManager {
 
     private final Object lock = new Object();
     private final Configuration configuration;
+    private final Function<Configuration, Connection> connectionCreator;
 
     // All mutable state is guarded by lock.
     private Connection connection;
@@ -50,7 +54,13 @@ public final class FlussClientManager {
     /** Captures connector configuration without connecting to Fluss. */
     @Inject
     public FlussClientManager(FlussConfig config) {
+        this(config, ConnectionFactory::createConnection);
+    }
+
+    @VisibleForTesting
+    FlussClientManager(FlussConfig config, Function<Configuration, Connection> connectionCreator) {
         checkNotNull(config, "config is null");
+        this.connectionCreator = checkNotNull(connectionCreator, "connectionCreator is null");
 
         this.configuration = new Configuration();
         configuration.setString(BOOTSTRAP_SERVERS, config.getBootstrapServers());
@@ -135,7 +145,7 @@ public final class FlussClientManager {
         Connection newConnection = null;
 
         try {
-            newConnection = ConnectionFactory.createConnection(configuration);
+            newConnection = connectionCreator.apply(configuration);
             Admin newAdmin = newConnection.getAdmin();
 
             connection = newConnection;

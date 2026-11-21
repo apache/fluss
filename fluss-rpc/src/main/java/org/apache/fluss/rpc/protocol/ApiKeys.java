@@ -41,7 +41,8 @@ public enum ApiKeys {
     TABLE_EXISTS(1010, 0, 0, PUBLIC),
     GET_TABLE_SCHEMA(1011, 0, 0, PUBLIC),
     GET_METADATA(1012, 0, 0, PUBLIC),
-    UPDATE_METADATA(1013, 0, 0, PRIVATE),
+    // Version 1: table deletions carry the actual table ID and an explicit deletion flag.
+    UPDATE_METADATA(1013, 0, 1, PRIVATE),
     // Version 1: Supports original_partition_name in requests and responses for historical writes.
     PRODUCE_LOG(1014, 0, 1, PUBLIC),
     FETCH_LOG(1015, 0, 0, PUBLIC),
@@ -64,7 +65,8 @@ public enum ApiKeys {
     STOP_REPLICA(1019, 0, 0, PRIVATE),
     ADJUST_ISR(1020, 0, 0, PRIVATE),
     LIST_OFFSETS(1021, 0, 0, PUBLIC),
-    COMMIT_KV_SNAPSHOT(1022, 0, 0, PRIVATE),
+    // Version 1: Carries the recovery identity of the KV context producing the snapshot.
+    COMMIT_KV_SNAPSHOT(1022, 0, 1, PRIVATE),
     GET_LATEST_KV_SNAPSHOTS(1023, 0, 0, PUBLIC),
     GET_KV_SNAPSHOT_METADATA(1024, 0, 1, PUBLIC),
     GET_FILESYSTEM_SECURITY_TOKEN(1025, 0, 0, PUBLIC),
@@ -87,8 +89,12 @@ public enum ApiKeys {
     DROP_PARTITION(1037, 0, 0, PUBLIC),
     AUTHENTICATE(1038, 0, 0, PUBLIC),
     CREATE_ACLS(1039, 0, 0, PUBLIC),
-    LIST_ACLS(1040, 0, 0, PUBLIC),
-    DROP_ACLS(1041, 0, 0, PUBLIC),
+    // Version 1: returns GROUP ACLs. Version 0 omits them so older clients can decode the
+    // response without encountering the unknown GROUP resource type.
+    LIST_ACLS(1040, 0, 1, PUBLIC),
+    // Version 1: returns GROUP ACLs in matching results. Version 0 omits them so older
+    // clients can decode the response without encountering the unknown GROUP resource type.
+    DROP_ACLS(1041, 0, 1, PUBLIC),
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE),
     CONTROLLED_SHUTDOWN(1043, 0, 0, PRIVATE),
     // Version 1: supports modifying the table distribution's bucket count.

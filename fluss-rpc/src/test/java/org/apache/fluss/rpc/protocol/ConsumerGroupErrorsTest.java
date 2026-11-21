@@ -22,6 +22,7 @@ import org.apache.fluss.exception.ConsumerGroupOwnerLoadingException;
 import org.apache.fluss.exception.ConsumerGroupOwnerNotAvailableException;
 import org.apache.fluss.exception.ConsumerOffsetMetadataTooLargeException;
 import org.apache.fluss.exception.InvalidConsumerGroupIdException;
+import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.NotConsumerGroupOwnerException;
 import org.apache.fluss.exception.RetriableException;
 
@@ -40,6 +41,7 @@ class ConsumerGroupErrorsTest {
         assertThat(Errors.NOT_CONSUMER_GROUP_OWNER.code()).isEqualTo(78);
         assertThat(Errors.CONSUMER_GROUP_ID_NOT_FOUND.code()).isEqualTo(79);
         assertThat(Errors.CONSUMER_OFFSET_METADATA_TOO_LARGE.code()).isEqualTo(80);
+        assertThat(Errors.INVALID_REQUEST.code()).isEqualTo(81);
     }
 
     @Test
@@ -56,6 +58,9 @@ class ConsumerGroupErrorsTest {
                 .isEqualTo(Errors.CONSUMER_GROUP_ID_NOT_FOUND);
         assertThat(Errors.forException(new ConsumerOffsetMetadataTooLargeException("large")))
                 .isEqualTo(Errors.CONSUMER_OFFSET_METADATA_TOO_LARGE);
+        assertThat(Errors.forException(new InvalidRequestException("invalid request")))
+                .isEqualTo(Errors.INVALID_REQUEST);
+        assertThat(Errors.INVALID_REQUEST.exception()).isNotInstanceOf(RetriableException.class);
     }
 
     @Test

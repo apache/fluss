@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IOUtils;
 
@@ -58,6 +59,8 @@ class BucketCalculatorITCase {
     static final FlussClusterExtension CLUSTER =
             FlussClusterExtension.builder().setNumOfTabletServers(1).build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     private Connection connection;
     private Admin admin;
 
@@ -74,7 +77,7 @@ class BucketCalculatorITCase {
 
     @Test
     void testAppendRoutesToCalculatedBucket() throws Exception {
-        TablePath path = TablePath.of("fluss", "calculator_append");
+        TablePath path = tableNames.tablePath("fluss", "calculator_append");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -104,7 +107,7 @@ class BucketCalculatorITCase {
     @Test
     void testUpsertAndDeleteRouteToCalculatedBucket() throws Exception {
         for (int version : new int[] {1, 2}) {
-            TablePath path = TablePath.of("fluss", "calculator_pk_v" + version);
+            TablePath path = tableNames.tablePath("fluss", "calculator_pk_v" + version);
             Schema schema =
                     Schema.newBuilder()
                             .column("id", DataTypes.INT())
@@ -138,7 +141,7 @@ class BucketCalculatorITCase {
 
     @Test
     void testAppendWithoutBucketKeyPreservesRouting() throws Exception {
-        TablePath path = TablePath.of("fluss", "calculator_no_bucket_key");
+        TablePath path = tableNames.tablePath("fluss", "calculator_no_bucket_key");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -172,7 +175,7 @@ class BucketCalculatorITCase {
 
     @Test
     void testExplicitPrimaryKeyBucketRoutesToCalculatedBucket() throws Exception {
-        TablePath path = TablePath.of("fluss", "calculator_explicit_pk");
+        TablePath path = tableNames.tablePath("fluss", "calculator_explicit_pk");
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())

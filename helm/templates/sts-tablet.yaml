@@ -98,6 +98,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            {{- include "fluss.listeners.advertisedEnv" (dict "ctx" . "component" "tablet") | trim | nindent 12 }}
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
@@ -176,8 +177,10 @@ spec:
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
-            - name: data
-              mountPath: /tmp/fluss/data
+            {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
+            - name: {{ .name | toYaml }}
+              mountPath: /tmp/fluss/{{ .name }}
+            {{- end }}
             {{- if (include "fluss.security.jaas.required" .) }}
             - name: sasl-config
               mountPath: /etc/fluss/conf
@@ -194,8 +197,10 @@ spec:
           configMap:
             name: {{ include "fluss.configMapName" . }}
         {{- if not .Values.tablet.storage.enabled }}
-        - name: data
+        {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
+        - name: {{ .name | toYaml }}
           emptyDir: {}
+        {{- end }}
         {{- end }}
         {{- if (include "fluss.security.jaas.required" .) }}
         {{- include "fluss.security.jaas.volumes" . | nindent 8 }}
@@ -208,12 +213,14 @@ spec:
         {{- end }}
   {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:
+    {{- range (include "fluss.tablet.storage.volumes" . | fromYamlArray) }}
     - metadata:
-        name: data
+        name: {{ .name | toYaml }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .Values.tablet.storage.size }}
-        storageClassName: {{ .Values.tablet.storage.storageClass }}
+            storage: {{ .size | toYaml }}
+        storageClassName: {{ if .storageClass }}{{ .storageClass | toYaml }}{{ end }}
+    {{- end }}
   {{- end}}

@@ -20,72 +20,17 @@ use crate::bucketing::BucketingFunction;
 use crate::client::ClientSchemaGetter;
 use crate::client::lookup::LookupClient;
 use crate::client::metadata::Metadata;
+use crate::client::table::kv_value_decoder::KvValueDecoder;
 use crate::client::table::partition_getter::PartitionGetter;
 use crate::error::{Error, Result};
 use crate::metadata::{
-    KvFormat, PhysicalTablePath, RowType, Schema, TableBucket, TableInfo, TableOrPartition,
-    TablePath,
+    PhysicalTablePath, RowType, TableBucket, TableInfo, TableOrPartition, TablePath,
 };
-use crate::record::RowAppendRecordBatchBuilder;
-use crate::record::kv::SCHEMA_ID_LENGTH;
 use crate::row::encode::{KeyEncoder, KeyEncoderFactory};
-use crate::row::{FixedSchemaDecoder, InternalRow, LookupRow};
+use crate::row::{InternalRow, LookupRow};
 use arrow::array::RecordBatch;
-use byteorder::{ByteOrder, LittleEndian};
-use futures::future::try_join_all;
-use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use parking_lot::Mutex;
 use std::sync::Arc;
-
-/// Per-Lookuper decoder cache. The target-schema decoder is held
-/// directly so the dominant decode path is a single field access; older
-/// schemas are populated lazily on first observation.
-struct DecoderCache {
-    target_id: i16,
-    target_decoder: Arc<FixedSchemaDecoder>,
-    others: RwLock<HashMap<i16, Arc<FixedSchemaDecoder>>>,
-}
-
-impl DecoderCache {
-    fn new(target_id: i16, target_decoder: Arc<FixedSchemaDecoder>) -> Self {
-        Self {
-            target_id,
-            target_decoder,
-            others: RwLock::new(HashMap::new()),
-        }
-    }
-
-    fn decode<'a>(&self, schema_id: i16, bytes: &'a [u8]) -> Result<LookupRow<'a>> {
-        if schema_id == self.target_id {
-            return self.target_decoder.decode(bytes);
-        }
-        let decoder =
-            self.others
-                .read()
-                .get(&schema_id)
-                .cloned()
-                .ok_or_else(|| Error::RowConvertError {
-                    message: format!("No decoder available for schema id {schema_id}"),
-                })?;
-        decoder.decode(bytes)
-    }
-
-    fn contains(&self, schema_id: i16) -> bool {
-        schema_id == self.target_id || self.others.read().contains_key(&schema_id)
-    }
-
-    fn insert(&self, schema_id: i16, decoder: Arc<FixedSchemaDecoder>) {
-        self.others.write().insert(schema_id, decoder);
-    }
-
-    #[cfg(test)]
-    fn get(&self, schema_id: i16) -> Option<Arc<FixedSchemaDecoder>> {
-        if schema_id == self.target_id {
-            return Some(Arc::clone(&self.target_decoder));
-        }
-        self.others.read().get(&schema_id).cloned()
-    }
-}
 
 /// Rows returned from a lookup. Primary-key lookups produce at most one
 /// row; prefix-key lookups may produce many. Rows written under older
@@ -96,11 +41,15 @@ impl DecoderCache {
 pub struct LookupResult {
     rows: Vec<Vec<u8>>,
     target_row_type: Arc<RowType>,
-    decoders: Arc<DecoderCache>,
+    decoders: Arc<KvValueDecoder>,
 }
 
 impl LookupResult {
-    fn new(rows: Vec<Vec<u8>>, target_row_type: Arc<RowType>, decoders: Arc<DecoderCache>) -> Self {
+    fn new(
+        rows: Vec<Vec<u8>>,
+        target_row_type: Arc<RowType>,
+        decoders: Arc<KvValueDecoder>,
+    ) -> Self {
         Self {
             rows,
             target_row_type,
@@ -108,28 +57,8 @@ impl LookupResult {
         }
     }
 
-    fn read_schema_id(bytes: &[u8]) -> Result<i16> {
-        if bytes.len() < SCHEMA_ID_LENGTH {
-            return Err(Error::RowConvertError {
-                message: format!(
-                    "Row payload too short: {} bytes, need at least {} for schema id",
-                    bytes.len(),
-                    SCHEMA_ID_LENGTH
-                ),
-            });
-        }
-        let schema_id = LittleEndian::read_i16(&bytes[..SCHEMA_ID_LENGTH]);
-        if schema_id < 0 {
-            return Err(Error::RowConvertError {
-                message: format!("Invalid negative schema id {schema_id}; row prefix is corrupt"),
-            });
-        }
-        Ok(schema_id)
-    }
-
     fn decode<'a>(&self, bytes: &'a [u8]) -> Result<LookupRow<'a>> {
-        let schema_id = Self::read_schema_id(bytes)?;
-        self.decoders.decode(schema_id, bytes)
+        self.decoders.decode(bytes)
     }
 
     /// Returns the single row when exactly one is present, `None` for
@@ -150,83 +79,31 @@ impl LookupResult {
     }
 
     pub fn to_record_batch(&self) -> Result<RecordBatch> {
-        let mut builder = RowAppendRecordBatchBuilder::new(&self.target_row_type)?;
-        for bytes in &self.rows {
-            let row = self.decode(bytes)?;
-            builder.append(&row)?;
-        }
-        builder.build_arrow_record_batch().map(Arc::unwrap_or_clone)
+        self.decoders
+            .decode_to_record_batch(self.rows.iter().map(Vec::as_slice), &self.target_row_type)
     }
 }
 
 struct LookupSchemaCtx {
-    target_schema: Arc<Schema>,
     target_row_type: Arc<RowType>,
-    kv_format: KvFormat,
     schema_getter: Arc<ClientSchemaGetter>,
-    decoders: Arc<DecoderCache>,
+    decoders: Arc<KvValueDecoder>,
 }
 
 impl LookupSchemaCtx {
     fn new(table_info: &TableInfo, schema_getter: Arc<ClientSchemaGetter>) -> Result<Self> {
-        let target_schema_i32 = table_info.get_schema_id();
-        if !(0..=i16::MAX as i32).contains(&target_schema_i32) {
-            return Err(Error::UnexpectedError {
-                message: format!(
-                    "Schema id {target_schema_i32} does not fit in 16 bits — wire format violated"
-                ),
-                source: None,
-            });
-        }
-        let target_schema = Arc::new(table_info.get_schema().clone());
-        let target_row_type = Arc::new(table_info.row_type().clone());
-        let kv_format = table_info.get_table_config().get_kv_format()?;
-        let target_decoder = Arc::new(FixedSchemaDecoder::new_no_projection(
-            kv_format,
-            target_schema.as_ref(),
-        )?);
-        let decoders = Arc::new(DecoderCache::new(target_schema_i32 as i16, target_decoder));
         Ok(Self {
-            target_schema,
-            target_row_type,
-            kv_format,
+            target_row_type: Arc::new(table_info.row_type().clone()),
             schema_getter,
-            decoders,
+            decoders: Arc::new(KvValueDecoder::for_table(table_info)?),
         })
-    }
-
-    async fn ensure_decoders(&self, rows: &[Vec<u8>]) -> Result<()> {
-        let mut missing: Vec<i16> = Vec::new();
-        for bytes in rows {
-            let schema_id = LookupResult::read_schema_id(bytes)?;
-            if !self.decoders.contains(schema_id) && !missing.contains(&schema_id) {
-                missing.push(schema_id);
-            }
-        }
-        if missing.is_empty() {
-            return Ok(());
-        }
-
-        let fetches = missing.into_iter().map(|schema_id| {
-            let cache = Arc::clone(&self.decoders);
-            let schema_getter = Arc::clone(&self.schema_getter);
-            let target_schema = Arc::clone(&self.target_schema);
-            let kv_format = self.kv_format;
-            async move {
-                let source = schema_getter.get_schema(schema_id as i32).await?;
-                let decoder =
-                    FixedSchemaDecoder::new(kv_format, source.as_ref(), target_schema.as_ref())?;
-                cache.insert(schema_id, Arc::new(decoder));
-                Ok::<_, Error>(())
-            }
-        });
-        try_join_all(fetches).await?;
-        Ok(())
     }
 
     async fn build_result(&self, rows: Vec<Vec<u8>>) -> Result<LookupResult> {
         if !rows.is_empty() {
-            self.ensure_decoders(&rows).await?;
+            self.decoders
+                .ensure_decoders(&self.schema_getter, rows.iter().map(Vec::as_slice))
+                .await?;
         }
         Ok(LookupResult::new(
             rows,
@@ -712,8 +589,10 @@ async fn partition_bucket_count(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::{Column, DataTypes, Schema};
+    use crate::metadata::{Column, DataTypes, KvFormat, Schema};
+    use crate::record::kv::SCHEMA_ID_LENGTH;
     use crate::row::DataGetters;
+    use crate::row::FixedSchemaDecoder;
     use crate::row::binary::BinaryWriter;
     use crate::row::compacted::CompactedRowWriter;
     use arrow::array::Int32Array;
@@ -734,13 +613,14 @@ mod tests {
     }
 
     fn cache_with(
+        target: &Schema,
         target_id: i16,
-        target_decoder: FixedSchemaDecoder,
         others: Vec<(i16, FixedSchemaDecoder)>,
-    ) -> Arc<DecoderCache> {
-        let cache = DecoderCache::new(target_id, Arc::new(target_decoder));
+    ) -> Arc<KvValueDecoder> {
+        let mut cache =
+            KvValueDecoder::new(KvFormat::COMPACTED, Arc::new(target.clone()), target_id).unwrap();
         for (id, decoder) in others {
-            cache.insert(id, Arc::new(decoder));
+            cache = cache.with_decoder(id, decoder);
         }
         Arc::new(cache)
     }
@@ -748,7 +628,7 @@ mod tests {
     fn lookup_result_from(
         rows: Vec<Vec<u8>>,
         target_schema: &Schema,
-        decoders: Arc<DecoderCache>,
+        decoders: Arc<KvValueDecoder>,
     ) -> LookupResult {
         LookupResult::new(rows, Arc::new(target_schema.row_type().clone()), decoders)
     }
@@ -756,8 +636,7 @@ mod tests {
     #[test]
     fn test_to_record_batch_empty() {
         let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
-        let result = lookup_result_from(Vec::new(), &target, cache_with(0, decoder, vec![]));
+        let result = lookup_result_from(Vec::new(), &target, cache_with(&target, 0, vec![]));
         let batch = result.to_record_batch().unwrap();
         assert_eq!(batch.num_rows(), 0);
         assert_eq!(batch.num_columns(), 1);
@@ -771,8 +650,7 @@ mod tests {
         writer.write_int(42);
         let row_bytes = make_row_bytes(0, writer.buffer());
 
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
-        let result = lookup_result_from(vec![row_bytes], &target, cache_with(0, decoder, vec![]));
+        let result = lookup_result_from(vec![row_bytes], &target, cache_with(&target, 0, vec![]));
 
         let batch = result.to_record_batch().unwrap();
         assert_eq!(batch.num_rows(), 1);
@@ -798,11 +676,9 @@ mod tests {
         w.write_string("eight");
         let new_row = make_row_bytes(7, w.buffer());
 
-        let target_decoder =
-            FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
         let projection_decoder =
             FixedSchemaDecoder::new(KvFormat::COMPACTED, &source, &target).unwrap();
-        let cache = cache_with(7, target_decoder, vec![(3, projection_decoder)]);
+        let cache = cache_with(&target, 7, vec![(3, projection_decoder)]);
         let result = lookup_result_from(vec![old_row, new_row], &target, cache);
 
         let rows = result.get_rows().unwrap();
@@ -816,19 +692,17 @@ mod tests {
     #[test]
     fn test_to_record_batch_payload_too_short() {
         let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
-        let result = lookup_result_from(vec![vec![0u8]], &target, cache_with(0, decoder, vec![]));
+        let result = lookup_result_from(vec![vec![0u8]], &target, cache_with(&target, 0, vec![]));
         assert!(result.to_record_batch().is_err());
     }
 
     #[test]
     fn test_get_rows_errors_when_no_decoder_for_schema_id() {
         let target = schema_with_ids(&[(0, "id", DataTypes::int())]);
-        let decoder = FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap();
         let mut w = CompactedRowWriter::new(1);
         w.write_int(1);
         let row = make_row_bytes(99, w.buffer());
-        let result = lookup_result_from(vec![row], &target, cache_with(0, decoder, vec![]));
+        let result = lookup_result_from(vec![row], &target, cache_with(&target, 0, vec![]));
 
         let err = result
             .get_rows()
@@ -836,27 +710,5 @@ mod tests {
             .map_err(|e| e.to_string())
             .unwrap_err();
         assert!(err.contains("schema id 99"), "{err}");
-    }
-
-    #[test]
-    fn test_read_schema_id_rejects_negative() {
-        let bytes = [0xFFu8, 0xFFu8, 0u8];
-        let err = LookupResult::read_schema_id(&bytes).unwrap_err();
-        assert!(
-            err.to_string().contains("Invalid negative schema id"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn test_decoder_cache_target_lookup_skips_lock() {
-        let target = schema_with_ids(&[(0, "a", DataTypes::int())]);
-        let target_decoder =
-            Arc::new(FixedSchemaDecoder::new_no_projection(KvFormat::COMPACTED, &target).unwrap());
-        let cache = DecoderCache::new(7, Arc::clone(&target_decoder));
-
-        let returned = cache.get(7).expect("target id must hit the cache");
-        assert!(Arc::ptr_eq(&returned, &target_decoder));
-        assert!(cache.get(99).is_none());
     }
 }

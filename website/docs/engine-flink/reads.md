@@ -81,6 +81,22 @@ TableSourceScan(table=[[fluss_catalog, fluss, log_table, project=[c_name]]], fie
 
 This confirms that only the `c_name` column is being read from storage.
 
+### Skip unchanged projected updates
+
+By default, a streaming scan of a primary-key table emits updates even when only an unselected column changes.
+To skip these updates for a particular scan, enable `scan.filter-unchanged-row.enabled`:
+
+```sql title="Flink SQL"
+SELECT order_id, status
+FROM orders /*+ OPTIONS('scan.filter-unchanged-row.enabled' = 'true') */;
+```
+
+For example, if only `notes` changes, this query skips the matching `UPDATE_BEFORE` and `UPDATE_AFTER`. A change to `status` emits both records.
+The reader compares the decoded values when the scan projects a subset of the columns. This can save downstream work when most updates affect unselected columns. Comparing large binary or nested values adds CPU cost when updates still need to be emitted.
+
+Only complete update pairs in the primary-key changelog are eligible. Inserts, deletes, updates without a before image, and the `$changelog` and `$binlog` virtual tables retain their normal behavior.
+The same filtering applies when Flink pushes a watermark strategy into the source. The watermark generator sees only emitted records. If a skipped update carries a later event time than the scan has seen so far, event-time windows may close later.
+
 ### Partition Pruning
 
 Partition pruning is an optimization technique for Fluss partitioned tables. It reduces the number of partitions scanned during a query by filtering based on partition keys.
