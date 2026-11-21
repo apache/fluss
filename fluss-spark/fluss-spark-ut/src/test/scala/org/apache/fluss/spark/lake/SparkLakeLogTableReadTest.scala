@@ -800,6 +800,12 @@ class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
                  |(1, "hello"), (2, "fluss")
                  |""".stripMargin)
 
+          // Verify the log-only fallback for each custom mapping before tiering.
+          checkAnswer(
+            sql(s"SELECT * FROM $DEFAULT_DATABASE.$tableName ORDER BY id"),
+            Row(1, "hello") :: Row(2, "fluss") :: Nil
+          )
+
           tierToLake(tableName)
 
           checkAnswer(
