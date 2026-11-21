@@ -43,6 +43,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -51,6 +52,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
@@ -149,6 +151,73 @@ class LakeSplitGeneratorTest {
             }
             return offsets;
         }
+    }
+
+    @Test
+    void testLogTableLakeSplitIndexFollowsPlanningOrderWithinBucket() throws Exception {
+        TablePath path = TablePath.of("db", "log_table");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("id", DataTypes.INT()).build())
+                        .distributedBy(2, "id")
+                        .build();
+        TableInfo info = TableInfo.of(path, 1L, 1, descriptor, null, 1L, 1L);
+
+        // The planner returns the lake splits of both buckets interleaved, in write order.
+        List<LakeSplit> plannedSplits =
+                Arrays.asList(
+                        new TestingLakeSplit(0, Collections.emptyList()),
+                        new TestingLakeSplit(1, Collections.emptyList()),
+                        new TestingLakeSplit(0, Collections.emptyList()),
+                        new TestingLakeSplit(0, Collections.emptyList()),
+                        new TestingLakeSplit(1, Collections.emptyList()));
+        Map<TableBucket, Long> lakeOffsets = new HashMap<>();
+        lakeOffsets.put(new TableBucket(1L, 0), 30L);
+        lakeOffsets.put(new TableBucket(1L, 1), 20L);
+        TestAdminAdapter admin =
+                new TestAdminAdapter() {
+                    @Override
+                    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(
+                            TablePath ignored) {
+                        return CompletableFuture.completedFuture(new LakeSnapshot(1L, lakeOffsets));
+                    }
+                };
+        LakeSplitGenerator generator =
+                new LakeSplitGenerator(
+                        info,
+                        admin,
+                        TestingLakeSource.fromSplits(plannedSplits),
+                        new ZeroOffsetsRetriever(),
+                        OffsetsInitializer.latest(),
+                        2,
+                        Collections::emptySet);
+
+        List<SourceSplitBase> splits = generator.generateHybridLakeFlussSplits();
+
+        // The reader restores a bucket's lake splits by split index, so the index must follow
+        // the planning order within each bucket.
+        for (int bucket = 0; bucket < 2; bucket++) {
+            int currentBucket = bucket;
+            List<LakeSplit> expected =
+                    plannedSplits.stream()
+                            .filter(split -> split.bucket() == currentBucket)
+                            .collect(Collectors.toList());
+            List<LakeSnapshotSplit> lakeSnapshotSplits = new ArrayList<>();
+            for (SourceSplitBase split : splits) {
+                if (split instanceof LakeSnapshotSplit
+                        && split.getTableBucket().getBucket() == currentBucket) {
+                    lakeSnapshotSplits.add((LakeSnapshotSplit) split);
+                }
+            }
+            lakeSnapshotSplits.sort(
+                    (left, right) -> Integer.compare(left.getSplitIndex(), right.getSplitIndex()));
+            assertThat(lakeSnapshotSplits)
+                    .extracting(LakeSnapshotSplit::getLakeSplit)
+                    .containsExactlyElementsOf(expected);
+        }
+        // Split ids must stay unique within the table.
+        assertThat(splits.stream().map(SourceSplitBase::splitId).distinct().count())
+                .isEqualTo(splits.size());
     }
 
     @Test

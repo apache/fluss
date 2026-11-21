@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.PredicateBuilder;
@@ -26,22 +27,32 @@ import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 
+import org.apache.iceberg.AppendFiles;
+import org.apache.iceberg.DataFile;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.data.GenericRecord;
+import org.apache.iceberg.data.Record;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
+import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import javax.annotation.Nullable;
+
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -154,6 +165,66 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLogTablePlanKeepsWriteOrderWithinBucket(boolean isPartitioned) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        DEFAULT_DB,
+                        "log_write_order_" + (isPartitioned ? "partitioned_" : "") + DEFAULT_TABLE);
+        Schema schema =
+                new Schema(
+                        optional(1, "c1", Types.IntegerType.get()),
+                        optional(2, "c2", Types.StringType.get()));
+        PartitionSpec partitionSpec =
+                isPartitioned
+                        ? PartitionSpec.builderFor(schema).identity("c2").bucket("c1", 2).build()
+                        : PartitionSpec.builderFor(schema).bucket("c1", 2).build();
+        createTable(tablePath, schema, partitionSpec);
+        Table table = getTable(tablePath);
+        List<String> partitions =
+                isPartitioned ? Arrays.asList("p1", "p2") : Collections.singletonList(null);
+
+        // Each tiering round is one Iceberg commit. Interleave commits across partitions and
+        // buckets, so the snapshot has one manifest per commit and every bucket has several files.
+        Map<String, String> bucketByFile = new HashMap<>();
+        Map<String, List<String>> expectedFilesByBucket = new HashMap<>();
+        for (int round = 0; round < 5; round++) {
+            for (String partition : partitions) {
+                for (int bucket = 0; bucket < 2; bucket++) {
+                    DataFile dataFile = writeDataFile(table, schema, partition, bucket, round);
+                    table.newAppend().appendFile(dataFile).commit();
+                    recordFile(bucketByFile, expectedFilesByBucket, partition, bucket, dataFile);
+                }
+            }
+        }
+        // One commit holding several files of the same bucket, which share a sequence number.
+        AppendFiles append = table.newAppend();
+        for (int i = 0; i < 3; i++) {
+            DataFile dataFile = writeDataFile(table, schema, partitions.get(0), 0, 100 + i);
+            append.appendFile(dataFile);
+            recordFile(bucketByFile, expectedFilesByBucket, partitions.get(0), 0, dataFile);
+        }
+        append.commit();
+        table.refresh();
+        long snapshotId = table.currentSnapshot().snapshotId();
+
+        // Iceberg's planning order varies between runs, so plan several times.
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        for (int run = 0; run < 20; run++) {
+            Map<String, List<String>> plannedFilesByBucket = new HashMap<>();
+            for (IcebergSplit split : lakeSource.createPlanner(() -> snapshotId).plan()) {
+                String file = split.fileScanTask().file().location();
+                assertThat(bucketKey(split.partition(), split.bucket()))
+                        .isEqualTo(bucketByFile.get(file));
+                plannedFilesByBucket
+                        .computeIfAbsent(bucketByFile.get(file), k -> new ArrayList<>())
+                        .add(file);
+            }
+            assertThat(plannedFilesByBucket).isEqualTo(expectedFilesByBucket);
+        }
+    }
+
     @Test
     void testOnlyIncludesFilterColumnStats() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test_filter_column_stats");
@@ -204,6 +275,40 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
         Expression boundExpression =
                 Expressions.greaterThanOrEqual("c2", "a").bind(schema.asStruct(), true);
         assertThat(referencedColumns(boundExpression)).containsOnly("c2");
+    }
+
+    private DataFile writeDataFile(
+            Table table, Schema schema, @Nullable String partition, int bucket, int value)
+            throws Exception {
+        try (TaskWriter<Record> taskWriter =
+                TaskWriterFactory.createTaskWriter(table, partition, bucket)) {
+            taskWriter.write(createIcebergRecord(schema, value, partition));
+            DataFile[] dataFiles = taskWriter.dataFiles();
+            assertThat(dataFiles).hasSize(1);
+            return dataFiles[0];
+        }
+    }
+
+    private static void recordFile(
+            Map<String, String> bucketByFile,
+            Map<String, List<String>> expectedFilesByBucket,
+            @Nullable String partition,
+            int bucket,
+            DataFile dataFile) {
+        String bucketKey =
+                bucketKey(
+                        partition == null
+                                ? Collections.emptyList()
+                                : Collections.singletonList(partition),
+                        bucket);
+        bucketByFile.put(dataFile.location(), bucketKey);
+        expectedFilesByBucket
+                .computeIfAbsent(bucketKey, k -> new ArrayList<>())
+                .add(dataFile.location());
+    }
+
+    private static String bucketKey(List<String> partition, int bucket) {
+        return partition + "/" + bucket;
     }
 
     private Set<String> referencedColumns(Expression expression) {
