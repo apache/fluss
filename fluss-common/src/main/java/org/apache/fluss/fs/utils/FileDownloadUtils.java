@@ -42,6 +42,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
@@ -75,7 +76,8 @@ public class FileDownloadUtils {
             FutureUtils.waitForAll(futures, new DownloadProgressAction(fileDownloadSpecs.size()))
                     .get();
         } catch (Exception e) {
-            futures.forEach(future -> future.cancel(true));
+            IOUtils.closeQuietly(internalCloser);
+            waitForAllUninterruptibly(futures);
             fileDownloadSpecs.stream()
                     .map(FileDownloadSpec::getTargetDirectory)
                     .map(Path::toFile)
@@ -93,6 +95,24 @@ public class FileDownloadUtils {
             if (closeableRegistry.unregisterCloseable(internalCloser)) {
                 IOUtils.closeQuietly(internalCloser);
             }
+        }
+    }
+
+    private static void waitForAllUninterruptibly(
+            Collection<? extends CompletableFuture<?>> futures) {
+        CompletableFuture<Void> allFutures = FutureUtils.completeAll(futures);
+        boolean interrupted = false;
+        while (!allFutures.isDone()) {
+            try {
+                allFutures.get();
+            } catch (InterruptedException e) {
+                interrupted = true;
+            } catch (ExecutionException ignored) {
+                // The original download failure is reported below.
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -140,9 +160,22 @@ public class FileDownloadUtils {
             FSDataInputStream inputStream = fileSystem.open(remoteFilePath);
             closeableRegistry.registerCloseable(inputStream);
 
+            if (closeableRegistry.isClosed()) {
+                throw new IOException("Download was cancelled.");
+            }
+
             Files.createDirectories(targetFilePath.getParent());
+
+            if (closeableRegistry.isClosed()) {
+                throw new IOException("Download was cancelled.");
+            }
+
             OutputStream outputStream = Files.newOutputStream(targetFilePath);
             closeableRegistry.registerCloseable(outputStream);
+
+            if (closeableRegistry.isClosed()) {
+                throw new IOException("Download was cancelled.");
+            }
 
             long readBytes = IOUtils.copyBytes(inputStream, outputStream, false);
 
