@@ -22,17 +22,40 @@ import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 
+import javax.annotation.Nullable;
+
 /**
  * The result of notify bucket leader and lsr for a bucket in request {@link
  * NotifyLeaderAndIsrRequest} with delete = true.
  */
 public class NotifyLeaderAndIsrResultForBucket extends ResultForBucket {
+    private final @Nullable Long recoveredSnapshotId;
 
     public NotifyLeaderAndIsrResultForBucket(TableBucket tableBucket) {
         super(tableBucket);
+        this.recoveredSnapshotId = null;
     }
 
     public NotifyLeaderAndIsrResultForBucket(TableBucket tableBucket, ApiError error) {
         super(tableBucket, error);
+        this.recoveredSnapshotId = null;
+    }
+
+    /** Reports successful recovery of the specified snapshot. */
+    public static NotifyLeaderAndIsrResultForBucket forRecoveredSnapshot(
+            TableBucket bucket, long snapshotId) {
+        return new NotifyLeaderAndIsrResultForBucket(bucket, snapshotId);
+    }
+
+    private NotifyLeaderAndIsrResultForBucket(TableBucket bucket, long recoveredSnapshotId) {
+        super(bucket);
+        this.recoveredSnapshotId = recoveredSnapshotId;
+    }
+
+    /**
+     * Returns the confirmed recovery snapshot ID, or null if no snapshot recovery was confirmed.
+     */
+    public @Nullable Long getRecoveredSnapshotId() {
+        return recoveredSnapshotId;
     }
 }

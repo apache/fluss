@@ -122,6 +122,13 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         }
     }
 
+    boolean isSnapshotKnownToKvContext(long snapshotId) {
+        synchronized (uploadedSstFiles) {
+            return lastCompletedSnapshotId == snapshotId
+                    || uploadedSstFiles.containsKey(snapshotId);
+        }
+    }
+
     /** Returns uploaded snapshots whose commit has not yet been confirmed. */
     public Set<Long> getUnconfirmedSnapshotIds() {
         synchronized (uploadedSstFiles) {
@@ -296,7 +303,10 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                             .sum();
             miscFiles.addAll(miscFilesUploadResult);
 
-            uploadedSstFiles.put(snapshotId, Collections.unmodifiableList(sstFiles));
+            List<KvFileHandleAndLocalPath> uploadedFiles = Collections.unmodifiableList(sstFiles);
+            synchronized (uploadedSstFiles) {
+                uploadedSstFiles.put(snapshotId, uploadedFiles);
+            }
             return size;
         }
 

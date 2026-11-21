@@ -30,6 +30,7 @@ import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.KvRecoveryInProgressException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -130,9 +131,11 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.utils.ByteArraySlice;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -160,6 +163,8 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
@@ -206,6 +211,9 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
+    private final ExecutorService bulkLoadRecoveryExecutor =
+            Executors.newSingleThreadExecutor(
+                    new ExecutorThreadFactory("tablet-server-bulk-load-recovery"));
     private final ProjectionPushdownCache projectionsCache = new ProjectionPushdownCache();
     private final Lock replicaStateChangeLock = new ReentrantLock();
 
@@ -602,47 +610,105 @@ public class ReplicaManager implements ServerReconfigurable {
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
             Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
+        List<CompletableFuture<NotifyLeaderAndIsrResultForBucket>> recoveryResponses =
+                new ArrayList<>();
         inLock(
                 replicaStateChangeLock,
                 () -> {
-                    // check or apply coordinator epoch.
                     validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
-
-                    List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
-                    List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
+                    List<NotifyLeaderAndIsrData> leaders = new ArrayList<>();
+                    List<NotifyLeaderAndIsrData> followers = new ArrayList<>();
                     for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                        TableBucket bucket = data.getTableBucket();
                         LOG.info(
                                 "Try to become leaderAndFollower for {} with isr {}, replicas: {}",
-                                data.getTableBucket(),
+                                bucket,
                                 data.getLeaderAndIsr(),
                                 data.getReplicas());
-                        TableBucket tb = data.getTableBucket();
+                        if (result.containsKey(bucket)) {
+                            continue;
+                        }
                         try {
-                            boolean becomeLeader = validateAndGetIsBecomeLeader(data);
-                            if (becomeLeader) {
-                                replicasToBeLeader.add(data);
+                            if (data.getRecoverySnapshotId() != null) {
+                                recoveryResponses.add(
+                                        requestBulkLoadRecovery(data, requestCoordinatorEpoch));
+                                continue;
+                            }
+                            HostedReplica hosted = allReplicas.get(bucket);
+                            if (hosted instanceof OnlineReplica
+                                    && ((OnlineReplica) hosted)
+                                            .getReplica()
+                                            .hasKvRecoveryInProgress()) {
+                                throw new KvRecoveryInProgressException(
+                                        "KV recovery is still running; retry the role notification.");
+                            }
+                            if (validateAndGetIsBecomeLeader(data)) {
+                                leaders.add(data);
                             } else {
-                                replicasToBeFollower.add(data);
+                                followers.add(data);
                             }
                         } catch (Exception e) {
                             result.put(
-                                    tb,
+                                    bucket,
                                     new NotifyLeaderAndIsrResultForBucket(
-                                            tb, ApiError.fromThrowable(e)));
+                                            bucket, ApiError.fromThrowable(e)));
                         }
                     }
-
-                    makeLeaders(replicasToBeLeader, result);
-                    makeFollowers(replicasToBeFollower, result);
-
-                    // We initialize highWatermark thread after the first LeaderAndIsr request. This
-                    // ensures that all the replicas have been completely populated before starting
-                    // the checkpointing there by avoiding weird race conditions
+                    makeLeaders(leaders, result);
+                    makeFollowers(followers, result);
+                    // Initialize checkpoints only after role requests have populated the replicas.
                     startHighWatermarkCheckPointThread();
                     replicaFetcherManager.shutdownIdleFetcherThreads();
                 });
+        if (recoveryResponses.isEmpty()) {
+            responseCallback.accept(new ArrayList<>(result.values()));
+            return;
+        }
+        CompletableFuture.allOf(recoveryResponses.toArray(new CompletableFuture<?>[0]))
+                .whenComplete(
+                        (ignored, error) -> {
+                            for (CompletableFuture<NotifyLeaderAndIsrResultForBucket> activation :
+                                    recoveryResponses) {
+                                NotifyLeaderAndIsrResultForBucket completed = activation.join();
+                                result.put(completed.getTableBucket(), completed);
+                            }
+                            responseCallback.accept(new ArrayList<>(result.values()));
+                        });
+    }
 
-        responseCallback.accept(new ArrayList<>(result.values()));
+    private CompletableFuture<NotifyLeaderAndIsrResultForBucket> requestBulkLoadRecovery(
+            NotifyLeaderAndIsrData data, int requestCoordinatorEpoch) {
+        Replica replica = getReplicaOrException(data.getTableBucket());
+        if (data.getLeader() != serverId
+                || !data.getReplicas().contains(serverId)
+                || !replica.getPhysicalTablePath().equals(data.getPhysicalTablePath())
+                || replica.getBucketEpoch() != data.getBucketEpoch()) {
+            throw new NotLeaderOrFollowerException(
+                    "BulkLoad recovery requires the matching physical leader.");
+        }
+        return replica.requestBulkLoadRestore(
+                        data.getRecoverySnapshotId(),
+                        data.getLeaderEpoch(),
+                        requestCoordinatorEpoch,
+                        () ->
+                                inLock(
+                                        replicaStateChangeLock,
+                                        () -> {
+                                            localDiskManager.ensureWritable();
+                                            replica.markBulkLoadRebuildStarted();
+                                        }),
+                        bulkLoadRecoveryExecutor)
+                .handle(
+                        (restored, error) -> {
+                            if (error != null) {
+                                return new NotifyLeaderAndIsrResultForBucket(
+                                        data.getTableBucket(), ApiError.fromThrowable(error));
+                            }
+                            return restored == null
+                                    ? new NotifyLeaderAndIsrResultForBucket(data.getTableBucket())
+                                    : NotifyLeaderAndIsrResultForBucket.forRecoveredSnapshot(
+                                            data.getTableBucket(), restored);
+                        });
     }
 
     public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {
@@ -2310,7 +2376,7 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private void ensureWritableForNewKvLeader(Replica replica, int requestLeaderEpoch) {
-        if (!replica.isKvTable() || requestLeaderEpoch <= replica.getLeaderEpoch()) {
+        if (!replica.isKvTable() || !replica.requiresLeaderActivation(requestLeaderEpoch)) {
             return;
         }
 
@@ -2737,6 +2803,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, bulkLoadRecoveryExecutor);
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         historicalPartitionManager.close();

@@ -46,7 +46,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
-import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -92,21 +91,15 @@ class ZooKeeperCompletedSnapshotStoreTest {
         final CompletedSnapshotStore snapshotStore =
                 createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
         TableBucket tableBucket = new TableBucket(1, 1);
-        FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
-        SnapshotsCleanerTest.TestCompletedSnapshot snapshot1 =
-                SnapshotsCleanerTest.createSnapshot(tableBucket, 0, snapshotPath);
-
+        CompletedSnapshot snapshot1 = mockCompletedSnapshot(tmpDir, tableBucket, 0);
         snapshotStore.add(snapshot1, null, 0);
-        assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot1);
+        FsPath metadata = snapshot1.getMetadataFilePath();
+        assertThat(metadata.getFileSystem().exists(metadata)).isTrue();
 
-        final SnapshotsCleanerTest.TestCompletedSnapshot snapshot2 =
-                SnapshotsCleanerTest.createSnapshot(tableBucket, 1, snapshotPath);
+        CompletedSnapshot snapshot2 = mockCompletedSnapshot(tmpDir, tableBucket, 1);
         snapshotStore.add(snapshot2, null, 0);
-        final List<CompletedSnapshot> allSnapshots = snapshotStore.getAllSnapshots();
-        assertThat(allSnapshots).containsExactly(snapshot2);
-
-        // verify that the subsumed snapshot is discarded
-        SnapshotsCleanerTest.verifySnapshotDiscarded(snapshot1);
+        assertThat(snapshotStore.getAllSnapshots()).containsExactly(snapshot2);
+        assertThat(metadata.getFileSystem().exists(metadata)).isFalse();
     }
 
     @Test

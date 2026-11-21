@@ -29,6 +29,7 @@ import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -37,6 +38,8 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -72,6 +75,8 @@ import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
@@ -80,6 +85,8 @@ import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
+import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -127,6 +134,7 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -163,6 +171,7 @@ import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -201,11 +210,13 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.slf4j.Logger;
@@ -227,6 +238,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -278,6 +290,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                                     ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key())));
     private final int defaultBucketNumber;
+    private final Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier;
     private final int defaultReplicationFactor;
     private final boolean logTableAllowCreation;
     private final boolean kvTableAllowCreation;
@@ -322,6 +335,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 dynamicConfigManager,
                 ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
+        this.coordinatorEventProcessorSupplier = coordinatorEventProcessorSupplier;
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
         this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
@@ -352,6 +366,99 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public String name() {
         return "coordinator";
+    }
+
+    @Override
+    public CompletableFuture<AllocateBulkLoadBucketSnapshotResponse> allocateBulkLoadBucketSnapshot(
+            AllocateBulkLoadBucketSnapshotRequest request) {
+        Session session = currentSession();
+        return submitBulkLoadOperation(
+                manager -> {
+                    PbBulkLoadHandle handle = request.getHandle();
+                    authorizeBulkLoad(handle.getTableId(), session);
+                    BulkLoadBucket allocation =
+                            manager.allocateBucketSnapshot(
+                                    handle.getBulkLoadId(),
+                                    new TableBucket(
+                                            handle.getTableId(),
+                                            request.hasPartitionId()
+                                                    ? request.getPartitionId()
+                                                    : null,
+                                            request.getBucketId()),
+                                    this::fetchLeaderLogEndOffset);
+                    return new AllocateBulkLoadBucketSnapshotResponse()
+                            .setSnapshotId(allocation.snapshotId)
+                            .setLogOffset(allocation.logOffset)
+                            .setState(allocation.state);
+                });
+    }
+
+    @Override
+    public CompletableFuture<CommitBulkLoadBucketSnapshotResponse> commitBulkLoadBucketSnapshot(
+            CommitBulkLoadBucketSnapshotRequest request) {
+        Session session = currentSession();
+        return submitBulkLoadOperation(
+                manager -> {
+                    PbBulkLoadHandle handle = request.getHandle();
+                    authorizeBulkLoad(handle.getTableId(), session);
+                    TableBucket bucket =
+                            new TableBucket(
+                                    handle.getTableId(),
+                                    request.hasPartitionId() ? request.getPartitionId() : null,
+                                    request.getBucketId());
+                    CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
+                    manager.commitBucketSnapshot(
+                            handle.getBulkLoadId(),
+                            bucket,
+                            this::fetchLeaderLogEndOffset,
+                            processor.completedSnapshotStoreManager(),
+                            () -> processor.requestBulkLoadRecovery(bucket));
+                    return new CommitBulkLoadBucketSnapshotResponse();
+                });
+    }
+
+    private void authorizeBulkLoad(long tableId, Session session) {
+        if (authorizer != null) {
+            try {
+                authorizeTableWithSession(session, OperationType.WRITE, tableId);
+            } catch (UnknownTableOrBucketException e) {
+                throw new BulkLoadNotFoundException(
+                        "The original BulkLoad table no longer exists.");
+            }
+        }
+    }
+
+    private long fetchLeaderLogEndOffset(TableBucket bucket) throws Exception {
+        int leader =
+                zkClient.getLeaderAndIsr(bucket)
+                        .orElseThrow(
+                                () ->
+                                        new NotLeaderOrFollowerException(
+                                                "BulkLoad bucket has no leader: " + bucket))
+                        .leader();
+        return coordinatorEventProcessorSupplier
+                .get()
+                .getCoordinatorChannelManager()
+                .bulkLoadLogEndOffset(leader, bucket);
+    }
+
+    private <T> CompletableFuture<T> submitBulkLoadOperation(
+            FunctionWithException<BulkLoadManager, T, Exception> action) {
+        final int epochVersion = coordinatorZkVersionSupplier.get();
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    if (!isLeader() || epochVersion < 0) {
+                        throw new NotCoordinatorLeaderException(
+                                "BulkLoad requires the current Coordinator leader.");
+                    }
+                    try {
+                        return action.apply(
+                                new BulkLoadManager(zkClient, metadataManager, epochVersion));
+                    } catch (Exception e) {
+                        throw new CompletionException(e);
+                    }
+                },
+                ioExecutor);
     }
 
     @Override

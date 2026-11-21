@@ -18,13 +18,22 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
@@ -35,11 +44,16 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
 /** Test for {@link CoordinatorChannelManager} . */
@@ -90,6 +104,62 @@ class CoordinatorChannelManagerTest {
         checkEnqueueRequest(coordinatorChannelManager, server1.id(), true);
 
         coordinatorChannelManager.close();
+    }
+
+    @Test
+    void testBulkLoadRequestsTimeOut() throws Exception {
+        Configuration configuration =
+                new Configuration()
+                        .set(
+                                ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT,
+                                Duration.ofMillis(50));
+        CompletableFuture<ListOffsetsResponse> offsets = new CompletableFuture<>();
+        CompletableFuture<NotifyLeaderAndIsrResponse> notification = new CompletableFuture<>();
+        TabletServerGateway unresponsiveGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<ListOffsetsResponse> listOffsets(
+                            ListOffsetsRequest request) {
+                        return offsets;
+                    }
+
+                    @Override
+                    public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
+                            NotifyLeaderAndIsrRequest request) {
+                        return notification;
+                    }
+                };
+        try (RpcClient client =
+                RpcClient.create(configuration, TestingClientMetricGroup.newInstance())) {
+            CoordinatorChannelManager manager =
+                    new CoordinatorChannelManager(
+                            client,
+                            () -> 0,
+                            configuration,
+                            TestingMetricGroups.COORDINATOR_METRICS) {
+                        @Override
+                        protected Optional<TabletServerGateway> getTabletServerGateway(
+                                int serverId) {
+                            return Optional.of(unresponsiveGateway);
+                        }
+                    };
+            CompletableFuture<NotifyLeaderAndIsrResponse> recovery =
+                    manager.notifyBulkLoadRecovery(0, new NotifyLeaderAndIsrRequest());
+            CompletableFuture<Throwable> allocation =
+                    CompletableFuture.supplyAsync(
+                            () ->
+                                    catchThrowable(
+                                            () ->
+                                                    manager.bulkLoadLogEndOffset(
+                                                            0, new TableBucket(1, 0))));
+            assertThat(Errors.forException(allocation.get(5, TimeUnit.SECONDS)))
+                    .isEqualTo(Errors.REQUEST_TIME_OUT);
+            assertThatThrownBy(() -> recovery.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(TimeoutException.class);
+        } finally {
+            offsets.completeExceptionally(new IllegalStateException("Test completed"));
+            notification.completeExceptionally(new IllegalStateException("Test completed"));
+        }
     }
 
     private void checkEnqueueRequest(

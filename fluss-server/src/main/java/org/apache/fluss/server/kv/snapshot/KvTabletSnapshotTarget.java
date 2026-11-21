@@ -151,6 +151,11 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         this.snapshotRunner = createSnapshotRunner(cancelStreamRegistry);
     }
 
+    /** Whether this KV instance produced or was restored from the selected snapshot. */
+    public boolean isSnapshotKnownToKvContext(long snapshotId) {
+        return rocksIncrementalSnapshot.isSnapshotKnownToKvContext(snapshotId);
+    }
+
     @Override
     public long currentSnapshotId() {
         try {

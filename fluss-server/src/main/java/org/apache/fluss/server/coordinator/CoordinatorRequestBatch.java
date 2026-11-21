@@ -211,7 +211,33 @@ public class CoordinatorRequestBatch {
         }
     }
 
+    /** Adds role notifications and publishes the bucket's location to the live tablet servers. */
     public void addNotifyLeaderRequestForTabletServers(
+            Set<Integer> tabletServers,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            List<Integer> bucketReplicas,
+            LeaderAndIsr leaderAndIsr) {
+        addRoleNotification(tabletServers, tablePath, tableBucket, bucketReplicas, leaderAndIsr);
+        // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
+        // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
+        // Location updates require the bucket's replica assignment even when its count is known.
+        Map<Integer, List<Integer>> assignment =
+                tableBucket.getPartitionId() == null
+                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
+                        : coordinatorContext.getPartitionAssignment(
+                                new TablePartition(
+                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
+        if (assignment.containsKey(tableBucket.getBucket())) {
+            addUpdateMetadataRequestForTabletServers(
+                    coordinatorContext.getLiveTabletServers().keySet(),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+        }
+    }
+
+    void addRoleNotification(
             Set<Integer> tabletServers,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -239,23 +265,6 @@ public class CoordinatorRequestBatch {
                                                     bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
-
-        // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
-        // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        // Location updates require the bucket's replica assignment even when its count is known.
-        Map<Integer, List<Integer>> assignment =
-                tableBucket.getPartitionId() == null
-                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
-                        : coordinatorContext.getPartitionAssignment(
-                                new TablePartition(
-                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
-        if (assignment.containsKey(tableBucket.getBucket())) {
-            addUpdateMetadataRequestForTabletServers(
-                    coordinatorContext.getLiveTabletServers().keySet(),
-                    null,
-                    null,
-                    Collections.singleton(tableBucket));
-        }
     }
 
     /**

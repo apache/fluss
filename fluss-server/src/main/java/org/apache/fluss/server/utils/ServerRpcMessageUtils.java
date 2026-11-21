@@ -856,6 +856,9 @@ public class ServerRpcMessageUtils {
         if (notifyLeaderAndIsrData.getBucketCountEpoch() != null) {
             reqForBucket.setBucketCountEpoch(notifyLeaderAndIsrData.getBucketCountEpoch());
         }
+        if (notifyLeaderAndIsrData.getRecoverySnapshotId() != null) {
+            reqForBucket.setRecoverySnapshotId(notifyLeaderAndIsrData.getRecoverySnapshotId());
+        }
 
         return reqForBucket;
     }
@@ -880,23 +883,38 @@ public class ServerRpcMessageUtils {
                 standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
             }
 
-            PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
-            notifyLeaderAndIsrDataList.add(
-                    new NotifyLeaderAndIsrData(
-                            toPhysicalTablePath(reqForBucket.getPhysicalTablePath()),
-                            toTableBucket(pbTableBucket),
-                            replicas,
-                            new LeaderAndIsr(
-                                    reqForBucket.getLeader(),
-                                    reqForBucket.getLeaderEpoch(),
-                                    isr,
-                                    standbyReplicas,
-                                    request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch()),
-                            reqForBucket.hasBucketCount() ? reqForBucket.getBucketCount() : null,
-                            reqForBucket.hasBucketCountEpoch()
-                                    ? reqForBucket.getBucketCountEpoch()
-                                    : null));
+            PhysicalTablePath path = toPhysicalTablePath(reqForBucket.getPhysicalTablePath());
+            TableBucket bucket = toTableBucket(reqForBucket.getTableBucket());
+            LeaderAndIsr role =
+                    new LeaderAndIsr(
+                            reqForBucket.getLeader(),
+                            reqForBucket.getLeaderEpoch(),
+                            isr,
+                            standbyReplicas,
+                            request.getCoordinatorEpoch(),
+                            reqForBucket.getBucketEpoch());
+            if (reqForBucket.hasRecoverySnapshotId()) {
+                notifyLeaderAndIsrDataList.add(
+                        NotifyLeaderAndIsrData.forBulkLoadRecovery(
+                                path,
+                                bucket,
+                                replicas,
+                                role,
+                                reqForBucket.getRecoverySnapshotId()));
+            } else {
+                notifyLeaderAndIsrDataList.add(
+                        new NotifyLeaderAndIsrData(
+                                path,
+                                bucket,
+                                replicas,
+                                role,
+                                reqForBucket.hasBucketCount()
+                                        ? reqForBucket.getBucketCount()
+                                        : null,
+                                reqForBucket.hasBucketCountEpoch()
+                                        ? reqForBucket.getBucketCountEpoch()
+                                        : null));
+            }
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -920,6 +938,9 @@ public class ServerRpcMessageUtils {
             if (bucketResult.failed()) {
                 respForBucket.setError(bucketResult.getErrorCode(), bucketResult.getErrorMessage());
             }
+            if (bucketResult.getRecoveredSnapshotId() != null) {
+                respForBucket.setRecoveredSnapshotId(bucketResult.getRecoveredSnapshotId());
+            }
             respForBuckets.add(respForBucket);
         }
         notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(respForBuckets);
@@ -932,18 +953,24 @@ public class ServerRpcMessageUtils {
                 new ArrayList<>();
         for (PbNotifyLeaderAndIsrRespForBucket protoNotifyLeaderRespForBucket :
                 response.getNotifyBucketsLeaderRespsList()) {
-            TableBucket tableBucket =
-                    toTableBucket(protoNotifyLeaderRespForBucket.getTableBucket());
-            // construct the result for notify bucket leader and isr
-            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket =
-                    protoNotifyLeaderRespForBucket.hasErrorCode()
-                            ? new NotifyLeaderAndIsrResultForBucket(
-                                    tableBucket,
-                                    ApiError.fromErrorMessage(protoNotifyLeaderRespForBucket))
-                            : new NotifyLeaderAndIsrResultForBucket(tableBucket);
-            notifyLeaderAndIsrResultForBuckets.add(notifyLeaderAndIsrResultForBucket);
+            notifyLeaderAndIsrResultForBuckets.add(
+                    toNotifyLeaderAndIsrResult(protoNotifyLeaderRespForBucket));
         }
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    /** Decodes the result for one bucket, including an optional recovery acknowledgment. */
+    public static NotifyLeaderAndIsrResultForBucket toNotifyLeaderAndIsrResult(
+            PbNotifyLeaderAndIsrRespForBucket response) {
+        TableBucket bucket = toTableBucket(response.getTableBucket());
+        if (response.hasErrorCode() && response.getErrorCode() != 0) {
+            return new NotifyLeaderAndIsrResultForBucket(
+                    bucket, ApiError.fromErrorMessage(response));
+        }
+        return response.hasRecoveredSnapshotId()
+                ? NotifyLeaderAndIsrResultForBucket.forRecoveredSnapshot(
+                        bucket, response.getRecoveredSnapshotId())
+                : new NotifyLeaderAndIsrResultForBucket(bucket);
     }
 
     /**

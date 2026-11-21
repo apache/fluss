@@ -32,9 +32,10 @@ public final class NotifyLeaderAndIsrData {
     private final TableBucket tableBucket;
     private final List<Integer> replicas;
     private final LeaderAndIsr leaderAndIsr;
-    // null when a legacy coordinator omits the fields
+    // Omitted by legacy coordinators and by recovery notifications for an installed layout.
     private final @Nullable Integer bucketCount;
     private final @Nullable Long bucketCountEpoch;
+    private final @Nullable Long recoverySnapshotId;
 
     public NotifyLeaderAndIsrData(
             PhysicalTablePath physicalTablePath,
@@ -51,12 +52,48 @@ public final class NotifyLeaderAndIsrData {
             LeaderAndIsr leaderAndIsr,
             @Nullable Integer bucketCount,
             @Nullable Long bucketCountEpoch) {
+        this(
+                physicalTablePath,
+                tableBucket,
+                replicas,
+                leaderAndIsr,
+                bucketCount,
+                bucketCountEpoch,
+                null);
+    }
+
+    /** Creates a recovery notification for a bucket whose role and layout are already installed. */
+    public static NotifyLeaderAndIsrData forBulkLoadRecovery(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr,
+            long recoverySnapshotId) {
+        return new NotifyLeaderAndIsrData(
+                physicalTablePath,
+                tableBucket,
+                replicas,
+                leaderAndIsr,
+                null,
+                null,
+                recoverySnapshotId);
+    }
+
+    private NotifyLeaderAndIsrData(
+            PhysicalTablePath physicalTablePath,
+            TableBucket tableBucket,
+            List<Integer> replicas,
+            LeaderAndIsr leaderAndIsr,
+            @Nullable Integer bucketCount,
+            @Nullable Long bucketCountEpoch,
+            @Nullable Long recoverySnapshotId) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.replicas = replicas;
         this.leaderAndIsr = leaderAndIsr;
         this.bucketCount = bucketCount;
         this.bucketCountEpoch = bucketCountEpoch;
+        this.recoverySnapshotId = recoverySnapshotId;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -119,5 +156,10 @@ public final class NotifyLeaderAndIsrData {
     /** The bucket layout epoch of the owning table, or null if not carried. */
     public @Nullable Long getBucketCountEpoch() {
         return bucketCountEpoch;
+    }
+
+    /** Returns the requested recovery snapshot ID, or null for an ordinary role notification. */
+    public @Nullable Long getRecoverySnapshotId() {
+        return recoverySnapshotId;
     }
 }

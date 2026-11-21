@@ -23,8 +23,12 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidRequestException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -92,6 +96,9 @@ import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.server.zk.data.ZkVersion;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
+import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
@@ -129,6 +136,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toMap;
@@ -180,6 +188,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 @Internal
 public class ZooKeeperClient implements AutoCloseable {
 
+    private static final Pattern BULK_LOAD_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,127}");
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperClient.class);
     public static final int UNKNOWN_VERSION = -2;
     private static final int MAX_BATCH_SIZE = 1024;
@@ -235,6 +244,13 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
+    }
+
+    private <T> Optional<VersionedData<T>> getVersionedData(String path, Function<byte[], T> decode)
+            throws Exception {
+        Stat stat = new Stat();
+        return getDataWithStat(path, stat)
+                .map(bytes -> new VersionedData<>(decode.apply(bytes), stat.getVersion()));
     }
 
     public String getDefaultRemoteDataDir() {
@@ -1393,8 +1409,196 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     // --------------------------------------------------------------------------------------------
+    // BulkLoad
+    // --------------------------------------------------------------------------------------------
+    /** Reads the BulkLoad transaction and its ZooKeeper version together. */
+    public Optional<VersionedData<BulkLoadTransaction>> getBulkLoadTransaction(
+            long tableId, String bulkLoadId) throws Exception {
+        if (!BULK_LOAD_ID.matcher(bulkLoadId).matches()) {
+            throw new InvalidRequestException("Invalid bulk_load_id.");
+        }
+        return getVersionedData(
+                bulkLoadTransactionPath(tableId, bulkLoadId),
+                bytes -> BulkLoadTransaction.fromJson(tableId, bulkLoadId, bytes));
+    }
+
+    /** Reads the BulkLoad target at its original physical partition identity. */
+    public Optional<VersionedData<BulkLoadTarget>> getBulkLoadTarget(
+            BulkLoadTransaction transaction, @Nullable Long partitionId) throws Exception {
+        return getVersionedData(
+                bulkLoadTargetPath(transaction, partitionId),
+                bytes -> BulkLoadTarget.fromJson(partitionId, bytes));
+    }
+
+    /** Reads the bucket allocation or the result of its completed commit. */
+    public Optional<VersionedData<BulkLoadBucket>> getBulkLoadBucket(
+            BulkLoadTransaction transaction, TableBucket bucket) throws Exception {
+        return getVersionedData(bulkLoadBucketPath(transaction, bucket), BulkLoadBucket::fromJson);
+    }
+
+    /**
+     * Creates an allocation if the transaction and its validated target registrations still match.
+     */
+    public void allocateBulkLoadBucket(
+            VersionedData<BulkLoadTransaction> transaction,
+            VersionedData<BulkLoadTarget> target,
+            TableBucket bucket,
+            BulkLoadBucket allocation,
+            int tableZkVersion,
+            @Nullable Integer partitionZkVersion,
+            int epochVersion)
+            throws Exception {
+        List<CuratorOp> ops =
+                bulkLoadMutationChecks(transaction, target, tableZkVersion, partitionZkVersion);
+        ops.add(
+                zkOp.createOp(
+                        bulkLoadBucketPath(transaction.data(), bucket),
+                        allocation.toJson(),
+                        CreateMode.PERSISTENT));
+        zkClient.transaction().forOperations(wrapRequestsWithEpochCheck(ops, epochVersion));
+    }
+
+    /**
+     * Atomically publishes the committed bucket, its ordinary snapshot and its recovery selection.
+     */
+    public void commitBulkLoadBucket(
+            VersionedData<BulkLoadTransaction> transaction,
+            VersionedData<BulkLoadTarget> target,
+            TableBucket bucket,
+            VersionedData<BulkLoadBucket> allocation,
+            BucketSnapshot snapshot,
+            int tableZkVersion,
+            @Nullable Integer partitionZkVersion,
+            int epochVersion)
+            throws Exception {
+        Optional<VersionedData<Long>> previous = getRecoverySnapshotSelection(bucket);
+        if (!previous.isPresent()) {
+            // Create only the snapshot directory, never a deleted physical bucket or its parents.
+            try {
+                zkClient.create().forPath(BucketSnapshotsZNode.path(bucket));
+            } catch (KeeperException.NodeExistsException ignored) {
+                // An ordinary snapshot may have registered the directory.
+            }
+        }
+        List<CuratorOp> ops =
+                bulkLoadMutationChecks(transaction, target, tableZkVersion, partitionZkVersion);
+        BulkLoadBucket committed =
+                new BulkLoadBucket(
+                        allocation.data().snapshotId,
+                        allocation.data().logOffset,
+                        BulkLoadBucket.COMMITTED);
+        ops.add(
+                zkOp.updateOp(
+                        bulkLoadBucketPath(transaction.data(), bucket),
+                        committed.toJson(),
+                        allocation.zkVersion()));
+        ops.add(
+                zkOp.createOp(
+                        BucketSnapshotIdZNode.path(bucket, snapshot.getSnapshotId()),
+                        BucketSnapshotIdZNode.encode(snapshot),
+                        CreateMode.PERSISTENT));
+
+        ops.add(recoverySnapshotUpdate(bucket, snapshot.getSnapshotId(), previous));
+        try {
+            zkClient.transaction().forOperations(wrapRequestsWithEpochCheck(ops, epochVersion));
+        } catch (KeeperException.ConnectionLossException
+                | KeeperException.OperationTimeoutException e) {
+            throw new BulkLoadPublicationUnknownException(e);
+        } catch (KeeperException.BadVersionException
+                | KeeperException.NodeExistsException
+                | KeeperException.NoNodeException e) {
+            Optional<Long> selected;
+            try {
+                // Curator may have retried the multi after losing its first response.
+                selected = getSelectedRecoverySnapshotId(bucket);
+            } catch (KeeperException.ConnectionLossException
+                    | KeeperException.OperationTimeoutException verificationFailure) {
+                throw new BulkLoadPublicationUnknownException(verificationFailure);
+            }
+            if (!selected.isPresent() || selected.get() != snapshot.getSnapshotId()) {
+                throw e;
+            }
+        }
+    }
+
+    private List<CuratorOp> bulkLoadMutationChecks(
+            VersionedData<BulkLoadTransaction> transaction,
+            VersionedData<BulkLoadTarget> target,
+            int tableZkVersion,
+            @Nullable Integer partitionZkVersion)
+            throws Exception {
+        BulkLoadTransaction txn = transaction.data();
+        BulkLoadTarget physicalTarget = target.data();
+        TablePath tablePath = txn.tableInfo.getTablePath();
+        List<CuratorOp> ops = new ArrayList<>();
+        ops.add(zkOp.checkOp(TableZNode.path(tablePath), tableZkVersion));
+        if (partitionZkVersion != null) {
+            ops.add(
+                    zkOp.checkOp(
+                            PartitionZNode.path(tablePath, physicalTarget.partitionName),
+                            partitionZkVersion));
+        }
+        ops.add(
+                zkOp.checkOp(
+                        bulkLoadTransactionPath(txn.tableInfo.getTableId(), txn.bulkLoadId),
+                        transaction.zkVersion()));
+        ops.add(
+                zkOp.checkOp(
+                        bulkLoadTargetPath(txn, physicalTarget.partitionId), target.zkVersion()));
+        return ops;
+    }
+
+    private static String bulkLoadTransactionPath(long tableId, String bulkLoadId) {
+        return "/bulk_load/tables/" + tableId + "/transactions/" + bulkLoadId;
+    }
+
+    private static String bulkLoadTargetPath(
+            BulkLoadTransaction transaction, @Nullable Long partitionId) {
+        String target = partitionId == null ? "/table" : "/partitions/" + partitionId;
+        return bulkLoadTransactionPath(transaction.tableInfo.getTableId(), transaction.bulkLoadId)
+                + "/targets"
+                + target;
+    }
+
+    private static String bulkLoadBucketPath(BulkLoadTransaction transaction, TableBucket bucket) {
+        return bulkLoadTargetPath(transaction, bucket.getPartitionId())
+                + "/buckets/"
+                + bucket.getBucket();
+    }
+
+    /** The BulkLoad publication multi was issued, but its result could not be established. */
+    public static final class BulkLoadPublicationUnknownException extends Exception {
+        private static final long serialVersionUID = 1L;
+
+        private BulkLoadPublicationUnknownException(KeeperException cause) {
+            super(
+                    cause instanceof KeeperException.OperationTimeoutException
+                            ? new TimeoutException("BulkLoad metadata operation timed out.", cause)
+                            : new NetworkException(
+                                    "Connection to BulkLoad metadata store was lost.", cause));
+        }
+
+        @Override
+        public synchronized ApiException getCause() {
+            return (ApiException) super.getCause();
+        }
+    }
+
+    // --------------------------------------------------------------------------------------------
     // Table Bucket snapshot
     // --------------------------------------------------------------------------------------------
+
+    /** Reserves an ID from the sequence shared by ordinary and imported bucket snapshots. */
+    public long allocateBucketSnapshotId(TableBucket bucket) throws Exception {
+        return new ZkSequenceIDCounter(zkClient, ZkData.BucketSnapshotSequenceIdZNode.path(bucket))
+                .getAndIncrement();
+    }
+
+    /** Returns the number of persisted snapshot references for the given bucket. */
+    public int getBucketSnapshotCount(TableBucket bucket) throws Exception {
+        return getStat(BucketSnapshotsZNode.path(bucket)).map(Stat::getNumChildren).orElse(0);
+    }
+
     public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot)
             throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
@@ -1427,20 +1631,22 @@ public class ZooKeeperClient implements AutoCloseable {
                 && current.get().data().longValue() != previousSnapshotId) {
             throw new KeeperException.BadVersionException(path);
         }
-        CuratorOp update =
-                current.isPresent()
-                        ? zkClient.transactionOp()
-                                .setData()
-                                .withVersion(current.get().zkVersion())
-                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId))
-                        : zkClient.transactionOp()
-                                .create()
-                                .forPath(path, ZkData.RecoverySnapshotZNode.encode(snapshotId));
+        CuratorOp update = recoverySnapshotUpdate(bucket, snapshotId, current);
         if (leaderCheck == null) {
             zkClient.transaction().forOperations(update);
         } else {
             zkClient.transaction().forOperations(update, leaderCheck);
         }
+    }
+
+    private CuratorOp recoverySnapshotUpdate(
+            TableBucket bucket, long snapshotId, Optional<VersionedData<Long>> current)
+            throws Exception {
+        String path = ZkData.RecoverySnapshotZNode.path(bucket);
+        byte[] selection = ZkData.RecoverySnapshotZNode.encode(snapshotId);
+        return current.isPresent()
+                ? zkOp.updateOp(path, selection, current.get().zkVersion())
+                : zkOp.createOp(path, selection, CreateMode.PERSISTENT);
     }
 
     private CuratorOp createSnapshotLeaderEpochCheck(TableBucket bucket, int expectedLeaderEpoch)
@@ -1461,26 +1667,26 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(path).stream().mapToLong(Long::parseLong).max();
     }
 
-    /** Reads the selected recovery identity together with its ZK CAS version. */
-    public Optional<VersionedData<Long>> getRecoverySnapshotSelection(TableBucket bucket)
+    /** Reads the snapshot ID selected for recovery. */
+    public Optional<Long> getSelectedRecoverySnapshotId(TableBucket bucket) throws Exception {
+        return getRecoverySnapshotSelection(bucket).map(VersionedData::data);
+    }
+
+    /** Reads the recovery selection and the version used to update it. */
+    protected Optional<VersionedData<Long>> getRecoverySnapshotSelection(TableBucket bucket)
             throws Exception {
-        Stat stat = new Stat();
-        return getDataWithStat(ZkData.RecoverySnapshotZNode.path(bucket), stat)
-                .map(
-                        bytes ->
-                                new VersionedData<>(
-                                        ZkData.RecoverySnapshotZNode.decode(bytes),
-                                        stat.getVersion()));
+        return getVersionedData(
+                ZkData.RecoverySnapshotZNode.path(bucket), ZkData.RecoverySnapshotZNode::decode);
     }
 
     /** Resolves the selected ordinary reference, never substituting another snapshot. */
     public Optional<BucketSnapshot> getRecoveryBucketSnapshot(TableBucket bucket) throws Exception {
-        Optional<VersionedData<Long>> recovery = getRecoverySnapshotSelection(bucket);
+        Optional<Long> recovery = getSelectedRecoverySnapshotId(bucket);
         if (!recovery.isPresent()) {
             return Optional.empty();
         }
         return Optional.of(
-                getTableBucketSnapshot(bucket, recovery.get().data())
+                getTableBucketSnapshot(bucket, recovery.get())
                         .orElseThrow(
                                 () ->
                                         new IllegalStateException(
