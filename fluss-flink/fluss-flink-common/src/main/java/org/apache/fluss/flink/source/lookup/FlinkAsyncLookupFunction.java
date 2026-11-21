@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source.lookup;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.lookup.Lookup;
+import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
@@ -43,6 +44,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -68,7 +70,12 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
+    private transient Object lookupLock;
+
+    @GuardedBy("lookupLock")
     private transient Lookuper lookuper;
+
+    @GuardedBy("lookupLock")
     private transient FlinkAsFlussRow lookupRow;
 
     public FlinkAsyncLookupFunction(
@@ -91,6 +98,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         LOG.info("start open ...");
         connection = ConnectionFactory.createConnection(flussConfig);
         table = connection.getTable(tablePath);
+        lookupLock = new Object();
         lookupRow = new FlinkAsFlussRow();
 
         final RowType outputRowType;
@@ -130,12 +138,8 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     public CompletableFuture<Collection<RowData>> asyncLookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
-        InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
-
-        // the retry mechanism is now handled by the underlying LookupClient layer,
-        // we can't call lookuper.lookup() in whenComplete callback as lookuper is not thread-safe.
         CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
-        lookuper.lookup(flussKeyRow)
+        submitLookup(normalizedKeyRow)
                 .whenComplete(
                         (result, throwable) -> {
                             if (throwable != null) {
@@ -160,6 +164,14 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
                             }
                         });
         return future;
+    }
+
+    private CompletableFuture<LookupResult> submitLookup(RowData normalizedKeyRow) {
+        // Flink can retry from a callback thread while another lookup is being submitted.
+        // Protect the reused key row and the lookuper's mutable encoders during submission.
+        synchronized (lookupLock) {
+            return lookuper.lookup(lookupRow.replace(normalizedKeyRow));
+        }
     }
 
     private void handleLookupSuccess(

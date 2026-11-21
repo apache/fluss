@@ -27,7 +27,9 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.utils.JoinedRowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Collector;
@@ -35,16 +37,23 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.stream.Collectors;
 
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.fluss.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlinkLookupFunction} and {@link FlinkAsyncLookupFunction}. */
@@ -145,6 +154,98 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         "3: null",
                         "3: null",
                         "4: null");
+    }
+
+    @Test
+    void testConcurrentAsyncLookupKeepsEachKey() throws Exception {
+        TablePath tablePath = tableNames.tablePath(DEFAULT_DB, "concurrent-async-lookup");
+        Schema schema =
+                Schema.newBuilder()
+                        .primaryKey("a", "b")
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .build();
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(DEFAULT_BUCKET_NUM, "a", "b")
+                        .build());
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(row(1, 11));
+            writer.upsert(row(2, 22));
+            writer.flush();
+        }
+
+        RowType flinkRowType = FlinkConversions.toFlinkRowType(schema.getRowType());
+        AsyncLookupFunction lookupFunction =
+                new FlinkAsyncLookupFunction(
+                        clientConf,
+                        tablePath,
+                        flinkRowType,
+                        createPrimaryKeyLookupNormalizer(new int[] {0, 1}, flinkRowType),
+                        null,
+                        false);
+        lookupFunction.open(null);
+
+        CountDownLatch firstKeyReadStarted = new CountDownLatch(1);
+        CountDownLatch resumeFirstKeyRead = new CountDownLatch(1);
+        RowData firstKey =
+                new JoinedRowData(GenericRowData.of(1), GenericRowData.of(11)) {
+                    @Override
+                    public int getInt(int pos) {
+                        if (pos == 0) {
+                            firstKeyReadStarted.countDown();
+                            try {
+                                assertThat(resumeFirstKeyRead.await(30, SECONDS)).isTrue();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new AssertionError(
+                                        "Interrupted while reading the lookup key", e);
+                            }
+                        }
+                        return super.getInt(pos);
+                    }
+                };
+        FutureTask<CompletableFuture<Collection<RowData>>> firstLookup =
+                new FutureTask<>(() -> lookupFunction.asyncLookup(firstKey));
+        FutureTask<CompletableFuture<Collection<RowData>>> secondLookup =
+                new FutureTask<>(() -> lookupFunction.asyncLookup(GenericRowData.of(2, 22)));
+        Thread firstThread = new Thread(firstLookup, "first-async-lookup");
+        Thread secondThread = new Thread(secondLookup, "second-async-lookup");
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+
+        try {
+            firstThread.start();
+            try {
+                assertThat(firstKeyReadStarted.await(30, SECONDS)).isTrue();
+                secondThread.start();
+                // Keep the first key read paused until the second lookup is submitted or waits
+                // for the first lookup to finish reading its key.
+                waitUntil(
+                        () -> {
+                            ThreadInfo secondThreadInfo =
+                                    threads.getThreadInfo(secondThread.getId());
+                            return secondLookup.isDone()
+                                    || (secondThreadInfo != null
+                                            && secondThreadInfo.getLockOwnerId()
+                                                    == firstThread.getId());
+                        },
+                        Duration.ofSeconds(30),
+                        "Second lookup neither submitted nor waited for the first lookup");
+            } finally {
+                resumeFirstKeyRead.countDown();
+            }
+            assertThat(firstLookup.get(30, SECONDS).get(30, SECONDS))
+                    .containsExactly(GenericRowData.of(1, 11));
+            assertThat(secondLookup.get(30, SECONDS).get(30, SECONDS))
+                    .containsExactly(GenericRowData.of(2, 22));
+        } finally {
+            firstThread.join(SECONDS.toMillis(30));
+            secondThread.join(SECONDS.toMillis(30));
+            lookupFunction.close();
+        }
     }
 
     @Test
