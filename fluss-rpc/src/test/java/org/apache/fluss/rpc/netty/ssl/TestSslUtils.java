@@ -22,9 +22,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
 
 import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.BasicConstraints;
+import org.bouncycastle.asn1.x509.ExtendedKeyUsage;
 import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.asn1.x509.GeneralName;
 import org.bouncycastle.asn1.x509.GeneralNames;
+import org.bouncycastle.asn1.x509.KeyPurposeId;
 import org.bouncycastle.cert.X509CertificateHolder;
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder;
@@ -104,6 +107,65 @@ public class TestSslUtils {
                 new Certificate[] {new JcaX509CertificateConverter().getCertificate(holder)});
     }
 
+    /**
+     * Generate a key and a certificate for {@code cn}, issued by a new certificate authority (CA).
+     * The extended key usage of the certificate allows TLS server authentication, and TLS client
+     * authentication only if {@code clientAuth} is true.
+     *
+     * <p>The JDK checks the extended key usage only for a certificate that a CA issued, not for a
+     * certificate that the truststore holds itself.
+     *
+     * @return the key with the chain of the certificate and the CA certificate
+     */
+    public static KeyStore.PrivateKeyEntry generateCaSignedCertificate(
+            String cn, boolean clientAuth) throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair caKeyPair = generator.generateKeyPair();
+        KeyPair keyPair = generator.generateKeyPair();
+        X500Name caName = new X500Name("CN=Test CA");
+        long now = System.currentTimeMillis();
+        Date notBefore = new Date(now - 86_400_000L);
+        Date notAfter = new Date(now + 86_400_000L);
+        JcaX509CertificateConverter converter = new JcaX509CertificateConverter();
+        JcaContentSignerBuilder signer = new JcaContentSignerBuilder("SHA256withRSA");
+        Certificate caCert =
+                converter.getCertificate(
+                        new JcaX509v3CertificateBuilder(
+                                        caName,
+                                        BigInteger.valueOf(now),
+                                        notBefore,
+                                        notAfter,
+                                        caName,
+                                        caKeyPair.getPublic())
+                                .addExtension(
+                                        Extension.basicConstraints,
+                                        true,
+                                        new BasicConstraints(true))
+                                .build(signer.build(caKeyPair.getPrivate())));
+        KeyPurposeId[] purposes =
+                clientAuth
+                        ? new KeyPurposeId[] {
+                            KeyPurposeId.id_kp_serverAuth, KeyPurposeId.id_kp_clientAuth
+                        }
+                        : new KeyPurposeId[] {KeyPurposeId.id_kp_serverAuth};
+        Certificate cert =
+                converter.getCertificate(
+                        new JcaX509v3CertificateBuilder(
+                                        caName,
+                                        BigInteger.valueOf(now + 1),
+                                        notBefore,
+                                        notAfter,
+                                        new X500Name("CN=" + cn),
+                                        keyPair.getPublic())
+                                .addExtension(
+                                        Extension.extendedKeyUsage,
+                                        false,
+                                        new ExtendedKeyUsage(purposes))
+                                .build(signer.build(caKeyPair.getPrivate())));
+        return new KeyStore.PrivateKeyEntry(keyPair.getPrivate(), new Certificate[] {cert, caCert});
+    }
+
     /** Create a JKS keystore file holding the private key and certificate of {@code cert}. */
     public static Path createKeyStore(Path dir, String fileName, SelfSignedCertificate cert)
             throws Exception {
@@ -148,12 +210,14 @@ public class TestSslUtils {
         return createTrustStore(dir, fileName, storeType, cert.cert());
     }
 
-    /** Create a truststore file of the given {@code storeType} trusting {@code cert}. */
+    /** Create a truststore file of the given {@code storeType} trusting each of {@code certs}. */
     public static Path createTrustStore(
-            Path dir, String fileName, String storeType, Certificate cert) throws Exception {
+            Path dir, String fileName, String storeType, Certificate... certs) throws Exception {
         KeyStore trustStore = KeyStore.getInstance(storeType);
         trustStore.load(null, null);
-        trustStore.setCertificateEntry("cert", cert);
+        for (int i = 0; i < certs.length; i++) {
+            trustStore.setCertificateEntry("cert" + i, certs[i]);
+        }
         return store(dir, fileName, trustStore);
     }
 

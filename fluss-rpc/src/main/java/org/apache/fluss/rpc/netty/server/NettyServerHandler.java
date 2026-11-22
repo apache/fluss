@@ -41,6 +41,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -48,6 +49,9 @@ import org.apache.fluss.utils.IOUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import javax.net.ssl.SSLSession;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -391,6 +395,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         try {
             authenticator.matchProtocol(authenticateRequest.getProtocol());
         } catch (AuthenticationException e) {
+            logFailedAuthentication(e);
             future.completeExceptionally(e);
             return;
         }
@@ -420,6 +425,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                         e);
                 authenticator.initialize(
                         new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
+            } else {
+                logFailedAuthentication(e);
             }
 
             future.completeExceptionally(e);
@@ -428,6 +435,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         if (authenticator.isCompleted()) {
             switchState(ConnectionState.READY);
         }
+    }
+
+    private void logFailedAuthentication(AuthenticationException e) {
+        LOG.info(
+                "Failed authentication with {} on listener '{}': {}",
+                remoteAddress,
+                listenerName,
+                e.getMessage());
     }
 
     private void switchState(ConnectionState targetState) {
@@ -472,6 +487,13 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         @Override
         public String protocol() {
             return protocolName;
+        }
+
+        @Nullable
+        @Override
+        public SSLSession sslSession() {
+            SslHandler sslHandler = ctx.pipeline().get(SslHandler.class);
+            return sslHandler == null ? null : sslHandler.engine().getSession();
         }
     }
 }

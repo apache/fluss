@@ -236,8 +236,9 @@ public final class FlussClusterExtension
         // The helper client reaches the servers through whichever listener the test helpers
         // pick: the first configured one by default, the internal one in collectAllRpcGateways.
         // It takes the cluster's client TLS settings so that it can talk to those listeners when
-        // they are TLS, as in TlsDataPathITCase, whose only listener is TLS.
-        copyClientSslConfig(conf);
+        // they are TLS, as in TlsDataPathITCase, whose only listener is TLS, or mTLS, as in
+        // TlsAuthenticationITCase.
+        copyClientSecurityConfig(conf);
         rpcClient =
                 RpcClient.create(
                         conf,
@@ -475,14 +476,23 @@ public final class FlussClusterExtension
         flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("2mb"));
         flussConf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("256kb"));
         flussConf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("1kb"));
-        copyClientSslConfig(flussConf);
+        copyClientSecurityConfig(flussConf);
         return flussConf;
     }
 
-    /** Carries the cluster's {@code client.security.ssl.*} options over, if it has any. */
-    private void copyClientSslConfig(Configuration target) {
+    /**
+     * Carries the cluster's {@code client.security.ssl.*} options and {@code
+     * client.security.protocol} over, if it has any. An mTLS listener needs both.
+     */
+    private void copyClientSecurityConfig(Configuration target) {
         clusterConf.toMap().entrySet().stream()
-                .filter(e -> e.getKey().startsWith("client.security.ssl."))
+                .filter(
+                        e ->
+                                e.getKey().startsWith("client.security.ssl.")
+                                        || e.getKey()
+                                                .equals(
+                                                        ConfigOptions.CLIENT_SECURITY_PROTOCOL
+                                                                .key()))
                 .forEach(e -> target.setString(e.getKey(), e.getValue()));
     }
 

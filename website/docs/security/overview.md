@@ -22,6 +22,7 @@ Authentication is the process of identifying who is trying to access the system.
 When a client (like an application or user) connects to Fluss, it must prove its identity using one of the supported methods. Fluss currently supports:
 * `PLAINTEXT`: No authentication (default). Suitable only for internal or development use.
 * `SASL`: This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password.
+* `mTLS`: Mutual TLS. The client authenticates with the X.509 certificate it presents during the TLS handshake. See [mTLS](authentication.md#mtls).
 * Custom Plugins: Extendable via plugins for enterprise or third-party integrations.
 
 ###  Listener-Based Security Configuration
@@ -39,7 +40,7 @@ Server side listener configurations:
 | bind.listeners |  String  | FLUSS://localhost:9123 | The network address and port to which the server binds for accepting connections. This defines the interface and port where the server will listen for incoming requests. The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas. Use `0.0.0.0` for the `host` to bind to all available interfaces which is dangerous on production and not suggested for production usage. The `listener_name` serves as an identifier for the address in the configuration. For example, `internal.listener.name` specifies the address used for internal server communication. If multiple addresses are configured, ensure that the `listener_name` values are unique. |
 | advertised.listeners |  (none) | String | The externally advertised address and port for client connections. Required in distributed environments when the bind address is not publicly reachable. Format matches `bind.listeners` (listener_name://host:port). Defaults to the value of `bind.listeners` if not explicitly configured. |
 | internal.listener.name |   FLUSS | String |The listener name used for internal server communication. |
-| security.protocol.map | Map | (none) | A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g.,`CLIENT:SASL, INTERNAL:PLAINTEXT`.A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. Each listener can be associated with a specific authentication protocol. Listeners not included in the map will use PLAINTEXT by default, which does not require authentication. Currently, only PLAINTEXT and SASL/PLAIN are supported. |
+| security.protocol.map | Map | (none) | A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g.,`CLIENT:SASL, INTERNAL:PLAINTEXT`.A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. Each listener can be associated with a specific authentication protocol. Listeners not included in the map will use PLAINTEXT by default, which does not require authentication. Currently, PLAINTEXT, SASL/PLAIN and mTLS are supported. |
 
 
 Here is an example server side configuration:
@@ -64,7 +65,7 @@ Each connection must use the protocol defined in `security.protocol.map`. If a c
 ### Client-Side Authentication Properties
 | Property | Description                                                                                                           | Default Value |
 | --- |-----------------------------------------------------------------------------------------------------------------------|---------------|
-| client.security.protocol | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive. | PLAINTEXT     |
+| client.security.protocol | The security protocol used to communicate with brokers. Currently, `PLAINTEXT`, `SASL` and `mTLS` are supported, the configuration value is case insensitive. | PLAINTEXT     |
 | `client.security.{protocol}.*` | Client-side configuration properties for a specific authentication protocol. E.g., `client.security.sasl.jaas.config`.  | (none)        |
 
 

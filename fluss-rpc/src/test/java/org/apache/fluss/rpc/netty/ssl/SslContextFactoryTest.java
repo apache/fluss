@@ -405,6 +405,21 @@ class SslContextFactoryTest {
     }
 
     @Test
+    void testInvalidPrincipalMappingRulesAreRejected() {
+        // checked without any TLS listener too, as the mTLS-without-TLS check is.
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES, "RULE:^CN=(.*)$/$2/");
+
+        assertThatThrownBy(() -> SslConfig.fromServerConfig(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES.key())
+                .hasMessageContaining("group 2");
+
+        conf.set(ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES, "RULE:^CN=(.*)$/$1/,DEFAULT");
+        assertThat(SslConfig.fromServerConfig(conf)).isEmpty();
+    }
+
+    @Test
     void testNonMtlsListenerNeedsNoTruststore() {
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(conf, keyStore, null);

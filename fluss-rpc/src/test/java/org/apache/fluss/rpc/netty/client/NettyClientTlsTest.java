@@ -33,16 +33,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
-import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.netty.ssl.TestSslUtils;
 import org.apache.fluss.rpc.protocol.ApiKeys;
-import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
-import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
-import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import org.apache.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
-import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
-import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.util.SelfSignedCertificate;
 
@@ -53,7 +45,6 @@ import org.junit.jupiter.api.io.TempDir;
 import javax.net.ssl.SSLSession;
 
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -149,51 +140,28 @@ class NettyClientTlsTest {
 
     @Test
     void testRejectedClientCertificateFailsAsNonRetriable() throws Exception {
-        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
         Configuration serverConf = new Configuration();
-        TestSslUtils.setServerSslConfig(
-                serverConf,
-                TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert),
-                TestSslUtils.createTrustStore(tempDir, "server-truststore.jks", cert));
-        SslContext sslContext = SslContextFactory.createServerSslContext(serverConf).get();
-        // A plain Netty server that requires a client certificate. NettyServer cannot start such
-        // a listener before the mTLS authenticator exists (#3793).
-        EventLoopGroup group = new NioEventLoopGroup(1);
+        TestSslUtils.setMutualTlsProtocolMap(serverConf);
+        serverConf.setString(
+                ConfigOptions.SERVER_SSL_TRUSTSTORE_PATH.key(),
+                TestSslUtils.createTrustStore(
+                                tempDir,
+                                "server-truststore.jks",
+                                TestSslUtils.generateCertificate("client"))
+                        .toString());
+        serverConf.setString(
+                ConfigOptions.SERVER_SSL_TRUSTSTORE_PASSWORD.key(), TestSslUtils.PASSWORD);
+        SelfSignedCertificate cert = startServer("localhost", serverConf);
+
         // the client trusts the server, but presents no certificate of its own.
         try (NettyClient client = newClient(clientConf(cert))) {
-            Channel serverChannel =
-                    new ServerBootstrap()
-                            .group(group)
-                            .channel(NioServerSocketChannel.class)
-                            .childHandler(
-                                    new ChannelInitializer<Channel>() {
-                                        @Override
-                                        protected void initChannel(Channel ch) {
-                                            ch.pipeline()
-                                                    .addLast(
-                                                            SslContextFactory
-                                                                    .createServerSslHandler(
-                                                                            sslContext,
-                                                                            ch.alloc(),
-                                                                            true));
-                                        }
-                                    })
-                            .bind("localhost", 0)
-                            .sync()
-                            .channel();
-            ServerNode node =
-                    new ServerNode(
-                            1,
-                            "localhost",
-                            ((InetSocketAddress) serverChannel.localAddress()).getPort(),
-                            ServerType.COORDINATOR);
-
             // With TLS 1.3 the server rejects the missing certificate only after the client
             // handshake has completed.
-            assertThatThrownBy(() -> sendApiVersions(client, node).get())
+            assertThatThrownBy(
+                            () ->
+                                    sendApiVersions(client, serverNode(TestSslUtils.TLS_LISTENER))
+                                            .get())
                     .hasCauseInstanceOf(AuthenticationException.class);
-        } finally {
-            group.shutdownGracefully();
         }
     }
 

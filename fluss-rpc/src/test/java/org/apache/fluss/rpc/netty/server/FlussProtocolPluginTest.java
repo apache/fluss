@@ -31,8 +31,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Path;
+import java.security.KeyStore;
 import java.util.Arrays;
 import java.util.Collections;
 
@@ -149,12 +151,158 @@ class FlussProtocolPluginTest {
                 .hasMessageNotContaining(ConfigOptions.CLIENT_SSL_ENABLED.key());
     }
 
+    @Test
+    void testMtlsInternalListenerRequiresMtlsClientProtocol(@TempDir Path tempDir)
+            throws Exception {
+        Configuration conf = mtlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "PLAINTEXT");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
+                .hasMessageContaining(
+                        ConfigOptions.CLIENT_SECURITY_PROTOCOL.key() + "' is 'PLAINTEXT'");
+
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mTLS");
+        assertThatCode(() -> tlsPlugin().setup(conf)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testMtlsInternalListenerRejectsOwnCertificateOutsideSuperUsers(@TempDir Path tempDir)
+            throws Exception {
+        Configuration conf = mtlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.SUPER_USERS, "User:admin");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key())
+                .hasMessageContaining("'User:CN=localhost'")
+                .hasMessageContaining(ConfigOptions.SUPER_USERS.key());
+    }
+
+    @Test
+    void testMtlsInternalListenerRejectsOwnCertificateWithoutMappingRule(@TempDir Path tempDir)
+            throws Exception {
+        Configuration conf = mtlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES, "RULE:^CN=admin$/admin/");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("No principal mapping rule applies")
+                .hasMessageContaining("'CN=localhost'");
+    }
+
+    @Test
+    void testMtlsInternalListenerRejectsUntrustedOwnCertificate(@TempDir Path tempDir)
+            throws Exception {
+        Configuration conf = mtlsOnInternalListener(tempDir);
+        // same subject, but a certificate that the server truststore does not hold.
+        Path untrusted =
+                TestSslUtils.createKeyStore(
+                        tempDir, "untrusted.jks", TestSslUtils.generateCertificate("localhost"));
+        conf.setString(ConfigOptions.CLIENT_SSL_KEYSTORE_PATH.key(), untrusted.toString());
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("TLS handshake")
+                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMtlsInternalListenerChecksClientAuthKeyUsage(boolean clientAuth, @TempDir Path tempDir)
+            throws Exception {
+        KeyStore.PrivateKeyEntry cert =
+                TestSslUtils.generateCaSignedCertificate("localhost", clientAuth);
+        Path keyStore =
+                TestSslUtils.createKeyStore(
+                        tempDir, "issued.jks", "JKS", cert.getPrivateKey(), cert.getCertificate());
+        Path trustStore =
+                TestSslUtils.createTrustStore(
+                        tempDir, "ca.jks", "JKS", cert.getCertificateChain()[1]);
+        Configuration conf = mtlsOnInternalListener(tempDir);
+        // one certificate in both roles, as server certificate and as client certificate.
+        TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
+        TestSslUtils.setClientSslConfig(conf, trustStore, keyStore);
+
+        if (clientAuth) {
+            assertThatCode(() -> tlsPlugin().setup(conf)).doesNotThrowAnyException();
+        } else {
+            assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                    .isInstanceOf(IllegalConfigurationException.class)
+                    .hasMessageContaining("TLS handshake")
+                    .hasMessageContaining("Extended key usage");
+        }
+    }
+
+    @Test
+    void testMtlsClientProtocolRequiresMtlsInternalListener(@TempDir Path tempDir)
+            throws Exception {
+        // the internal listener uses TLS with PLAINTEXT authentication, and rejects mTLS clients.
+        Configuration conf = tlsOnInternalListener(tempDir);
+        conf.set(ConfigOptions.CLIENT_SSL_ENABLED, true);
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mTLS");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener '" + TestSslUtils.TLS_LISTENER + "'")
+                .hasMessageContaining("uses the authentication protocol 'PLAINTEXT'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key() + "' is 'mTLS'");
+    }
+
+    @Test
+    void testSaslInternalListenerRequiresSaslClientProtocol() {
+        Configuration conf = credentials("root:root-pass");
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "INTERNAL:sasl");
+        conf.setString(ConfigOptions.SERVER_SASL_ENABLED_MECHANISMS_CONFIG.key(), "PLAIN");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("internal listener 'INTERNAL'")
+                .hasMessageContaining("uses the authentication protocol 'sasl'")
+                .hasMessageContaining(
+                        ConfigOptions.CLIENT_SECURITY_PROTOCOL.key() + "' is 'PLAINTEXT'");
+
+        // protocol names are compared ignoring case.
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+        assertThatCode(() -> tlsPlugin().setup(conf)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void testSaslClientProtocolRequiresSaslInternalListener() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, "INTERNAL");
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "SASL");
+
+        assertThatThrownBy(() -> tlsPlugin().setup(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("uses the authentication protocol 'PLAINTEXT'")
+                .hasMessageContaining(ConfigOptions.CLIENT_SECURITY_PROTOCOL.key() + "' is 'SASL'");
+    }
+
     private static Configuration tlsOnInternalListener(Path tempDir) throws Exception {
         SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
         Configuration conf = new Configuration();
         TestSslUtils.setServerSslConfig(
                 conf, TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert), null);
         conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, TestSslUtils.TLS_LISTENER);
+        return conf;
+    }
+
+    /** An mTLS internal listener, with client options that pass every startup check. */
+    private static Configuration mtlsOnInternalListener(Path tempDir) throws Exception {
+        SelfSignedCertificate cert = TestSslUtils.generateCertificate("localhost");
+        Path keyStore = TestSslUtils.createKeyStore(tempDir, "keystore.jks", cert);
+        Path trustStore = TestSslUtils.createTrustStore(tempDir, "truststore.jks", cert);
+        Configuration conf = new Configuration();
+        TestSslUtils.setServerSslConfig(conf, keyStore, trustStore);
+        TestSslUtils.setMutualTlsProtocolMap(conf);
+        conf.set(ConfigOptions.INTERNAL_LISTENER_NAME, TestSslUtils.TLS_LISTENER);
+        TestSslUtils.setClientSslConfig(conf, trustStore, keyStore);
+        conf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mTLS");
+        // the DEFAULT mapping rule keeps the distinguished name.
+        conf.set(ConfigOptions.SUPER_USERS, "User:CN=localhost");
         return conf;
     }
 
