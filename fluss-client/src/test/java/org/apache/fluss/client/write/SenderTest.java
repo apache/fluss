@@ -1133,6 +1133,66 @@ final class SenderTest {
     }
 
     @Test
+    void testWaitsWhenReadyBucketsCannotBeDrained() throws Exception {
+        sender.destroyResources();
+        // A batch timeout far beyond the test's waits: a ready check that drains nothing ends only
+        // when the sender is woken up.
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        sender =
+                setupWithIdempotenceState(
+                        idempotenceManager,
+                        Integer.MAX_VALUE,
+                        (int) Duration.ofHours(1).toMillis());
+        // A flush in progress makes every queued batch ready whatever its age.
+        accumulator.beginFlush();
+
+        // 1. fill the in-flight limit of the bucket.
+        for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
+            appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> {});
+            sender.runOnce();
+        }
+        assertThat(pendingRequestSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+        assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
+
+        // 2. the next batch is ready but its bucket cannot take another in-flight request.
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> {});
+        CompletableFuture<Void> finished = new CompletableFuture<>();
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                sender.runOnce();
+                                finished.complete(null);
+                            } catch (Throwable t) {
+                                finished.completeExceptionally(t);
+                            }
+                        },
+                        "undrainable-ready-check-test");
+        thread.start();
+        try {
+            // The sender waits instead of returning to check the same state again.
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(thread.getState()).isEqualTo(Thread.State.TIMED_WAITING));
+            assertThat(finished).isNotDone();
+            assertThat(pendingRequestSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+
+            // 3. a completed batch frees an in-flight slot and wakes the sender.
+            finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0, 1));
+            finished.get(10, TimeUnit.SECONDS);
+
+            // 4. the queued batch is now drained and sent.
+            sender.runOnce();
+            assertThat(pendingRequestSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+            assertThat(idempotenceManager.inflightBatchSize(tb1))
+                    .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+        } finally {
+            sender.forceClose();
+            thread.join(10000);
+        }
+    }
+
+    @Test
     void testIdempotenceWithInflightBatchesExceedMaxInflightBatch() throws Exception {
         // When more than 5 batches (MAX_INFLIGHT_REQUEST_PER_BUCKET) of data are incorrectly
         // returned with retriable error, we can still continue to send requests, but only for the
