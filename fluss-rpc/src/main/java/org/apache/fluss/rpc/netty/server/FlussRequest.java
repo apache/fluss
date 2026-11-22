@@ -53,6 +53,17 @@ public final class FlussRequest implements RpcRequest {
     private volatile long requestDequeTimeMs;
     private volatile long requestCompletedTimeMs;
     private volatile boolean cancelled = false;
+    private volatile boolean processorOwnsBuffer;
+
+    void setProcessorOwnsBuffer() {
+        processorOwnsBuffer = true;
+    }
+
+    void releaseBufferFromResponse() {
+        if (!processorOwnsBuffer) {
+            releaseBuffer();
+        }
+    }
 
     public FlussRequest(
             short apiKey,

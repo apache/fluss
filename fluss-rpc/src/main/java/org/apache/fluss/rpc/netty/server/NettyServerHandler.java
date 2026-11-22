@@ -152,15 +152,15 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             }
 
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
-            if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+            if (handlesAuthenticationInline(apiKey)) {
                 // handle to authentication for 3 cases:
                 // 1. the channel is in authing state, and the request is auth request, normal case
                 // 2. the channel is in authentication state, but receive non-auth request, error
                 // 3. the channel is complete, but receive auth request (PLAINTEXT case)
                 handleAuthenticateRequest(apiKey, requestMessage, future);
-            } else {
-                requestChannel.putRequest(request);
+            } else if (!requestChannel.offerFlussRequest(ctx.channel(), request)) {
+                needRelease = true;
+                request.fail(new NetworkException("Request processor is shutting down"));
             }
 
         } catch (Throwable t) {
@@ -172,6 +172,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 buffer.release();
             }
         }
+    }
+
+    boolean handlesAuthenticationInline(short apiKey) {
+        return apiKey == ApiKeys.AUTHENTICATE.id
+                || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id);
     }
 
     @Override
@@ -240,7 +245,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private void sendResponse(ChannelHandlerContext ctx, FlussRequest request) {
         boolean cancelled = request.cancelled();
         if (cancelled) {
-            request.releaseBuffer();
+            request.releaseBufferFromResponse();
         }
 
         if (state.isActive()) {
@@ -252,7 +257,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 sendError(ctx, request, t);
             }
         } else {
-            request.releaseBuffer();
+            request.releaseBufferFromResponse();
         }
     }
 

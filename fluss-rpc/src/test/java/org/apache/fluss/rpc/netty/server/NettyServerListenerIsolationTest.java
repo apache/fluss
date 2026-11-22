@@ -84,6 +84,29 @@ class NettyServerListenerIsolationTest {
     }
 
     @Test
+    void testNativeTabletServerPipelinesTwoPendingRequestsByDefault() throws Exception {
+        try (ListenerFixture fixture = new ListenerFixture(1, "FLUSS", "FLUSS")) {
+            CompletableFuture<ApiMessage> running = fixture.send("FLUSS", "block-running");
+            fixture.awaitBlocked();
+            CompletableFuture<ApiMessage> first = fixture.send("FLUSS", "first");
+            retry(Duration.ofSeconds(10), () -> assertThat(fixture.queuedRequests()).isEqualTo(1));
+
+            // The fixture has a single network thread. Fence any read pause from the first
+            // pending request before sending the next frame on that same connection.
+            CompletableFuture<Void> networkTurn = new CompletableFuture<>();
+            fixture.server.getScheduledExecutor().execute(() -> networkTurn.complete(null));
+            networkTurn.get(10, TimeUnit.SECONDS);
+            CompletableFuture<ApiMessage> second = fixture.send("FLUSS", "second");
+            retry(Duration.ofSeconds(10), () -> assertThat(fixture.queuedRequests()).isEqualTo(2));
+
+            fixture.release.complete(null);
+            assertThat(running.get(10, TimeUnit.SECONDS)).isInstanceOf(ApiVersionsResponse.class);
+            assertThat(first.get(10, TimeUnit.SECONDS)).isInstanceOf(ApiVersionsResponse.class);
+            assertThat(second.get(10, TimeUnit.SECONDS)).isInstanceOf(ApiVersionsResponse.class);
+        }
+    }
+
+    @Test
     void testInternalNetworkRemainsAvailableWhenExternalNetworkIsBlocked() throws Exception {
         try (ListenerFixture fixture = new ListenerFixture(0, "INTERNAL", "FLUSS", "INTERNAL")) {
             fixture.fetch("INTERNAL", 1).get(10, TimeUnit.SECONDS);

@@ -74,6 +74,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  */
 public final class NettyServer implements RpcServer {
 
+    private static final long MIN_REQUEST_BUDGET_BYTES = 128L * 1024 * 1024;
+
     private static final Logger LOG = LoggerFactory.getLogger(NettyServer.class);
 
     private final Configuration conf;
@@ -156,6 +158,9 @@ public final class NettyServer implements RpcServer {
         } else {
             this.internalResources = externalResources;
         }
+        if (service.providerType() == ServerType.TABLET_SERVER) {
+            configureConnectionScheduling();
+        }
         requestsMetrics.gauge(
                 MetricNames.REQUEST_QUEUE_SIZE,
                 () -> resources.stream().mapToInt(ServerRpcResources::requestsCount).sum());
@@ -214,13 +219,41 @@ public final class NettyServer implements RpcServer {
         return bindEndpoints;
     }
 
+    private void configureConnectionScheduling() {
+        long budgetBytes =
+                Math.max(
+                        MIN_REQUEST_BUDGET_BYTES,
+                        conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes());
+        ConnectionHeadScheduler scheduler = new ConnectionHeadScheduler();
+        Map<String, NetworkProtocolPlugin> byListener = getProtocolsByListenerName();
+        for (ServerRpcResources group : resources) {
+            boolean nativeOnly =
+                    endpoints.stream()
+                            .filter(endpoint -> resourcesFor(endpoint) == group)
+                            .allMatch(
+                                    endpoint ->
+                                            byListener.get(endpoint.getListenerName())
+                                                    instanceof FlussProtocolPlugin);
+            if (nativeOnly) {
+                ConnectionHeadScheduler.WorkerGroup workers =
+                        new ConnectionHeadScheduler.WorkerGroup(budgetBytes);
+                for (RequestChannel channel : group.requestChannels()) {
+                    channel.scheduleConnectionHeads(scheduler, workers);
+                }
+            }
+        }
+    }
+
+    private ServerRpcResources resourcesFor(Endpoint endpoint) {
+        return internalListenerName.equals(endpoint.getListenerName())
+                ? internalResources
+                : externalResources;
+    }
+
     private void startEndpoint(Endpoint endpoint, NetworkProtocolPlugin protocol)
             throws IOException {
         ServerBootstrap bootstrap = new ServerBootstrap();
-        ServerRpcResources resource =
-                internalListenerName.equals(endpoint.getListenerName())
-                        ? internalResources
-                        : externalResources;
+        ServerRpcResources resource = resourcesFor(endpoint);
         EventLoopGroup selectorGroup = resource.selectorGroup();
 
         bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);

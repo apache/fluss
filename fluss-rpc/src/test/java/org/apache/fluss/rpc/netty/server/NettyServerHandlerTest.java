@@ -69,7 +69,9 @@ import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
@@ -185,6 +187,268 @@ final class NettyServerHandlerTest {
             assertThat(request).isNotNull();
             request.releaseBuffer();
             assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testDrainsCoalescedFramesWithoutAnotherSocketRead() {
+        RequestChannel requestChannel = scheduledRequestChannel(1);
+        TestEmbeddedChannel connection = fairConnection(requestChannel);
+        try {
+            ByteBuf frames =
+                    Unpooled.wrappedBuffer(versionsFrame(1), versionsFrame(2), versionsFrame(3));
+            connection.writeInbound(frames);
+            assertThat(requestChannel.requestsCount()).isOne();
+            assertThat(connection.config().isAutoRead()).isFalse();
+
+            for (int requestId = 1; requestId <= 3; requestId++) {
+                assertThat(requestChannel.requestsCount()).isOne();
+                FlussRequest request = (FlussRequest) requestChannel.nextRequest();
+                assertThat(request.getRequestId()).isEqualTo(requestId);
+                request.releaseBuffer();
+                requestChannel.requestFinished();
+                connection.runPendingTasks();
+            }
+            assertThat(requestChannel.requestsCount()).isZero();
+            assertThat(connection.config().isAutoRead()).isTrue();
+            assertThat(frames.refCnt()).isZero();
+        } finally {
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testDoesNotPauseWhenThereIsNoSuccessor() {
+        RequestChannel requestChannel = scheduledRequestChannel(2);
+        TestEmbeddedChannel connection = fairConnection(requestChannel);
+        try {
+            connection.writeInbound(versionsFrame(1));
+            assertThat(connection.config().isAutoRead()).isTrue();
+            claimAndRelease(requestChannel, 1);
+            connection.runPendingTasks();
+            assertThat(requestChannel.requestsCount()).isZero();
+            connection.writeInbound(versionsFrame(2));
+            assertThat(connection.config().isAutoRead()).isTrue();
+            requestChannel.requestFinished();
+            claimAndRelease(requestChannel, 2);
+            requestChannel.requestFinished();
+        } finally {
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testNewlyEligibleSuccessorQueuesBehindExistingByteWaiter() {
+        RequestChannel requestChannel = scheduledRequestChannel(2);
+        TestEmbeddedChannel hot = fairConnection(requestChannel);
+        TestEmbeddedChannel cold = fairConnection(requestChannel);
+        try {
+            hot.writeInbound(
+                    Unpooled.wrappedBuffer(versionsFrame(1), versionsFrame(2), versionsFrame(3)));
+            cold.writeInbound(versionsFrame(4));
+            assertThat(hot.config().isAutoRead()).isFalse();
+            assertThat(cold.config().isAutoRead()).isFalse();
+
+            claimAndRelease(requestChannel, 1);
+            requestChannel.requestFinished();
+            hot.runPendingTasks();
+            cold.runPendingTasks();
+            assertThat(hot.config().isAutoRead()).isFalse();
+            assertThat(cold.config().isAutoRead()).isTrue();
+
+            claimAndRelease(requestChannel, 2);
+            requestChannel.requestFinished();
+            hot.runPendingTasks();
+            assertThat(hot.config().isAutoRead()).isTrue();
+            claimAndRelease(requestChannel, 4);
+            requestChannel.requestFinished();
+            claimAndRelease(requestChannel, 3);
+            requestChannel.requestFinished();
+        } finally {
+            hot.finishAndReleaseAll();
+            cold.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testKeepsTwoPendingRequestsInOrder() {
+        RequestChannel requestChannel = scheduledRequestChannel(4);
+        TestEmbeddedChannel connection = fairConnection(requestChannel);
+        try {
+            connection.writeInbound(
+                    Unpooled.wrappedBuffer(versionsFrame(1), versionsFrame(2), versionsFrame(3)));
+            assertThat(requestChannel.requestsCount()).isEqualTo(2);
+            assertThat(connection.config().isAutoRead()).isFalse();
+
+            FlussRequest first = (FlussRequest) requestChannel.nextRequest();
+            assertThat(first.getRequestId()).isOne();
+            first.releaseBuffer();
+            connection.runPendingTasks();
+            assertThat(connection.config().isAutoRead()).isTrue();
+            assertThat(requestChannel.requestsCount()).isEqualTo(2);
+            requestChannel.requestFinished();
+
+            FlussRequest second = (FlussRequest) requestChannel.nextRequest();
+            assertThat(second.getRequestId()).isEqualTo(2);
+            second.releaseBuffer();
+            requestChannel.requestFinished();
+            claimAndRelease(requestChannel, 3);
+            requestChannel.requestFinished();
+        } finally {
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testThirdPendingFrameIsDroppedWhenItsConnectionCloses() {
+        RequestChannel requestChannel = scheduledRequestChannel(4);
+        TestEmbeddedChannel hot = fairConnection(requestChannel);
+        TestEmbeddedChannel cold = fairConnection(requestChannel);
+        try {
+            ByteBuf third = versionsFrame(3);
+            hot.writeInbound(Unpooled.wrappedBuffer(versionsFrame(1), versionsFrame(2), third));
+            assertThat(hot.config().isAutoRead()).isFalse();
+            hot.close();
+            assertThat(third.refCnt()).isZero();
+            cold.writeInbound(versionsFrame(4));
+
+            for (int id : new int[] {1, 4, 2}) {
+                claimAndRelease(requestChannel, id);
+                requestChannel.requestFinished();
+            }
+            assertThat(requestChannel.requestsCount()).isZero();
+        } finally {
+            hot.finishAndReleaseAll();
+            cold.finishAndReleaseAll();
+        }
+    }
+
+    private static RequestChannel scheduledRequestChannel(int frameCapacity) {
+        ByteBuf sample = versionsFrame(1);
+        try {
+            return scheduledByteBudget(frameCapacity * sample.readableBytes());
+        } finally {
+            sample.release();
+        }
+    }
+
+    private static RequestChannel scheduledByteBudget(long bytes) {
+        RequestChannel channel = new RequestChannel(1);
+        channel.scheduleConnectionHeads(
+                new ConnectionHeadScheduler(), new ConnectionHeadScheduler.WorkerGroup(bytes));
+        return channel;
+    }
+
+    private static void claimAndRelease(RequestChannel requestChannel, int requestId) {
+        FlussRequest request = (FlussRequest) requestChannel.nextRequest();
+        assertThat(request.getRequestId()).isEqualTo(requestId);
+        request.releaseBuffer();
+    }
+
+    @Test
+    void testReadPermitReturnsWhenDecoderIsRemovedBeforeResuming() {
+        RequestChannel requestChannel = scheduledRequestChannel(1);
+        TestEmbeddedChannel hot = fairConnection(requestChannel);
+        TestEmbeddedChannel firstWaiter = fairConnection(requestChannel);
+        TestEmbeddedChannel secondWaiter = fairConnection(requestChannel);
+        try {
+            hot.writeInbound(versionsFrame(1));
+            ByteBuf abandoned = versionsFrame(2);
+            firstWaiter.writeInbound(abandoned);
+            secondWaiter.writeInbound(versionsFrame(3));
+            assertThat(requestChannel.requestsCount()).isOne();
+            assertThat(firstWaiter.config().isAutoRead()).isFalse();
+            assertThat(secondWaiter.config().isAutoRead()).isFalse();
+
+            RpcRequest first = requestChannel.nextRequest();
+            first.releaseBuffer();
+            requestChannel.requestFinished();
+            firstWaiter.pipeline().remove(FairRequestFrameDecoder.class);
+            firstWaiter.runPendingTasks();
+            assertThat(abandoned.refCnt()).isZero();
+
+            secondWaiter.runPendingTasks();
+            assertThat(requestChannel.requestsCount()).isOne();
+            FlussRequest next = (FlussRequest) requestChannel.nextRequest();
+            assertThat(next.getRequestId()).isEqualTo(3);
+            next.releaseBuffer();
+            requestChannel.requestFinished();
+        } finally {
+            hot.finishAndReleaseAll();
+            firstWaiter.finishAndReleaseAll();
+            secondWaiter.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testReusesCumulationWhileOnePartialFrameRemains() {
+        RequestChannel requestChannel = scheduledRequestChannel(1);
+        TestEmbeddedChannel connection = fairConnection(requestChannel);
+        ByteBuf frame = versionsFrame(1);
+        try {
+            byte[] encoded = new byte[frame.readableBytes()];
+            frame.readBytes(encoded);
+            ByteBuf cumulation = Unpooled.buffer(128);
+            connection.writeInbound(cumulation.writeBytes(encoded).writeByte(encoded[0]));
+            for (int i = 0; i < 32; i++) {
+                assertThat(requestChannel.requestsCount()).isOne();
+                requestChannel.nextRequest().releaseBuffer();
+                requestChannel.requestFinished();
+                connection.writeInbound(
+                        Unpooled.buffer(encoded.length)
+                                .writeBytes(encoded, 1, encoded.length - 1)
+                                .writeByte(encoded[0]));
+            }
+            assertThat(cumulation.capacity()).isEqualTo(128);
+            requestChannel.nextRequest().releaseBuffer();
+            requestChannel.requestFinished();
+        } finally {
+            frame.release();
+            connection.finishAndReleaseAll();
+        }
+    }
+
+    private static TestEmbeddedChannel fairConnection(RequestChannel channel) {
+        NettyServerHandler handler = newServerHandler(channel);
+        return new TestEmbeddedChannel(
+                new FairRequestFrameDecoder(
+                        1024, channel, key -> handler.handlesAuthenticationInline((short) key)),
+                handler);
+    }
+
+    private static ByteBuf versionsFrame(int requestId) {
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.API_VERSIONS.id,
+                ApiKeys.API_VERSIONS.highestSupportedVersion,
+                requestId,
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("test")
+                        .setClientSoftwareVersion("1"));
+    }
+
+    @Test
+    void testScheduledLazyRequestDrainsAfterDisconnectWithoutEarlyRelease() throws Exception {
+        RequestChannel channel = scheduledByteBudget(1024 * 1024);
+        TestEmbeddedChannel embeddedChannel = fairConnection(channel);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            embeddedChannel.writeInbound(requestBuffer);
+            embeddedChannel.close();
+            channel.putShutdownRequest();
+
+            FlussRequest request = (FlussRequest) channel.nextRequest();
+            request.fail(new IllegalStateException("test response after disconnect"));
+            embeddedChannel.runPendingTasks();
+            assertThat(requestBuffer.refCnt()).isOne();
+
+            request.releaseBuffer();
+            channel.requestFinished();
+            assertThat(requestBuffer.refCnt()).isZero();
+            assertThat(channel.nextRequest()).isSameAs(ShutdownRequest.INSTANCE);
         } finally {
             embeddedChannel.finishAndReleaseAll();
         }
@@ -937,8 +1201,8 @@ final class NettyServerHandlerTest {
         private static final InetSocketAddress REMOTE_ADDRESS =
                 new InetSocketAddress("127.0.0.1", 8080);
 
-        private TestEmbeddedChannel(NettyServerHandler serverHandler) {
-            super(serverHandler);
+        private TestEmbeddedChannel(ChannelHandler... handlers) {
+            super(handlers);
         }
 
         @Override

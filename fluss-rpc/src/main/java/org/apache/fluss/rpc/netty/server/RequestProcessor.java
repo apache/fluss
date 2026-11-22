@@ -49,10 +49,16 @@ final class RequestProcessor implements Runnable {
         this.isRunning = true;
     }
 
+    private volatile long synchronousRequestNanos;
+
+    long synchronousRequestNanos() {
+        return synchronousRequestNanos;
+    }
+
     @Override
     public void run() {
         while (isRunning) {
-            RpcRequest request = requestChannel.pollRequest(300);
+            RpcRequest request = requestChannel.nextRequest();
             if (request != null) {
                 if (request == ShutdownRequest.INSTANCE) {
                     LOG.debug(
@@ -66,16 +72,22 @@ final class RequestProcessor implements Runnable {
                             processorId,
                             service.name(),
                             request);
+                    long startNanos = System.nanoTime();
                     try {
                         processRequest(request);
                     } catch (Throwable t) {
                         LOG.error("Error while processing request.", t);
                     } finally {
+                        synchronousRequestNanos += System.nanoTime() - startNanos;
                         // this releases the lazily parsed buffer (e.g. for produce request).
                         // RpcGateway shouldn't hold the reference to the request/ByteBuf after
                         // the invoking of RPC method, i.e. async execution shouldn't retain the
                         // request/ByteBuf. The request/ByteBuf is released after the RPC method.
-                        request.releaseBuffer();
+                        try {
+                            request.releaseBuffer();
+                        } finally {
+                            requestChannel.requestFinished();
+                        }
                     }
                 }
             }
