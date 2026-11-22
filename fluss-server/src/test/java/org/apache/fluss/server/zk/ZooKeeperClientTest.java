@@ -88,6 +88,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.UncheckedIOException;
@@ -450,10 +451,28 @@ class ZooKeeperClientTest {
         // test update
         leaderAndIsr1 =
                 new LeaderAndIsr(
-                        2, 20, Collections.emptyList(), Collections.singletonList(3), 0, 2000);
+                                2,
+                                20,
+                                Collections.emptyList(),
+                                Collections.singletonList(3),
+                                0,
+                                2000)
+                        .withZkVersion(0);
         zookeeperClient.updateLeaderAndIsr(
                 tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
+        LeaderAndIsr registered =
+                zookeeperClient.registerLeaderAndIsr(
+                        tableBucket1, leaderAndIsr2, zkEpoch.getCoordinatorEpochZkVersion());
+        assertThat(registered).isEqualTo(leaderAndIsr1);
+        assertThat(registered.zkVersion()).isEqualTo(1);
+
+        // Replay the same CAS after the original success response has been lost.
+        LeaderAndIsr replay =
+                zookeeperClient.updateLeaderAndIsr(
+                        tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
+        assertThat(replay).isEqualTo(leaderAndIsr1);
+        assertThat(replay.zkVersion()).isEqualTo(1);
 
         // test delete
         zookeeperClient.deleteLeaderAndIsr(tableBucket1);
@@ -539,10 +558,12 @@ class ZooKeeperClientTest {
                         entry -> {
                             LeaderAndIsr originalLeaderAndIsr = entry.getValue();
                             LeaderAndIsr adjustLeaderAndIsr =
-                                    originalLeaderAndIsr.newLeaderAndIsr(
-                                            LeaderAndIsr.NO_LEADER,
-                                            originalLeaderAndIsr.isr().subList(0, 1),
-                                            Collections.emptyList());
+                                    originalLeaderAndIsr
+                                            .newLeaderAndIsr(
+                                                    LeaderAndIsr.NO_LEADER,
+                                                    originalLeaderAndIsr.isr().subList(0, 1),
+                                                    Collections.emptyList())
+                                            .withZkVersion(0);
                             leaderAndIsrUpdateList.add(adjustLeaderAndIsr);
                             entry.setValue(adjustLeaderAndIsr);
                         });
@@ -587,12 +608,13 @@ class ZooKeeperClientTest {
                                         entry -> {
                                             LeaderAndIsr old = entry.getValue();
                                             return new LeaderAndIsr(
-                                                    old.leader() + 1,
-                                                    old.leaderEpoch() + 1,
-                                                    old.isr(),
-                                                    Collections.emptyList(),
-                                                    old.coordinatorEpoch(),
-                                                    old.bucketEpoch() + 1);
+                                                            old.leader() + 1,
+                                                            old.leaderEpoch() + 1,
+                                                            old.isr(),
+                                                            Collections.emptyList(),
+                                                            old.coordinatorEpoch(),
+                                                            old.bucketEpoch() + 1)
+                                                    .withZkVersion(0);
                                         }));
         zookeeperClient.batchUpdateLeaderAndIsr(
                 updateLeaderAndIsrList, zkEpoch.getCoordinatorEpochZkVersion());
@@ -1020,8 +1042,11 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(rejected);
     }
 
-    @Test
-    void testOldLeaderCommitCannotInvalidateNewRecoveryContext() throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(longs = 4L)
+    void testOldLeaderCommitCannotInvalidateNewRecoveryContext(Long previousSnapshotId)
+            throws Exception {
         TableBucket bucket = new TableBucket(1L, 0);
         LeaderAndIsr initial =
                 new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
@@ -1043,9 +1068,10 @@ class ZooKeeperClientTest {
                             zookeeperClient.updateLeaderAndIsr(
                                     bucket,
                                     initial.newLeaderAndIsr(
-                                            2,
-                                            Collections.singletonList(2),
-                                            Collections.emptyList()),
+                                                    initial.leader(),
+                                                    initial.isr(),
+                                                    initial.standbyReplicas())
+                                            .withZkVersion(0),
                                     zkEpoch.getCoordinatorEpochZkVersion());
                         }
                         return super.getRecoverySnapshotSelection(requested);
@@ -1053,12 +1079,15 @@ class ZooKeeperClientTest {
                 };
         zookeeperClient.registerTableBucketSnapshot(
                 bucket, new BucketSnapshot(5L, 40L, "file:/snapshot-5"));
-        Throwable failure = catchThrowable(() -> delayed.updateRecoverySnapshot(bucket, 5L, 4L, 0));
+        Throwable failure =
+                catchThrowable(
+                        () -> delayed.updateRecoverySnapshot(bucket, 5L, previousSnapshotId, 0));
+        assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
+        assertThat(zookeeperClient.getSelectedRecoverySnapshotId(bucket)).contains(4L);
         BucketSnapshot next = new BucketSnapshot(6L, 50L, "file:/snapshot-6");
         zookeeperClient.registerTableBucketSnapshot(bucket, next);
         zookeeperClient.updateRecoverySnapshot(bucket, 6L, 4L, 1);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(next);
-        assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getTableBucketSnapshot(bucket, 5L)).isPresent();
     }
 

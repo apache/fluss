@@ -1298,14 +1298,12 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 standby_replicas = 8 [packed = true];
   optional int32 bucket_count = 9;
   optional int64 bucket_count_epoch = 10;
-  optional int64 recovery_snapshot_id = 11;
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
   required PbTableBucket table_bucket = 1;
   optional int32 error_code = 2;
   optional string error_message = 3;
-  optional int64 recovered_snapshot_id = 4;
 }
 
 message PbStopReplicaReqForBucket {

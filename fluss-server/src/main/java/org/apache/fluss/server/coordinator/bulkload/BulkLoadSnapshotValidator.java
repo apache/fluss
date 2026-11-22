@@ -114,30 +114,19 @@ final class BulkLoadSnapshotValidator {
         require(
                 metadata.getRowCount() == null || metadata.getRowCount() >= 0,
                 "Negative snapshot row count.");
-        Set<String> local = new HashSet<>();
-        Set<String> remote = new HashSet<>();
-        long privateSize = validateFiles(metadata.getPrivateFiles(), directory, local, remote);
-        long total =
-                Math.addExact(
-                        privateSize,
-                        validateFiles(
-                                metadata.getSharedFiles(),
-                                FlussPaths.remoteKvSharedDir(tabletDir),
-                                local,
-                                remote));
         require(
-                metadata.getIncrementalSize() >= privateSize
-                        && metadata.getIncrementalSize() <= total,
-                "Snapshot incremental size differs.");
+                metadata.getSharedFiles().isEmpty(),
+                "BulkLoad snapshots must not reference shared files.");
+        long privateSize = validateFiles(metadata.getPrivateFiles(), directory);
+        require(metadata.getIncrementalSize() == privateSize, "Snapshot incremental size differs.");
         return CompletedSnapshotJsonSerde.toCompletedSnapshot(metadata);
     }
 
     private static long validateFiles(
-            List<KvSnapshotFileMetadata.FileHandle> files,
-            FsPath ownerDirectory,
-            Set<String> local,
-            Set<String> remote)
+            List<KvSnapshotFileMetadata.FileHandle> files, FsPath ownerDirectory)
             throws IOException {
+        Set<String> local = new HashSet<>();
+        Set<String> remote = new HashSet<>();
         long size = 0;
         for (KvSnapshotFileMetadata.FileHandle file : files) {
             String name = file.getLocalPath();

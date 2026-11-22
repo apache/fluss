@@ -852,26 +852,29 @@ class TableBucketStateMachineTest {
         }
 
         @Override
-        public void batchUpdateLeaderAndIsr(
+        public Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsr(
                 Map<TableBucket, LeaderAndIsr> leaderAndIsrs, int expectedZkVersion) {
             batchUpdates.putAll(leaderAndIsrs);
             batchUpdateZkVersion = expectedZkVersion;
             if (failBatchUpdate) {
                 throw new RuntimeException("Expected batch update failure");
             }
+            return leaderAndIsrs;
         }
 
         @Override
-        public void updateLeaderAndIsr(
+        public LeaderAndIsr updateLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
             individualUpdates.put(tableBucket, leaderAndIsr);
             individualUpdateZkVersions.put(tableBucket, expectedZkVersion);
+            return leaderAndIsr;
         }
 
         @Override
-        public void registerLeaderAndIsr(
+        public LeaderAndIsr registerLeaderAndIsr(
                 TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion) {
             registeredLeaderAndIsrs.put(tableBucket, leaderAndIsr);
+            return leaderAndIsr.withZkVersion(0);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {

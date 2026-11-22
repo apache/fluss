@@ -22,8 +22,8 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.zk.ZooKeeperClient.BulkLoadPublicationUnknownException;
-import org.apache.fluss.utils.function.RunnableWithException;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.utils.function.CheckedSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -76,8 +76,7 @@ public class CompletedSnapshotStore {
     private final ReentrantLock lock = new ReentrantLock();
 
     @Nullable private Long recoverySnapshotId;
-
-    @Nullable private CompletedSnapshot unconfirmedImport;
+    private boolean recoverySelectionKnown = true;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -134,63 +133,42 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
-    /** Publishes a validated snapshot and protects its shared files before releasing the bucket. */
-    public boolean commitImportedSnapshot(CompletedSnapshot snapshot, RunnableWithException persist)
+    /** Serializes an import's publication or confirmation with ordinary snapshot retention. */
+    public Optional<LeaderAndIsr> commitImportedSnapshot(
+            CompletedSnapshot snapshot, CheckedSupplier<Optional<LeaderAndIsr>> publish)
             throws Exception {
         return inLock(
                 lock,
                 () -> {
-                    reconcileUnconfirmedImportUnderLock();
-                    try {
-                        persist.run();
-                    } catch (BulkLoadPublicationUnknownException e) {
-                        unconfirmedImport = snapshot;
-                        throw e;
+                    Optional<LeaderAndIsr> role = publish.get();
+                    long snapshotId = snapshot.getSnapshotID();
+                    boolean tracked =
+                            stillInUseSnapshots.containsKey(snapshotId)
+                                    || completedSnapshots.stream()
+                                            .anyMatch(s -> s.getSnapshotID() == snapshotId);
+                    if (role.isPresent()) {
+                        if (!tracked) {
+                            completedSnapshots.addLast(snapshot);
+                        }
+                        recoverySnapshotId = snapshotId;
+                        recoverySelectionKnown = true;
+                    } else if (!tracked
+                            && completedSnapshotHandleStore
+                                    .get(snapshot.getTableBucket(), snapshotId)
+                                    .isPresent()) {
+                        // The import was superseded before it was adopted by this store.
+                        completedSnapshots.addFirst(snapshot);
                     }
-                    if (recoverySnapshotId != null
-                            && recoverySnapshotId == snapshot.getSnapshotID()) {
-                        return false;
-                    }
-                    rememberImportedSnapshot(snapshot);
-                    return true;
+                    return role;
                 });
     }
 
-    private void rememberImportedSnapshot(CompletedSnapshot snapshot) {
-        long snapshotId = snapshot.getSnapshotID();
-        if (completedSnapshots.stream().noneMatch(s -> s.getSnapshotID() == snapshotId)) {
-            snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
-            completedSnapshots.addLast(snapshot);
-        }
-        recoverySnapshotId = snapshotId;
-    }
-
-    /** Resolves an uncertain publication before acknowledging a retry. */
-    public void reconcileUnconfirmedImport() throws Exception {
-        inLock(lock, this::reconcileUnconfirmedImportUnderLock);
-    }
-
-    private void reconcileUnconfirmedImportUnderLock() throws Exception {
-        if (unconfirmedImport == null) {
-            return;
-        }
-        Optional<CompletedSnapshotHandle> selected =
-                completedSnapshotHandleStore.getRecoverySnapshot(
-                        unconfirmedImport.getTableBucket());
-        if (selected.isPresent()
-                && selected.get().getSnapshotId() == unconfirmedImport.getSnapshotID()) {
-            rememberImportedSnapshot(unconfirmedImport);
-        }
-        unconfirmedImport = null;
-    }
-
-    /** Runs retention after an imported snapshot has become the recovery source. */
+    /** Applies the ordinary retention policy after an import. */
     public void retainSnapshotsAfterImport() throws Exception {
         inLock(
                 lock,
                 () -> {
-                    reconcileUnconfirmedImportUnderLock();
-                    if (!completedSnapshots.isEmpty()) {
+                    if (recoverySelectionKnown && !completedSnapshots.isEmpty()) {
                         subsumeOldSnapshots();
                     }
                 });
@@ -230,7 +208,6 @@ public class CompletedSnapshotStore {
             @Nullable Long previousRecoverySnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        reconcileUnconfirmedImportUnderLock();
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
         completedSnapshotHandleStore.add(
                 snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
@@ -244,6 +221,7 @@ public class CompletedSnapshotStore {
                     previousRecoverySnapshotId,
                     expectedLeaderEpoch);
             recoverySnapshotId = snapshot.getSnapshotID();
+            recoverySelectionKnown = true;
         } catch (Exception updateFailure) {
             try {
                 recoverySnapshotId =
@@ -251,7 +229,10 @@ public class CompletedSnapshotStore {
                                 .getRecoverySnapshot(snapshot.getTableBucket())
                                 .map(CompletedSnapshotHandle::getSnapshotId)
                                 .orElse(null);
+                recoverySelectionKnown = true;
             } catch (Exception readFailure) {
+                // A queued retention task must not prune using the previous selection.
+                recoverySelectionKnown = false;
                 updateFailure.addSuppressed(readFailure);
                 if (previousRecoverySnapshotId != null) {
                     throw updateFailure;

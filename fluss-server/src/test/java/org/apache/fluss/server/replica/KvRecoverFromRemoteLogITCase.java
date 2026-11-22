@@ -261,13 +261,13 @@ class KvRecoverFromRemoteLogITCase {
         LeaderAndIsr currentLeaderAndIsr =
                 FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tableBucket);
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        followerToPromote,
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        currentLeaderAndIsr.isr(),
-                        Collections.emptyList(),
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch() + 1);
+                zkClient.updateLeaderAndIsr(
+                        tableBucket,
+                        currentLeaderAndIsr.newLeaderAndIsr(
+                                followerToPromote,
+                                currentLeaderAndIsr.isr(),
+                                Collections.emptyList()),
+                        zkClient.getCurrentEpoch().getCoordinatorEpochZkVersion());
 
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
                 followerToPromote, tablePath, tableBucket, newLeaderAndIsr, replicas);

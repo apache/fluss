@@ -1762,8 +1762,6 @@ pub struct PbNotifyLeaderAndIsrReqForBucket {
     pub bucket_count: ::core::option::Option<i32>,
     #[prost(int64, optional, tag = "10")]
     pub bucket_count_epoch: ::core::option::Option<i64>,
-    #[prost(int64, optional, tag = "11")]
-    pub recovery_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbNotifyLeaderAndIsrRespForBucket {
@@ -1773,8 +1771,6 @@ pub struct PbNotifyLeaderAndIsrRespForBucket {
     pub error_code: ::core::option::Option<i32>,
     #[prost(string, optional, tag = "3")]
     pub error_message: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(int64, optional, tag = "4")]
-    pub recovered_snapshot_id: ::core::option::Option<i64>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbStopReplicaReqForBucket {

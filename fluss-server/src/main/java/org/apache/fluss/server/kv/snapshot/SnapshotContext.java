@@ -55,11 +55,11 @@ public interface SnapshotContext {
     int getSnapshotFsWriteBufferSize();
 
     /**
-     * Get the provider of latest CompletedSnapshot for a table bucket. When no completed snapshot
-     * exists, the CompletedSnapshot provided will be null.
+     * Returns a snapshot provider for leader activation. The provider reads the selection after
+     * observing the notified leader epoch and returns null when no snapshot exists.
      */
     FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-            getLatestCompletedSnapshotProvider();
+            getLatestCompletedSnapshotProvider(int leaderEpoch);
 
     /**
      * Handles broken snapshots.

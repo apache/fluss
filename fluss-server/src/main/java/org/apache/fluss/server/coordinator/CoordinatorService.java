@@ -407,16 +407,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId());
                     CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
-                    manager.commitBucketSnapshot(
-                            handle.getBulkLoadId(),
-                            bucket,
-                            target ->
-                                    processor
-                                            .getCoordinatorChannelManager()
-                                            .bulkLoadCommitOffsets(
-                                                    getBulkLoadLeader(target), target),
-                            processor.completedSnapshotStoreManager(),
-                            () -> processor.requestBulkLoadRecovery(bucket));
+                    Optional<BulkLoadManager.PreparedCommit> prepared =
+                            manager.prepareBucketCommit(
+                                    handle.getBulkLoadId(),
+                                    bucket,
+                                    leader ->
+                                            processor
+                                                    .getCoordinatorChannelManager()
+                                                    .bulkLoadCommitOffsets(leader, bucket));
+                    if (prepared.isPresent()) {
+                        processor.publishBulkLoadBucketSnapshot(prepared.get());
+                    }
                     return new CommitBulkLoadBucketSnapshotResponse();
                 });
     }

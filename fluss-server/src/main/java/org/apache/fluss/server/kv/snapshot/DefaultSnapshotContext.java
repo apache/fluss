@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -149,8 +150,19 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
     @Override
     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-            getLatestCompletedSnapshotProvider() {
+            getLatestCompletedSnapshotProvider(int leaderEpoch) {
         return (tableBucket) -> {
+            // The role and its recovery selection may have been published by another ZK session.
+            if (!zooKeeperClient
+                    .getLeaderAndIsr(tableBucket)
+                    .filter(role -> role.leaderEpoch() >= leaderEpoch)
+                    .isPresent()) {
+                throw new LeaderNotAvailableException(
+                        "The published leader epoch "
+                                + leaderEpoch
+                                + " is not yet visible for "
+                                + tableBucket);
+            }
             Optional<CompletedSnapshotHandle> snapshotHandle =
                     completedSnapshotHandleStore.getLatestCompletedSnapshotHandle(tableBucket);
             if (snapshotHandle.isPresent()) {

@@ -43,11 +43,8 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
-import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -474,44 +471,9 @@ public class ServerConnectionTest {
     }
 
     @Test
-    void testBulkLoadRecoveryCannotDowngradeToOrdinaryRoleNotification() throws Exception {
-        nettyServer.close();
-        buildNettyServer(new OldTabletGatewayService());
-
-        ServerConnection connection =
-                new ServerConnection(
-                        bootstrap,
-                        serverNode,
-                        TestingClientMetricGroup.newInstance(),
-                        clientAuthenticator,
-                        null,
-                        null,
-                        (con, ignore) -> {});
-        try {
-            NotifyLeaderAndIsrRequest request =
-                    new NotifyLeaderAndIsrRequest().setCoordinatorEpoch(1);
-            PbNotifyLeaderAndIsrReqForBucket notification =
-                    request.addNotifyBucketsLeaderReq()
-                            .setLeader(1)
-                            .setLeaderEpoch(1)
-                            .setBucketEpoch(1);
-            notification.setTableBucket().setTableId(1L).setBucketId(0);
-            notification.setPhysicalTablePath().setDatabaseName("db").setTableName("orders");
-            assertThat(connection.send(ApiKeys.NOTIFY_LEADER_AND_ISR, request).get())
-                    .isInstanceOf(NotifyLeaderAndIsrResponse.class);
-            notification.setRecoverySnapshotId(7);
-            assertThatThrownBy(() -> connection.send(ApiKeys.NOTIFY_LEADER_AND_ISR, request).get())
-                    .rootCause()
-                    .isInstanceOf(UnsupportedVersionException.class);
-        } finally {
-            connection.close().get();
-        }
-    }
-
-    @Test
     void testRejectHistoricalWritesForOldServer() throws Exception {
         nettyServer.close();
-        buildNettyServer(new OldTabletGatewayService());
+        buildNettyServer(new OldWriteGatewayService());
 
         ServerConnection connection =
                 new ServerConnection(
@@ -662,7 +624,7 @@ public class ServerConnectionTest {
         }
     }
 
-    private static class OldTabletGatewayService extends TestingTabletGatewayService {
+    private static class OldWriteGatewayService extends TestingTabletGatewayService {
         @Override
         public CompletableFuture<ApiVersionsResponse> apiVersions(ApiVersionsRequest request) {
             return super.apiVersions(request)
@@ -671,9 +633,7 @@ public class ServerConnectionTest {
                                 for (PbApiVersion apiVersion : response.getApiVersionsList()) {
                                     if (apiVersion.getApiKey() == ApiKeys.PUT_KV.id) {
                                         apiVersion.setMaxVersion(2);
-                                    } else if (apiVersion.getApiKey() == ApiKeys.PRODUCE_LOG.id
-                                            || apiVersion.getApiKey()
-                                                    == ApiKeys.NOTIFY_LEADER_AND_ISR.id) {
+                                    } else if (apiVersion.getApiKey() == ApiKeys.PRODUCE_LOG.id) {
                                         apiVersion.setMaxVersion(0);
                                     }
                                 }
@@ -689,13 +649,6 @@ public class ServerConnectionTest {
         @Override
         public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
             return CompletableFuture.completedFuture(new ProduceLogResponse());
-        }
-
-        @Override
-        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                NotifyLeaderAndIsrRequest request) {
-            assertThat(currentApiVersion()).isZero();
-            return CompletableFuture.completedFuture(new NotifyLeaderAndIsrResponse());
         }
     }
 

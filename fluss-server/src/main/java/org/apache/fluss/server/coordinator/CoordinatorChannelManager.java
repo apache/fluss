@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownServerException;
@@ -53,7 +54,6 @@ import org.apache.fluss.server.coordinator.channel.QueueItem;
 import org.apache.fluss.server.coordinator.channel.TabletServerChannelState;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.utils.RpcGatewayManager;
-import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -353,6 +353,10 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
+            if (request instanceof NotifyLeaderAndIsrRequest && responseConsumer != null) {
+                responseConsumer.accept(
+                        null, new NetworkException("TabletServer channel is unavailable."));
+            }
         } else {
             TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
             requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
@@ -361,22 +365,6 @@ public class CoordinatorChannelManager {
 
     protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
         return rpcGatewayManager.getRpcGateway(targetServerId);
-    }
-
-    /** Sends a BulkLoad recovery notification to the current leader and awaits its response. */
-    public CompletableFuture<NotifyLeaderAndIsrResponse> notifyBulkLoadRecovery(
-            int leader, NotifyLeaderAndIsrRequest request) {
-        TabletServerGateway gateway =
-                getTabletServerGateway(leader)
-                        .orElseThrow(
-                                () ->
-                                        new NotLeaderOrFollowerException(
-                                                "BulkLoad bucket leader is unavailable."));
-        return FutureUtils.orTimeout(
-                gateway.notifyLeaderAndIsr(request),
-                controlRequestTimeoutMs,
-                TimeUnit.MILLISECONDS,
-                "Timed out waiting for the BulkLoad recovery notification response.");
     }
 
     /** Reads the leader's WAL end offset for BulkLoad bucket allocation. */

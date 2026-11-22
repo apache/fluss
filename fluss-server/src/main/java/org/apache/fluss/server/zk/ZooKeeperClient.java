@@ -107,8 +107,10 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFram
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorTransactionResult;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.OpResult;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.types.Tuple2;
@@ -135,6 +137,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -549,15 +552,19 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register bucket LeaderAndIsr to ZK. */
-    public void registerLeaderAndIsr(
+    public LeaderAndIsr registerLeaderAndIsr(
             TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
             throws Exception {
 
         String path = LeaderAndIsrZNode.path(tableBucket);
         byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
 
-        createRecursiveWithEpochCheck(path, data, expectedZkVersion, false);
+        if (!createRecursiveWithEpochCheck(path, data, expectedZkVersion)) {
+            return getLeaderAndIsr(tableBucket)
+                    .orElseThrow(() -> new KeeperException.NoNodeException(path));
+        }
         LOG.info("Registered {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+        return leaderAndIsr.withZkVersion(0);
     }
 
     public void batchRegisterLeaderAndIsrForTablePartition(
@@ -616,8 +623,9 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Get the bucket LeaderAndIsr in ZK. */
     public Optional<LeaderAndIsr> getLeaderAndIsr(TableBucket tableBucket) throws Exception {
-        Optional<byte[]> bytes = getOrEmpty(LeaderAndIsrZNode.path(tableBucket));
-        return bytes.map(LeaderAndIsrZNode::decode);
+        Stat stat = new Stat();
+        return getDataWithStat(LeaderAndIsrZNode.path(tableBucket), stat)
+                .map(bytes -> LeaderAndIsrZNode.decode(bytes).withZkVersion(stat.getVersion()));
     }
 
     /**
@@ -630,55 +638,85 @@ public class ZooKeeperClient implements AutoCloseable {
                 tableBuckets.stream().collect(toMap(LeaderAndIsrZNode::path, bucket -> bucket));
 
         List<ZkGetDataResponse> responses = getDataInBackground(path2TableBucketMap.keySet());
-        return processGetDataResponses(
+        return decodeGetDataResponses(
                 responses,
                 response -> path2TableBucketMap.get(response.getPath()),
-                LeaderAndIsrZNode::decode,
+                response ->
+                        LeaderAndIsrZNode.decode(response.getData())
+                                .withZkVersion(checkNotNull(response.getStat()).getVersion()),
                 "leader and isr");
     }
 
-    public void updateLeaderAndIsr(
+    /** Persists an updated role, checking the version of the role it was derived from. */
+    public LeaderAndIsr updateLeaderAndIsr(
             TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
             throws Exception {
-        String path = LeaderAndIsrZNode.path(tableBucket);
-        byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
-
-        CuratorOp updateOp = zkOp.updateOp(path, data);
-        List<CuratorOp> ops = wrapRequestWithEpochCheck(updateOp, expectedZkVersion);
-
-        zkClient.transaction().forOperations(ops);
-        LOG.info("Updated {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+        List<CuratorOp> ops =
+                wrapRequestWithEpochCheck(
+                        updateLeaderAndIsrOp(tableBucket, leaderAndIsr), expectedZkVersion);
+        try {
+            List<CuratorTransactionResult> results = zkClient.transaction().forOperations(ops);
+            LOG.info("Updated {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
+            return leaderAndIsr.withZkVersion(
+                    results.get(results.size() - 1).getResultStat().getVersion());
+        } catch (KeeperException.BadVersionException
+                | KeeperException.ConnectionLossException
+                | KeeperException.OperationTimeoutException e) {
+            Optional<LeaderAndIsr> installed =
+                    getLeaderAndIsr(tableBucket)
+                            .filter(role -> matchesRoleUpdate(leaderAndIsr, role));
+            if (installed.isPresent()
+                    && (expectedZkVersion == ZkVersion.MATCH_ANY_VERSION.getVersion()
+                            || getCurrentEpoch().getCoordinatorEpochZkVersion()
+                                    == expectedZkVersion)) {
+                return installed.get();
+            }
+            throw e;
+        }
     }
 
-    public void batchUpdateLeaderAndIsr(
+    private static boolean matchesRoleUpdate(LeaderAndIsr proposed, LeaderAndIsr current) {
+        return proposed.zkVersion() + 1 == current.zkVersion() && proposed.equals(current);
+    }
+
+    private CuratorOp updateLeaderAndIsrOp(TableBucket bucket, LeaderAndIsr leaderAndIsr)
+            throws Exception {
+        checkState(leaderAndIsr.zkVersion() >= 0, "Missing ZooKeeper role version for %s.", bucket);
+        return zkOp.updateOp(
+                LeaderAndIsrZNode.path(bucket),
+                LeaderAndIsrZNode.encode(leaderAndIsr),
+                leaderAndIsr.zkVersion());
+    }
+
+    /** Persists role updates in bounded ZooKeeper transactions. */
+    public Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsr(
             Map<TableBucket, LeaderAndIsr> leaderAndIsrList, int expectedZkVersion)
             throws Exception {
         if (leaderAndIsrList.isEmpty()) {
-            return;
+            return Collections.emptyMap();
         }
 
         long startTimeMs = System.currentTimeMillis();
         int transactionCount = 0;
         List<CuratorOp> ops = new ArrayList<>(leaderAndIsrList.size());
+        List<TableBucket> batch = new ArrayList<>();
+        Map<TableBucket, LeaderAndIsr> updated = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
 
             LOG.debug("Batch update {} for bucket {} in ZooKeeper.", leaderAndIsr, tableBucket);
-            String path = LeaderAndIsrZNode.path(tableBucket);
-            byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
-            CuratorOp updateOp = zkClient.transactionOp().setData().forPath(path, data);
-            ops.add(updateOp);
+            ops.add(updateLeaderAndIsrOp(tableBucket, leaderAndIsr));
+            batch.add(tableBucket);
             if (ops.size() == MAX_BATCH_SIZE) {
-                List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
-                zkClient.transaction().forOperations(wrapOps);
+                writeRoleBatch(ops, batch, leaderAndIsrList, updated, expectedZkVersion);
                 transactionCount++;
                 ops.clear();
+                batch.clear();
             }
         }
         if (!ops.isEmpty()) {
-            List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
-            zkClient.transaction().forOperations(wrapOps);
+            writeRoleBatch(ops, batch, leaderAndIsrList, updated, expectedZkVersion);
             transactionCount++;
         }
         LOG.info(
@@ -686,6 +724,83 @@ public class ZooKeeperClient implements AutoCloseable {
                 leaderAndIsrList.size(),
                 transactionCount,
                 System.currentTimeMillis() - startTimeMs);
+        return updated;
+    }
+
+    private void writeRoleBatch(
+            List<CuratorOp> operations,
+            List<TableBucket> buckets,
+            Map<TableBucket, LeaderAndIsr> proposed,
+            Map<TableBucket, LeaderAndIsr> updated,
+            int coordinatorVersion)
+            throws Exception {
+        for (int attempt = 0; attempt < 2 && !buckets.isEmpty(); attempt++) {
+            try {
+                List<CuratorTransactionResult> results =
+                        zkClient.transaction()
+                                .forOperations(
+                                        wrapRequestsWithEpochCheck(operations, coordinatorVersion));
+                int firstUpdate = results.size() - buckets.size();
+                for (int i = 0; i < buckets.size(); i++) {
+                    TableBucket bucket = buckets.get(i);
+                    int version = results.get(firstUpdate + i).getResultStat().getVersion();
+                    updated.put(bucket, proposed.get(bucket).withZkVersion(version));
+                }
+                return;
+            } catch (KeeperException e) {
+                boolean unknown =
+                        e.code() == KeeperException.Code.CONNECTIONLOSS
+                                || e.code() == KeeperException.Code.OPERATIONTIMEOUT;
+                if (!unknown
+                        && (e.code() != KeeperException.Code.BADVERSION
+                                        && e.code() != KeeperException.Code.NONODE
+                                || failedCoordinatorEpochCheck(e, coordinatorVersion))) {
+                    throw e;
+                }
+
+                Map<TableBucket, LeaderAndIsr> installed;
+                try {
+                    installed = getLeaderAndIsrs(buckets);
+                } catch (KeeperException.ConnectionLossException
+                        | KeeperException.OperationTimeoutException verificationFailure) {
+                    LOG.warn(
+                            "Could not confirm a batch of LeaderAndIsr updates.",
+                            verificationFailure);
+                    return;
+                }
+
+                List<TableBucket> unchanged = new ArrayList<>();
+                List<CuratorOp> retryOperations = new ArrayList<>();
+                for (int i = 0; i < buckets.size(); i++) {
+                    TableBucket bucket = buckets.get(i);
+                    LeaderAndIsr current = installed.get(bucket);
+                    if (current == null) {
+                        continue;
+                    }
+                    LeaderAndIsr proposal = proposed.get(bucket);
+                    if (matchesRoleUpdate(proposal, current)) {
+                        updated.put(bucket, current);
+                    } else if (!unknown && current.zkVersion() == proposal.zkVersion()) {
+                        unchanged.add(bucket);
+                        retryOperations.add(operations.get(i));
+                    }
+                }
+                // Retry the unchanged roles together, so one conflict doesn't require a
+                // synchronous write for every other bucket in the batch.
+                buckets = unchanged;
+                operations = retryOperations;
+            }
+        }
+    }
+
+    private static boolean failedCoordinatorEpochCheck(KeeperException e, int coordinatorVersion) {
+        List<OpResult> results = e.getResults();
+        return coordinatorVersion >= 0
+                && results != null
+                && !results.isEmpty()
+                && results.get(0) instanceof OpResult.ErrorResult
+                && ((OpResult.ErrorResult) results.get(0)).getErr()
+                        != KeeperException.Code.OK.intValue();
     }
 
     protected void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {
@@ -1458,15 +1573,108 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.transaction().forOperations(wrapRequestsWithEpochCheck(ops, epochVersion));
     }
 
-    /**
-     * Atomically publishes the committed bucket, its ordinary snapshot and its recovery selection.
-     */
-    public void commitBulkLoadBucket(
+    /** Publishes the snapshot and advances the current leader's epoch in one transaction. */
+    public Optional<LeaderAndIsr> commitBulkLoadBucket(
             VersionedData<BulkLoadTransaction> transaction,
             VersionedData<BulkLoadTarget> target,
             TableBucket bucket,
             VersionedData<BulkLoadBucket> allocation,
             BucketSnapshot snapshot,
+            LeaderAndIsr currentRole,
+            int tableZkVersion,
+            @Nullable Integer partitionZkVersion,
+            int epochVersion)
+            throws Exception {
+        LeaderAndIsr nextRole =
+                currentRole.newLeaderAndIsr(
+                        currentRole.leader(), currentRole.isr(), currentRole.standbyReplicas());
+        List<CuratorOp> operations =
+                prepareBulkLoadBucketCommit(
+                        transaction,
+                        target,
+                        bucket,
+                        allocation,
+                        snapshot,
+                        nextRole,
+                        tableZkVersion,
+                        partitionZkVersion,
+                        epochVersion);
+        try {
+            zkClient.transaction().forOperations(operations);
+            return Optional.of(nextRole.withZkVersion(currentRole.zkVersion() + 1));
+        } catch (KeeperException.ConnectionLossException
+                | KeeperException.OperationTimeoutException e) {
+            throw new BulkLoadPublicationUnknownException(e);
+        } catch (KeeperException.BadVersionException
+                | KeeperException.NodeExistsException
+                | KeeperException.NoNodeException e) {
+            try {
+                if (isBulkLoadBucketCommitted(
+                        transaction.data(), bucket, snapshot.getSnapshotId())) {
+                    return getPublishedRoleIfSelected(bucket, snapshot.getSnapshotId());
+                }
+            } catch (KeeperException.ConnectionLossException
+                    | KeeperException.OperationTimeoutException verificationFailure) {
+                throw new BulkLoadPublicationUnknownException(verificationFailure);
+            }
+            throw e;
+        }
+    }
+
+    /** Checks a publication with an unknown result against its durable bucket record. */
+    public boolean confirmBulkLoadBucketCommit(
+            BulkLoadTransaction transaction,
+            TableBucket bucket,
+            long snapshotId,
+            int coordinatorVersion)
+            throws Exception {
+        String path = bulkLoadBucketPath(transaction, bucket);
+        CompletableFuture<Integer> syncResult = new CompletableFuture<>();
+        zkClient.sync()
+                .inBackground((client, event) -> syncResult.complete(event.getResultCode()))
+                .forPath(path);
+        int code;
+        try {
+            code =
+                    syncResult.get(
+                            configuration
+                                    .get(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT)
+                                    .toMillis(),
+                            TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new KeeperException.OperationTimeoutException();
+        }
+        if (code != KeeperException.Code.OK.intValue()) {
+            throw KeeperException.create(KeeperException.Code.get(code), path);
+        }
+        return getCurrentEpoch().getCoordinatorEpochZkVersion() == coordinatorVersion
+                && isBulkLoadBucketCommitted(transaction, bucket, snapshotId);
+    }
+
+    private boolean isBulkLoadBucketCommitted(
+            BulkLoadTransaction transaction, TableBucket bucket, long snapshotId) throws Exception {
+        return getBulkLoadBucket(transaction, bucket)
+                .map(VersionedData::data)
+                .filter(result -> result.state == BulkLoadBucket.COMMITTED)
+                .filter(result -> result.snapshotId == snapshotId)
+                .isPresent();
+    }
+
+    /** Returns the role for a published import while that import remains selected. */
+    public Optional<LeaderAndIsr> getPublishedRoleIfSelected(TableBucket bucket, long snapshotId)
+            throws Exception {
+        return getSelectedRecoverySnapshotId(bucket).filter(id -> id == snapshotId).isPresent()
+                ? getLeaderAndIsr(bucket)
+                : Optional.empty();
+    }
+
+    private List<CuratorOp> prepareBulkLoadBucketCommit(
+            VersionedData<BulkLoadTransaction> transaction,
+            VersionedData<BulkLoadTarget> target,
+            TableBucket bucket,
+            VersionedData<BulkLoadBucket> allocation,
+            BucketSnapshot snapshot,
+            LeaderAndIsr nextRole,
             int tableZkVersion,
             @Nullable Integer partitionZkVersion,
             int epochVersion)
@@ -1499,26 +1707,8 @@ public class ZooKeeperClient implements AutoCloseable {
                         CreateMode.PERSISTENT));
 
         ops.add(recoverySnapshotUpdate(bucket, snapshot.getSnapshotId(), previous));
-        try {
-            zkClient.transaction().forOperations(wrapRequestsWithEpochCheck(ops, epochVersion));
-        } catch (KeeperException.ConnectionLossException
-                | KeeperException.OperationTimeoutException e) {
-            throw new BulkLoadPublicationUnknownException(e);
-        } catch (KeeperException.BadVersionException
-                | KeeperException.NodeExistsException
-                | KeeperException.NoNodeException e) {
-            Optional<Long> selected;
-            try {
-                // Curator may have retried the multi after losing its first response.
-                selected = getSelectedRecoverySnapshotId(bucket);
-            } catch (KeeperException.ConnectionLossException
-                    | KeeperException.OperationTimeoutException verificationFailure) {
-                throw new BulkLoadPublicationUnknownException(verificationFailure);
-            }
-            if (!selected.isPresent() || selected.get() != snapshot.getSnapshotId()) {
-                throw e;
-            }
-        }
+        ops.add(updateLeaderAndIsrOp(bucket, nextRole));
+        return wrapRequestsWithEpochCheck(ops, epochVersion);
     }
 
     private List<CuratorOp> bulkLoadMutationChecks(
@@ -1594,11 +1784,7 @@ public class ZooKeeperClient implements AutoCloseable {
                 .getAndIncrement();
     }
 
-    /** Returns the number of persisted snapshot references for the given bucket. */
-    public int getBucketSnapshotCount(TableBucket bucket) throws Exception {
-        return getStat(BucketSnapshotsZNode.path(bucket)).map(Stat::getNumChildren).orElse(0);
-    }
-
+    /** Registers the handle of a completed bucket snapshot. */
     public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot)
             throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
@@ -1613,17 +1799,16 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.delete().forPath(path);
     }
 
-    /** Advances the recovery selection after its ordinary reference has been registered. */
+    /**
+     * Advances the recovery selection after registration, fenced by the snapshot's leader epoch.
+     */
     public void updateRecoverySnapshot(
             TableBucket bucket,
             long snapshotId,
             @Nullable Long previousSnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        CuratorOp leaderCheck =
-                previousSnapshotId == null
-                        ? null
-                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+        CuratorOp leaderCheck = createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
         Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
         String path = ZkData.RecoverySnapshotZNode.path(bucket);
         if (current.isPresent()
@@ -1632,11 +1817,7 @@ public class ZooKeeperClient implements AutoCloseable {
             throw new KeeperException.BadVersionException(path);
         }
         CuratorOp update = recoverySnapshotUpdate(bucket, snapshotId, current);
-        if (leaderCheck == null) {
-            zkClient.transaction().forOperations(update);
-        } else {
-            zkClient.transaction().forOperations(update, leaderCheck);
-        }
+        zkClient.transaction().forOperations(update, leaderCheck);
     }
 
     private CuratorOp recoverySnapshotUpdate(
@@ -2529,13 +2710,25 @@ public class ZooKeeperClient implements AutoCloseable {
             Function<ZkGetDataResponse, K> keyExtractor,
             Function<byte[], V> decoder,
             String operationName) {
+        return decodeGetDataResponses(
+                responses,
+                keyExtractor,
+                response -> decoder.apply(response.getData()),
+                operationName);
+    }
+
+    private static <K, V> Map<K, V> decodeGetDataResponses(
+            List<ZkGetDataResponse> responses,
+            Function<ZkGetDataResponse, K> keyExtractor,
+            Function<ZkGetDataResponse, V> decoder,
+            String operationName) {
         Map<K, V> result = new HashMap<>();
         for (ZkGetDataResponse response : responses) {
             if (response.getResultCode() == KeeperException.Code.OK) {
                 byte[] data = response.getData();
                 if (data != null && data.length > 0) {
                     K key = keyExtractor.apply(response);
-                    V value = decoder.apply(response.getData());
+                    V value = decoder.apply(response);
                     result.put(key, value);
                 } else {
                     LOG.warn("Data is empty for path {}", response.getPath());
@@ -2608,46 +2801,35 @@ public class ZooKeeperClient implements AutoCloseable {
      * @param throwIfPathExists whether to throw exception if path exist
      * @throws Exception if any error occurs
      */
-    public void createRecursiveWithEpochCheck(
-            String path, byte[] data, int expectedZkVersion, boolean throwIfPathExists)
+    private boolean createRecursiveWithEpochCheck(String path, byte[] data, int expectedZkVersion)
             throws Exception {
         CuratorOp createOp = zkOp.createOp(path, data, CreateMode.PERSISTENT);
         List<CuratorOp> ops = wrapRequestWithEpochCheck(createOp, expectedZkVersion);
-
         try {
-            // try to directly create
             zkClient.transaction().forOperations(ops);
+            return true;
         } catch (KeeperException.NodeExistsException e) {
-            // should not exist
-            if (throwIfPathExists) {
-                throw e;
-            }
+            return false;
         } catch (KeeperException.NoNodeException e) {
-            // if parent does not exist, create parent first
-            int indexOfLastSlash = path.lastIndexOf("/");
-            if (indexOfLastSlash == -1) {
+            int parentEnd = path.lastIndexOf('/');
+            if (parentEnd < 0) {
                 throw new IllegalArgumentException("Invalid path: " + path);
-            } else if (indexOfLastSlash == 0) {
-                // root path can be directly create without fence
-                try {
-                    zkClient.create()
-                            .creatingParentsIfNeeded()
-                            .withMode(CreateMode.PERSISTENT)
-                            .forPath(path);
-                } catch (KeeperException.NodeExistsException ignored) {
-                    // ignore
-                }
-            } else {
-                // indexOfLastSlash > 0
-                String parentPath = path.substring(0, indexOfLastSlash);
-                createRecursiveWithEpochCheck(
-                        parentPath, null, expectedZkVersion, throwIfPathExists);
-                // After creating parent (or if parent is root), retry creating the original path
-                zkClient.transaction().forOperations(ops);
             }
-        } catch (KeeperException.BadVersionException e) {
-            LOG.error("Bad version for path {}, expected version {} ", path, expectedZkVersion);
-            throw e;
+            if (parentEnd == 0) {
+                try {
+                    zkClient.create().creatingParentsIfNeeded().forPath(path);
+                    return true;
+                } catch (KeeperException.NodeExistsException ignored) {
+                    return false;
+                }
+            }
+            createRecursiveWithEpochCheck(path.substring(0, parentEnd), null, expectedZkVersion);
+            try {
+                zkClient.transaction().forOperations(ops);
+                return true;
+            } catch (KeeperException.NodeExistsException ignored) {
+                return false;
+            }
         }
     }
 

@@ -40,6 +40,7 @@ import io.github.fluss_contrib.rocksdb.RocksDB;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -55,8 +56,7 @@ final class TestingBulkLoadSnapshot {
             long snapshotId,
             long offset,
             Long rowCount,
-            List<Tuple2<byte[], byte[]>> records,
-            boolean shareSst)
+            List<Tuple2<byte[], byte[]>> records)
             throws Exception {
         FsPath tabletDir =
                 FlussPaths.remoteKvTabletDir(
@@ -83,29 +83,19 @@ final class TestingBulkLoadSnapshot {
             }
             FileSystem fs = snapshotDir.getFileSystem();
             fs.mkdirs(snapshotDir);
-            FsPath sharedDir = FlussPaths.remoteKvSharedDir(tabletDir);
-            if (shareSst) {
-                fs.mkdirs(sharedDir);
-            }
-            List<KvSnapshotFileMetadata.FileHandle> sharedFiles = new ArrayList<>();
             List<KvSnapshotFileMetadata.FileHandle> privateFiles = new ArrayList<>();
             long size = 0;
             try (Stream<Path> paths = Files.list(checkpointDir)) {
                 for (Path local : paths.filter(Files::isRegularFile).collect(Collectors.toList())) {
                     String name = local.getFileName().toString();
-                    boolean shared = shareSst && name.endsWith(".sst");
-                    FsPath remote = new FsPath(shared ? sharedDir : snapshotDir, name);
-                    if (!shared || !fs.exists(remote)) {
-                        try (FSDataOutputStream out =
-                                fs.create(remote, FileSystem.WriteMode.NO_OVERWRITE)) {
-                            Files.copy(local, out);
-                        }
+                    FsPath remote = new FsPath(snapshotDir, name);
+                    try (FSDataOutputStream out =
+                            fs.create(remote, FileSystem.WriteMode.NO_OVERWRITE)) {
+                        Files.copy(local, out);
                     }
                     long length = fs.getFileStatus(remote).getLen();
-                    (shared ? sharedFiles : privateFiles)
-                            .add(
-                                    new KvSnapshotFileMetadata.FileHandle(
-                                            remote.toString(), length, name));
+                    privateFiles.add(
+                            new KvSnapshotFileMetadata.FileHandle(remote.toString(), length, name));
                     size += length;
                 }
             }
@@ -115,7 +105,7 @@ final class TestingBulkLoadSnapshot {
                                     bucket,
                                     snapshotId,
                                     snapshotDir.toString(),
-                                    sharedFiles,
+                                    Collections.emptyList(),
                                     privateFiles,
                                     size,
                                     offset,

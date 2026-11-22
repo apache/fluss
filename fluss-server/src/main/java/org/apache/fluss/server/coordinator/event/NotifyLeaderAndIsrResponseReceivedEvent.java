@@ -35,6 +35,7 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     private final int responseServerId;
 
     private final Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts;
+    private final boolean transportFailure;
 
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
@@ -46,9 +47,33 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId,
             Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts) {
+        this(notifyLeaderAndIsrResultForBuckets, responseServerId, requestContexts, false);
+    }
+
+    private NotifyLeaderAndIsrResponseReceivedEvent(
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
+            int responseServerId,
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts,
+            boolean transportFailure) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
         this.requestContexts = Collections.unmodifiableMap(new HashMap<>(requestContexts));
+        this.transportFailure = transportFailure;
+    }
+
+    /** A transport failure leaves the result of every bucket in the request unknown. */
+    public static NotifyLeaderAndIsrResponseReceivedEvent transportFailure(
+            int serverId, Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts) {
+        return new NotifyLeaderAndIsrResponseReceivedEvent(
+                Collections.emptyList(), serverId, requestContexts, true);
+    }
+
+    public Map<TableBucket, NotifyLeaderAndIsrRequestContext> getRequestContexts() {
+        return requestContexts;
+    }
+
+    public boolean isTransportFailure() {
+        return transportFailure;
     }
 
     public int getResponseServerId() {

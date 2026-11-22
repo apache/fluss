@@ -22,8 +22,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.BulkLoadConflictException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvSnapshotFileMetadata;
@@ -42,15 +42,18 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotRequest;
 import org.apache.fluss.rpc.messages.AllocateBulkLoadBucketSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitBulkLoadBucketSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.PbBulkLoadHandle;
+import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager.PreparedCommit;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.log.LogTablet;
@@ -59,15 +62,17 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperClient.BulkLoadPublicationUnknownException;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
-import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
 import org.apache.fluss.utils.types.Tuple2;
@@ -91,11 +96,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.DataTestUtils.toKvRecordBatch;
@@ -148,9 +156,9 @@ class BulkLoadBucketCommitTest {
                 client,
                 path + "/targets/table/buckets/0",
                 new BulkLoadBucket(SNAPSHOT_ID, WAL_OFFSET, BulkLoadBucket.ALLOCATED).toJson());
-        createNode(client, ZkData.BucketIdZNode.path(bucket), new byte[0]);
         int epoch =
                 client.fenceBecomeCoordinatorLeader("bucket-commit").getCoordinatorEpochZkVersion();
+        client.registerLeaderAndIsr(bucket, new LeaderAndIsr(0, 0), epoch);
         manager = new BulkLoadManager(client, metadata, epoch);
         snapshots =
                 new CompletedSnapshotStoreManager(
@@ -161,25 +169,17 @@ class BulkLoadBucketCommitTest {
                         ignored -> false);
     }
 
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testCommitReplacesExistingRecoverySelection(boolean previousIdIsHigher) throws Exception {
+    @Test
+    void testCommitSelectsAllocatedSnapshotDespiteHigherExistingId() throws Exception {
         prepareAllocatedBucket();
-        long previousId = previousIdIsHigher ? SNAPSHOT_ID + 1 : SNAPSHOT_ID - 1;
-        CompletedSnapshotHandle previous = uploadSnapshot(previousId, WAL_OFFSET, true);
-        CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET, true);
-        KvSnapshotFileMetadata previousMetadata =
-                KvSnapshotFileMetadataJsonSerde.fromJson(
-                        Files.readAllBytes(Paths.get(previous.getMetadataFilePath().toUri())));
-        KvSnapshotFileMetadata uploadedMetadata =
-                KvSnapshotFileMetadataJsonSerde.fromJson(
-                        Files.readAllBytes(Paths.get(uploaded.getMetadataFilePath().toUri())));
-        assertThat(uploadedMetadata.getSharedFiles()).isEqualTo(previousMetadata.getSharedFiles());
-        client.registerTableBucketSnapshot(
+        long previousId = SNAPSHOT_ID + 1;
+        CompletedSnapshotHandle previous = uploadSnapshot(previousId, WAL_OFFSET);
+        CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
+        registerRecoverySnapshot(
+                client,
                 bucket,
                 new BucketSnapshot(
                         previousId, WAL_OFFSET, previous.getMetadataFilePath().toString()));
-        client.updateRecoverySnapshot(bucket, previousId, null, -1);
         assertThat(commit(WAL_OFFSET)).isTrue();
         assertThat(
                         client.getBulkLoadBucket(
@@ -206,10 +206,7 @@ class BulkLoadBucketCommitTest {
                                 .getFileSystem()
                                 .exists(previous.getMetadataFilePath()))
                 .isFalse();
-        assertThat(uploadedMetadata.getSharedFiles())
-                .singleElement()
-                .satisfies(
-                        file -> assertThat(Paths.get(new FsPath(file.getPath()).toUri())).exists());
+        assertThat(Paths.get(uploaded.getMetadataFilePath().toUri())).exists();
     }
 
     @Test
@@ -231,11 +228,42 @@ class BulkLoadBucketCommitTest {
                 new BucketSnapshot(
                         SNAPSHOT_ID, WAL_OFFSET, uploaded.getMetadataFilePath().toString());
         client.registerTableBucketSnapshot(bucket, existing);
+        int leaderEpoch = client.getLeaderAndIsr(bucket).get().leaderEpoch();
 
         assertThatThrownBy(() -> commit(WAL_OFFSET))
                 .isInstanceOf(KeeperException.NodeExistsException.class);
         assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).contains(existing);
+        assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(leaderEpoch);
         assertBucketNotCommitted(client, bucket);
+    }
+
+    @Test
+    void testCommitRejectsAnOffsetReadBeforeRoleChange() throws Exception {
+        prepareAllocatedBucket();
+        uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
+        LeaderAndIsr role = client.getLeaderAndIsr(bucket).get();
+        PreparedCommit prepared =
+                manager.prepareBucketCommit(
+                                LOAD_ID,
+                                bucket,
+                                leader ->
+                                        new ListOffsetsResultForBucket(
+                                                bucket, WAL_OFFSET, WAL_OFFSET))
+                        .get();
+
+        LeaderAndIsr nextRole =
+                client.updateLeaderAndIsr(
+                        bucket,
+                        role.newLeaderAndIsr(role.leader(), role.isr(), role.standbyReplicas()),
+                        client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+        assertThatThrownBy(() -> publish(prepared))
+                .isInstanceOf(NotLeaderOrFollowerException.class);
+        assertBucketNotCommitted(client, bucket);
+        assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).isEmpty();
+
+        commit(WAL_OFFSET);
+        assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch())
+                .isEqualTo(nextRole.leaderEpoch() + 1);
     }
 
     @Test
@@ -243,22 +271,16 @@ class BulkLoadBucketCommitTest {
         prepareAllocatedBucket();
         uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
 
-        assertThatThrownBy(
-                        () ->
-                                manager.commitBucketSnapshot(
-                                        LOAD_ID,
-                                        bucket,
-                                        ignored -> {
-                                            client.deleteTable(TABLE);
-                                            return new ListOffsetsResultForBucket(
-                                                    bucket, WAL_OFFSET, WAL_OFFSET);
-                                        },
-                                        snapshots,
-                                        () -> {
-                                            throw new AssertionError(
-                                                    "No recovery should be requested.");
-                                        }))
-                .isInstanceOf(BulkLoadNotFoundException.class);
+        PreparedCommit prepared =
+                manager.prepareBucketCommit(
+                                LOAD_ID,
+                                bucket,
+                                leader ->
+                                        new ListOffsetsResultForBucket(
+                                                bucket, WAL_OFFSET, WAL_OFFSET))
+                        .get();
+        client.deleteTable(TABLE);
+        assertThatThrownBy(() -> publish(prepared)).isInstanceOf(BulkLoadNotFoundException.class);
 
         assertBucketNotCommitted(client, bucket);
         assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).isEmpty();
@@ -266,16 +288,12 @@ class BulkLoadBucketCommitTest {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testRequestsRecoveryOnlyIfPublicationWasAttempted(boolean publicationAttempted)
+    void testDistinguishesPublicationFailureFromUnknownResult(boolean publicationAttempted)
             throws Exception {
         prepareAllocatedBucket();
         CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
-        // Force the actual multi to return NodeExists and then require a selection readback.
-        client.registerTableBucketSnapshot(
-                bucket,
-                new BucketSnapshot(
-                        SNAPSHOT_ID, WAL_OFFSET, uploaded.getMetadataFilePath().toString()));
         Configuration conf = new Configuration().set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        AtomicBoolean failReadback = new AtomicBoolean();
         ZooKeeperClient failingClient =
                 new ZooKeeperClient(
                         new CuratorFrameworkWithUnhandledErrorListener(
@@ -291,12 +309,12 @@ class BulkLoadBucketCommitTest {
                     }
 
                     @Override
-                    public Optional<Long> getSelectedRecoverySnapshotId(TableBucket bucket)
-                            throws Exception {
-                        if (publicationAttempted) {
+                    public Optional<VersionedData<BulkLoadBucket>> getBulkLoadBucket(
+                            BulkLoadTransaction transaction, TableBucket bucket) throws Exception {
+                        if (publicationAttempted && failReadback.get()) {
                             throw new KeeperException.ConnectionLossException();
                         }
-                        return super.getSelectedRecoverySnapshotId(bucket);
+                        return super.getBulkLoadBucket(transaction, bucket);
                     }
                 };
         BulkLoadManager failingManager =
@@ -305,27 +323,68 @@ class BulkLoadBucketCommitTest {
                         new MetadataManager(
                                 client, conf, new LakeCatalogDynamicLoader(conf, null, true)),
                         client.getCurrentEpoch().getCoordinatorEpochZkVersion());
-        AtomicBoolean recoveryRequested = new AtomicBoolean();
-        assertThatThrownBy(
-                        () ->
-                                failingManager.commitBucketSnapshot(
-                                        LOAD_ID,
-                                        bucket,
-                                        target ->
-                                                new ListOffsetsResultForBucket(
-                                                        target, WAL_OFFSET, WAL_OFFSET),
-                                        snapshots,
-                                        () -> recoveryRequested.set(true)))
+        PreparedCommit prepared =
+                failingManager
+                        .prepareBucketCommit(
+                                LOAD_ID,
+                                bucket,
+                                leader ->
+                                        new ListOffsetsResultForBucket(
+                                                bucket, WAL_OFFSET, WAL_OFFSET))
+                        .get();
+        CompletedSnapshotStore store = snapshots.getOrCreateCompletedSnapshotStore(TABLE, bucket);
+        if (publicationAttempted) {
+            // Model an earlier multi that committed but whose caller never received the result.
+            // The retry hits the committed allocation, then loses the verification read too.
+            VersionedData<BulkLoadTransaction> transaction =
+                    client.getBulkLoadTransaction(bucket.getTableId(), LOAD_ID).get();
+            client.commitBulkLoadBucket(
+                    transaction,
+                    client.getBulkLoadTarget(transaction.data(), null).get(),
+                    bucket,
+                    client.getBulkLoadBucket(transaction.data(), bucket).get(),
+                    new BucketSnapshot(
+                            SNAPSHOT_ID, WAL_OFFSET, uploaded.getMetadataFilePath().toString()),
+                    client.getLeaderAndIsr(bucket).get(),
+                    client.getTableWithVersion(TABLE).get().zkVersion(),
+                    null,
+                    client.getCurrentEpoch().getCoordinatorEpochZkVersion());
+        }
+        failReadback.set(true);
+        assertThatThrownBy(() -> publish(prepared))
                 .isInstanceOf(
                         publicationAttempted
-                                ? NetworkException.class
+                                ? BulkLoadPublicationUnknownException.class
                                 : KeeperException.ConnectionLossException.class);
-        assertThat(recoveryRequested.get()).isEqualTo(publicationAttempted);
-        assertBucketNotCommitted(client, bucket);
+        if (publicationAttempted) {
+            // An ordinary snapshot can advance the selection before confirmation.
+            CompletedSnapshotHandle next = uploadSnapshot(SNAPSHOT_ID + 1, WAL_OFFSET);
+            store.add(
+                    next.retrieveCompleteSnapshot(),
+                    SNAPSHOT_ID,
+                    client.getLeaderAndIsr(bucket).get().leaderEpoch());
+
+            failReadback.set(false);
+            assertThat(prepared.confirmPublication()).isTrue();
+            assertThat(
+                            store.commitImportedSnapshot(
+                                    prepared.snapshot(),
+                                    () -> client.getPublishedRoleIfSelected(bucket, SNAPSHOT_ID)))
+                    .isEmpty();
+            store.retainSnapshotsAfterImport();
+
+            assertThat(client.getSelectedRecoverySnapshotId(bucket)).contains(next.getSnapshotId());
+            assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).isEmpty();
+            assertThat(Paths.get(uploaded.getMetadataFilePath().toUri())).doesNotExist();
+            assertThat(store.getActiveSnapshotIds()).containsExactly(next.getSnapshotId());
+        } else {
+            assertBucketNotCommitted(client, bucket);
+        }
     }
 
-    @Test
-    void testCommitRejectsPrivateFileFromPreviousSnapshot() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testCommitRejectsFilesOutsideTheAllocatedSnapshot(boolean shared) throws Exception {
         prepareAllocatedBucket();
         CompletedSnapshotHandle previous = uploadSnapshot(SNAPSHOT_ID - 1, WAL_OFFSET);
         Path previousMetadata = Paths.get(previous.getMetadataFilePath().toUri());
@@ -333,6 +392,24 @@ class BulkLoadBucketCommitTest {
                 KvSnapshotFileMetadataJsonSerde.fromJson(Files.readAllBytes(previousMetadata));
         CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
         Path metadata = Paths.get(uploaded.getMetadataFilePath().toUri());
+        KvSnapshotFileMetadata owned =
+                KvSnapshotFileMetadataJsonSerde.fromJson(Files.readAllBytes(metadata));
+        List<KvSnapshotFileMetadata.FileHandle> sharedFiles = Collections.emptyList();
+        if (shared) {
+            KvSnapshotFileMetadata.FileHandle file = old.getPrivateFiles().get(0);
+            FsPath sharedDir =
+                    FlussPaths.remoteKvSharedDir(
+                            uploaded.getMetadataFilePath().getParent().getParent());
+            Path sharedFile =
+                    Files.createDirectories(Paths.get(sharedDir.toUri())).resolve("external.sst");
+            Files.copy(Paths.get(new FsPath(file.getPath()).toUri()), sharedFile);
+            sharedFiles =
+                    Collections.singletonList(
+                            new KvSnapshotFileMetadata.FileHandle(
+                                    new FsPath(sharedFile.toUri()).toString(),
+                                    file.getSize(),
+                                    "external.sst"));
+        }
         Files.write(
                 metadata,
                 KvSnapshotFileMetadataJsonSerde.toJson(
@@ -340,15 +417,16 @@ class BulkLoadBucketCommitTest {
                                 bucket,
                                 SNAPSHOT_ID,
                                 uploaded.getMetadataFilePath().getParent().toString(),
-                                old.getSharedFiles(),
-                                old.getPrivateFiles(),
-                                old.getIncrementalSize(),
+                                sharedFiles,
+                                shared ? owned.getPrivateFiles() : old.getPrivateFiles(),
+                                shared ? owned.getIncrementalSize() : old.getIncrementalSize(),
                                 WAL_OFFSET,
                                 0L,
                                 null)));
         assertThatThrownBy(() -> commit(WAL_OFFSET))
                 .isInstanceOf(InvalidBulkLoadSnapshotException.class)
-                .hasMessageContaining("Snapshot file escapes");
+                .hasMessageContaining(
+                        shared ? "must not reference shared files" : "Snapshot file escapes");
         assertBucketNotCommitted(client, bucket);
     }
 
@@ -440,8 +518,7 @@ class BulkLoadBucketCommitTest {
                             allocated.getSnapshotId(),
                             allocated.getLogOffset(),
                             1L,
-                            getKeyValuePairs(rows),
-                            false);
+                            getKeyValuePairs(rows));
             CommitBulkLoadBucketSnapshotRequest commit =
                     new CommitBulkLoadBucketSnapshotRequest().setHandle(handle).setBucketId(0);
             if (partitioned) {
@@ -464,9 +541,33 @@ class BulkLoadBucketCommitTest {
                                         .getState())
                         .isEqualTo(BulkLoadBucket.ALLOCATED);
             } else if (scenario == BucketCommitScenario.COORDINATOR_TAKEOVER) {
-                // Persist the commit without sending its recovery notification. The TabletServer
-                // keeps the same leader role, so only Coordinator takeover can dispatch recovery.
-                int leaderEpoch = cluster.waitAndGetLeaderReplica(target).getLeaderEpoch();
+                LeaderAndIsr role = zk.getLeaderAndIsr(target).get();
+                LeaderAndIsr published =
+                        role.newLeaderAndIsr(role.leader(), role.isr(), role.standbyReplicas());
+                NotifyLeaderAndIsrRequest earlyNotification =
+                        makeNotifyLeaderAndIsrRequest(
+                                zk.getCurrentEpoch().getCoordinatorEpoch(),
+                                Collections.singletonList(
+                                        makeNotifyBucketLeaderAndIsr(
+                                                new NotifyLeaderAndIsrData(
+                                                        PhysicalTablePath.of(path),
+                                                        target,
+                                                        role.isr(),
+                                                        published,
+                                                        1,
+                                                        null))));
+                // A TabletServer can receive the role before its ZooKeeper session sees the
+                // transaction that selected the imported snapshot and advanced that role.
+                assertThat(
+                                leader.notifyLeaderAndIsr(earlyNotification)
+                                        .get(30, TimeUnit.SECONDS)
+                                        .getNotifyBucketsLeaderRespAt(0)
+                                        .getErrorCode())
+                        .isEqualTo(Errors.LEADER_NOT_AVAILABLE_EXCEPTION.code());
+                assertThat(cluster.waitAndGetLeaderReplica(target).getLeaderEpoch())
+                        .isEqualTo(role.leaderEpoch());
+
+                // Let the new Coordinator send the ordinary notification for the durable epoch.
                 int coordinatorVersion = zk.getCurrentEpoch().getCoordinatorEpochZkVersion();
                 cluster.stopCoordinatorServer();
                 VersionedData<BulkLoadTransaction> transaction =
@@ -480,6 +581,7 @@ class BulkLoadBucketCommitTest {
                                 uploaded.getSnapshotId(),
                                 uploaded.getLogOffset(),
                                 uploaded.getMetadataFilePath().toString()),
+                        zk.getLeaderAndIsr(target).get(),
                         zk.getTableWithVersion(path).get().zkVersion(),
                         null,
                         coordinatorVersion);
@@ -488,7 +590,7 @@ class BulkLoadBucketCommitTest {
                 Tuple2<byte[], byte[]> imported = getKeyValuePairs(rows).get(0);
                 retry(Duration.ofSeconds(30), () -> assertLookupRow(leader, target, imported));
                 assertThat(cluster.waitAndGetLeaderReplica(target).getLeaderEpoch())
-                        .isEqualTo(leaderEpoch);
+                        .isEqualTo(published.leaderEpoch());
             } else if (scenario == BucketCommitScenario.RECOVERY_FAILS) {
                 // A valid-size CURRENT file passes publication validation but RocksDB cannot open
                 // it.
@@ -497,17 +599,21 @@ class BulkLoadBucketCommitTest {
                                 .resolve("CURRENT");
                 Files.write(current, new byte[Files.readAllBytes(current).length]);
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
-                GetTableStatsRequest stats = new GetTableStatsRequest().setTableId(tableId);
-                stats.addBucketsReq().setBucketId(0);
+                LookupRequest lookup =
+                        newLookupRequest(
+                                tableId, target.getBucket(), getKeyValuePairs(rows).get(0).f0);
+                lookup.getBucketsReqAt(0).setRoutingBucketCount(1);
                 retry(
                         Duration.ofSeconds(30),
-                        () ->
-                                assertThat(
-                                                leader.getTableStats(stats)
-                                                        .get(5, TimeUnit.SECONDS)
-                                                        .getBucketsRespAt(0)
-                                                        .getErrorCode())
-                                        .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code()));
+                        () -> {
+                            PbLookupRespForBucket result =
+                                    leader.lookup(lookup)
+                                            .get(5, TimeUnit.SECONDS)
+                                            .getBucketsRespAt(0);
+                            assertThat(result.hasErrorCode()).isTrue();
+                            assertThat(result.getErrorCode())
+                                    .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code());
+                        });
             } else {
                 coordinator
                         .alterTable(
@@ -532,7 +638,10 @@ class BulkLoadBucketCommitTest {
                 assertThat(zk.getTableBucketSnapshot(target, allocated.getSnapshotId())).isEmpty();
 
                 log.updateHighWatermark(allocatedOffset);
+                int leaderEpoch = zk.getLeaderAndIsr(target).get().leaderEpoch();
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
+                assertThat(zk.getLeaderAndIsr(target).get().leaderEpoch())
+                        .isEqualTo(leaderEpoch + 1);
                 assertThat(zk.getSelectedRecoverySnapshotId(target))
                         .contains(allocated.getSnapshotId());
                 Tuple2<byte[], byte[]> imported = getKeyValuePairs(rows).get(0);
@@ -559,6 +668,8 @@ class BulkLoadBucketCommitTest {
                 assertThat(replay.getSnapshotId()).isEqualTo(allocated.getSnapshotId());
                 assertThat(replay.getLogOffset()).isEqualTo(allocatedOffset);
                 assertThat(zk.getSelectedRecoverySnapshotId(target)).contains(ordinarySnapshot);
+                assertThat(zk.getLeaderAndIsr(target).get().leaderEpoch())
+                        .isEqualTo(leaderEpoch + 1);
                 assertLookupRow(leader, target, imported);
                 assertLookupRow(leader, target, getKeyValuePairs(tail).get(0));
             }
@@ -611,33 +722,30 @@ class BulkLoadBucketCommitTest {
     }
 
     private boolean commit(long leaderOffset) throws Exception {
-        AtomicBoolean recoveryRequested = new AtomicBoolean();
-        manager.commitBucketSnapshot(
-                LOAD_ID,
-                bucket,
-                target -> new ListOffsetsResultForBucket(target, leaderOffset, leaderOffset),
-                snapshots,
-                () -> recoveryRequested.set(true));
-        return recoveryRequested.get();
+        Optional<PreparedCommit> prepared =
+                manager.prepareBucketCommit(
+                        LOAD_ID,
+                        bucket,
+                        leader ->
+                                new ListOffsetsResultForBucket(bucket, leaderOffset, leaderOffset));
+        return prepared.isPresent() && publish(prepared.get()).isPresent();
+    }
+
+    private Optional<LeaderAndIsr> publish(PreparedCommit prepared) throws Exception {
+        return snapshots
+                .getOrCreateCompletedSnapshotStore(prepared.tablePath(), bucket)
+                .commitImportedSnapshot(prepared.snapshot(), prepared::publish);
     }
 
     private CompletedSnapshotHandle uploadSnapshot(long snapshotId, long offset) throws Exception {
-        return uploadSnapshot(snapshotId, offset, false);
-    }
-
-    private CompletedSnapshotHandle uploadSnapshot(long snapshotId, long offset, boolean shareSst)
-            throws Exception {
         return TestingBulkLoadSnapshot.writeSnapshot(
                 new FsPath(remoteDataDir),
                 PhysicalTablePath.of(TABLE),
                 bucket,
                 snapshotId,
                 offset,
-                shareSst ? 1L : 0L,
-                shareSst
-                        ? getKeyValuePairs(genKvRecords(new Object[] {1, "shared"}))
-                        : Collections.emptyList(),
-                shareSst);
+                0L,
+                Collections.emptyList());
     }
 
     private static String seedRunningTarget(

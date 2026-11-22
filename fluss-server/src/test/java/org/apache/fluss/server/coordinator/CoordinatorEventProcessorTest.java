@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -48,6 +49,8 @@ import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
@@ -118,6 +121,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -135,7 +139,6 @@ import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITI
 import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -1432,6 +1435,38 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
+    void testAdjustIsrCannotOverwriteANewerPersistedLeaderEpoch() throws Exception {
+        Map.Entry<TableBucket, LeaderAndIsr> entry =
+                createTableAndGetLeaderAndIsr("adjust_isr_with_stale_coordinator_role");
+        TableBucket bucket = entry.getKey();
+        LeaderAndIsr original = entry.getValue();
+        LeaderAndIsr bumped =
+                original.newLeaderAndIsr(
+                        original.leader(), original.isr(), original.standbyReplicas());
+        zookeeperClient.updateLeaderAndIsr(
+                bucket, bumped, fromCtx(CoordinatorContext::getCoordinatorZkVersion));
+
+        TableBucket otherBucket =
+                new TableBucket(bucket.getTableId(), (bucket.getBucket() + 1) % N_BUCKETS);
+        LeaderAndIsr otherRole = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(otherBucket).get());
+        Map<TableBucket, LeaderAndIsr> adjustments = new HashMap<>();
+        adjustments.put(bucket, original);
+        adjustments.put(otherBucket, otherRole);
+        CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(new AdjustIsrReceivedEvent(adjustments, response));
+
+        Map<TableBucket, AdjustIsrResultForBucket> result =
+                getAdjustIsrResponseData(response.get(10, TimeUnit.SECONDS));
+        assertThat(result.get(bucket).failed()).isTrue();
+        assertThat(result.get(otherBucket).succeeded()).isTrue();
+        assertThat(zookeeperClient.getLeaderAndIsr(bucket)).contains(bumped);
+        assertThat(zookeeperClient.getLeaderAndIsr(otherBucket))
+                .contains(otherRole.newLeaderAndIsr(otherRole.isr()));
+    }
+
+    @Test
     void testProcessAdjustIsrRejectsRequestFromNonLeader() throws Exception {
         Map.Entry<TableBucket, LeaderAndIsr> entry =
                 createTableAndGetLeaderAndIsr("adjust_isr_from_non_leader");
@@ -1561,7 +1596,7 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
     }
 
     @Test
-    void testRoleNotificationRetriesDuringKvRecoveryWithoutOffliningReplica() throws Exception {
+    void testRoleNotificationRetriesTransportFailure() throws Exception {
         initCoordinatorChannel();
         TablePath path = TablePath.of(defaultDatabase, "notify_during_kv_recovery");
         TableAssignment assignment =
@@ -1576,54 +1611,48 @@ class CoordinatorEventProcessorTest extends CoordinatorEventProcessorTestBase {
         verifyTableCreated(tableId, assignment, 1, 1);
         TableBucket bucket = new TableBucket(tableId, 0);
         int leader = fromCtx(ctx -> ctx.getBucketLeaderAndIsr(bucket).get().leader());
-        // Record only the traffic sent after the initial role notification.
-        ConcurrentLinkedDeque<PendingNotify> pending = new ConcurrentLinkedDeque<>();
-        installBlockingNotifyGateways(pending);
-        TestTabletServerGateway observer =
-                (TestTabletServerGateway)
-                        testCoordinatorChannelManager.getTabletServerGateway(1).get();
-        try {
-            eventProcessor
-                    .getCoordinatorEventManager()
-                    .put(
-                            new NotifyLeaderAndIsrResponseReceivedEvent(
-                                    Collections.singletonList(
-                                            new NotifyLeaderAndIsrResultForBucket(
-                                                    bucket,
-                                                    new ApiError(
-                                                            Errors.KV_RECOVERY_IN_PROGRESS, null))),
-                                    leader));
+        AtomicInteger attempts = new AtomicInteger();
+        TestTabletServerGateway gateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
+                            NotifyLeaderAndIsrRequest request) {
+                        if (attempts.incrementAndGet() == 1) {
+                            CompletableFuture<NotifyLeaderAndIsrResponse> failed =
+                                    new CompletableFuture<>();
+                            failed.completeExceptionally(
+                                    new NetworkException("Lost role notification"));
+                            return failed;
+                        }
+                        return super.notifyLeaderAndIsr(request);
+                    }
+                };
+        testCoordinatorChannelManager.setGateways(Collections.singletonMap(leader, gateway));
+        fromCtx(
+                ctx -> {
+                    CoordinatorRequestBatch batch =
+                            new CoordinatorRequestBatch(
+                                    testCoordinatorChannelManager,
+                                    eventProcessor.getCoordinatorEventManager(),
+                                    ctx,
+                                    ignored -> null);
+                    LeaderAndIsr role = ctx.getBucketLeaderAndIsr(bucket).get();
+                    batch.addRoleNotification(
+                            Collections.singleton(leader),
+                            PhysicalTablePath.of(path),
+                            bucket,
+                            ctx.getAssignment(bucket),
+                            role);
+                    batch.sendNotifyLeaderAndIsrRequest(ctx.getCoordinatorEpoch());
+                    return null;
+                });
 
-            retry(
-                    Duration.ofSeconds(10),
-                    () ->
-                            assertThat(pending)
-                                    .singleElement()
-                                    .satisfies(
-                                            retry -> {
-                                                assertThat(retry.getResponseServerId())
-                                                        .isEqualTo(leader);
-                                                assertThat(
-                                                                retry.getRequest()
-                                                                        .getNotifyBucketsLeaderReqsList())
-                                                        .extracting(
-                                                                request ->
-                                                                        toTableBucket(
-                                                                                request
-                                                                                        .getTableBucket()))
-                                                        .containsExactly(bucket);
-                                            }));
-            boolean online = fromCtx(ctx -> ctx.isReplicaOnline(leader, bucket));
-            assertThat(online).isTrue();
-            assertThat(observer.pendingRequestSize()).isZero();
-            completePendingNotifyTrigger(pending, leader);
-            retryVerifyContext(
-                    ctx ->
-                            assertThat(ctx.getPendingLeaderActivationBuckets())
-                                    .doesNotContain(bucket));
-        } finally {
-            drainPendingNotifyTriggers(pending);
-        }
+        retry(Duration.ofSeconds(10), () -> assertThat(attempts.get()).isEqualTo(2));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(bucket);
+                    assertThat(ctx.isReplicaOnline(leader, bucket)).isTrue();
+                });
     }
 
     private void putFailedNotifyResponse(

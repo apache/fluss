@@ -221,9 +221,11 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr =
-                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(
-                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
+                zookeeperClient.registerLeaderAndIsr(
+                        tableBucket,
+                        new LeaderAndIsr(
+                                0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0),
+                        ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
@@ -267,9 +269,11 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr =
-                new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(
-                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
+                zookeeperClient.registerLeaderAndIsr(
+                        tableBucket,
+                        new LeaderAndIsr(
+                                0, 0, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 0),
+                        ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 

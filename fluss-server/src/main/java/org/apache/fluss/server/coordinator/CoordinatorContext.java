@@ -383,11 +383,6 @@ public class CoordinatorContext {
         kvBuckets.removeAll(tableBuckets);
     }
 
-    /** Returns a view of the KV buckets for use on the Coordinator event thread. */
-    public Set<TableBucket> getKvBuckets() {
-        return Collections.unmodifiableSet(kvBuckets);
-    }
-
     /** Returns the number of KV buckets currently observed by the Coordinator. */
     public long getKvBucketCount() {
         return kvBuckets.size();

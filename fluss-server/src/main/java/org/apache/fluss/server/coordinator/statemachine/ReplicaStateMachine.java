@@ -502,14 +502,20 @@ public class ReplicaStateMachine {
             toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
         }
         try {
-            zooKeeperClient.batchUpdateLeaderAndIsr(
-                    toUpdateLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
-            toUpdateLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+            Map<TableBucket, LeaderAndIsr> committed =
+                    zooKeeperClient.batchUpdateLeaderAndIsr(
+                            toUpdateLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
+            committed.forEach(coordinatorContext::putBucketLeaderAndIsr);
+            adjustedLeaderAndIsr
+                    .keySet()
+                    .removeIf(replica -> !committed.containsKey(replica.getTableBucket()));
+            adjustedLeaderAndIsr.replaceAll(
+                    (replica, proposal) -> committed.get(replica.getTableBucket()));
             return adjustedLeaderAndIsr;
         } catch (Exception e) {
             LOG.error("Fail to batch update bucket LeaderAndIsr.", e);
+            return Collections.emptyMap();
         }
-        return adjustedLeaderAndIsr;
     }
 
     @Nullable

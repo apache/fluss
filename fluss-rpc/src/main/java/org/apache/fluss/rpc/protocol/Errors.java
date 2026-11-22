@@ -61,7 +61,6 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.KvRecoveryInProgressException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
@@ -341,8 +340,7 @@ public enum Errors {
     INVALID_BULK_LOAD_SNAPSHOT(
             85, "BulkLoad snapshot input is invalid.", InvalidBulkLoadSnapshotException::new),
     BULK_LOAD_TARGET_WITHDRAWN(
-            86, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new),
-    KV_RECOVERY_IN_PROGRESS(87, "KV recovery is in progress.", KvRecoveryInProgressException::new);
+            86, "BulkLoad target has been withdrawn.", BulkLoadTargetWithdrawnException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

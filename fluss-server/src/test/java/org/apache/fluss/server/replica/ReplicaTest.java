@@ -58,7 +58,6 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -88,7 +87,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -136,35 +134,6 @@ final class ReplicaTest extends ReplicaTestBase {
     // TODO add more tests to cover partition table
 
     private TestingHoldableKvFlushScheduler holdableKvFlushScheduler;
-
-    @Test
-    void testQueuedBulkLoadRecoveryDoesNotBlockLeaderActivation() throws Exception {
-        TableBucket bucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, false);
-        Replica replica = replicaManager.getReplicaOrException(bucket);
-
-        long snapshotId = 42L;
-        List<Runnable> queuedRecoveries = new ArrayList<>();
-        CompletableFuture<Long> recovery =
-                replica.requestBulkLoadRestore(
-                        snapshotId,
-                        INITIAL_LEADER_EPOCH,
-                        INITIAL_COORDINATOR_EPOCH,
-                        () -> {},
-                        queuedRecoveries::add);
-
-        int nextLeaderEpoch = INITIAL_LEADER_EPOCH + 1;
-        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, nextLeaderEpoch, false);
-        assertThat(replica.getLeaderEpoch()).isEqualTo(nextLeaderEpoch);
-
-        zkClient.registerTableBucketSnapshot(
-                bucket, new BucketSnapshot(snapshotId, 0, "unused-by-stale-request"));
-        zkClient.updateRecoverySnapshot(bucket, snapshotId, null, -1);
-        assertThat(queuedRecoveries).hasSize(1);
-        queuedRecoveries.get(0).run();
-        assertThatThrownBy(() -> recovery.get(5, TimeUnit.SECONDS))
-                .hasCauseInstanceOf(NotLeaderOrFollowerException.class);
-    }
 
     @ParameterizedTest
     @CsvSource({"false, 1", "false, 2", "true, 1", "true, 2"})
@@ -820,7 +789,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider() {
+                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
                         return bucket -> {
                             throw new IOException("Snapshot metadata unavailable");
                         };
@@ -855,9 +824,9 @@ final class ReplicaTest extends ReplicaTestBase {
 
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider() {
+                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
                         FunctionWithException<TableBucket, CompletedSnapshot, Exception> provider =
-                                super.getLatestCompletedSnapshotProvider();
+                                super.getLatestCompletedSnapshotProvider(leaderEpoch);
                         return target -> {
                             if (failLookup.get()) {
                                 throw new IOException("Snapshot metadata unavailable");
@@ -918,7 +887,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider() {
+                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
                         return ignored -> external;
                     }
 
@@ -1027,9 +996,10 @@ final class ReplicaTest extends ReplicaTestBase {
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider() {
+                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
                         FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                                snapshotProvider =
+                                        super.getLatestCompletedSnapshotProvider(leaderEpoch);
                         return bucket -> {
                             CompletedSnapshot latestSnapshot = snapshotProvider.apply(bucket);
                             if (latestSnapshot != null) {
@@ -1169,9 +1139,10 @@ final class ReplicaTest extends ReplicaTestBase {
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
                     public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider() {
+                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
                         FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                                snapshotProvider =
+                                        super.getLatestCompletedSnapshotProvider(leaderEpoch);
                         return bucket -> {
                             CompletedSnapshot snapshot = snapshotProvider.apply(bucket);
                             if (snapshot != null) {

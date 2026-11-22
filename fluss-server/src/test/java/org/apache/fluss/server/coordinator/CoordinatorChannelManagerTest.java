@@ -26,8 +26,6 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
-import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -47,12 +45,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
 
@@ -107,26 +103,19 @@ class CoordinatorChannelManagerTest {
     }
 
     @Test
-    void testBulkLoadRequestsTimeOut() throws Exception {
+    void testBulkLoadOffsetRequestTimesOut() throws Exception {
         Configuration configuration =
                 new Configuration()
                         .set(
                                 ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT,
                                 Duration.ofMillis(50));
         CompletableFuture<ListOffsetsResponse> offsets = new CompletableFuture<>();
-        CompletableFuture<NotifyLeaderAndIsrResponse> notification = new CompletableFuture<>();
         TabletServerGateway unresponsiveGateway =
                 new TestTabletServerGateway(false, Collections.emptySet()) {
                     @Override
                     public CompletableFuture<ListOffsetsResponse> listOffsets(
                             ListOffsetsRequest request) {
                         return offsets;
-                    }
-
-                    @Override
-                    public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
-                            NotifyLeaderAndIsrRequest request) {
-                        return notification;
                     }
                 };
         try (RpcClient client =
@@ -143,12 +132,6 @@ class CoordinatorChannelManagerTest {
                             return Optional.of(unresponsiveGateway);
                         }
                     };
-            CompletableFuture<NotifyLeaderAndIsrResponse> recovery =
-                    CompletableFuture.supplyAsync(
-                                    () ->
-                                            manager.notifyBulkLoadRecovery(
-                                                    0, new NotifyLeaderAndIsrRequest()))
-                            .thenCompose(response -> response);
             CompletableFuture<Throwable> allocation =
                     CompletableFuture.supplyAsync(
                             () ->
@@ -158,11 +141,9 @@ class CoordinatorChannelManagerTest {
                                                             0, new TableBucket(1, 0))));
             assertThat(Errors.forException(allocation.get(5, TimeUnit.SECONDS)))
                     .isEqualTo(Errors.REQUEST_TIME_OUT);
-            assertThatThrownBy(() -> recovery.get(5, TimeUnit.SECONDS))
-                    .hasCauseInstanceOf(TimeoutException.class);
+
         } finally {
             offsets.completeExceptionally(new IllegalStateException("Test completed"));
-            notification.completeExceptionally(new IllegalStateException("Test completed"));
         }
     }
 

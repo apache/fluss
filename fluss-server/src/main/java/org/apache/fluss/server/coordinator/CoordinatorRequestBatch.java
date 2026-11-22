@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -502,12 +503,13 @@ public class CoordinatorRequestBatch {
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
-                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request, and retry if encounter any error; It may happens that
-                            // the tablet server is offline and will always got error. But,
-                            // coordinator will remove the sender for the tablet server and mark all
-                            // replica in the tablet server as offline. so, in here, if encounter
-                            // any error, we just ignore it.
+                            ApiError error = ApiError.fromThrowable(throwable);
+                            if (error.error() == Errors.NETWORK_EXCEPTION
+                                    || error.error() == Errors.REQUEST_TIME_OUT) {
+                                eventManager.put(
+                                        NotifyLeaderAndIsrResponseReceivedEvent.transportFailure(
+                                                serverId, requestContexts));
+                            }
 
                             // Clear pending state so the health API does not report stale
                             // RED. The coordinator will detect actual server death via

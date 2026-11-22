@@ -23,23 +23,24 @@ import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
-import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperClient.BulkLoadPublicationUnknownException;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.function.CheckedSupplier;
 import org.apache.fluss.utils.function.FunctionWithException;
 
 import javax.annotation.Nullable;
@@ -213,17 +214,12 @@ public final class BulkLoadManager {
         return partition;
     }
 
-    /**
-     * Durably publishes an allocated bucket snapshot. Signals recovery when a publication is new or
-     * its result is unknown. A successful return does not imply the leader has applied it yet.
-     */
-    public void commitBucketSnapshot(
+    /** Prepares an allocated bucket snapshot for publication, or returns empty on replay. */
+    public Optional<PreparedCommit> prepareBucketCommit(
             String bulkLoadId,
             TableBucket bucket,
-            FunctionWithException<TableBucket, ListOffsetsResultForBucket, Exception>
-                    fetchLeaderOffsets,
-            CompletedSnapshotStoreManager snapshots,
-            Runnable requestRecovery)
+            FunctionWithException<Integer, ListOffsetsResultForBucket, Exception>
+                    fetchLeaderOffsets)
             throws Exception {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
@@ -237,8 +233,7 @@ public final class BulkLoadManager {
                                         new InvalidRequestException(
                                                 "Bucket has not been allocated."));
         if (allocation.data().state == BulkLoadBucket.COMMITTED) {
-            snapshots.reconcileUnconfirmedImport(bucket);
-            return;
+            return Optional.empty();
         }
 
         requireRunning(bulkLoadTransaction);
@@ -247,45 +242,68 @@ public final class BulkLoadManager {
         TableInfo table = bulkLoadTransaction.tableInfo;
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
-        CompletedSnapshotStore snapshotStore =
-                snapshots.getOrCreateCompletedSnapshotStore(table.getTablePath(), bucket);
+        LeaderAndIsr role =
+                client.getLeaderAndIsr(bucket)
+                        .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
+                        .orElseThrow(
+                                () ->
+                                        new NotLeaderOrFollowerException(
+                                                "BulkLoad bucket has no leader: " + bucket));
         validateCommitOffsets(
-                bucket, allocation.data().logOffset, fetchLeaderOffsets.apply(bucket));
+                bucket, allocation.data().logOffset, fetchLeaderOffsets.apply(role.leader()));
 
-        BucketSnapshot snapshotReference =
+        BucketSnapshot reference =
                 new BucketSnapshot(
                         snapshot.getSnapshotID(),
                         snapshot.getLogOffset(),
                         snapshot.getMetadataFilePath().toString());
-        boolean published;
+        return Optional.of(
+                new PreparedCommit(
+                        table.getTablePath(),
+                        snapshot,
+                        () ->
+                                publishValidatedSnapshot(
+                                        transaction,
+                                        target,
+                                        bucket,
+                                        allocation,
+                                        reference,
+                                        role,
+                                        registrationVersions),
+                        () ->
+                                client.confirmBulkLoadBucketCommit(
+                                        bulkLoadTransaction,
+                                        bucket,
+                                        snapshot.getSnapshotID(),
+                                        epochVersion)));
+    }
+
+    private Optional<LeaderAndIsr> publishValidatedSnapshot(
+            VersionedData<BulkLoadTransaction> transaction,
+            VersionedData<BulkLoadTarget> target,
+            TableBucket bucket,
+            VersionedData<BulkLoadBucket> allocation,
+            BucketSnapshot reference,
+            LeaderAndIsr role,
+            TableAndPartitionZkVersions registrationVersions)
+            throws Exception {
         try {
-            published =
-                    snapshotStore.commitImportedSnapshot(
-                            snapshot,
-                            () ->
-                                    client.commitBulkLoadBucket(
-                                            transaction,
-                                            target,
-                                            bucket,
-                                            allocation,
-                                            snapshotReference,
-                                            registrationVersions.tableZkVersion,
-                                            registrationVersions.partitionZkVersion,
-                                            epochVersion));
-        } catch (BulkLoadPublicationUnknownException e) {
-            requestRecovery.run();
-            throw e.getCause();
+            return client.commitBulkLoadBucket(
+                    transaction,
+                    target,
+                    bucket,
+                    allocation,
+                    reference,
+                    role,
+                    registrationVersions.tableZkVersion,
+                    registrationVersions.partitionZkVersion,
+                    epochVersion);
         } catch (KeeperException.NodeExistsException
                 | KeeperException.BadVersionException
                 | KeeperException.NoNodeException e) {
-            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
+            BulkLoadTransaction current =
+                    getTransaction(bucket.getTableId(), transaction.data().bulkLoadId).data();
             getOriginalTable(current);
-            Optional<VersionedData<BulkLoadBucket>> result =
-                    client.getBulkLoadBucket(current, bucket);
-            if (result.isPresent() && result.get().data().state == BulkLoadBucket.COMMITTED) {
-                snapshots.reconcileUnconfirmedImport(bucket);
-                return;
-            }
             requireRunning(current);
             if (e instanceof KeeperException.NoNodeException && bucket.getPartitionId() != null) {
                 BulkLoadTarget originalTarget = target.data();
@@ -297,10 +315,49 @@ public final class BulkLoadManager {
                 }
                 getOriginalPartition(current.tableInfo, originalTarget);
             }
+            if (e instanceof KeeperException.BadVersionException
+                    && !client.getLeaderAndIsr(bucket)
+                            .filter(latest -> latest.zkVersion() == role.zkVersion())
+                            .isPresent()) {
+                throw new NotLeaderOrFollowerException(
+                        "BulkLoad bucket role changed during commit: " + bucket);
+            }
             throw e;
         }
-        if (published) {
-            requestRecovery.run();
+    }
+
+    /** A validated snapshot and its versioned publication operation. */
+    public static final class PreparedCommit {
+        private final TablePath tablePath;
+        private final CompletedSnapshot snapshot;
+        private final CheckedSupplier<Optional<LeaderAndIsr>> publication;
+        private final CheckedSupplier<Boolean> publicationConfirmed;
+
+        private PreparedCommit(
+                TablePath tablePath,
+                CompletedSnapshot snapshot,
+                CheckedSupplier<Optional<LeaderAndIsr>> publication,
+                CheckedSupplier<Boolean> publicationConfirmed) {
+            this.tablePath = tablePath;
+            this.snapshot = snapshot;
+            this.publication = publication;
+            this.publicationConfirmed = publicationConfirmed;
+        }
+
+        public TablePath tablePath() {
+            return tablePath;
+        }
+
+        public CompletedSnapshot snapshot() {
+            return snapshot;
+        }
+
+        public Optional<LeaderAndIsr> publish() throws Exception {
+            return publication.get();
+        }
+
+        public boolean confirmPublication() throws Exception {
+            return publicationConfirmed.get();
         }
     }
 

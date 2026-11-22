@@ -27,7 +27,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.concurrent.Executors;
@@ -91,6 +90,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         final CompletedSnapshotStore snapshotStore =
                 createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
         TableBucket tableBucket = new TableBucket(1, 1);
+        registerLeader(tableBucket);
         CompletedSnapshot snapshot1 = mockCompletedSnapshot(tmpDir, tableBucket, 0);
         snapshotStore.add(snapshot1, null, 0);
         FsPath metadata = snapshot1.getMetadataFilePath();
@@ -105,6 +105,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
     @Test
     void testAddSnapshotWithFailedDiscard(@TempDir Path tmpDir) throws Exception {
         TableBucket bucket = new TableBucket(1L, 2);
+        registerLeader(bucket);
         CompletedSnapshotStore store =
                 createZooKeeperSnapshotStore(zooKeeperClient, new SharedKvFileRegistry());
         CompletableFuture<Void> discard = new CompletableFuture<>();
@@ -134,13 +135,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
     void testRecoverySourceRemainsRetainedAfterRejectedCommits(
             boolean responseLost, @TempDir Path root) throws Exception {
         TableBucket bucket = new TableBucket(2L, responseLost ? 1 : 0);
-        zooKeeperClient
-                .getCuratorClient()
-                .create()
-                .creatingParentsIfNeeded()
-                .forPath(
-                        ZkData.LeaderAndIsrZNode.path(bucket),
-                        ZkData.LeaderAndIsrZNode.encode(new LeaderAndIsr(0, 0)));
+        registerLeader(bucket);
         Path shared = root.resolve("shared.sst");
         Files.write(shared, new byte[] {1});
         Configuration conf = new Configuration();
@@ -196,6 +191,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
             assertThatThrownBy(() -> store.add(snapshot(root, bucket, 3L, null), 1L, 0))
                     .isInstanceOf(KeeperException.ConnectionLossException.class);
+            store.retainSnapshotsAfterImport();
             assertThat(Files.exists(shared)).isTrue();
             assertThat(store.getActiveSnapshotIds()).contains(1L, 2L, 3L);
             failSelectionReads.set(false);
@@ -218,6 +214,10 @@ class ZooKeeperCompletedSnapshotStoreTest {
         assertThat(Files.exists(shared)).isFalse();
         assertThat(zooKeeperClient.getTableBucketLatestSnapshot(bucket).get().getSnapshotId())
                 .isEqualTo(6L);
+    }
+
+    private void registerLeader(TableBucket bucket) throws Exception {
+        zooKeeperClient.registerLeaderAndIsr(bucket, new LeaderAndIsr(0, 0), -1);
     }
 
     private CompletedSnapshot snapshot(Path root, TableBucket bucket, long id, Path shared) {

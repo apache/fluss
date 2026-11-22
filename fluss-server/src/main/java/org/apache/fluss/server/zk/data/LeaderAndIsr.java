@@ -54,6 +54,9 @@ public class LeaderAndIsr {
      */
     private final int bucketEpoch;
 
+    // Local persistence metadata carried from the role we read to its proposed update.
+    private final int zkVersion;
+
     public LeaderAndIsr(int leader, int coordinatorEpoch) {
         this(
                 leader,
@@ -71,12 +74,34 @@ public class LeaderAndIsr {
             List<Integer> standbyReplicas,
             int coordinatorEpoch,
             int bucketEpoch) {
+        this(leader, leaderEpoch, isr, standbyReplicas, coordinatorEpoch, bucketEpoch, -1);
+    }
+
+    private LeaderAndIsr(
+            int leader,
+            int leaderEpoch,
+            List<Integer> isr,
+            List<Integer> standbyReplicas,
+            int coordinatorEpoch,
+            int bucketEpoch,
+            int zkVersion) {
         this.leader = leader;
         this.leaderEpoch = leaderEpoch;
         this.isr = checkNotNull(isr);
         this.standbyReplicas = checkNotNull(standbyReplicas);
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketEpoch = bucketEpoch;
+        this.zkVersion = zkVersion;
+    }
+
+    /** Returns this role with the ZooKeeper version used for the next update. */
+    public LeaderAndIsr withZkVersion(int version) {
+        return new LeaderAndIsr(
+                leader, leaderEpoch, isr, standbyReplicas, coordinatorEpoch, bucketEpoch, version);
+    }
+
+    public int zkVersion() {
+        return zkVersion;
     }
 
     /**
@@ -94,7 +119,8 @@ public class LeaderAndIsr {
                 newIsr,
                 standbyReplicas,
                 coordinatorEpoch,
-                bucketEpoch + 1);
+                bucketEpoch + 1,
+                zkVersion);
     }
 
     /**
@@ -106,7 +132,13 @@ public class LeaderAndIsr {
      */
     public LeaderAndIsr newLeaderAndIsr(List<Integer> newIsr) {
         return new LeaderAndIsr(
-                leader, leaderEpoch, newIsr, standbyReplicas, coordinatorEpoch, bucketEpoch + 1);
+                leader,
+                leaderEpoch,
+                newIsr,
+                standbyReplicas,
+                coordinatorEpoch,
+                bucketEpoch + 1,
+                zkVersion);
     }
 
     public int leader() {
