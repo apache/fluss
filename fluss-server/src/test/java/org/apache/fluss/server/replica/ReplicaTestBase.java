@@ -74,7 +74,6 @@ import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorServi
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
-import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
 import org.junit.jupiter.api.AfterEach;
@@ -854,16 +853,14 @@ public class ReplicaTestBase {
         }
 
         @Override
-        public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                getLatestCompletedSnapshotProvider(int leaderEpoch) {
-            return tableBucket -> {
-                CompletedSnapshot snapshot =
-                        testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
-                return snapshot == null
-                        ? null
-                        : CompletedSnapshotJsonSerde.fromJson(
-                                CompletedSnapshotJsonSerde.toJson(snapshot));
-            };
+        public CompletedSnapshot getLatestCompletedSnapshot(
+                TableBucket tableBucket, int leaderEpoch) throws Exception {
+            CompletedSnapshot snapshot =
+                    testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
+            return snapshot == null
+                    ? null
+                    : CompletedSnapshotJsonSerde.fromJson(
+                            CompletedSnapshotJsonSerde.toJson(snapshot));
         }
 
         @Override

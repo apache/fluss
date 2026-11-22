@@ -123,11 +123,19 @@ public class ReplicaStateMachine {
 
     public void handleStateChanges(
             Collection<TableBucketReplica> replicas, ReplicaState targetState) {
+        handleStateChanges(replicas, targetState, null);
+    }
+
+    /** Applies replica transitions, retrying transport for the published import's leader. */
+    public void handleStateChanges(
+            Collection<TableBucketReplica> replicas,
+            ReplicaState targetState,
+            @Nullable TableBucket importedBucket) {
         try {
             coordinatorRequestBatch.newBatch();
             doHandleStateChanges(replicas, targetState);
             coordinatorRequestBatch.sendRequestToTabletServers(
-                    coordinatorContext.getCoordinatorEpoch());
+                    coordinatorContext.getCoordinatorEpoch(), importedBucket);
         } catch (Throwable e) {
             LOG.error(
                     "Failed to move table bucket replicas {} to state {}.",

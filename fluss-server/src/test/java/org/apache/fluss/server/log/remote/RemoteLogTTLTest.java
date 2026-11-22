@@ -29,7 +29,6 @@ import org.apache.fluss.server.log.remote.RemoteLogIndexCache.Entry;
 import org.apache.fluss.server.replica.Replica;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -38,8 +37,6 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
-import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for remote log ttl in {@link RemoteLogManager}. */
@@ -48,28 +45,6 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
-    }
-
-    @Test
-    void testRemoteLogTtlRespectsKvRetentionOffset() throws Exception {
-        TableBucket bucket = makeTableBucket(false, true);
-        makeKvTableAsLeader(bucket, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, false);
-        Replica replica = replicaManager.getReplicaOrException(bucket);
-        LogTablet log = replica.getLogTablet();
-        updateTableConfig(replica, ConfigOptions.TABLE_DATALAKE_ENABLED, "true");
-        addMultiSegmentsToLogTablet(log, 5);
-        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(bucket);
-        assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
-
-        log.updateLakeLogEndOffset(30L);
-        log.updateMinRetainOffset(20L);
-        manualClock.advanceTime(Duration.ofDays(7).plusHours(1));
-        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-
-        assertThat(remoteLog.allRemoteLogSegments())
-                .extracting(RemoteLogSegment::remoteLogStartOffset)
-                .containsExactly(20L, 30L);
     }
 
     @ParameterizedTest

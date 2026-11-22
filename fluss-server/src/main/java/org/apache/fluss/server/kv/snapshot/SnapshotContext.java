@@ -20,7 +20,8 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.function.FunctionWithException;
+
+import javax.annotation.Nullable;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -54,12 +55,10 @@ public interface SnapshotContext {
     /** Get the size of the write buffer for writing the kv snapshot file to remote filesystem. */
     int getSnapshotFsWriteBufferSize();
 
-    /**
-     * Returns a snapshot provider for leader activation. The provider reads the selection after
-     * observing the notified leader epoch and returns null when no snapshot exists.
-     */
-    FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-            getLatestCompletedSnapshotProvider(int leaderEpoch);
+    /** Reads the latest completed snapshot after observing the notified leader epoch. */
+    @Nullable
+    CompletedSnapshot getLatestCompletedSnapshot(TableBucket bucket, int leaderEpoch)
+            throws Exception;
 
     /**
      * Handles broken snapshots.

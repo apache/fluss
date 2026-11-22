@@ -84,7 +84,8 @@ public final class BulkLoadManager {
     public BulkLoadBucket allocateBucketSnapshot(
             String bulkLoadId,
             TableBucket bucket,
-            FunctionWithException<TableBucket, Long, Exception> leaderLogEndOffsetFetcher)
+            FunctionWithException<Integer, ListOffsetsResultForBucket, Exception>
+                    fetchLeaderOffsets)
             throws Exception {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
@@ -101,7 +102,7 @@ public final class BulkLoadManager {
         TableAndPartitionZkVersions registrationVersions =
                 validateBuildContext(original, target.data(), table);
         long snapshotId = client.allocateBucketSnapshotId(bucket);
-        long logOffset = leaderLogEndOffsetFetcher.apply(bucket);
+        long logOffset = fetchLeaderOffsets.apply(getBucketLeader(bucket).leader()).getOffset();
         BulkLoadBucket allocation =
                 new BulkLoadBucket(snapshotId, logOffset, BulkLoadBucket.ALLOCATED);
         try {
@@ -142,6 +143,15 @@ public final class BulkLoadManager {
             validateBuildContext(transaction, target, table);
         }
         return allocation;
+    }
+
+    private LeaderAndIsr getBucketLeader(TableBucket bucket) throws Exception {
+        return client.getLeaderAndIsr(bucket)
+                .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
+                .orElseThrow(
+                        () ->
+                                new NotLeaderOrFollowerException(
+                                        "BulkLoad bucket has no leader: " + bucket));
     }
 
     private VersionedData<BulkLoadTarget> resolveTarget(
@@ -242,13 +252,7 @@ public final class BulkLoadManager {
         TableInfo table = bulkLoadTransaction.tableInfo;
         CompletedSnapshot snapshot =
                 BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
-        LeaderAndIsr role =
-                client.getLeaderAndIsr(bucket)
-                        .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
-                        .orElseThrow(
-                                () ->
-                                        new NotLeaderOrFollowerException(
-                                                "BulkLoad bucket has no leader: " + bucket));
+        LeaderAndIsr role = getBucketLeader(bucket);
         validateCommitOffsets(
                 bucket, allocation.data().logOffset, fetchLeaderOffsets.apply(role.leader()));
 

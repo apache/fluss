@@ -171,8 +171,14 @@ public class CoordinatorRequestBatch {
     }
 
     public void sendRequestToTabletServers(int coordinatorEpoch) {
+        sendRequestToTabletServers(coordinatorEpoch, null);
+    }
+
+    /** Sends the batch, retrying a transport failure only for the imported bucket's leader. */
+    public void sendRequestToTabletServers(
+            int coordinatorEpoch, @Nullable TableBucket importedBucket) {
         try {
-            sendNotifyLeaderAndIsrRequest(coordinatorEpoch);
+            sendNotifyLeaderAndIsrRequest(coordinatorEpoch, importedBucket);
             sendUpdateMetadataRequest();
             sendNotifyRemoteLogOffsetsRequest(coordinatorEpoch);
             sendNotifyKvSnapshotOffsetRequest(coordinatorEpoch);
@@ -460,7 +466,7 @@ public class CoordinatorRequestBatch {
                         });
     }
 
-    void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch) {
+    void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch, @Nullable TableBucket importedBucket) {
         for (Map.Entry<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
                 notifyRequestEntry : notifyLeaderAndIsrRequestMap.entrySet()) {
             // send request for each tablet server
@@ -479,7 +485,9 @@ public class CoordinatorRequestBatch {
                                 request.getLeader(),
                                 request.getLeaderEpoch(),
                                 request.getBucketEpoch(),
-                                rebalanceExecutionKeyResolver.apply(entry.getKey())));
+                                rebalanceExecutionKeyResolver.apply(entry.getKey()),
+                                request.getLeader() == serverId
+                                        && entry.getKey().equals(importedBucket)));
             }
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
@@ -494,21 +502,30 @@ public class CoordinatorRequestBatch {
                 }
             }
 
+            NotifyLeaderAndIsrRequestContext importRequest = requestContexts.get(importedBucket);
+            boolean retryImport = importRequest != null && importRequest.isImportLeaderActivation();
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
                     serverId,
                     notifyLeaderAndIsrRequest,
+                    retryImport,
                     (response, throwable) -> {
                         if (throwable != null) {
                             LOG.warn(
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
-                            ApiError error = ApiError.fromThrowable(throwable);
-                            if (error.error() == Errors.NETWORK_EXCEPTION
-                                    || error.error() == Errors.REQUEST_TIME_OUT) {
-                                eventManager.put(
-                                        NotifyLeaderAndIsrResponseReceivedEvent.transportFailure(
-                                                serverId, requestContexts));
+                            if (retryImport) {
+                                Errors error = ApiError.fromThrowable(throwable).error();
+                                if (error == Errors.NETWORK_EXCEPTION
+                                        || error == Errors.REQUEST_TIME_OUT) {
+                                    eventManager.put(
+                                            NotifyLeaderAndIsrResponseReceivedEvent
+                                                    .transportFailure(
+                                                            serverId,
+                                                            Collections.singletonMap(
+                                                                    importedBucket,
+                                                                    importRequest)));
+                                }
                             }
 
                             // Clear pending state so the health API does not report stale

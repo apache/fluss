@@ -65,7 +65,6 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.concurrent.Executors;
-import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -788,11 +787,9 @@ final class ReplicaTest extends ReplicaTestBase {
         TestSnapshotContext context =
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
-                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
-                        return bucket -> {
-                            throw new IOException("Snapshot metadata unavailable");
-                        };
+                    public CompletedSnapshot getLatestCompletedSnapshot(
+                            TableBucket bucket, int leaderEpoch) throws Exception {
+                        throw new IOException("Snapshot metadata unavailable");
                     }
                 };
         Replica replica =
@@ -823,16 +820,12 @@ final class ReplicaTest extends ReplicaTestBase {
                     }
 
                     @Override
-                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
-                        FunctionWithException<TableBucket, CompletedSnapshot, Exception> provider =
-                                super.getLatestCompletedSnapshotProvider(leaderEpoch);
-                        return target -> {
-                            if (failLookup.get()) {
-                                throw new IOException("Snapshot metadata unavailable");
-                            }
-                            return provider.apply(target);
-                        };
+                    public CompletedSnapshot getLatestCompletedSnapshot(
+                            TableBucket target, int leaderEpoch) throws Exception {
+                        if (failLookup.get()) {
+                            throw new IOException("Snapshot metadata unavailable");
+                        }
+                        return super.getLatestCompletedSnapshot(target, leaderEpoch);
                     }
                 };
         Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
@@ -886,9 +879,9 @@ final class ReplicaTest extends ReplicaTestBase {
         TestSnapshotContext context =
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
-                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
-                        return ignored -> external;
+                    public CompletedSnapshot getLatestCompletedSnapshot(
+                            TableBucket ignored, int leaderEpoch) throws Exception {
+                        return external;
                     }
 
                     @Override
@@ -995,18 +988,14 @@ final class ReplicaTest extends ReplicaTestBase {
         testKvSnapshotContext =
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
-                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
-                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                                snapshotProvider =
-                                        super.getLatestCompletedSnapshotProvider(leaderEpoch);
-                        return bucket -> {
-                            CompletedSnapshot latestSnapshot = snapshotProvider.apply(bucket);
-                            if (latestSnapshot != null) {
-                                attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
-                            }
-                            return latestSnapshot;
-                        };
+                    public CompletedSnapshot getLatestCompletedSnapshot(
+                            TableBucket bucket, int leaderEpoch) throws Exception {
+                        CompletedSnapshot latestSnapshot =
+                                super.getLatestCompletedSnapshot(bucket, leaderEpoch);
+                        if (latestSnapshot != null) {
+                            attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
+                        }
+                        return latestSnapshot;
                     }
 
                     @Override
@@ -1138,18 +1127,14 @@ final class ReplicaTest extends ReplicaTestBase {
         testKvSnapshotContext =
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
-                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                            getLatestCompletedSnapshotProvider(int leaderEpoch) {
-                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                                snapshotProvider =
-                                        super.getLatestCompletedSnapshotProvider(leaderEpoch);
-                        return bucket -> {
-                            CompletedSnapshot snapshot = snapshotProvider.apply(bucket);
-                            if (snapshot != null) {
-                                attemptedSnapshotIds.add(snapshot.getSnapshotID());
-                            }
-                            return snapshot;
-                        };
+                    public CompletedSnapshot getLatestCompletedSnapshot(
+                            TableBucket bucket, int leaderEpoch) throws Exception {
+                        CompletedSnapshot snapshot =
+                                super.getLatestCompletedSnapshot(bucket, leaderEpoch);
+                        if (snapshot != null) {
+                            attemptedSnapshotIds.add(snapshot.getSnapshotID());
+                        }
+                        return snapshot;
                     }
 
                     @Override

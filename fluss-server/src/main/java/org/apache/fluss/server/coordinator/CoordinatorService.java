@@ -39,7 +39,6 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
-import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -376,16 +375,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 manager -> {
                     PbBulkLoadHandle handle = request.getHandle();
                     authorizeBulkLoad(handle.getTableId(), session);
+                    TableBucket bucket =
+                            new TableBucket(
+                                    handle.getTableId(),
+                                    request.hasPartitionId() ? request.getPartitionId() : null,
+                                    request.getBucketId());
+                    CoordinatorChannelManager channels =
+                            coordinatorEventProcessorSupplier.get().getCoordinatorChannelManager();
                     BulkLoadBucket allocation =
                             manager.allocateBucketSnapshot(
                                     handle.getBulkLoadId(),
-                                    new TableBucket(
-                                            handle.getTableId(),
-                                            request.hasPartitionId()
-                                                    ? request.getPartitionId()
-                                                    : null,
-                                            request.getBucketId()),
-                                    this::fetchLeaderLogEndOffset);
+                                    bucket,
+                                    leader -> channels.bulkLoadOffsets(leader, bucket));
                     return new AllocateBulkLoadBucketSnapshotResponse()
                             .setSnapshotId(allocation.snapshotId)
                             .setLogOffset(allocation.logOffset)
@@ -414,7 +415,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     leader ->
                                             processor
                                                     .getCoordinatorChannelManager()
-                                                    .bulkLoadCommitOffsets(leader, bucket));
+                                                    .bulkLoadOffsets(leader, bucket));
                     if (prepared.isPresent()) {
                         processor.publishBulkLoadBucketSnapshot(prepared.get());
                     }
@@ -431,22 +432,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         "The original BulkLoad table no longer exists.");
             }
         }
-    }
-
-    private long fetchLeaderLogEndOffset(TableBucket bucket) throws Exception {
-        return coordinatorEventProcessorSupplier
-                .get()
-                .getCoordinatorChannelManager()
-                .bulkLoadLogEndOffset(getBulkLoadLeader(bucket), bucket);
-    }
-
-    private int getBulkLoadLeader(TableBucket bucket) throws Exception {
-        return zkClient.getLeaderAndIsr(bucket)
-                .orElseThrow(
-                        () ->
-                                new NotLeaderOrFollowerException(
-                                        "BulkLoad bucket has no leader: " + bucket))
-                .leader();
     }
 
     private <T> CompletableFuture<T> submitBulkLoadOperation(

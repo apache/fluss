@@ -85,7 +85,6 @@ final class BulkLoadSnapshotValidator {
         byte[] bytes = new byte[(int) status.getLen()];
         try (DataInputStream input = new DataInputStream(fileSystem.open(path))) {
             input.readFully(bytes);
-            require(input.read() == -1, "Snapshot metadata changed while reading.");
         }
         KvSnapshotFileMetadata metadata;
         try {

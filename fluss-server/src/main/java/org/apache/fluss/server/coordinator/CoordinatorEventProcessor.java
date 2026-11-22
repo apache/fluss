@@ -406,7 +406,8 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                             .filter(replica -> ctx.isReplicaOnline(replica, bucket))
                                             .map(replica -> new TableBucketReplica(bucket, replica))
                                             .collect(Collectors.toList()),
-                                    OnlineReplica);
+                                    OnlineReplica,
+                                    bucket);
                             return null;
                         }));
     }
@@ -1479,6 +1480,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                                 return null;
                                             }
                                             coordinatorRequestBatch.newBatch();
+                                            TableBucket importedBucket = null;
                                             for (Map.Entry<
                                                             TableBucket,
                                                             NotifyLeaderAndIsrRequestContext>
@@ -1504,6 +1506,9 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                                 PhysicalTablePath path =
                                                         roleNotificationPath(bucket);
                                                 if (path != null) {
+                                                    if (sent.isImportLeaderActivation()) {
+                                                        importedBucket = bucket;
+                                                    }
                                                     coordinatorRequestBatch.addRoleNotification(
                                                             Collections.singleton(serverId),
                                                             path,
@@ -1513,7 +1518,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                                 }
                                             }
                                             coordinatorRequestBatch.sendNotifyLeaderAndIsrRequest(
-                                                    coordinatorEpoch);
+                                                    coordinatorEpoch, importedBucket);
                                             return null;
                                         })),
                 1_000L);

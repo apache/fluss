@@ -1102,9 +1102,7 @@ public final class Replica {
             TableBucket tableBucket, int leaderEpoch) {
         try {
             return Optional.ofNullable(
-                    snapshotContext
-                            .getLatestCompletedSnapshotProvider(leaderEpoch)
-                            .apply(tableBucket));
+                    snapshotContext.getLatestCompletedSnapshot(tableBucket, leaderEpoch));
         } catch (LeaderNotAvailableException e) {
             throw e;
         } catch (Exception e) {

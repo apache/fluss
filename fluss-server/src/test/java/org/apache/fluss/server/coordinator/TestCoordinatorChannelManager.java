@@ -17,15 +17,21 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager;
+import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager.PreparedCommit;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 /** A coordinator channel manager for test purpose which can set gateways manually. */
 public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
@@ -43,6 +49,33 @@ public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
                 new Configuration(),
                 TestingMetricGroups.COORDINATOR_METRICS);
         this.gateways = gateways;
+    }
+
+    /** Publishes through the real Coordinator while its leader notification channel is absent. */
+    public static void publishWithDisconnectedLeader(
+            CoordinatorEventProcessor processor,
+            BulkLoadManager manager,
+            String bulkLoadId,
+            TableBucket bucket,
+            ServerNode leader)
+            throws Exception {
+        CoordinatorChannelManager channels = processor.getCoordinatorChannelManager();
+        PreparedCommit prepared =
+                manager.prepareBucketCommit(
+                                bulkLoadId,
+                                bucket,
+                                serverId -> channels.bulkLoadOffsets(serverId, bucket))
+                        .get();
+        channels.removeTabletServer(leader.id());
+        try {
+            processor.publishBulkLoadBucketSnapshot(prepared);
+            // Keep the channel disconnected until the event thread has sent the new role.
+            AccessContextEvent<Void> notificationSent = new AccessContextEvent<>(ctx -> null);
+            processor.getCoordinatorEventManager().put(notificationSent);
+            notificationSent.getResultFuture().get(30, TimeUnit.SECONDS);
+        } finally {
+            channels.addTabletServer(leader);
+        }
     }
 
     public void setGateways(Map<Integer, TabletServerGateway> gateways) {

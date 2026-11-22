@@ -52,6 +52,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager.PreparedCommit;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -482,8 +483,8 @@ class BulkLoadBucketCommitTest {
                             : info.getRemoteDataDir();
             seedRunningTarget(zk, info, partitionId, partitionName, targetRemoteDir);
 
-            TabletServerGateway leader =
-                    cluster.newTabletServerClientForNode(cluster.waitAndGetLeader(target));
+            int leaderId = cluster.waitAndGetLeader(target);
+            TabletServerGateway leader = cluster.newTabletServerClientForNode(leaderId);
             CoordinatorGateway coordinator = cluster.newCoordinatorClient();
             PbBulkLoadHandle handle =
                     new PbBulkLoadHandle().setTableId(tableId).setBulkLoadId(LOAD_ID);
@@ -581,6 +582,22 @@ class BulkLoadBucketCommitTest {
                 retry(Duration.ofSeconds(30), () -> assertLookupRow(leader, target, imported));
                 assertThat(cluster.waitAndGetLeaderReplica(target).getLeaderEpoch())
                         .isEqualTo(published.leaderEpoch());
+            } else if (scenario == BucketCommitScenario.LEADER_NOTIFICATION_DISCONNECTED) {
+                TestCoordinatorChannelManager.publishWithDisconnectedLeader(
+                        cluster.getCoordinatorServer().getCoordinatorEventProcessor(),
+                        new BulkLoadManager(
+                                zk, metadata, zk.getCurrentEpoch().getCoordinatorEpochZkVersion()),
+                        LOAD_ID,
+                        target,
+                        cluster.getTabletServerNodes().stream()
+                                .filter(server -> server.id() == leaderId)
+                                .findFirst()
+                                .get());
+
+                assertThat(zk.getSelectedRecoverySnapshotId(target))
+                        .contains(allocated.getSnapshotId());
+                Tuple2<byte[], byte[]> imported = getKeyValuePairs(rows).get(0);
+                retry(Duration.ofSeconds(30), () -> assertLookupRow(leader, target, imported));
             } else if (scenario == BucketCommitScenario.RECOVERY_FAILS) {
                 // A valid-size CURRENT file passes publication validation but RocksDB cannot open
                 // it.
@@ -780,6 +797,7 @@ class BulkLoadBucketCommitTest {
         RECOVERY_SUCCEEDS,
         WAL_ADVANCED,
         COORDINATOR_TAKEOVER,
+        LEADER_NOTIFICATION_DISCONNECTED,
         RECOVERY_FAILS
     }
 }

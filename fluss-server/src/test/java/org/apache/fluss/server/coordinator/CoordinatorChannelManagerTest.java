@@ -137,7 +137,7 @@ class CoordinatorChannelManagerTest {
                             () ->
                                     catchThrowable(
                                             () ->
-                                                    manager.bulkLoadLogEndOffset(
+                                                    manager.bulkLoadOffsets(
                                                             0, new TableBucket(1, 0))));
             assertThat(Errors.forException(allocation.get(5, TimeUnit.SECONDS)))
                     .isEqualTo(Errors.REQUEST_TIME_OUT);

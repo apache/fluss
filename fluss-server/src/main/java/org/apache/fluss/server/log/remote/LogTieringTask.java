@@ -138,18 +138,15 @@ public class LogTieringTask implements Runnable {
             // clean up.
             List<EnrichedLogSegment> candidateToCopySegments =
                     candidateToCopyLogSegments(logTablet);
+            // Only delete segments that have been tiered to lake to ensure data safety
             TableConfig tableConfig = replica.getTableInfo().getTableConfig();
-            Long cleanupOffset =
-                    tableConfig.isDataLakeEnabled() ? logTablet.getLakeLogEndOffset() : null;
-            if (replica.isKvTable()) {
-                cleanupOffset =
-                        cleanupOffset == null
-                                ? logTablet.getMinRetainOffset()
-                                : Math.min(cleanupOffset, logTablet.getMinRetainOffset());
-            }
             List<RemoteLogSegment> expiredRemoteLogSegments =
                     remoteLog.expiredRemoteLogSegments(
-                            clock.milliseconds(), cleanupOffset, tableConfig.getLogTTLMs());
+                            clock.milliseconds(),
+                            tableConfig.isDataLakeEnabled()
+                                    ? logTablet.getLakeLogEndOffset()
+                                    : null,
+                            tableConfig.getLogTTLMs());
 
             // 1. For these candidateToCopySegments, we will first copy segment files to
             // remote before commit the remote log manifest.

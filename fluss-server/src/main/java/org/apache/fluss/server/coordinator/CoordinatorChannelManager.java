@@ -230,12 +230,17 @@ public class CoordinatorChannelManager {
     public void sendBucketLeaderAndIsrRequest(
             int receiveServerId,
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
+            boolean reportUnavailable,
             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
-                receiveServerId,
-                notifyLeaderAndIsrRequest,
-                TabletServerGateway::notifyLeaderAndIsr,
-                responseConsumer);
+        if (!sendRequest(
+                        receiveServerId,
+                        notifyLeaderAndIsrRequest,
+                        TabletServerGateway::notifyLeaderAndIsr,
+                        responseConsumer)
+                && reportUnavailable) {
+            responseConsumer.accept(
+                    null, new NetworkException("TabletServer channel is unavailable."));
+        }
     }
 
     /** Send StopBucketReplicaRequest to the server and handle the response. */
@@ -341,7 +346,7 @@ public class CoordinatorChannelManager {
     }
 
     @VisibleForTesting
-    protected <Request extends ApiMessage, Response extends ApiMessage> void sendRequest(
+    protected <Request extends ApiMessage, Response extends ApiMessage> boolean sendRequest(
             int targetServerId,
             Request request,
             RequestSendFunction<Request, Response> requestFunction,
@@ -353,39 +358,21 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
-            if (request instanceof NotifyLeaderAndIsrRequest && responseConsumer != null) {
-                responseConsumer.accept(
-                        null, new NetworkException("TabletServer channel is unavailable."));
-            }
-        } else {
-            TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
-            requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
+            return false;
         }
+        requestFunction
+                .apply(optionalTabletServerGateway.get(), request)
+                .whenComplete(responseConsumer);
+        return true;
     }
 
     protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
         return rpcGatewayManager.getRpcGateway(targetServerId);
     }
 
-    /** Reads the leader's WAL end offset for BulkLoad bucket allocation. */
-    public long bulkLoadLogEndOffset(int leader, TableBucket bucket) throws Exception {
-        return listBulkLoadOffsets(leader, bucket, ListOffsetsParam.LATEST_OFFSET_TYPE).getOffset();
-    }
-
     /** Reads the leader's WAL end offset and high watermark in one request. */
-    public ListOffsetsResultForBucket bulkLoadCommitOffsets(int leader, TableBucket bucket)
+    public ListOffsetsResultForBucket bulkLoadOffsets(int leader, TableBucket bucket)
             throws Exception {
-        PbListOffsetsRespForBucket response =
-                listBulkLoadOffsets(leader, bucket, ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE);
-        if (!response.hasHighWatermark()) {
-            throw new UnknownServerException("Leader did not return the BulkLoad high watermark.");
-        }
-        return new ListOffsetsResultForBucket(
-                bucket, response.getOffset(), response.getHighWatermark());
-    }
-
-    private PbListOffsetsRespForBucket listBulkLoadOffsets(
-            int leader, TableBucket bucket, int offsetType) throws Exception {
         TabletServerGateway gateway =
                 getTabletServerGateway(leader)
                         .orElseThrow(
@@ -396,7 +383,7 @@ public class CoordinatorChannelManager {
         ListOffsetsRequest request =
                 makeListOffsetsRequest(
                         leader,
-                        offsetType,
+                        ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE,
                         bucket.getTableId(),
                         bucket.getPartitionId(),
                         bucket.getBucket());
@@ -418,7 +405,11 @@ public class CoordinatorChannelManager {
             throw new UnknownServerException(
                     "Leader did not return the requested BulkLoad bucket offset.");
         }
-        return response;
+        if (!response.hasHighWatermark()) {
+            throw new UnknownServerException("Leader did not return the BulkLoad high watermark.");
+        }
+        return new ListOffsetsResultForBucket(
+                bucket, response.getOffset(), response.getHighWatermark());
     }
 
     /** A functional interface to send request via TabletServerGateway. */
