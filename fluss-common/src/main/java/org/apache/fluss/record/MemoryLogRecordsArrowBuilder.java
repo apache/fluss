@@ -107,7 +107,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 "The size of first segment of pagedOutputView is too small, need at least "
                         + headerSize
                         + " bytes.");
-        this.changeTypeWriter = new ChangeTypeVectorWriter(firstSegment, headerSize);
+        this.changeTypeWriter = new ChangeTypeVectorWriter();
         this.estimatedSizeInBytes = headerSize;
         this.recordCount = 0;
         this.statisticsCollector = statisticsCollector;
@@ -188,21 +188,12 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
         int headerSize = recordBatchHeaderSize(magic);
         recordCount = arrowWriter.getRecordsCount();
-        int changeTypeSize = changeTypeWriter.sizeInBytes();
 
-        // For V1+ with statistics, write everything sequentially to pagedOutputView:
-        // [header] [statistics] [changeTypes] [arrow data]
-        // This makes CRC computation zero-copy over contiguous memory segments.
+        // Everything after the header is written sequentially to pagedOutputView, so each part
+        // may cross a page boundary: [header] [statistics (V1+)] [changeTypes] [arrow data]
+        pagedOutputView.setPosition(headerSize);
+
         if (magic >= LOG_MAGIC_VALUE_V1 && statisticsCollector != null && recordCount > 0) {
-            // Save changeType bytes before they get overwritten. The changeType data lives
-            // in firstSegment at offset headerSize, which is the same memory backing
-            // pagedOutputView — so writing statistics there would clobber it.
-            byte[] changeTypeBytes = new byte[changeTypeSize];
-            firstSegment.get(headerSize, changeTypeBytes, 0, changeTypeSize);
-
-            // Position pagedOutputView right after the header
-            pagedOutputView.setPosition(headerSize);
-
             // Write statistics directly to pagedOutputView (no temp byte[])
             try {
                 statisticsBytesLength = statisticsCollector.writeStatistics(pagedOutputView);
@@ -215,18 +206,12 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 // been crossed and setPosition() can rewind within the same page.
                 pagedOutputView.setPosition(headerSize);
             }
-
-            // Write saved changeType bytes to pagedOutputView
-            pagedOutputView.write(changeTypeBytes);
-
-            // Write arrow data to pagedOutputView at current position.
-            // Use the no-position overload since pages may have advanced.
-            arrowWriter.serializeToOutputView(pagedOutputView);
-        } else {
-            // V0 path or no stats: layout is [header] [changeTypes] [arrow data]
-            // changeTypes are already in firstSegment at headerSize offset
-            arrowWriter.serializeToOutputView(pagedOutputView, headerSize + changeTypeSize);
         }
+
+        changeTypeWriter.writeTo(pagedOutputView);
+
+        // Use the no-position overload since pages may have advanced.
+        arrowWriter.serializeToOutputView(pagedOutputView);
 
         // Reset the statistics collector for reuse
         if (statisticsCollector != null) {
