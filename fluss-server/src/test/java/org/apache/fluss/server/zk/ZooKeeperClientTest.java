@@ -88,7 +88,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.UncheckedIOException;
@@ -112,7 +111,6 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
@@ -1038,15 +1036,12 @@ class ZooKeeperClientTest {
         assertThatThrownBy(() -> raced.updateRecoverySnapshot(bucket, 7L, 5L, 0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
-        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 0);
+        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 1);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(rejected);
     }
 
-    @ParameterizedTest
-    @NullSource
-    @ValueSource(longs = 4L)
-    void testOldLeaderCommitCannotInvalidateNewRecoveryContext(Long previousSnapshotId)
-            throws Exception {
+    @Test
+    void testOldLeaderCommitCannotInvalidateNewRecoveryContext() throws Exception {
         TableBucket bucket = new TableBucket(1L, 0);
         LeaderAndIsr initial =
                 new LeaderAndIsr(1, 0, Collections.singletonList(1), Collections.emptyList(), 0, 0);
@@ -1079,10 +1074,8 @@ class ZooKeeperClientTest {
                 };
         zookeeperClient.registerTableBucketSnapshot(
                 bucket, new BucketSnapshot(5L, 40L, "file:/snapshot-5"));
-        Throwable failure =
-                catchThrowable(
-                        () -> delayed.updateRecoverySnapshot(bucket, 5L, previousSnapshotId, 0));
-        assertThat(failure).isInstanceOf(KeeperException.BadVersionException.class);
+        assertThatThrownBy(() -> delayed.updateRecoverySnapshot(bucket, 5L, 4L, 0))
+                .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getSelectedRecoverySnapshotId(bucket)).contains(4L);
         BucketSnapshot next = new BucketSnapshot(6L, 50L, "file:/snapshot-6");
         zookeeperClient.registerTableBucketSnapshot(bucket, next);

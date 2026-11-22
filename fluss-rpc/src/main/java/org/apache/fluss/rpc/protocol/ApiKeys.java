@@ -61,7 +61,6 @@ public enum ApiKeys {
     //            primary key, enabling prefix lookup support.
     LOOKUP(1017, 0, 1, PUBLIC),
 
-    // Version 1: Required for BulkLoad recovery notifications carrying a snapshot ID.
     NOTIFY_LEADER_AND_ISR(1018, 0, 0, PRIVATE),
     STOP_REPLICA(1019, 0, 0, PRIVATE),
     ADJUST_ISR(1020, 0, 0, PRIVATE),

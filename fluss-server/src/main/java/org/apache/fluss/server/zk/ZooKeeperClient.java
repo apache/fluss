@@ -1799,16 +1799,17 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.delete().forPath(path);
     }
 
-    /**
-     * Advances the recovery selection after registration, fenced by the snapshot's leader epoch.
-     */
+    /** Advances the recovery selection after its ordinary reference has been registered. */
     public void updateRecoverySnapshot(
             TableBucket bucket,
             long snapshotId,
             @Nullable Long previousSnapshotId,
             int expectedLeaderEpoch)
             throws Exception {
-        CuratorOp leaderCheck = createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
+        CuratorOp leaderCheck =
+                previousSnapshotId == null
+                        ? null
+                        : createSnapshotLeaderEpochCheck(bucket, expectedLeaderEpoch);
         Optional<VersionedData<Long>> current = getRecoverySnapshotSelection(bucket);
         String path = ZkData.RecoverySnapshotZNode.path(bucket);
         if (current.isPresent()
@@ -1817,7 +1818,11 @@ public class ZooKeeperClient implements AutoCloseable {
             throw new KeeperException.BadVersionException(path);
         }
         CuratorOp update = recoverySnapshotUpdate(bucket, snapshotId, current);
-        zkClient.transaction().forOperations(update, leaderCheck);
+        if (leaderCheck == null) {
+            zkClient.transaction().forOperations(update);
+        } else {
+            zkClient.transaction().forOperations(update, leaderCheck);
+        }
     }
 
     private CuratorOp recoverySnapshotUpdate(

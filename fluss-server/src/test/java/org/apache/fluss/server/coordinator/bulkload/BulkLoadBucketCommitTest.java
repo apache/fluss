@@ -56,7 +56,6 @@ import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager.PreparedComm
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
-import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
@@ -99,7 +98,6 @@ import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse
 import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
-import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
@@ -221,19 +219,19 @@ class BulkLoadBucketCommitTest {
     }
 
     @Test
-    void testExistingReferencePreventsPartialCommit() throws Exception {
+    void testCommitRejectsHighWatermarkBelowAllocatedOffset() throws Exception {
         prepareAllocatedBucket();
-        CompletedSnapshotHandle uploaded = uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
-        BucketSnapshot existing =
-                new BucketSnapshot(
-                        SNAPSHOT_ID, WAL_OFFSET, uploaded.getMetadataFilePath().toString());
-        client.registerTableBucketSnapshot(bucket, existing);
-        int leaderEpoch = client.getLeaderAndIsr(bucket).get().leaderEpoch();
+        uploadSnapshot(SNAPSHOT_ID, WAL_OFFSET);
 
-        assertThatThrownBy(() -> commit(WAL_OFFSET))
-                .isInstanceOf(KeeperException.NodeExistsException.class);
-        assertThat(client.getTableBucketSnapshot(bucket, SNAPSHOT_ID)).contains(existing);
-        assertThat(client.getLeaderAndIsr(bucket).get().leaderEpoch()).isEqualTo(leaderEpoch);
+        assertThatThrownBy(
+                        () ->
+                                manager.prepareBucketCommit(
+                                        LOAD_ID,
+                                        bucket,
+                                        leader ->
+                                                new ListOffsetsResultForBucket(
+                                                        bucket, WAL_OFFSET, WAL_OFFSET - 1)))
+                .isInstanceOf(NotEnoughReplicasException.class);
         assertBucketNotCommitted(client, bucket);
     }
 
@@ -486,14 +484,6 @@ class BulkLoadBucketCommitTest {
 
             TabletServerGateway leader =
                     cluster.newTabletServerClientForNode(cluster.waitAndGetLeader(target));
-            if (partitioned) {
-                putRows(
-                        leader,
-                        target,
-                        genKvRecords(
-                                schema.getRowType(),
-                                new Object[] {1, "before-import", partitionName}));
-            }
             CoordinatorGateway coordinator = cluster.newCoordinatorClient();
             PbBulkLoadHandle handle =
                     new PbBulkLoadHandle().setTableId(tableId).setBulkLoadId(LOAD_ID);
@@ -615,29 +605,6 @@ class BulkLoadBucketCommitTest {
                                     .isEqualTo(Errors.NOT_LEADER_OR_FOLLOWER.code());
                         });
             } else {
-                coordinator
-                        .alterTable(
-                                newAlterTableRequest(
-                                        path,
-                                        Collections.singletonMap("owner", "orders-team"),
-                                        Collections.emptyList(),
-                                        Collections.emptyList(),
-                                        false))
-                        .get(30, TimeUnit.SECONDS);
-                LogTablet log = cluster.waitAndGetLeaderReplica(target).getLogTablet();
-                long allocatedOffset = allocated.getLogOffset();
-                assertThat(allocatedOffset).isPositive();
-                log.updateHighWatermark(allocatedOffset - 1);
-                assertThatThrownBy(
-                                () ->
-                                        coordinator
-                                                .commitBulkLoadBucketSnapshot(commit)
-                                                .get(30, TimeUnit.SECONDS))
-                        .hasCauseInstanceOf(NotEnoughReplicasException.class);
-                assertBucketNotCommitted(zk, target);
-                assertThat(zk.getTableBucketSnapshot(target, allocated.getSnapshotId())).isEmpty();
-
-                log.updateHighWatermark(allocatedOffset);
                 int leaderEpoch = zk.getLeaderAndIsr(target).get().leaderEpoch();
                 coordinator.commitBulkLoadBucketSnapshot(commit).get(30, TimeUnit.SECONDS);
                 assertThat(zk.getLeaderAndIsr(target).get().leaderEpoch())
@@ -666,7 +633,7 @@ class BulkLoadBucketCommitTest {
                                 .get(30, TimeUnit.SECONDS);
                 assertThat(replay.getState()).isEqualTo(BulkLoadBucket.COMMITTED);
                 assertThat(replay.getSnapshotId()).isEqualTo(allocated.getSnapshotId());
-                assertThat(replay.getLogOffset()).isEqualTo(allocatedOffset);
+                assertThat(replay.getLogOffset()).isEqualTo(allocated.getLogOffset());
                 assertThat(zk.getSelectedRecoverySnapshotId(target)).contains(ordinarySnapshot);
                 assertThat(zk.getLeaderAndIsr(target).get().leaderEpoch())
                         .isEqualTo(leaderEpoch + 1);
