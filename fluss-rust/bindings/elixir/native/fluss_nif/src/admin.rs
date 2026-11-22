@@ -385,7 +385,7 @@ pub enum NifTableChange {
     AddColumn(String, DataType, Option<String>),
     DropColumn(String),
     RenameColumn(String, String),
-    ModifyColumn(String, Option<DataType>, Option<String>),
+    ModifyColumn(String, DataType, Option<String>),
     SetProperty(String, String),
     ResetProperty(String),
     SetBucketCount(i32),
@@ -422,7 +422,7 @@ fn to_alter_table_changes(changes: Vec<NifTableChange>) -> Result<AlterTableChan
             NifTableChange::ModifyColumn(column_name, data_type, comment) => {
                 result.modify_columns.push(ModifyColumn {
                     column_name,
-                    data_type_json: data_type.as_ref().map(type_json).transpose()?,
+                    data_type_json: Some(type_json(&data_type)?),
                     comment,
                     position: None,
                 })

@@ -1048,7 +1048,7 @@ defmodule Fluss.Integration.AdminTest do
       for change <- [
             {:drop_column, "id"},
             {:rename_column, "id", "key"},
-            {:modify_column, "id", type: :bigint, comment: "The id"}
+            {:modify_column, "id", :bigint, comment: "The id"}
           ] do
         assert {:error, %Fluss.Error{code: :unknown_server_error}} =
                  Fluss.Admin.alter_table(admin, @database, table, [change])
@@ -1063,7 +1063,8 @@ defmodule Fluss.Integration.AdminTest do
             {[{:add_column, "c", {:not_null, :int}}], "an added column must be nullable"},
             {[{:add_column, "c", :int, comment: false}],
              "expected the column comment to be a string"},
-            {[{:modify_column, "c", type: :bogus}], "invalid data type for column `c`"},
+            {[{:modify_column, "c", :bogus}], "invalid data type for column `c`"},
+            {[{:modify_column, "c", comment: "x"}], "invalid data type for column `c`"},
             {[{:set_property, "owner", 1}], "expected the property value to be a string"},
             {[{:set_property, "bucket.num", "3"}], ~s("bucket.num" is not a property)},
             {[{:set_bucket_count, 0}], "expected the bucket count to be an integer"},

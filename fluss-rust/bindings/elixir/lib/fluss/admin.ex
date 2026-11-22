@@ -81,8 +81,8 @@ defmodule Fluss.Admin do
           | {:add_column, String.t(), Fluss.Schema.data_type(), [comment: String.t() | nil]}
           | {:drop_column, String.t()}
           | {:rename_column, String.t(), String.t()}
-          | {:modify_column, String.t(),
-             [type: Fluss.Schema.data_type(), comment: String.t() | nil]}
+          | {:modify_column, String.t(), Fluss.Schema.data_type()}
+          | {:modify_column, String.t(), Fluss.Schema.data_type(), [comment: String.t() | nil]}
           | {:set_property, String.t(), String.t()}
           | {:reset_property, String.t()}
           | {:set_bucket_count, pos_integer()}
@@ -286,8 +286,7 @@ defmodule Fluss.Admin do
     * `{:add_column, name, type}`, `{:add_column, name, type, comment: comment}` - appends a
       column. The type must be nullable (no top-level `{:not_null, _}`).
     * `{:drop_column, name}`, `{:rename_column, from, to}`.
-    * `{:modify_column, name, type: type, comment: comment}` - both options are optional; a
-      missing one is left unchanged, `comment: nil` sends an empty comment.
+    * `{:modify_column, name, type}`, `{:modify_column, name, type, comment: comment}`.
     * `{:set_property, key, value}`, `{:reset_property, key}` - a reset property falls back to
       its default.
     * `{:set_bucket_count, count}` - the bucket count for new partitions of a partitioned
@@ -616,20 +615,16 @@ defmodule Fluss.Admin do
   defp validate_table_change!({:rename_column, from, to}),
     do: {:rename_column, validate_name!(from, "column"), validate_name!(to, "new column")}
 
-  defp validate_table_change!({:modify_column, name, opts}) do
+  defp validate_table_change!({:modify_column, name, type}),
+    do: validate_table_change!({:modify_column, name, type, []})
+
+  defp validate_table_change!({:modify_column, name, type, opts}) do
     name = validate_name!(name, "column")
-    opts = validate_keyword!(opts, [:type, :comment])
+    type = Fluss.Schema.validate_data_type!(type, name)
+    opts = validate_keyword!(opts, comment: nil)
 
-    type =
-      if Keyword.has_key?(opts, :type), do: Fluss.Schema.validate_data_type!(opts[:type], name)
-
-    # The wire has no "remove the comment"; `""` is the closest.
     comment =
-      case Keyword.fetch(opts, :comment) do
-        :error -> nil
-        {:ok, nil} -> ""
-        {:ok, comment} -> validate_string!(comment, "column comment")
-      end
+      unless is_nil(opts[:comment]), do: validate_string!(opts[:comment], "column comment")
 
     {:modify_column, name, type, comment}
   end

@@ -23,7 +23,7 @@ defmodule Fluss.Schema do
   `:float`, `:double`, `:string`, `:bytes`, `:date`, `:time`, `:timestamp`, `:timestamp_ltz`
 
   Parameterized types: `{:decimal, precision, scale}` (precision 1..38, scale 0..precision),
-  `{:char, length}`, `{:binary, length}` (length at least 1)
+  `{:char, length}`, `{:binary, length}` (length 1..2147483647)
 
   Complex types: `{:array, dt}`, `{:map, key_dt, value_dt}`, `{:row, [{name, dt}]}`
   (e.g. `{:row, [{"x", :int}, {"y", :string}]}`).
@@ -162,8 +162,9 @@ defmodule Fluss.Schema do
   defp valid_data_type?({:decimal, precision, scale}) when precision in 1..38,
     do: scale in 0..precision
 
-  defp valid_data_type?({:char, length}) when length in 1..0xFFFFFFFF, do: true
-  defp valid_data_type?({:binary, length}) when length in 1..0xFFFFFFFFFFFFFFFF, do: true
+  # Java caps both lengths at Integer.MAX_VALUE.
+  defp valid_data_type?({:char, length}) when length in 1..0x7FFFFFFF, do: true
+  defp valid_data_type?({:binary, length}) when length in 1..0x7FFFFFFF, do: true
   defp valid_data_type?({:array, item}), do: valid_data_type?(item)
   defp valid_data_type?({:map, key, value}), do: valid_data_type?(key) and valid_data_type?(value)
   defp valid_data_type?({:not_null, type}), do: valid_data_type?(type)

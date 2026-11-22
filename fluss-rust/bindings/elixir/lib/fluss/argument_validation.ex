@@ -21,7 +21,13 @@ defmodule Fluss.ArgumentValidation do
   # specs, changes) live in their own module. Each raises `ArgumentError` or returns the
   # (normalized) value.
 
-  def validate_string!(value, _what) when is_binary(value), do: value
+  def validate_string!(value, what) when is_binary(value) do
+    if String.valid?(value) do
+      value
+    else
+      raise ArgumentError, "expected the #{what} to be valid UTF-8, got: #{inspect(value)}"
+    end
+  end
 
   def validate_string!(value, what) do
     raise ArgumentError, "expected the #{what} to be a string, got: #{inspect(value)}"
