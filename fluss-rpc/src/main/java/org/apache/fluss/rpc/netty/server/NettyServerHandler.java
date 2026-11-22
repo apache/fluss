@@ -101,7 +101,11 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         CompletableFuture<ApiMessage> future = new CompletableFuture<>();
-        ByteBuf buffer = (ByteBuf) msg;
+        FairRequestFrameDecoder.BufferedFrames delayed =
+                msg instanceof FairRequestFrameDecoder.BufferedFrames
+                        ? (FairRequestFrameDecoder.BufferedFrames) msg
+                        : null;
+        ByteBuf buffer = delayed == null ? (ByteBuf) msg : delayed.content();
         int frameLength = buffer.readInt();
         short apiKey = buffer.readShort();
         short apiVersion = buffer.readShort();
@@ -139,7 +143,8 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                             isInternal,
                             authenticator.isCompleted() ? authenticator.createPrincipal() : null,
                             ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
-                            future);
+                            future,
+                            delayed == null ? System.currentTimeMillis() : delayed.receivedAtMs);
 
             // Reject requests from inactive connections before they enter the request queue. Lazy
             // requests retain the underlying ByteBuf and rely on the request processor to release

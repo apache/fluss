@@ -77,6 +77,34 @@ public final class FlussRequest implements RpcRequest {
             FlussPrincipal principal,
             InetAddress address,
             CompletableFuture<ApiMessage> responseFuture) {
+        this(
+                apiKey,
+                apiVersion,
+                requestId,
+                apiMethod,
+                message,
+                buffer,
+                listenerName,
+                isInternal,
+                principal,
+                address,
+                responseFuture,
+                System.currentTimeMillis());
+    }
+
+    FlussRequest(
+            short apiKey,
+            short apiVersion,
+            int requestId,
+            ApiMethod apiMethod,
+            ApiMessage message,
+            ByteBuf buffer,
+            String listenerName,
+            boolean isInternal,
+            FlussPrincipal principal,
+            InetAddress address,
+            CompletableFuture<ApiMessage> responseFuture,
+            long startTimeMs) {
         this.apiKey = apiKey;
         this.apiVersion = apiVersion;
         this.requestId = requestId;
@@ -88,7 +116,7 @@ public final class FlussRequest implements RpcRequest {
         this.principal = principal;
         this.address = address;
         this.listenerName = listenerName;
-        this.startTimeMs = System.currentTimeMillis();
+        this.startTimeMs = startTimeMs;
     }
 
     @Override

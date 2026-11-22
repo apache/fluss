@@ -31,6 +31,7 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 import org.apache.fluss.utils.MathUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -118,18 +119,18 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
                         requestsMetrics,
                         serverAuthenticator);
         if (requestChannel.schedulesConnectionHeads()) {
-            ch.pipeline()
-                    .addLast(
-                            "frameDecoder",
-                            new FairRequestFrameDecoder(
-                                    maxRequestSize,
-                                    requestChannel,
-                                    key -> handler.handlesAuthenticationInline((short) key)));
+            addIdleStateHandler(ch);
+            FairRequestFrameDecoder.addAroundIdleHandler(
+                    ch.pipeline(),
+                    maxRequestSize,
+                    requestChannel,
+                    key -> handler.handlesAuthenticationInline((short) key),
+                    SystemClock.getInstance());
         } else {
             // Keep the frame length field for the request handler.
             addFrameDecoder(ch, maxRequestSize, 0, false);
+            addIdleStateHandler(ch);
         }
-        addIdleStateHandler(ch);
         ch.pipeline().addLast("handler", handler);
     }
 

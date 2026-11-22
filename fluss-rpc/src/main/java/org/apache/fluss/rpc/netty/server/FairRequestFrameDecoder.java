@@ -18,37 +18,49 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.DefaultByteBufHolder;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.ByteToMessageDecoder;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.CorruptedFrameException;
-import org.apache.fluss.shaded.netty4.io.netty.handler.codec.TooLongFrameException;
-import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPipeline;
+import org.apache.fluss.utils.clock.Clock;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayDeque;
 import java.util.function.IntPredicate;
-
-import static org.apache.fluss.rpc.protocol.MessageCodec.REQUEST_HEADER_LENGTH;
 
 /**
  * Gates complete RPC frames before parsing while keeping read state on the connection EventLoop.
  */
 final class FairRequestFrameDecoder extends ChannelInboundHandlerAdapter {
-    private final int maxFrameLength;
     private final RequestChannel requestChannel;
     private final IntPredicate handlesInline;
+    private final Clock clock;
     private final Runnable resume = this::resumeRead;
-
+    private ArrayDeque<BufferedFrames> pending;
     private ChannelHandlerContext ctx;
-    private ByteBuf input;
-    private boolean waiting;
     private boolean closed;
+    @Nullable private RuntimeException framingFailure;
 
-    FairRequestFrameDecoder(
-            int maxFrameLength, RequestChannel requestChannel, IntPredicate handlesInline) {
-        this.maxFrameLength = maxFrameLength;
+    private FairRequestFrameDecoder(
+            RequestChannel requestChannel, IntPredicate handlesInline, Clock clock) {
         this.requestChannel = requestChannel;
         this.handlesInline = handlesInline;
+        this.clock = clock;
+    }
+
+    static void addAroundIdleHandler(
+            ChannelPipeline pipeline,
+            int maxFrameLength,
+            RequestChannel requestChannel,
+            IntPredicate handlesInline,
+            Clock clock) {
+        FairRequestFrameDecoder admission =
+                new FairRequestFrameDecoder(requestChannel, handlesInline, clock);
+        // Only complete network reads reach the idle detector. Admission wakeups run downstream.
+        pipeline.addBefore(
+                "idle", "frameDecoder", new RequestFrameBatchDecoder(maxFrameLength, admission));
+        pipeline.addAfter("idle", "frameAdmission", admission);
     }
 
     @Override
@@ -58,87 +70,96 @@ final class FairRequestFrameDecoder extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object message) {
-        if (closed) {
-            ReferenceCountUtil.release(message);
-            return;
-        }
-        ByteBuf bytes = (ByteBuf) message;
-        input =
-                ByteToMessageDecoder.MERGE_CUMULATOR.cumulate(
-                        ctx.alloc(), input == null ? Unpooled.EMPTY_BUFFER : input, bytes);
-        if (!waiting) {
-            drain(false);
+        ByteBuf batch = (ByteBuf) message;
+        try {
+            if (closed) {
+                return;
+            }
+            long receivedAtMs = clock.milliseconds();
+            if (pending == null || pending.isEmpty()) {
+                if (drain(batch, null)) {
+                    return;
+                }
+                ctx.channel().config().setAutoRead(false);
+                if (pending == null) {
+                    pending = new ArrayDeque<>();
+                }
+            }
+            pending.addLast(new BufferedFrames(batch.retain(), receivedAtMs));
+        } finally {
+            batch.release();
         }
     }
 
-    private void drain(boolean useWakeGrant) {
+    private boolean drain(ByteBuf batch, @Nullable BufferedFrames buffered) {
+        boolean useWakeGrant = buffered != null;
+        while (!closed && batch.isReadable()) {
+            int start = batch.readerIndex();
+            int frameLength = Integer.BYTES + batch.getInt(start);
+            boolean inline = handlesInline.test(batch.getShort(start + Integer.BYTES));
+            boolean granted = useWakeGrant && requestChannel.hasReadGrant(ctx.channel());
+            useWakeGrant = false;
+            if (!inline && !granted && !requestChannel.acquireRead(ctx, resume, frameLength)) {
+                return false;
+            }
+            boolean last = batch.readableBytes() == frameLength;
+            ByteBuf frame = last ? batch.retain() : batch.readRetainedSlice(frameLength);
+            try {
+                if (buffered == null) {
+                    ctx.fireChannelRead(frame);
+                } else {
+                    ctx.fireChannelRead(
+                            last ? buffered : new BufferedFrames(frame, buffered.receivedAtMs));
+                }
+            } finally {
+                if (!inline || granted) {
+                    requestChannel.releaseRead(ctx.channel(), false);
+                }
+            }
+            if (last) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    private void resumeRead() {
+        if (closed || pending == null || pending.isEmpty() || !ctx.channel().isActive()) {
+            return;
+        }
         try {
-            while (!closed && input != null && input.readableBytes() >= Integer.BYTES) {
-                int start = input.readerIndex();
-                long length = input.getUnsignedInt(start);
-                long frameLength = Integer.BYTES + length;
-                if (frameLength > maxFrameLength) {
-                    throw new TooLongFrameException(
-                            "RPC frame length " + frameLength + " exceeds " + maxFrameLength);
-                }
-                if (length < REQUEST_HEADER_LENGTH) {
-                    throw new CorruptedFrameException(
-                            "RPC frame is shorter than its header: " + length);
-                }
-                if (input.readableBytes() < frameLength) {
+            while (!pending.isEmpty()) {
+                BufferedFrames batch = pending.peekFirst();
+                if (!drain(batch.content(), batch)) {
                     break;
                 }
-                boolean inline = handlesInline.test(input.getShort(start + Integer.BYTES));
-                boolean granted = useWakeGrant && requestChannel.hasReadGrant(ctx.channel());
-                useWakeGrant = false;
-                if (!inline
-                        && !granted
-                        && !requestChannel.acquireRead(ctx, resume, (int) frameLength)) {
-                    pauseRead();
+                if (closed) {
                     return;
                 }
-
-                ByteBuf frame = input.readRetainedSlice((int) frameLength);
-                try {
-                    ctx.fireChannelRead(frame);
-                } finally {
-                    if (!inline || granted) {
-                        // Parsing and admission are synchronous. An unconsumed grant is returned.
-                        requestChannel.releaseRead(ctx.channel(), false);
-                    }
-                }
+                pending.removeFirst().release();
             }
         } catch (RuntimeException e) {
             closeInput();
             ctx.fireExceptionCaught(e);
-        } finally {
-            if (input != null) {
-                if (!input.isReadable()) {
-                    input.release();
-                    input = null;
-                } else if (input.refCnt() == 1) {
-                    // Reclaim consumed bytes without moving outstanding lazy request slices.
-                    input.discardSomeReadBytes();
-                }
+            return;
+        }
+        ctx.fireChannelReadComplete();
+        if (pending.isEmpty() && !closed && ctx.channel().isActive()) {
+            if (framingFailure != null) {
+                rejectAfterPending(framingFailure);
+            } else {
+                ctx.channel().config().setAutoRead(true);
             }
         }
     }
 
-    private void pauseRead() {
-        waiting = true;
-        ctx.channel().config().setAutoRead(false);
-    }
-
-    private void resumeRead() {
-        if (!waiting || closed || !ctx.channel().isActive()) {
-            return;
-        }
-        waiting = false;
-        // A socket read cannot wake a frame that is already entirely buffered here.
-        drain(true);
-        ctx.fireChannelReadComplete();
-        if (!waiting && !closed && ctx.channel().isActive()) {
-            ctx.channel().config().setAutoRead(true);
+    void rejectAfterPending(RuntimeException failure) {
+        // A malformed suffix must not discard valid frames ahead of it waiting for admission.
+        if (pending != null && !pending.isEmpty()) {
+            framingFailure = failure;
+        } else {
+            closeInput();
+            ctx.fireExceptionCaught(failure);
         }
     }
 
@@ -156,9 +177,22 @@ final class FairRequestFrameDecoder extends ChannelInboundHandlerAdapter {
     private void closeInput() {
         if (!closed) {
             closed = true;
+            framingFailure = null;
             requestChannel.releaseRead(ctx.channel(), true);
-            ReferenceCountUtil.release(input);
-            input = null;
+            if (pending != null) {
+                while (!pending.isEmpty()) {
+                    pending.removeFirst().release();
+                }
+            }
+        }
+    }
+
+    static final class BufferedFrames extends DefaultByteBufHolder {
+        final long receivedAtMs;
+
+        BufferedFrames(ByteBuf frame, long receivedAtMs) {
+            super(frame);
+            this.receivedAtMs = receivedAtMs;
         }
     }
 }

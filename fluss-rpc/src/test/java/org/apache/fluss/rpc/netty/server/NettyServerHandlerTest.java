@@ -74,8 +74,13 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateHandler;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -216,6 +221,104 @@ final class NettyServerHandlerTest {
             assertThat(frames.refCnt()).isZero();
         } finally {
             connection.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testOnlyCompleteNetworkFramesReachIdleHandlerDuringAdmissionWait() {
+        RequestChannel channel = scheduledRequestChannel(1);
+        TestEmbeddedChannel busy = fairConnection(channel);
+        AtomicInteger reads = new AtomicInteger();
+        IdleStateHandler idle =
+                new IdleStateHandler(0, 0, 60) {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg)
+                            throws Exception {
+                        reads.incrementAndGet();
+                        super.channelRead(ctx, msg);
+                    }
+                };
+        TestEmbeddedChannel waiting = fairConnection(channel, idle, SystemClock.getInstance());
+        ByteBuf frame = versionsFrame(2);
+        try {
+            busy.writeInbound(versionsFrame(1));
+            waiting.writeInbound(frame.readRetainedSlice(frame.readableBytes() - 1));
+            assertThat(reads).hasValue(0);
+            waiting.writeInbound(frame.readRetainedSlice(1));
+            assertThat(waiting.config().isAutoRead()).isFalse();
+            assertThat(reads).hasValue(1);
+
+            claimAndRelease(channel, 1);
+            channel.requestFinished();
+            waiting.runPendingTasks();
+            claimAndRelease(channel, 2);
+            channel.requestFinished();
+            assertThat(reads).hasValue(1);
+        } finally {
+            frame.release();
+            busy.finishAndReleaseAll();
+            waiting.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testBufferedRequestsRetainTheirCompleteFrameArrivalTime() {
+        RequestChannel channel = scheduledRequestChannel(1);
+        TestEmbeddedChannel busy = fairConnection(channel);
+        ManualClock clock = new ManualClock(1000);
+        TestEmbeddedChannel waiting =
+                fairConnection(channel, new IdleStateHandler(0, 0, 60), clock);
+        ByteBuf last = versionsFrame(4);
+        try {
+            busy.writeInbound(versionsFrame(1));
+            waiting.writeInbound(
+                    Unpooled.wrappedBuffer(
+                            versionsFrame(2),
+                            versionsFrame(3),
+                            last.readRetainedSlice(last.readableBytes() - 1)));
+            clock.advanceTime(200, TimeUnit.MILLISECONDS);
+            // More decrypted bytes can already be in the pipeline when autoRead is disabled.
+            waiting.writeInbound(last.readRetainedSlice(1));
+            clock.advanceTime(300, TimeUnit.MILLISECONDS);
+            claimAndRelease(channel, 1);
+            channel.requestFinished();
+            for (int id = 2; id <= 4; id++) {
+                waiting.runPendingTasks();
+                FlussRequest request = (FlussRequest) channel.nextRequest();
+                assertThat(request.getRequestId()).isEqualTo(id);
+                assertThat(request.getStartTimeMs()).isEqualTo(id == 4 ? 1200L : 1000L);
+                request.releaseBuffer();
+                channel.requestFinished();
+            }
+        } finally {
+            last.release();
+            busy.finishAndReleaseAll();
+            waiting.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testMalformedSuffixPreservesPrecedingRequestWaitingForAdmission() {
+        RequestChannel channel = scheduledRequestChannel(1);
+        TestEmbeddedChannel busy = fairConnection(channel);
+        TestEmbeddedChannel waiting = fairConnection(channel);
+        ByteBuf batch = Unpooled.wrappedBuffer(versionsFrame(2), Unpooled.buffer(4).writeInt(1024));
+        try {
+            busy.writeInbound(versionsFrame(1));
+            waiting.writeInbound(batch);
+            assertThat(waiting.isActive()).isTrue();
+
+            claimAndRelease(channel, 1);
+            channel.requestFinished();
+            waiting.runPendingTasks();
+            assertThat(waiting.isActive()).isFalse();
+            assertThat(channel.requestsCount()).isOne();
+            claimAndRelease(channel, 2);
+            channel.requestFinished();
+            assertThat(batch.refCnt()).isZero();
+        } finally {
+            busy.finishAndReleaseAll();
+            waiting.finishAndReleaseAll();
         }
     }
 
@@ -411,11 +514,26 @@ final class NettyServerHandlerTest {
     }
 
     private static TestEmbeddedChannel fairConnection(RequestChannel channel) {
+        return fairConnection(channel, new IdleStateHandler(0, 0, 60), SystemClock.getInstance());
+    }
+
+    private static TestEmbeddedChannel fairConnection(
+            RequestChannel channel, IdleStateHandler idle, Clock clock) {
         NettyServerHandler handler = newServerHandler(channel);
         return new TestEmbeddedChannel(
-                new FairRequestFrameDecoder(
-                        1024, channel, key -> handler.handlesAuthenticationInline((short) key)),
-                handler);
+                new ChannelInitializer<Channel>() {
+                    @Override
+                    protected void initChannel(Channel connection) {
+                        connection.pipeline().addLast("idle", idle);
+                        FairRequestFrameDecoder.addAroundIdleHandler(
+                                connection.pipeline(),
+                                1024,
+                                channel,
+                                key -> handler.handlesAuthenticationInline((short) key),
+                                clock);
+                        connection.pipeline().addLast(handler);
+                    }
+                });
     }
 
     private static ByteBuf versionsFrame(int requestId) {
