@@ -25,6 +25,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.Password;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.security.auth.ssl.MutualTlsAuthenticationPlugin;
+import org.apache.fluss.security.auth.ssl.SslPrincipalMapper;
 
 import javax.annotation.Nullable;
 import javax.net.ssl.SSLContext;
@@ -78,7 +80,8 @@ public final class SslConfig {
      * Matched case-insensitively, as {@code AuthenticationFactory} matches authentication protocol
      * names.
      */
-    private static final String MUTUAL_TLS_AUTH_PROTOCOL = "mTLS";
+    private static final String MUTUAL_TLS_AUTH_PROTOCOL =
+            MutualTlsAuthenticationPlugin.AUTH_PROTOCOL;
 
     /** The endpoint identification algorithms the JDK implements for TLS. */
     private static final List<String> ENDPOINT_IDENTIFICATION_ALGORITHMS =
@@ -172,6 +175,19 @@ public final class SslConfig {
                     MUTUAL_TLS_AUTH_PROTOCOL,
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
                     MUTUAL_TLS_AUTH_PROTOCOL);
+        }
+
+        // Validate the rules at startup. Otherwise the server would start with invalid rules and
+        // then reject every mTLS connection.
+        try {
+            SslPrincipalMapper.fromRules(
+                    conf.get(ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid '%s': %s",
+                            ConfigOptions.SERVER_SSL_PRINCIPAL_MAPPING_RULES.key(), e.getMessage()),
+                    e);
         }
 
         if (enabledListeners.isEmpty()) {

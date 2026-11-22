@@ -21,6 +21,9 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
+import javax.annotation.Nullable;
+import javax.net.ssl.SSLSession;
+
 import java.io.Closeable;
 import java.io.IOException;
 
@@ -106,5 +109,11 @@ public interface ServerAuthenticator extends Closeable {
         String listenerName();
 
         String protocol();
+
+        /** The TLS session of the connection, or null if the connection is not encrypted. */
+        @Nullable
+        default SSLSession sslSession() {
+            return null;
+        }
     }
 }

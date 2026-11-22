@@ -24,7 +24,8 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 /** Authentication Plugin for PLAINTEXT which not need to do authentication. */
 public class PlainTextAuthenticationPlugin
         implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
-    private static final String AUTH_PROTOCOL = "PLAINTEXT";
+    /** The name of the protocol in {@code security.protocol.map} and the client configuration. */
+    public static final String AUTH_PROTOCOL = "PLAINTEXT";
 
     @Override
     public String authProtocol() {

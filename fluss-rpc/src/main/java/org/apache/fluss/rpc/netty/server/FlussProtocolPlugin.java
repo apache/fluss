@@ -83,8 +83,11 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
             checkTlsListenersExist(sslConfig.enabledListeners());
         }
         checkInternalListenerMatchesClientTls();
+        checkInternalListenerMatchesClientProtocol();
         this.sslContext =
                 sslConfig == null ? null : SslContextFactory.createServerSslContext(sslConfig);
+        InternalListenerConfigValidator.checkOwnCertificate(
+                this.conf, sslConfig, sslContext, authenticatorSuppliers);
     }
 
     @Override
@@ -162,6 +165,34 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
                     ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
                     ConfigOptions.CLIENT_SSL_ENABLED.key(),
                     clientTls);
+        }
+    }
+
+    /**
+     * Servers connect to each other over the internal listener as clients, so {@code
+     * client.security.protocol} must name the authentication protocol of the internal listener. A
+     * mismatch would fail every request between servers at runtime, so it is rejected at startup.
+     */
+    private void checkInternalListenerMatchesClientProtocol() {
+        String internalListener = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
+        // A listener without an entry authenticates with PLAINTEXT, see createChannelHandler.
+        String listenerProtocol =
+                conf.get(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP)
+                        .getOrDefault(
+                                internalListener, PlainTextAuthenticationPlugin.AUTH_PROTOCOL);
+        String clientProtocol = conf.get(ConfigOptions.CLIENT_SECURITY_PROTOCOL);
+        if (!listenerProtocol.equalsIgnoreCase(clientProtocol)) {
+            throw new IllegalConfigurationException(
+                    "The internal listener '%s' (see '%s') uses the authentication protocol '%s' "
+                            + "(see '%s'), but '%s' is '%s'. Servers connect to each other over "
+                            + "the internal listener with the client options of the server "
+                            + "configuration, so both must name the same protocol.",
+                    internalListener,
+                    ConfigOptions.INTERNAL_LISTENER_NAME.key(),
+                    listenerProtocol,
+                    ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(),
+                    ConfigOptions.CLIENT_SECURITY_PROTOCOL.key(),
+                    clientProtocol);
         }
     }
 

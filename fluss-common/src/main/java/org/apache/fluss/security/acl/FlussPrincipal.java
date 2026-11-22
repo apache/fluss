@@ -62,10 +62,13 @@ public class FlussPrincipal implements Principal {
     /**
      * Parses principals from a semicolon separated list of {@code <type>:<name>} pairs, e.g. {@code
      * User:root;Group:admins}.
+     *
+     * <p>Only the first colon of a pair separates the type from the name, so a name may contain
+     * colons, e.g. {@code User:spiffe://example.org/fluss}.
      */
     public static Set<FlussPrincipal> parsePrincipals(String principals) {
         return Arrays.stream(principals.split(";"))
-                .map(principal -> principal.trim().split(":"))
+                .map(principal -> principal.trim().split(":", 2))
                 .map(principal -> new FlussPrincipal(principal[1], principal[0]))
                 .collect(Collectors.toSet());
     }

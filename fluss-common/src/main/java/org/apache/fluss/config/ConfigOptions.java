@@ -678,6 +678,8 @@ public class ConfigOptions {
                             "A map defining the authentication protocol for each listener. "
                                     + "The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. "
                                     + "Each listener can be associated with a specific authentication protocol. "
+                                    + "The built-in protocols are `PLAINTEXT`, `SASL` and `mTLS`. "
+                                    + "An `mTLS` listener must be listed in `security.ssl.enabled.listeners` and authenticates clients by their TLS certificate. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
     public static final ConfigOption<Map<String, String>> SERVER_SASL_CREDENTIALS =
@@ -1698,7 +1700,10 @@ public class ConfigOptions {
                     .stringType()
                     .defaultValue("PLAINTEXT")
                     .withDescription(
-                            "The authentication protocol used to authenticate the client.");
+                            "The authentication protocol used to authenticate the client. "
+                                    + "The built-in protocols are `PLAINTEXT`, `SASL` and `mTLS`. "
+                                    + "`mTLS` authenticates the client with the certificate in `client.security.ssl.keystore.path` "
+                                    + "and requires `client.security.ssl.enabled`.");
 
     public static final ConfigOption<Boolean> CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY =
             key("client.security.enable-plugin-discovery")

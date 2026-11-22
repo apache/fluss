@@ -11,6 +11,7 @@ Fluss provides a pluggable authentication mechanism, allowing users to configure
 Authentication in Fluss is handled through listeners, where each connection triggers a specific authentication protocol based on the configuration. Supported mechanisms include:
 * **PLAINTEXT**: Default, no authentication.
 * **SASL**: This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password.
+* **mTLS**: Mutual TLS. The client authenticates with the X.509 certificate it presents during the TLS handshake.
 * **Custom plugins**: Extendable via interfaces for enterprise or third-party integrations.
 
 You can configure different authentication protocols per listener using the `security.protocol.map` property in `conf/server.yaml`.
@@ -91,7 +92,7 @@ Clients must specify the appropriate security protocol and authentication mechan
 
 | Option                           | Type   | Default Value | Description                                                                                                                                                                                                                                                                               |
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
+| client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, `PLAINTEXT`, `SASL` and `mTLS` are supported, the configuration value is case insensitive.                                                                                                                              |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
 | client.security.sasl.authorization-id | String | (none) | The user to act as with SASL/PLAIN. Unset or empty uses the authenticated account; another user requires a server-side proxy grant. |
 | client.security.sasl.username    | String | (none)        | The username to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
@@ -141,6 +142,95 @@ Fluss verifies the service account's password and the grant during the handshake
 Separate target usernames with semicolons and service accounts with commas. The service account must match the authenticated username exactly. Target names and `super.users` entries follow the ACL principal case setting (`security.acl.principal.ignore-case`): exact by default, case-insensitive when enabled. An explicit wildcard grant (`gateway:*`) permits any target other than a super user. Grant it only to a service that authenticates its callers and derives the authorization ID from the authenticated identity.
 
 Grants apply only to the configured listener and are validated at server startup. Dynamic updates to `security.sasl.plain.credentials` affect authentication on new connections. Use TLS to protect the service account password in transit.
+
+## mTLS
+With mutual TLS (mTLS), the client presents an X.509 certificate during the TLS handshake. The server validates the certificate against its truststore and derives the principal from the distinguished name (DN) of the certificate subject. The client sends no password.
+
+A listener uses mTLS when its `security.protocol.map` entry is `mTLS`. Such a listener must also be listed in `security.ssl.enabled.listeners`. The server then requires a client certificate on that listener and rejects a client without one.
+
+### mTLS Server-Side Configuration
+| Option                                | Type   | Default Value | Description                                                                                                                                   |
+|---------------------------------------|--------|---------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| security.protocol.map                 | Map    | (none)        | Set the listener to `mTLS`, e.g. `CLIENT:mTLS`.                                                                                               |
+| security.ssl.enabled.listeners        | List   | (none)        | Listener names with TLS enabled. Every `mTLS` listener must be in this list.                                                                  |
+| security.ssl.keystore.path            | String | (none)        | Keystore with the private key and certificate of the server.                                                                                  |
+| security.ssl.keystore.password        | String | (none)        | The password of the server keystore.                                                                                                          |
+| security.ssl.truststore.path          | String | (none)        | Truststore with the certificates the server trusts. Required for `mTLS` listeners. The server accepts only client certificates it can verify with this truststore. |
+| security.ssl.truststore.password      | String | (none)        | The password of the server truststore.                                                                                                        |
+| security.ssl.principal.mapping.rules  | String | DEFAULT       | Rules that map the DN of a client certificate to a principal name. See [Principal Mapping Rules](#principal-mapping-rules).                    |
+
+### Principal Mapping Rules
+The server reads the DN in the RFC 2253 form, for example `CN=alice,OU=Engineering,O=Example`. It applies the rules in `security.ssl.principal.mapping.rules` in order and uses the first rule that matches. The principal type is always `User`.
+
+The value is a comma-separated list of rules. Each rule is one of:
+* `DEFAULT`: uses the full DN as the principal name.
+* `RULE:pattern/replacement/`: if the Java regular expression `pattern` matches the full DN, the principal name is `replacement`, where `$1`, `$2`, ... refer to the groups of the pattern. Append `L` or `U` to convert the name to lower or upper case, e.g. `RULE:pattern/replacement/L`.
+
+The following rules use the common name (CN) as the principal name, and the full DN for a certificate whose subject does not start with a CN:
+
+```yaml title="conf/server.yaml"
+security.ssl.principal.mapping.rules: RULE:^CN=([^,]+).*$/$1/,DEFAULT
+```
+
+With these rules, the certificate `CN=alice,OU=Engineering,O=Example` authenticates as `User:alice`. If no rule matches a DN, the server rejects the client. The server checks the syntax of the rules at startup and fails to start if a rule is invalid.
+
+To make an mTLS principal a super user, add it to `super.users` as `User:<name>`. The name is what the mapping rules produce. Separate several entries with semicolons:
+
+* With the rules above, the name is the CN: `super.users: User:admin;User:ops`
+* With the `DEFAULT` rule, the name is the full DN: `super.users: User:CN=admin,O=Example;User:CN=ops,O=Example`
+
+A name may contain commas and colons, e.g. `User:spiffe://example.org/fluss`. A name cannot contain a semicolon, because a semicolon ends the entry. If a certificate would get such a name, use a mapping rule that produces a different one.
+
+### mTLS Client-Side Configuration
+| Option                                  | Type    | Default Value | Description                                                                                         |
+|-----------------------------------------|---------|---------------|-----------------------------------------------------------------------------------------------------|
+| client.security.protocol                | String  | PLAINTEXT     | Set to `mTLS`.                                                                                      |
+| client.security.ssl.enabled             | Boolean | false         | Must be `true` for `mTLS`.                                                                          |
+| client.security.ssl.keystore.path       | String  | (none)        | Keystore with the private key and certificate of the client. Required for `mTLS`.                   |
+| client.security.ssl.keystore.password   | String  | (none)        | The password of the client keystore.                                                                |
+| client.security.ssl.truststore.path     | String  | (none)        | Truststore with the certificates the client trusts. If unset, the JVM default truststore is used. |
+| client.security.ssl.truststore.password | String  | (none)        | The password of the client truststore.                                                              |
+
+The client certificate must allow TLS client authentication. If it has an extended key usage (EKU) extension, the extension must include `clientAuth`. Otherwise the server rejects the TLS handshake, and the client fails without a retry.
+
+Here is an example where the `CLIENT` listener requires mTLS and the internal listener uses PLAINTEXT:
+
+```yaml title="conf/server.yaml"
+bind.listeners: INTERNAL://localhost:9092, CLIENT://localhost:9093
+security.protocol.map: CLIENT:mTLS, INTERNAL:PLAINTEXT
+internal.listener.name: INTERNAL
+security.ssl.enabled.listeners: CLIENT
+security.ssl.keystore.path: /etc/fluss/server.keystore.jks
+security.ssl.keystore.password: <keystore-password>
+security.ssl.truststore.path: /etc/fluss/server.truststore.jks
+security.ssl.truststore.password: <truststore-password>
+security.ssl.principal.mapping.rules: RULE:^CN=([^,]+).*$/$1/,DEFAULT
+authorizer.enabled: true
+super.users: User:admin
+```
+
+```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+  'type' = 'fluss',
+  'bootstrap.servers' = 'fluss-server-1:9093',
+  'client.security.protocol' = 'mTLS',
+  'client.security.ssl.enabled' = 'true',
+  'client.security.ssl.keystore.path' = '/etc/fluss/client.keystore.jks',
+  'client.security.ssl.keystore.password' = '<keystore-password>',
+  'client.security.ssl.truststore.path' = '/etc/fluss/client.truststore.jks',
+  'client.security.ssl.truststore.password' = '<truststore-password>'
+);
+```
+
+### mTLS on the Internal Listener
+Servers connect to each other over the internal listener with the `client.security.*` options of their own `conf/server.yaml`. If the internal listener uses mTLS, each server needs `client.security.protocol: mTLS`, `client.security.ssl.enabled: true`, and a client keystore in `client.security.ssl.keystore.*`. The server truststore must accept the certificate in that keystore. A server fails to start if `client.security.protocol` differs from the authentication protocol of its internal listener.
+
+The server skips ACL checks for every request on the internal listener. An mTLS internal listener therefore accepts only principals listed in `super.users`. Add the principal that the mapping rules derive from the server certificate, e.g. `super.users: User:admin;User:fluss-server`. The server rejects every other certificate on the internal listener, including one that an mTLS client listener accepts. If clients and servers share one listener, only super users can connect to it. Configure a separate client listener for regular users.
+
+A certificate that a server uses both as server certificate and as client certificate needs `serverAuth` and `clientAuth` in its EKU extension, if it has one.
+
+### Certificate Validity
+The server validates the client certificate during the TLS handshake only. A connection stays open after its client certificate expires. The server checks the certificate again only when the client opens a new connection.
 
 ## Extending Authentication Methods (For Developers)
 
