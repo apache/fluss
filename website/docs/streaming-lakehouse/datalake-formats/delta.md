@@ -71,7 +71,7 @@ Set file system options such as credentials here, for example `datalake.delta.fs
 
 ### Prepare Hadoop Dependencies
 
-Delta Kernel reads and writes files through Hadoop file systems, but the Delta Lake connector doesn't bundle Hadoop.
+Delta Kernel reads and writes files through Hadoop file systems, but the Delta Lake connector doesn't bundle the Hadoop client API (`hadoop-client-api`).
 Provide Hadoop 3.x in every process that loads the connector. The Fluss servers and the Flink clusters get it in different ways.
 
 If the warehouse is on an object store, both also need the Hadoop file system for its scheme. For `s3a://`, see [Amazon S3 and S3-Compatible Storage](#amazon-s3-and-s3-compatible-storage).
@@ -186,7 +186,7 @@ When a Fluss log table is created or altered with the option `'table.datalake.en
 - The schema of the Delta table matches the Fluss table schema and contains only the user-defined columns. Fluss doesn't add system columns.
 - The Fluss partition keys become the partition columns of the Delta table.
 - The table has the `domainMetadata` table feature, which Fluss uses to record the tiering progress (see [Commit Metadata](#commit-metadata)).
-- If a Delta table already exists at the path, for example from an earlier attempt to create the same Fluss table, Fluss reuses it when its schema and partition columns match the Fluss table and it has the `domainMetadata` feature. Otherwise, creating the table fails.
+- If a Delta table already exists at the path, for example from an earlier attempt to create the same Fluss table, Fluss reuses it when its schema and partition columns match the Fluss table and it has the `domainMetadata` feature. Otherwise, creating the table fails. When a new Fluss table is created, the existing Delta table must also be empty: no data files and no `fluss.tiering` domain metadata. Dropping a Fluss table doesn't drop its Delta table, so drop or move the Delta table, or use another table name, before you create a Fluss table with the same name again.
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -343,11 +343,11 @@ delta-rs (as of 1.6.6) can read Delta tiered tables but can't write them: append
 
 A Delta tiered table is a standard Delta table, so other engines can write to it. Fluss can only keep the table in line with the Fluss log if they follow these rules:
 
-- **Allowed**: `OPTIMIZE` and `ZORDER`, `VACUUM`, checkpoints and log cleanup, and changes of table properties outside `fluss.*`.
-- **Not allowed**: data changes (`INSERT`, `DELETE`, `UPDATE`, `MERGE`, overwrite), schema or partition changes, and changes to the `fluss.tiering` domain metadata.
+- **Allowed**: `OPTIMIZE` and `ZORDER`, `VACUUM`, checkpoints and log cleanup, and changes of other table properties outside `fluss.*`.
+- **Not allowed**: data changes (`INSERT`, `DELETE`, `UPDATE`, `MERGE`, overwrite), schema or partition changes, changes to the `fluss.tiering` domain metadata, CHECK constraints (`delta.constraints.*`), and column mapping (`delta.columnMapping.mode`). Delta Kernel can't write to a table with CHECK constraints or column mapping, so tiering the table fails.
 
 Before each commit, the tiering service checks that the schema and partition columns of the Delta table still match the Fluss table, and fails the commit with a message naming the difference.
-The tiering job then fails over and retries the table until the Delta table matches the Fluss table again.
+The tiering service then tries the table again in later rounds, until the Delta table matches the Fluss table again.
 Data written by other engines can't be detected reliably, so don't write data to the table outside Fluss.
 
 ### Retention
