@@ -18,14 +18,26 @@
 package org.apache.fluss.rpc.gateway;
 
 import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.CommitConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
+import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetConsumerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
+import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -184,6 +196,52 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
+
+    /** Find the tablet server that owns a consumer group. */
+    @RPC(api = ApiKeys.FIND_CONSUMER_GROUP_OWNER)
+    CompletableFuture<FindConsumerGroupOwnerResponse> findConsumerGroupOwner(
+            FindConsumerGroupOwnerRequest request);
+
+    /** Commit offsets for a consumer group. */
+    @RPC(api = ApiKeys.COMMIT_CONSUMER_OFFSETS)
+    CompletableFuture<CommitConsumerOffsetsResponse> commitConsumerOffsets(
+            CommitConsumerOffsetsRequest request);
+
+    /** Get committed offsets of a consumer group. */
+    @RPC(api = ApiKeys.GET_CONSUMER_OFFSETS)
+    CompletableFuture<GetConsumerOffsetsResponse> getConsumerOffsets(
+            GetConsumerOffsetsRequest request);
+
+    /**
+     * Deletes committed offsets for selected buckets of a consumer group. Requires Group {@code
+     * WRITE}; no source-table permission is required.
+     */
+    @RPC(api = ApiKeys.DELETE_CONSUMER_OFFSETS)
+    CompletableFuture<DeleteConsumerOffsetsResponse> deleteConsumerOffsets(
+            DeleteConsumerOffsetsRequest request);
+
+    /**
+     * Lists consumer groups currently owned by this tablet server.
+     *
+     * <p>Cluster {@code DESCRIBE} grants visibility to all locally owned groups; otherwise only
+     * groups with Group {@code DESCRIBE} are returned. This is not a cluster-wide listing. Callers
+     * that need a cluster-wide view must query every tablet server and merge the responses.
+     */
+    @RPC(api = ApiKeys.LIST_CONSUMER_GROUPS)
+    CompletableFuture<ListConsumerGroupsResponse> listConsumerGroups(
+            ListConsumerGroupsRequest request);
+
+    /**
+     * Deletes consumer-group metadata and all committed offsets for each requested group. A later
+     * offset commit may recreate a deleted group.
+     *
+     * <p>No source-table permission is required. This is not a cluster-wide request. Callers must
+     * route each group to the tablet server that owns the group's consumer-offsets bucket; groups
+     * not owned by this server are reported with {@code NOT_CONSUMER_GROUP_OWNER}.
+     */
+    @RPC(api = ApiKeys.DELETE_CONSUMER_GROUPS)
+    CompletableFuture<DeleteConsumerGroupsResponse> deleteConsumerGroups(
+            DeleteConsumerGroupsRequest request);
 
     /**
      * Perform a full KV scan over a primary key table bucket. The first request opens a server-side

@@ -25,13 +25,17 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -53,7 +57,6 @@ import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -61,14 +64,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** ITCase for {@link LogScannerImpl}. */
 public class LogScannerITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     @Test
     void testPoll() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -93,17 +99,47 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testPollReturnsProgressOnlyRecords() throws Exception {
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_log_scanner_progress_only");
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        long tableId = createTable(tablePath, descriptor, false);
+        waitAllReplicasReady(tableId, 1);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        try (Table table = conn.getTable(tablePath)) {
+            appendRows(table, 1, 5);
+
+            try (LogScanner logScanner =
+                    table.newScan()
+                            .filter(
+                                    new PredicateBuilder(DATA1_SCHEMA.getRowType())
+                                            .greaterThan(0, 5))
+                            .createLogScanner()) {
+                logScanner.subscribeFromBeginning(0);
+
+                ScanRecords scanRecords = pollUntilProgressOnly(logScanner, tableBucket);
+                assertThat(scanRecords.consumedUpToOffset(tableBucket)).isGreaterThan(0L);
+            }
+        }
+    }
+
+    @Test
     void testPollWhileCreateTableNotReady() throws Exception {
         // create one table with 30 buckets.
         int bucketNumber = 30;
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        createTable(data1TablePath, tableDescriptor, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -129,12 +165,12 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLogScannerMultiThreadAccess() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
 
         // append a batch of data.
         int recordSize = 10;
         List<GenericRow> expectedRows = new ArrayList<>();
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < recordSize; i++) {
                 GenericRow row = row(i, "a");
@@ -282,7 +318,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromStartTimestamp(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_db_1",
                         "test_scan_from_timestamp" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
@@ -385,7 +421,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromLatestOffsets(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
+                tableNames.tablePath(
                         "test_db_1",
                         "test_scan_from_latest_offsets" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
@@ -444,7 +480,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testSubscribeOutOfRangeLog() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_subscribe_out_of_range_log");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_subscribe_out_of_range_log");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -476,7 +512,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollArrowBatchesWithSchemaEvolution() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_arrow_batches_with_schema_evolution");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -567,5 +604,34 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
         }
         assertThat(count).isEqualTo(expectedRecords);
+    }
+
+    private static ScanRecords pollUntilProgressOnly(
+            LogScanner logScanner, TableBucket tableBucket) {
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        ScanRecords scanRecords = ScanRecords.EMPTY;
+        while (System.nanoTime() < deadline) {
+            scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            if (scanRecords.isEmpty()
+                    && scanRecords.hasProgress()
+                    && scanRecords.buckets().contains(tableBucket)) {
+                assertThat(scanRecords.count()).isEqualTo(0);
+                assertThat(scanRecords.records(tableBucket)).isEmpty();
+                return scanRecords;
+            }
+        }
+        assertThat(scanRecords.hasProgress())
+                .as("Timed out waiting for progress-only poll")
+                .isTrue();
+        return scanRecords;
+    }
+
+    private static void appendRows(Table table, int fromInclusive, int toInclusive)
+            throws Exception {
+        AppendWriter writer = table.newAppend().createWriter();
+        for (int i = fromInclusive; i <= toInclusive; i++) {
+            writer.append(row(i, "value-" + i)).get();
+        }
+        writer.flush();
     }
 }

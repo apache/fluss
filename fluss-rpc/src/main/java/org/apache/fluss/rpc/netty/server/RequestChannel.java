@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -93,8 +94,8 @@ public class RequestChannel {
 
     public RequestChannel(int backpressureThreshold) {
         this.requestQueue = new LinkedBlockingQueue<>();
-        this.backpressureThreshold = backpressureThreshold;
-        this.resumeThreshold = backpressureThreshold / 2;
+        this.backpressureThreshold = Math.max(1, backpressureThreshold);
+        this.resumeThreshold = this.backpressureThreshold / 2;
     }
 
     /**
@@ -105,17 +106,12 @@ public class RequestChannel {
      * queue size exceeds the backpressure threshold, ALL channels associated with this
      * RequestChannel will be paused to prevent further memory growth.
      *
-     * <p>OPTIMIZATION: Only check backpressure if not already active (avoid redundant checks).
+     * <p>The common path uses lock-free state and queue-size reads. The lock is acquired only when
+     * a backpressure transition may be required.
      */
     public void putRequest(RpcRequest request) {
         requestQueue.add(request);
-
-        // CRITICAL OPTIMIZATION: Skip check if already in backpressure state.
-        // This avoids lock contention on every putRequest() call when system is under pressure.
-        // The volatile read is very cheap compared to lock acquisition.
-        if (!isBackpressureActive) {
-            pauseAllChannelsIfNeeded();
-        }
+        reconcileBackpressure();
     }
 
     /**
@@ -137,8 +133,8 @@ public class RequestChannel {
     public RpcRequest pollRequest(long timeoutMs) {
         try {
             RpcRequest request = requestQueue.poll(timeoutMs, TimeUnit.MILLISECONDS);
-            if (isBackpressureActive) {
-                tryResumeChannels();
+            if (request != null) {
+                reconcileBackpressure();
             }
             return request;
         } catch (InterruptedException e) {
@@ -194,66 +190,30 @@ public class RequestChannel {
         }
     }
 
-    /**
-     * Check if the queue size has exceeded the backpressure threshold. When true, channel reads
-     * should be paused to prevent memory exhaustion.
-     */
-    private boolean shouldApplyBackpressure() {
-        return requestQueue.size() >= backpressureThreshold;
-    }
-
-    /**
-     * Check if the queue size has dropped below the resume threshold. When true, paused channels
-     * can be resumed to accept new requests.
-     */
-    private boolean shouldResumeChannels() {
-        return requestQueue.size() <= resumeThreshold;
-    }
-
-    /**
-     * Pauses ALL channels associated with this RequestChannel if the queue size exceeds the
-     * backpressure threshold. This ensures that when the queue is full, all channels stop sending
-     * requests to prevent memory exhaustion.
-     *
-     * <p>Uses a lock to protect the entire operation (state check + state change + task submission)
-     * as an atomic unit. This prevents race conditions with resume operations and channel
-     * registrations.
-     *
-     * <p>TODO: In the future, consider pausing only a subset of channels instead of all channels to
-     * reduce the impact on upstream traffic. A selective pause strategy could minimize disruption
-     * to the overall system while still providing effective backpressure control.
-     */
-    private void pauseAllChannelsIfNeeded() {
-        if (!shouldApplyBackpressure()) {
+    /** Reconciles the backpressure state with the current queue size. */
+    private void reconcileBackpressure() {
+        int queueSize = requestQueue.size();
+        boolean backpressureActive = isBackpressureActive;
+        if (backpressureActive ? queueSize > resumeThreshold : queueSize < backpressureThreshold) {
             return;
         }
 
-        // Lock protects: state check + state change + task submission as atomic operation
         backpressureLock.lock();
         try {
-            // Check if already in backpressure state
-            if (isBackpressureActive) {
-                return; // Already paused, nothing to do
-            }
-
-            // Activate backpressure and pause all channels
-            isBackpressureActive = true;
-
-            for (Channel channel : associatedChannels) {
-                if (channel.isActive()) {
-                    // Submit to the channel's EventLoop to ensure thread safety
-                    channel.eventLoop()
-                            .execute(
-                                    () -> {
-                                        if (channel.isActive() && channel.config().isAutoRead()) {
-                                            channel.config().setAutoRead(false);
-                                            LOG.warn(
-                                                    "Queue size ({}) exceeded backpressure threshold ({}), paused channel: {}",
-                                                    requestsCount(),
-                                                    backpressureThreshold,
-                                                    channel.remoteAddress());
-                                        }
-                                    });
+            while (true) {
+                queueSize = requestQueue.size();
+                if (isBackpressureActive) {
+                    if (queueSize > resumeThreshold) {
+                        return;
+                    }
+                    isBackpressureActive = false;
+                    resumeAllChannels(queueSize);
+                } else {
+                    if (queueSize < backpressureThreshold) {
+                        return;
+                    }
+                    isBackpressureActive = true;
+                    pauseAllChannels(queueSize);
                 }
             }
         } finally {
@@ -261,49 +221,64 @@ public class RequestChannel {
         }
     }
 
-    /**
-     * Attempts to resume all associated channels if the queue size has dropped below the resume
-     * threshold. This method is called automatically after a request is dequeued.
-     *
-     * <p>Uses a lock to protect the entire operation (state check + state change + task submission)
-     * as an atomic unit. This prevents race conditions with pause operations and channel
-     * registrations.
-     */
-    private void tryResumeChannels() {
-        if (!shouldResumeChannels()) {
-            return;
+    private void pauseAllChannels(int queueSize) {
+        for (Channel channel : associatedChannels) {
+            if (channel.isActive()) {
+                // Submit to the channel's EventLoop to ensure thread safety
+                executeOnEventLoop(
+                        channel,
+                        () -> {
+                            if (channel.isActive() && channel.config().isAutoRead()) {
+                                channel.config().setAutoRead(false);
+                                LOG.warn(
+                                        "Queue size ({}) reached backpressure threshold ({}), paused channel: {}",
+                                        queueSize,
+                                        backpressureThreshold,
+                                        channel.remoteAddress());
+                            }
+                        });
+            }
         }
+    }
 
-        // Lock protects: state check + state change + task submission as atomic operation
-        backpressureLock.lock();
+    private void resumeAllChannels(int queueSize) {
+        for (Channel channel : associatedChannels) {
+            if (channel.isActive()) {
+                // Submit resume task to the channel's EventLoop to ensure thread safety
+                executeOnEventLoop(
+                        channel,
+                        () -> {
+                            if (channel.isActive() && !channel.config().isAutoRead()) {
+                                channel.config().setAutoRead(true);
+                                LOG.info(
+                                        "Queue size ({}) reached resume threshold ({}), resumed channel: {}",
+                                        queueSize,
+                                        resumeThreshold,
+                                        channel.remoteAddress());
+                            }
+                        });
+            }
+        }
+    }
+
+    /**
+     * Executes the task on the channel's EventLoop. The EventLoop may already be shutting down
+     * (e.g. during server shutdown) even though the channel was still active when checked; in that
+     * case the task is skipped, because the channel is about to be closed anyway. Letting the
+     * rejection propagate would kill the calling request processor thread, and its shutdown future
+     * would never complete.
+     *
+     * <p>A skipped task leaves {@link #isBackpressureActive} out of sync with the channel's actual
+     * auto-read state. This is harmless, as the channel is closed together with its EventLoop.
+     */
+    private static void executeOnEventLoop(Channel channel, Runnable task) {
         try {
-            // Check if backpressure is not active
-            if (!isBackpressureActive) {
-                return; // Already resumed, nothing to do
-            }
-
-            // Deactivate backpressure and resume all channels
-            isBackpressureActive = false;
-
-            for (Channel channel : associatedChannels) {
-                if (channel.isActive()) {
-                    // Submit resume task to the channel's EventLoop to ensure thread safety
-                    channel.eventLoop()
-                            .execute(
-                                    () -> {
-                                        if (channel.isActive() && !channel.config().isAutoRead()) {
-                                            channel.config().setAutoRead(true);
-                                            LOG.info(
-                                                    "Queue size ({}) dropped below resume threshold ({}), resumed channel: {}",
-                                                    requestsCount(),
-                                                    resumeThreshold,
-                                                    channel.remoteAddress());
-                                        }
-                                    });
-                }
-            }
-        } finally {
-            backpressureLock.unlock();
+            channel.eventLoop().execute(task);
+        } catch (RejectedExecutionException e) {
+            LOG.debug(
+                    "Skip backpressure task for channel {} because its event loop is shutting down.",
+                    channel.remoteAddress(),
+                    e);
         }
     }
 }

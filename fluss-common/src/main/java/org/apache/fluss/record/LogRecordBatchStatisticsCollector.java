@@ -34,6 +34,8 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.function.Function;
 
+import static org.apache.fluss.types.DataTypeChecks.getLength;
+
 /**
  * Collector for {@link LogRecordBatchStatistics} that accumulates statistics during record batch
  * construction. Manages statistics data in memory arrays and supports schema-aware statistics
@@ -159,6 +161,11 @@ public class LogRecordBatchStatisticsCollector {
             case DOUBLE:
                 double doubleValue = row.getDouble(schemaIndex);
                 updateMinMaxInternal(statsIndex, doubleValue, Double::compare);
+                break;
+            case CHAR:
+                BinaryString charValue = row.getChar(schemaIndex, getLength(fieldType));
+                updateMinMaxInternal(
+                        statsIndex, charValue, BinaryString::compareTo, BinaryString::copy);
                 break;
             case STRING:
                 BinaryString stringValue = row.getString(schemaIndex);

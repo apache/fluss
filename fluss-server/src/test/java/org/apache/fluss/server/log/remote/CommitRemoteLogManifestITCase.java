@@ -21,9 +21,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -36,7 +41,6 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
@@ -54,51 +58,69 @@ class CommitRemoteLogManifestITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+
     @Test
     void testDeleteOutOfSyncReplicaLogAfterCommit() throws Exception {
-        // then create a table with 3 buckets
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
-
-        // find the tb whose leader is the server with large log tiering interval.
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
-        int leader =
-                Objects.requireNonNull(
-                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
-        TabletServerGateway leaderGateWay =
+        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
+        int leader = Objects.requireNonNull(leaderReplica.getLeaderId());
+        TabletServerGateway leaderGateway =
                 FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
-        // produce many records to trigger remote log copy.
-        long expectedRemoteLogEndOffset = 0L;
+        List<Integer> followers =
+                Stream.of(0, 1, 2).filter(i -> i != leader).collect(Collectors.toList());
+
+        // Wait for each batch to replicate so followers roll the same segments as the leader.
+        long followerEndOffset = 0L;
         for (int i = 0; i < 3; i++) {
             assertProduceLogResponse(
-                    leaderGateWay
+                    leaderGateway
                             .produceLog(
                                     newProduceLogRequest(
                                             tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
-                    expectedRemoteLogEndOffset);
-            expectedRemoteLogEndOffset += DATA1.size();
+                    followerEndOffset);
+            followerEndOffset += DATA1.size();
+            long expectedEndOffset = followerEndOffset;
+            for (int follower : followers) {
+                LogTablet followerLog =
+                        FLUSS_CLUSTER_EXTENSION
+                                .waitAndGetFollowerReplica(tb, follower)
+                                .getLogTablet();
+                retry(
+                        Duration.ofMinutes(1),
+                        () ->
+                                assertThat(followerLog.localLogEndOffset())
+                                        .as("Follower %s log end offset", follower)
+                                        .isEqualTo(expectedEndOffset));
+            }
         }
 
-        // stop replicas to mock followers are out of sync
-        List<Integer> stopFollowers =
-                Stream.of(0, 1, 2).filter(i -> i != leader).collect(Collectors.toList());
-        for (int stopFollower : stopFollowers) {
-            FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, 1);
+        for (int follower : followers) {
+            FLUSS_CLUSTER_EXTENSION.stopReplica(follower, tb, leaderReplica.getLeaderEpoch());
         }
-        leaderGateWay
-                .produceLog(
-                        newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
-                .get();
-        for (int stopFollower : stopFollowers) {
-            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stopFollower);
-            LogTablet stopfollowerLogTablet =
-                    FLUSS_CLUSTER_EXTENSION
-                            .waitAndGetFollowerReplica(tb, stopFollower)
-                            .getLogTablet();
-            assertThat(stopfollowerLogTablet.logSegments()).hasSize(3);
+        // Roll the leader's third segment without appending the fourth batch to the followers.
+        assertProduceLogResponse(
+                leaderGateway
+                        .produceLog(
+                                newProduceLogRequest(
+                                        tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
+                        .get(),
+                0,
+                followerEndOffset);
+        long batchSize = DATA1.size();
+        for (int follower : followers) {
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, follower);
+            LogTablet followerLog =
+                    FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, follower).getLogTablet();
+            assertThat(followerLog.localLogEndOffset()).isEqualTo(followerEndOffset);
+            assertThat(followerLog.logSegments())
+                    .extracting(LogSegment::getBaseOffset)
+                    .containsExactly(0L, batchSize, 2 * batchSize);
         }
 
         // restart the leader server with a small log tiering interval
@@ -108,17 +130,18 @@ class CommitRemoteLogManifestITCase {
                         .set(
                                 ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION,
                                 Duration.ofMillis(1)));
-        FLUSS_CLUSTER_EXTENSION.waitUntilRemoteLogEndOffset(tb, expectedRemoteLogEndOffset);
+        FLUSS_CLUSTER_EXTENSION.waitUntilRemoteLogEndOffset(tb, followerEndOffset);
 
-        // check only has two remote log segments for the stopped replicas
-        for (int stopFollower : stopFollowers) {
-            LogTablet stopfollowerLogTablet =
-                    FLUSS_CLUSTER_EXTENSION
-                            .waitAndGetFollowerReplica(tb, stopFollower)
-                            .getLogTablet();
+        // The stopped followers should delete their oldest local segment after the commit.
+        for (int follower : followers) {
+            LogTablet followerLog =
+                    FLUSS_CLUSTER_EXTENSION.waitAndGetFollowerReplica(tb, follower).getLogTablet();
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(stopfollowerLogTablet.logSegments()).hasSize(2));
+                    () ->
+                            assertThat(followerLog.logSegments())
+                                    .extracting(LogSegment::getBaseOffset)
+                                    .containsExactly(batchSize, 2 * batchSize));
         }
     }
 

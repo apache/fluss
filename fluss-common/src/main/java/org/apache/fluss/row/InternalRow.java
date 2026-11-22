@@ -19,7 +19,6 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
@@ -32,7 +31,6 @@ import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.apache.fluss.row.InternalArray.createDeepElementGetter;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -239,22 +237,35 @@ public interface InternalRow extends DataGetters {
     }
 
     /**
-     * Creates a deep accessor for getting elements in an internal array data structure at the given
-     * position. It returns new objects (GenericArray/GenericMap/GenericMap) for nested
-     * array/map/row types.
+     * Creates a deep accessor for getting elements in an internal row data structure at the given
+     * position. Returns new objects (GenericArray/GenericMap/GenericRow) for nested array/map/row
+     * types to prevent use-after-free when the underlying buffer is released.
      *
-     * <p>NOTE: Currently, it is only used for deep copying {@link ColumnarRow} for Arrow which
-     * avoid the arrow buffer is released before accessing elements. It doesn't deep copy STRING and
-     * BYTES types, because {@link ColumnarRow} already deep copies the bytes, see {@link
-     * VectorizedColumnBatch#getString(int, int)}. This can be removed once we supports object reuse
-     * for Arrow {@link ColumnarRow}, see {@code CompletedFetch#toScanRecord(LogRecord)}.
+     * <p>For ARROW, pass copyStrings=false since {@link VectorizedColumnBatch} already copies
+     * strings. For INDEXED and COMPACTED, pass copyStrings=true to copy STRING/CHAR out of the
+     * pooled buffer they reference.
      */
-    static FieldGetter createDeepFieldGetter(DataType fieldType, int fieldPos) {
+    static FieldGetter createDeepFieldGetter(
+            DataType fieldType, int fieldPos, boolean copyStrings) {
         final FieldGetter fieldGetter;
         switch (fieldType.getTypeRoot()) {
+            case CHAR:
+                final int charLen = getLength(fieldType);
+                fieldGetter =
+                        copyStrings
+                                ? row -> row.getChar(fieldPos, charLen).copy()
+                                : row -> row.getChar(fieldPos, charLen);
+                break;
+            case STRING:
+                fieldGetter =
+                        copyStrings
+                                ? row -> row.getString(fieldPos).copy()
+                                : row -> row.getString(fieldPos);
+                break;
             case ARRAY:
                 DataType elementType = ((ArrayType) fieldType).getElementType();
-                InternalArray.ElementGetter nestedGetter = createDeepElementGetter(elementType);
+                InternalArray.ElementGetter nestedGetter =
+                        InternalArray.createDeepElementGetter(elementType, copyStrings);
                 fieldGetter =
                         row -> {
                             InternalArray array = row.getArray(fieldPos);
@@ -268,9 +279,9 @@ public interface InternalRow extends DataGetters {
             case MAP:
                 MapType mapType = (MapType) fieldType;
                 InternalArray.ElementGetter keyGetter =
-                        createDeepElementGetter(mapType.getKeyType());
+                        InternalArray.createDeepElementGetter(mapType.getKeyType(), copyStrings);
                 InternalArray.ElementGetter valueGetter =
-                        createDeepElementGetter(mapType.getValueType());
+                        InternalArray.createDeepElementGetter(mapType.getValueType(), copyStrings);
                 fieldGetter =
                         row -> {
                             InternalMap map = row.getMap(fieldPos);
@@ -288,7 +299,8 @@ public interface InternalRow extends DataGetters {
                 int numFields = rowType.getFieldCount();
                 FieldGetter[] nestedFieldGetters = new FieldGetter[numFields];
                 for (int i = 0; i < numFields; i++) {
-                    nestedFieldGetters[i] = createDeepFieldGetter(rowType.getTypeAt(i), i);
+                    nestedFieldGetters[i] =
+                            createDeepFieldGetter(rowType.getTypeAt(i), i, copyStrings);
                 }
                 fieldGetter =
                         row -> {
@@ -322,5 +334,74 @@ public interface InternalRow extends DataGetters {
     interface FieldGetter extends Serializable {
         @Nullable
         Object getFieldOrNull(InternalRow row);
+    }
+
+    /**
+     * Creates an array of converters for getting all fields of an internal row data structure as
+     * human-readable strings.
+     *
+     * @param rowType the row type of the internal row
+     */
+    static FieldToString[] createFieldToStrings(RowType rowType) {
+        final FieldToString[] fieldToStrings = new FieldToString[rowType.getFieldCount()];
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            fieldToStrings[i] = createFieldToString(rowType.getTypeAt(i), i);
+        }
+        return fieldToStrings;
+    }
+
+    /**
+     * Creates a converter that reads the field at the given position of an internal row and renders
+     * it as a human-readable string.
+     *
+     * <p>Rendering conventions:
+     *
+     * <ul>
+     *   <li>A null field is rendered as Java {@code null}, regardless of the declared nullability
+     *       of the field.
+     *   <li>CHAR, STRING, BOOLEAN, numeric types and DECIMAL are rendered as their Java string
+     *       form, e.g. {@code hello}, {@code true}, {@code 3.14}, {@code 1.50}. FLOAT and DOUBLE
+     *       follow {@link Float#toString} and {@link Double#toString} respectively and may use
+     *       scientific notation for extreme magnitudes (e.g. {@code 1.0E-4}); DECIMAL never does.
+     *   <li>DATE is rendered as {@code yyyy-MM-dd}; TIME as {@code HH:mm:ss[.fff]} with at most the
+     *       declared precision fractional digits (the internal representation holds milliseconds of
+     *       the day, so at most 3 fractional digits are ever printed); TIMESTAMP and TIMESTAMP_LTZ
+     *       as SQL-style {@code yyyy-MM-dd HH:mm:ss[.fff]} with at most the declared precision
+     *       fractional digits, trailing zeros trimmed. TIMESTAMP_LTZ is rendered in UTC with a
+     *       {@code 'Z'} zone suffix.
+     *   <li>BINARY and BYTES values are rendered as Base64 of the bytes returned by the row's
+     *       getter; the bytes themselves are used as-is, neither padded nor trimmed. Note that
+     *       IndexedRow, including rows nested inside an indexed row, strips trailing 0x00 bytes
+     *       when reading a BINARY(n) field, because its fixed-length encoding does not record the
+     *       actual length. Array elements, map keys and values, and other row implementations
+     *       return the bytes as stored. A BINARY(n) value whose last byte is 0x00 may therefore
+     *       render with fewer bytes when read from an indexed row. BYTES is not affected.
+     *   <li>ARRAY, MAP and ROW are rendered as JSON: arrays as {@code [1,"a"]}, maps as {@code
+     *       {"one":1}} with keys converted to their string representation (map key types are
+     *       declared non-nullable, but writers do not enforce it, so a null key is rendered as the
+     *       string {@code "null"}), rows as {@code {"id":1}} with the row's field names. Distinct
+     *       keys whose string representations collide — e.g. timestamps differing beyond the
+     *       declared precision, or fixed-length BINARY/CHAR values differing only in trailing pad
+     *       bytes that some row implementations trim on read — are merged into a single JSON entry,
+     *       because keys are rendered with the same conventions as values. Null elements inside
+     *       nested structures are rendered as JSON {@code null}. Note that non-finite DOUBLE values
+     *       (NaN, Infinity) are not representable in JSON and follow Jackson's behavior.
+     * </ul>
+     *
+     * <p>A field whose runtime representation does not match the declared type fails with an {@link
+     * IllegalArgumentException} that reports where the rendering failed with the original exception
+     * as the cause.
+     *
+     * @param fieldType the element type of the row
+     * @param fieldPos the element position of the row
+     */
+    static FieldToString createFieldToString(DataType fieldType, int fieldPos) {
+        return FieldToStringConverters.createFieldToString(fieldType, fieldPos);
+    }
+
+    /** Accessor for getting the field of a row as a human-readable string. */
+    interface FieldToString extends Serializable {
+        @Nullable
+        String getFieldAsStringOrNull(InternalRow row);
     }
 }

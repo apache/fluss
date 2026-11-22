@@ -31,8 +31,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /**
  * This represents all the required data and indexed for a specific log segment that needs to be
  * stored in the tiered storage. is passed with {@link
- * RemoteLogStorage#copyLogSegmentFiles(RemoteLogSegment, LogSegmentFiles)} while copying a specific
- * log segment to the tiered storage.
+ * RemoteLogStorage#copyLogSegmentFiles(org.apache.fluss.fs.FsPath, RemoteLogSegment,
+ * LogSegmentFiles)} while copying a specific log segment to the tiered storage.
  */
 public class LogSegmentFiles {
 

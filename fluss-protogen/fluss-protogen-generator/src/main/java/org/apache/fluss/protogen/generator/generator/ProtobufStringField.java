@@ -113,7 +113,7 @@ public class ProtobufStringField extends ProtobufField<Field.String> {
 
     @Override
     public void parse(PrintWriter w) {
-        w.format("_%sLen = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
+        w.format("_%sLen = ProtoCodecUtils.readBytesLen(_buffer);\n", ccName);
         w.format("int _%sBufferIdx = _buffer.readerIndex();\n", ccName);
         w.format(
                 "%s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sLen);\n",

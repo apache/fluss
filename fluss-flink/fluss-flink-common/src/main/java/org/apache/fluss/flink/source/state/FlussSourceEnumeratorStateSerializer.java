@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -53,14 +54,20 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * <ul>
  *   <li><b>Version 0:</b> Initial version. Remaining hybrid lake splits are only (de)serialized if
  *       the {@code lakeSource} is non-null.
- *   <li><b>Version 1 (Current):</b> Decouples split serialization from the {@code lakeSource}
- *       presence. It always attempts to (de)serialize the splits, using an internal boolean flag to
- *       indicate presence. This ensures state consistency regardless of the current runtime
- *       configuration.
+ *   <li><b>Version 1:</b> Decouples split serialization from the {@code lakeSource} presence. It
+ *       always attempts to (de)serialize the splits, using an internal boolean flag to indicate
+ *       presence. This ensures state consistency regardless of the current runtime configuration.
+ *   <li><b>Version 2:</b> Adds lease ID (UTF string) after the hybrid lake splits section to
+ *       support KV snapshot lease management.
+ *   <li><b>Version 3 (Current):</b> Adds {@code initialDiscoveryFinished} boolean flag after the
+ *       lease ID, and appends {@code unassignedSplits} collection. The flag tracks whether the
+ *       first partition discovery round has completed (FLIP-288 offset semantics); the unassigned
+ *       splits are persisted so they survive failover without re-initialization.
  * </ul>
  *
  * <p><b>Compatibility Note:</b> This serializer is designed for backward compatibility. It can
- * deserialize states from Version 0, but always produces Version 1 during serialization.
+ * deserialize states from all previous versions, but always produces the current version during
+ * serialization.
  */
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
@@ -70,11 +77,12 @@ public class FlussSourceEnumeratorStateSerializer
     private static final int VERSION_0 = 0;
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
+    private static final int VERSION_3 = 3;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_2;
+    private static final int CURRENT_VERSION = VERSION_3;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -98,6 +106,12 @@ public class FlussSourceEnumeratorStateSerializer
 
         // write lease context
         serializeLeaseId(out, state);
+
+        // write initial discovery finished flag (VERSION_3+)
+        out.writeBoolean(state.isInitialDiscoveryFinished());
+
+        // write unassigned splits (VERSION_3+)
+        serializeUnassignedSplits(out, state.getUnassignedSplits());
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -166,9 +180,24 @@ public class FlussSourceEnumeratorStateSerializer
         return result;
     }
 
+    /** Produces a real V2 payload: assignedBuckets + partitions + hybridSplits + leaseId. */
+    @VisibleForTesting
+    protected byte[] serializeV2(SourceEnumeratorState state) throws IOException {
+        final DataOutputSerializer out = SERIALIZER_CACHE.get();
+        serializeAssignBucketAndPartitions(
+                out, state.getAssignedBuckets(), state.getAssignedPartitions());
+        serializeRemainingHybridLakeFlussSplits(out, state);
+        serializeLeaseId(out, state);
+        final byte[] result = out.getCopyOfBuffer();
+        out.clear();
+        return result;
+    }
+
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         switch (version) {
+            case VERSION_3:
+                return deserializeV3(serialized);
             case VERSION_2:
                 return deserializeV2(serialized);
             case VERSION_1:
@@ -229,11 +258,38 @@ public class FlussSourceEnumeratorStateSerializer
 
         // deserialize lease context
         LeaseContext leaseContext = deserializeLeaseId(in);
+        // V2 does not have initialDiscoveryFinished flag; default to true (safe choice
+        // to prevent data loss: treat all newly discovered partitions as post-initial).
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
                 leaseContext.getKvSnapshotLeaseId());
+    }
+
+    private SourceEnumeratorState deserializeV3(byte[] serialized) throws IOException {
+        DataInputDeserializer in = new DataInputDeserializer(serialized);
+        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
+                deserializeAssignBucketAndPartitions(in);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                deserializeRemainingHybridLakeFlussSplits(in);
+
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseId(in);
+
+        // deserialize initial discovery finished flag
+        boolean initialDiscoveryFinished = in.readBoolean();
+
+        // deserialize unassigned splits
+        List<SourceSplitBase> unassignedSplits = deserializeUnassignedSplits(in);
+
+        return new SourceEnumeratorState(
+                assignBucketAndPartitions.f0,
+                assignBucketAndPartitions.f1,
+                remainingHybridLakeFlussSplits,
+                leaseContext.getKvSnapshotLeaseId(),
+                initialDiscoveryFinished,
+                unassignedSplits);
     }
 
     private Tuple2<Set<TableBucket>, Map<Long, String>> deserializeAssignBucketAndPartitions(
@@ -301,5 +357,38 @@ public class FlussSourceEnumeratorStateSerializer
         String kvSnapshotLeaseId = in.readUTF();
         return new LeaseContext(
                 kvSnapshotLeaseId, LeaseContext.DEFAULT.getKvSnapshotLeaseDurationMs());
+    }
+
+    private void serializeUnassignedSplits(
+            final DataOutputSerializer out, Collection<SourceSplitBase> unassignedSplits)
+            throws IOException {
+        out.writeInt(unassignedSplits.size());
+        if (!unassignedSplits.isEmpty()) {
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            out.writeInt(sourceSplitSerializer.getVersion());
+            for (SourceSplitBase split : unassignedSplits) {
+                byte[] serializeBytes = sourceSplitSerializer.serialize(split);
+                out.writeInt(serializeBytes.length);
+                out.write(serializeBytes);
+            }
+        }
+    }
+
+    private List<SourceSplitBase> deserializeUnassignedSplits(final DataInputDeserializer in)
+            throws IOException {
+        int numSplits = in.readInt();
+        if (numSplits == 0) {
+            return new ArrayList<>();
+        }
+        SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+        int version = in.readInt();
+        List<SourceSplitBase> splits = new ArrayList<>(numSplits);
+        for (int i = 0; i < numSplits; i++) {
+            int splitSizeInBytes = in.readInt();
+            byte[] splitBytes = new byte[splitSizeInBytes];
+            in.readFully(splitBytes);
+            splits.add(sourceSplitSerializer.deserialize(version, splitBytes));
+        }
+        return splits;
     }
 }

@@ -25,6 +25,9 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableDescriptor, TablePath}
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.server.testutils.FlussClusterExtension
+import org.apache.fluss.spark.utils.FlussConnectionCache
+import org.apache.fluss.testutils.TestTableNames
+import org.apache.fluss.utils.IOUtils
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.QueryTest
@@ -41,6 +44,8 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
   protected var conn: Connection = _
   protected var admin: Admin = _
+
+  private var tableNames = new TestTableNames()
 
   protected val flussServer: FlussClusterExtension =
     FlussClusterExtension.builder
@@ -66,17 +71,30 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
   }
 
   override protected def afterAll(): Unit = {
-    super.afterAll()
-    if (admin != null) {
-      admin.close()
-      admin = null
+    try {
+      super.afterAll()
+    } finally {
+      try {
+        IOUtils.closeAll(
+          admin,
+          conn,
+          () => FlussConnectionCache.clearIdleConnections(),
+          () => flussServer.close())
+      } finally {
+        admin = null
+        conn = null
+      }
     }
-    if (conn != null) {
-      conn.close()
-      conn = null
-    }
-    flussServer.close()
   }
+
+  override protected def beforeEach(): Unit = {
+    super.beforeEach()
+    // ScalaTest reuses the suite instance, so each test needs a fresh naming scope.
+    tableNames = new TestTableNames()
+  }
+
+  /** Returns a stable table name within the current test invocation. */
+  protected def scopedTableName(name: String): String = tableNames.tableName(name)
 
   def createTablePath(tableName: String): TablePath = {
     TablePath.of(DEFAULT_DATABASE, tableName)
@@ -106,16 +124,37 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
         (0 until table.getTableInfo.getNumBuckets).foreach(i => ls.subscribeFromBeginning(i))
         ls
     }
-    val scanRecords = logScanner.poll(Duration.ofSeconds(1))
-    scanRecords
-      .iterator()
-      .asScala
-      .map(record => (record.getChangeType.shortString(), record.getRow))
-      .toArray
+    // Poll in a loop to accumulate all available records. With async KV flush,
+    // the high watermark may advance in stages, so a single poll may not
+    // return all records that were written in the same client flush() call.
+    // We keep polling until we have received at least some records and then
+    // get an empty poll (indicating no more data), or until the deadline.
+    val result = scala.collection.mutable.ArrayBuffer[(String, InternalRow)]()
+    val deadline = System.currentTimeMillis() + 10000
+    var hasReceivedAny = false
+    var done = false
+    while (!done && System.currentTimeMillis() < deadline) {
+      val scanRecords = logScanner.poll(Duration.ofSeconds(1))
+      val records = scanRecords
+        .iterator()
+        .asScala
+        .map(record => (record.getChangeType.shortString(), record.getRow))
+        .toArray
+      if (records.nonEmpty) {
+        hasReceivedAny = true
+        result ++= records
+      } else if (hasReceivedAny) {
+        // We already received records and now got empty - all caught up.
+        done = true
+      }
+      // else: no records received yet, keep polling (HW may not have advanced)
+    }
+    result.toArray
   }
 
   protected def flussConf: Configuration = {
     val conf = new Configuration
     conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+    conf
   }
 }

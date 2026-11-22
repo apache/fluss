@@ -40,6 +40,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.test.util.AbstractTestBase;
@@ -144,14 +145,16 @@ public class FlinkTestBase extends AbstractTestBase {
 
     protected static final String DEFAULT_DB = "test-flink-db";
 
-    protected static final TablePath DEFAULT_TABLE_PATH =
-            TablePath.of(DEFAULT_DB, "test-flink-table");
-
     protected static Connection conn;
     protected static Admin admin;
 
     protected static Configuration clientConf;
     protected static String bootstrapServers;
+
+    protected final TestTableNames tableNames = new TestTableNames();
+
+    protected final TablePath defaultTablePath =
+            tableNames.tablePath(DEFAULT_DB, "test-flink-table");
 
     @BeforeAll
     protected static void beforeAll() {
@@ -247,7 +250,8 @@ public class FlinkTestBase extends AbstractTestBase {
                             tableInfo.getTableId(), assignment.getBucketAssignments()),
                     zkClient.getDefaultRemoteDataDir(),
                     tablePath,
-                    tableInfo.getTableId());
+                    tableInfo.getTableId(),
+                    tableInfo.getNumBuckets());
         }
         return newPartitionIds;
     }

@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-client</artifactId>
-    <name>Apache Fluss (Incubating) : Client</name>
+    <name>Apache Fluss : Client</name>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -108,6 +108,31 @@
             <artifactId>fluss-rpc</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- TestSslUtils (from the fluss-rpc test-jar) generates certificates with Netty's
+             SelfSignedCertificate, which needs BouncyCastle from JDK 16 on. Test-scoped
+             dependencies do not come along with a test-jar, so they are repeated here;
+             see fluss-rpc/pom.xml for why bcutil and bcprov are pinned. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcutil-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

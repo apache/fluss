@@ -18,11 +18,13 @@
 package org.apache.fluss.flink.source.deserializer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.metrics.MetricGroup;
+import org.apache.flink.table.runtime.typeutils.InternalTypeInfo;
 import org.apache.flink.util.UserCodeClassLoader;
 
 import java.io.Serializable;
@@ -60,10 +62,23 @@ public interface FlussDeserializationSchema<T> extends Serializable {
     /**
      * Gets the data type (as a {@link TypeInformation}) produced by this deserializer.
      *
-     * @param rowSchema The schema of the {@link LogRecord#getRow()}.
+     * @param scanRowType The schema of the {@link LogRecord#getRow()}.
      * @return The data type produced by this deserializer.
      */
-    TypeInformation<T> getProducedType(RowType rowSchema);
+    TypeInformation<T> getProducedType(RowType scanRowType);
+
+    /**
+     * Gets the data type produced by this deserializer when the final produced row type is known.
+     *
+     * @param scanRowType The schema of the {@link LogRecord#getRow()}.
+     * @param producedRowType The expected row type specified by the source.
+     * @return The data type produced by this deserializer.
+     */
+    @SuppressWarnings("unchecked")
+    default TypeInformation<T> getProducedType(RowType scanRowType, RowType producedRowType) {
+        return (TypeInformation<T>)
+                InternalTypeInfo.of(FlinkConversions.toFlinkRowType(producedRowType));
+    }
 
     /**
      * A contextual information provided for {@link #open(InitializationContext)} method. It can be

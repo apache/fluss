@@ -23,22 +23,27 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
-import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.io.IOException;
@@ -51,7 +56,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -61,8 +71,10 @@ import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.utils.FlussPaths.logTabletDir;
 import static org.apache.fluss.utils.FlussPaths.offsetFromFile;
 import static org.apache.fluss.utils.FlussPaths.writerSnapshotFile;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -92,6 +104,8 @@ final class LogTabletTest extends LogTestBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH),
                         logDir,
                         conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         scheduler,
@@ -105,6 +119,144 @@ final class LogTabletTest extends LogTestBase {
     @AfterEach
     public void teardown() throws Exception {
         scheduler.shutdown();
+    }
+
+    @Test
+    void testRemoteLogOffsetsCanResetAfterEmptyManifest() {
+        logTablet.updateRemoteLogOffsets(0L, 10L, 10L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
+
+        logTablet.updateRemoteLogOffsets(Long.MAX_VALUE, -1L, 10L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isFalse();
+
+        // A new non-empty range can become readable after the empty state.
+        logTablet.updateRemoteLogOffsets(10L, 20L, 20L);
+        assertThat(logTablet.canFetchFromRemoteLog(0L)).isFalse();
+        assertThat(logTablet.canFetchFromRemoteLog(10L)).isTrue();
+        assertThat(logTablet.canFetchFromRemoteLog(20L)).isFalse();
+    }
+
+    @Test
+    void testMinRetainOffsetIsMonotonicWithConcurrentUpdates() throws Exception {
+        File kvLogDir =
+                LogTestUtils.makeRandomLogTabletDir(
+                        tempDir,
+                        DATA1_TABLE_PATH.getDatabaseName(),
+                        DATA1_TABLE_ID,
+                        DATA1_TABLE_PATH.getTableName());
+        LogTablet kvLogTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        kvLogDir,
+                        conf,
+                        new AtomicBoolean(false),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        true,
+                        SystemClock.getInstance(),
+                        true);
+        int updateThreadCount = 32;
+        ExecutorService executor = Executors.newFixedThreadPool(updateThreadCount);
+        CountDownLatch ready = new CountDownLatch(updateThreadCount);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            for (int i = 1; i <= updateThreadCount; i++) {
+                final long minRetainOffset = i;
+                executor.execute(
+                        () -> {
+                            ready.countDown();
+                            try {
+                                start.await();
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                return;
+                            }
+                            kvLogTablet.updateMinRetainOffset(minRetainOffset);
+                        });
+            }
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+            kvLogTablet.updateMinRetainOffset(1L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(updateThreadCount);
+        } finally {
+            executor.shutdownNow();
+            kvLogTablet.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLakeProgressReleasesOnlyHistoricalLogSegments(boolean historicalPartition)
+            throws Exception {
+        PhysicalTablePath physicalPath =
+                PhysicalTablePath.of(
+                        DATA1_TABLE_PATH,
+                        historicalPartition ? HISTORICAL_PARTITION_VALUE : "20240101");
+        File kvLogDir = logTabletDir(tempDir, physicalPath, new TableBucket(DATA1_TABLE_ID, 1L, 0));
+        LogTablet kvLogTablet =
+                LogTablet.create(
+                        tempDir,
+                        physicalPath,
+                        kvLogDir,
+                        conf,
+                        new AtomicBoolean(false),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        2,
+                        true,
+                        SystemClock.getInstance(),
+                        true);
+        try {
+            for (int i = 0; i < 4; i++) {
+                kvLogTablet.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+                kvLogTablet.roll(Optional.empty());
+            }
+            kvLogTablet.updateHighWatermark(40L);
+            kvLogTablet.updateRemoteLogOffsets(0L, 20L, 20L);
+            assertThat(kvLogTablet.getSegments()).hasSize(5);
+
+            // Only complete segments covered by lake progress can be released. The segment
+            // starting at 10 still contains records needed for recovery from offset 15.
+            kvLogTablet.updateLakeLogEndOffset(15L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(historicalPartition ? 15L : 0L);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 10L : 0L);
+
+            // Lake progress cannot release a segment that has not been uploaded to remote log.
+            kvLogTablet.updateLakeLogEndOffset(30L);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 20L : 0L);
+            kvLogTablet.updateLakeLogEndOffset(30L);
+            kvLogTablet.updateLakeLogEndOffset(10L);
+            assertThat(kvLogTablet.getMinRetainOffset()).isEqualTo(historicalPartition ? 30L : 0L);
+
+            // Once uploads catch up, preserve the configured two most recent local segments.
+            kvLogTablet.updateRemoteLogOffsets(0L, 40L, 40L);
+            assertThat(kvLogTablet.getSegments()).hasSize(historicalPartition ? 2 : 5);
+            assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(historicalPartition ? 30L : 0L);
+            kvLogTablet.updateLakeLogEndOffset(40L);
+            assertThat(kvLogTablet.getSegments()).hasSize(historicalPartition ? 2 : 5);
+
+            // Ordinary KV partitions still require KV snapshot progress to release their WAL.
+            if (!historicalPartition) {
+                kvLogTablet.updateMinRetainOffset(30L);
+                assertThat(kvLogTablet.getSegments()).hasSize(2);
+                assertThat(kvLogTablet.localLogStartOffset()).isEqualTo(30L);
+            }
+        } finally {
+            kvLogTablet.close();
+        }
     }
 
     @Test
@@ -325,6 +477,23 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testInitializeEmptyLocalTailProtectsExistingLog() throws Exception {
+        logTablet.initializeEmptyLocalTail(17L);
+        logTablet.initializeEmptyLocalTail(17L);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(17L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(17L);
+        assertThat(logTablet.getHighWatermark()).isEqualTo(17L);
+        assertThatThrownBy(() -> logTablet.initializeEmptyLocalTail(18L))
+                .isInstanceOf(IllegalStateException.class);
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        assertThatThrownBy(() -> logTablet.initializeEmptyLocalTail(17L))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(17L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(18L);
+    }
+
+    @Test
     void testWriterStateTruncateFullyAndStartAt() throws Exception {
         MemoryLogRecords records =
                 genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
@@ -347,6 +516,46 @@ final class LogTabletTest extends LogTestBase {
         assertThat(log.logSegments().size()).isEqualTo(1);
         assertThat(latestWriterStateEndOffset(log)).isEqualTo(29);
         assertThat(latestWriterSnapshotOffset(log).get()).isEqualTo(29);
+    }
+
+    @Test
+    void testTruncateToBeforeFirstSegmentDeletesHigherOffsetSegment() throws Exception {
+        logTablet.truncateFullyAndStartAt(10L);
+        logTablet.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        LogSegment oldActiveSegment = logTablet.activeLogSegment();
+        assertThat(oldActiveSegment.getBaseOffset()).isEqualTo(10L);
+
+        logTablet.truncateTo(5L);
+
+        assertThat(oldActiveSegment.deleted()).isTrue();
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(5L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(5L);
+
+        logTablet.close();
+        logTablet =
+                LogTablet.create(
+                        tempDir,
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        logDir,
+                        conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        0,
+                        scheduler,
+                        LogFormat.ARROW,
+                        1,
+                        false,
+                        SystemClock.getInstance(),
+                        false);
+
+        assertThat(logTablet.logSegments())
+                .extracting(LogSegment::getBaseOffset)
+                .containsExactly(5L);
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(5L);
     }
 
     @Test
@@ -429,6 +638,111 @@ final class LogTabletTest extends LogTestBase {
     }
 
     @Test
+    void testFreshWriterCannotSkipFirstSequenceWithManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        LogTablet log = createLogTablet(conf, clock);
+        try {
+            long writerId = 23L;
+            assertThatThrownBy(
+                            () ->
+                                    log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(
+                                                    DATA1, writerId, 1, 0L)))
+                    .isInstanceOf(OutOfOrderSequenceException.class);
+            assertThat(log.activeWriters()).isEmpty();
+            assertThat(
+                            log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L))
+                                    .firstOffset())
+                    .isZero();
+            assertThat(
+                            log.appendAsLeader(
+                                            genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0L))
+                                    .firstOffset())
+                    .isEqualTo((long) DATA1.size());
+            assertThat(activeWritersWithLastBatchSequence(log)).containsEntry(writerId, 1);
+            FetchDataInfo fetched =
+                    readLog(log, 0L, Integer.MAX_VALUE, FetchIsolation.LOG_END, true);
+            assertThat(fetched.getRecords().batches())
+                    .hasSize(2)
+                    .allSatisfy(
+                            batch -> {
+                                assertThat(batch.commitTimestamp()).isZero();
+                                assertThat(batch.getRecordCount()).isEqualTo(DATA1.size());
+                            });
+        } finally {
+            log.close();
+        }
+    }
+
+    @Test
+    void testPeriodicWriterExpirationUsesManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        ManuallyTriggeredScheduledExecutorService executor =
+                new ManuallyTriggeredScheduledExecutorService();
+        scheduler.shutdown();
+        scheduler =
+                new FlussScheduler(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            String name, Runnable task, long delayMs, long periodMs) {
+                        // Trigger the expiration callback synchronously to avoid timer races.
+                        return executor.scheduleAtFixedRate(
+                                task, delayMs, periodMs, TimeUnit.MILLISECONDS);
+                    }
+                };
+        LogTablet log = createLogTablet(conf, clock);
+        try {
+            long writerId = 23L;
+            log.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L));
+            executor.triggerPeriodicScheduledTasks();
+            assertThat(log.activeWriters()).containsKey(writerId);
+            clock.advanceTime(
+                    conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis() + 1,
+                    TimeUnit.MILLISECONDS);
+            executor.triggerPeriodicScheduledTasks();
+            assertThat(log.activeWriters()).isEmpty();
+        } finally {
+            log.close();
+            executor.shutdown();
+        }
+    }
+
+    @Test
+    void testWriterSnapshotReloadUsesManualClock() throws Exception {
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofSeconds(10));
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL, Duration.ofSeconds(1));
+        ManualClock clock = new ManualClock();
+        LogTablet log = createLogTablet(conf, clock);
+        File directory = log.getLogDir();
+        long writerId = 23L;
+        try {
+            log.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0L));
+        } finally {
+            log.close();
+        }
+        log = createLogTablet(conf, clock, directory);
+        try {
+            assertThat(activeWritersWithLastBatchSequence(log)).containsEntry(writerId, 0);
+        } finally {
+            log.close();
+        }
+        clock.advanceTime(
+                conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis() + 1,
+                TimeUnit.MILLISECONDS);
+        log = createLogTablet(conf, clock, directory);
+        try {
+            assertThat(log.activeWriters()).isEmpty();
+        } finally {
+            log.close();
+        }
+    }
+
+    @Test
     void testDuplicateAppends() throws Exception {
         long writerId = 1L;
         // Pad the beginning of the log.
@@ -483,26 +797,35 @@ final class LogTabletTest extends LogTestBase {
     }
 
     private LogTablet createLogTablet(Configuration config) throws Exception {
+        return createLogTablet(config, SystemClock.getInstance());
+    }
+
+    private LogTablet createLogTablet(Configuration config, Clock clock) throws Exception {
         File logDir =
                 LogTestUtils.makeRandomLogTabletDir(
                         tempDir,
                         DATA1_TABLE_PATH.getDatabaseName(),
                         DATA1_TABLE_ID,
                         DATA1_TABLE_PATH.getTableName());
-        Scheduler scheduler = new FlussScheduler(1);
-        scheduler.startup();
+        return createLogTablet(config, clock, logDir);
+    }
+
+    private LogTablet createLogTablet(Configuration config, Clock clock, File logDir)
+            throws Exception {
         return LogTablet.create(
                 tempDir,
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,
+                new AtomicBoolean(
+                        config.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 scheduler,
                 LogFormat.ARROW,
                 1,
                 false,
-                SystemClock.getInstance(),
+                clock,
                 true);
     }
 

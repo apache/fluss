@@ -20,6 +20,7 @@ package org.apache.fluss.lake.writer;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.PartitionMarkDoneCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
 import java.io.IOException;
@@ -64,6 +65,16 @@ public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializa
      */
     LakeCommitter<WriteResult, CommittableT> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException;
+
+    /**
+     * Returns whether this factory creates {@link PartitionMarkDoneCommitter} instances.
+     *
+     * <p>This check must not access lake resources. The committer checks whether the actual table
+     * enables mark-done.
+     */
+    default boolean supportsPartitionMarkDone() {
+        return false;
+    }
 
     /**
      * Returns the serializer for committable objects.

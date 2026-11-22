@@ -19,11 +19,14 @@ package org.apache.fluss.fs.s3;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.s3.token.DynamicTemporaryAWSCredentialsProvider;
+import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
+import org.apache.fluss.fs.s3.token.S3DelegationTokenProviderTest;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import org.apache.hadoop.fs.s3a.Constants;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -64,6 +67,129 @@ class S3FileSystemPluginTest {
     }
 
     @Test
+    void testServerModeWithConfiguredCredentialProvider() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+        assertThat(
+                        hadoopConfig.getBoolean(
+                                S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
+                                false))
+                .isTrue();
+    }
+
+    @Test
+    void testServerModeWithConfiguredCredentialProviderForS3A() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+
+        S3AFileSystemPlugin plugin = new S3AFileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+    }
+
+    @Test
+    void testConfiguredCredentialProviderWithRoleArnIsAccepted() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+        flussConfig.setString(
+                "fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+        assertThat(hadoopConfig.get(PROVIDER_CONFIG))
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(hadoopConfig.get("fs.s3a.assumed.role.arn"))
+                .isEqualTo("arn:aws:iam::123456789012:role/test-role");
+    }
+
+    @Test
+    void testInputStreamTypeDefaultsToClassic() {
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new S3FileSystemPlugin()
+                        .buildHadoopConfiguration(configurationWithStaticCredentials());
+
+        assertThat(hadoopConfig.get(Constants.INPUT_STREAM_TYPE))
+                .isEqualTo(Constants.INPUT_STREAM_TYPE_CLASSIC);
+    }
+
+    @Test
+    void testExplicitAnalyticsInputStreamTypeIsPreserved() {
+        Configuration flussConfig = configurationWithStaticCredentials();
+        flussConfig.setString("s3.input.stream.type", Constants.INPUT_STREAM_TYPE_ANALYTICS);
+
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new S3FileSystemPlugin().buildHadoopConfiguration(flussConfig);
+
+        assertThat(hadoopConfig.get(Constants.INPUT_STREAM_TYPE))
+                .isEqualTo(Constants.INPUT_STREAM_TYPE_ANALYTICS);
+    }
+
+    @Test
+    void testLegacyPrefetchOptionIsPreserved() {
+        Configuration flussConfig = configurationWithStaticCredentials();
+        flussConfig.setString("s3.prefetch.enabled", "true");
+
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new S3FileSystemPlugin().buildHadoopConfiguration(flussConfig);
+
+        assertThat(hadoopConfig.get(Constants.INPUT_STREAM_TYPE)).isNull();
+        assertThat(hadoopConfig.getBoolean(Constants.PREFETCH_ENABLED_KEY, false)).isTrue();
+    }
+
+    @Test
+    void testRegionIsMirroredToEndpointRegion() {
+        Configuration flussConfig = configurationWithStaticCredentials();
+        flussConfig.setString("s3.region", "us-west-1");
+
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new S3FileSystemPlugin().buildHadoopConfiguration(flussConfig);
+
+        assertThat(hadoopConfig.get("fs.s3a.region")).isEqualTo("us-west-1");
+        assertThat(hadoopConfig.get(Constants.AWS_REGION)).isEqualTo("us-west-1");
+    }
+
+    @Test
+    void testExplicitEndpointRegionTakesPrecedence() {
+        Configuration flussConfig = configurationWithStaticCredentials();
+        flussConfig.setString("s3.region", "us-west-1");
+        flussConfig.setString("s3.endpoint.region", "us-east-1");
+
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                new S3FileSystemPlugin().buildHadoopConfiguration(flussConfig);
+
+        assertThat(hadoopConfig.get("fs.s3a.region")).isEqualTo("us-west-1");
+        assertThat(hadoopConfig.get(Constants.AWS_REGION)).isEqualTo("us-east-1");
+    }
+
+    @Test
     void testClientModeWithDelegatedCredentials() {
         // Pre-populate receiver so updateHadoopConfig does not throw.
         Credentials creds = new Credentials("testKey", "testSecret", "testToken");
@@ -84,5 +210,19 @@ class S3FileSystemPluginTest {
 
         String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
         assertThat(providers).contains(DynamicTemporaryAWSCredentialsProvider.NAME);
+        assertThat(hadoopConfig.get("fs.s3a.region")).isEqualTo("us-east-1");
+        assertThat(hadoopConfig.get(Constants.AWS_REGION)).isEqualTo("us-east-1");
+        assertThat(
+                        hadoopConfig.getBoolean(
+                                S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
+                                false))
+                .isFalse();
+    }
+
+    private static Configuration configurationWithStaticCredentials() {
+        Configuration configuration = new Configuration();
+        configuration.setString("fs.s3a.access.key", "testAccessKey");
+        configuration.setString("fs.s3a.secret.key", "testSecretKey");
+        return configuration;
     }
 }

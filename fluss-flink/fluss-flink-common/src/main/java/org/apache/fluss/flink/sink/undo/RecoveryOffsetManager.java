@@ -42,23 +42,35 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
  * Manages recovery offset determination for undo recovery in aggregation tables.
  *
+ * <p>State semantics:
+ *
+ * <ul>
+ *   <li>{@code null} means that no Flink checkpoint is being restored, so the producer offset
+ *       snapshot provides the initial baseline.
+ *   <li>V2 state is a complete sparse baseline; an assigned live bucket absent from it has baseline
+ *       zero.
+ *   <li>Legacy or empty restored state is rejected because it cannot prove the same completeness
+ *       guarantee.
+ * </ul>
+ *
+ * <p>The complete baseline is preserved independently from the Undo work set. Unchanged buckets
+ * must remain in the next checkpoint even though only buckets whose current offsets exceed their
+ * baselines require Undo.
+ *
  * <p>Recovery flow:
  *
  * <ol>
- *   <li>Get recovery offsets (from checkpoint or producer offsets)
- *   <li>Fetch partition info once and cache it (partitioned tables only), create TableBuckets for
- *       partitions not in recovery offsets
- *   <li>Filter buckets by sharding to current subtask
- *   <li>Fetch current offsets for filtered buckets (one RPC per partition due to Admin API
- *       limitation)
- *   <li>Filter buckets with changed offsets (recovery < current, new partition buckets use 0 as
- *       original offset)
- *   <li>Return recovery decision
+ *   <li>Classify Flink state and reject legacy V1 state before external reads.
+ *   <li>Load the current partition metadata through the existing Admin API.
+ *   <li>Merge state fragments without guessing and enumerate every assigned live bucket.
+ *   <li>Resolve each bucket's baseline and fetch its strict current log end offset.
+ *   <li>Return the complete non-zero baseline separately from the bounded Undo work set.
  * </ol>
  */
 public class RecoveryOffsetManager {
@@ -92,16 +104,22 @@ public class RecoveryOffsetManager {
         PRODUCER_OFFSET_RECOVERY
     }
 
+    private enum RecoveryStateKind {
+        NO_FLINK_STATE,
+        V1_LEGACY,
+        V2_COMPLETE
+    }
+
     /** Result of recovery strategy determination. */
     public static class RecoveryDecision {
         private final RecoveryStrategy strategy;
-        @Nullable private final Map<TableBucket, Long> recoveryOffsets;
-        @Nullable private final Map<TableBucket, UndoOffsets> undoOffsets;
+        private final Map<TableBucket, Long> recoveryOffsets;
+        private final Map<TableBucket, UndoOffsets> undoOffsets;
 
         private RecoveryDecision(
                 RecoveryStrategy strategy,
-                @Nullable Map<TableBucket, Long> recoveryOffsets,
-                @Nullable Map<TableBucket, UndoOffsets> undoOffsets) {
+                Map<TableBucket, Long> recoveryOffsets,
+                Map<TableBucket, UndoOffsets> undoOffsets) {
             this.strategy = strategy;
             this.recoveryOffsets = recoveryOffsets;
             this.undoOffsets = undoOffsets;
@@ -111,7 +129,7 @@ public class RecoveryOffsetManager {
             return strategy;
         }
 
-        @Nullable
+        /** Returns all non-zero recovery offsets that the next checkpoint must preserve. */
         public Map<TableBucket, Long> getRecoveryOffsets() {
             return recoveryOffsets;
         }
@@ -122,30 +140,28 @@ public class RecoveryOffsetManager {
          * <p>This is used by UndoRecoveryManager to perform undo recovery without needing to call
          * listOffset again.
          *
-         * @return map of bucket to UndoOffsets, or null if no recovery needed
+         * @return map of bucket to UndoOffsets, empty if no recovery is needed
          */
-        @Nullable
         public Map<TableBucket, UndoOffsets> getUndoOffsets() {
             return undoOffsets;
         }
 
         public boolean needsUndoRecovery() {
-            return strategy != RecoveryStrategy.FRESH_START
-                    && undoOffsets != null
-                    && !undoOffsets.isEmpty();
+            return !undoOffsets.isEmpty();
         }
 
         static RecoveryDecision of(
                 RecoveryStrategy strategy,
-                @Nullable Map<TableBucket, Long> recoveryOffsets,
-                @Nullable Map<TableBucket, UndoOffsets> undoOffsets) {
+                Map<TableBucket, Long> recoveryOffsets,
+                Map<TableBucket, UndoOffsets> undoOffsets) {
             return new RecoveryDecision(strategy, recoveryOffsets, undoOffsets);
         }
 
         @Override
         public String toString() {
-            int size = undoOffsets != null ? undoOffsets.size() : 0;
-            return String.format("RecoveryDecision{strategy=%s, buckets=%d}", strategy, size);
+            return String.format(
+                    "RecoveryDecision{strategy=%s, recoveryBuckets=%d, undoBuckets=%d}",
+                    strategy, recoveryOffsets.size(), undoOffsets.size());
         }
     }
 
@@ -206,104 +222,95 @@ public class RecoveryOffsetManager {
                 parallelism,
                 producerId);
 
-        // Step 1: Get recovery offsets (checkpoint or producer offsets)
-        // Note: recoveredState == null means no checkpoint exists (fresh start or pre-checkpoint
-        // failure)
-        //       recoveredState != null but empty means checkpoint exists but no data was written
-        //       OR the checkpoint was taken before UndoRecoveryOperator was added to the topology
-        //       In both cases, we should use producer offsets for recovery decision
-        boolean hasCheckpoint = recoveredState != null && !recoveredState.isEmpty();
+        RecoveryStateKind stateKind = classifyRecoveredState(recoveredState);
+        Map<Long, PartitionInfo> partitionInfos = getPartitionInfoMap();
         Map<TableBucket, Long> recoveryOffsets =
-                hasCheckpoint ? mergeCheckpointState(recoveredState) : getProducerOffsets();
-
-        // Validate that checkpoint state refers to the same table (detect table re-creation)
-        if (hasCheckpoint) {
-            validateTableId(recoveryOffsets);
-        }
+                stateKind == RecoveryStateKind.NO_FLINK_STATE
+                        ? getProducerOffsets()
+                        : mergeCheckpointState(recoveredState, partitionInfos);
 
         LOG.info(
                 "Recovery offsets for subtask {} (source={}): {}",
                 subtaskIndex,
-                hasCheckpoint ? "checkpoint" : "producer",
+                stateKind,
                 recoveryOffsets);
 
-        // Step 2: Get all buckets (to ensure no bucket is missed during listOffset)
         Set<TableBucket> allBuckets = getAllBuckets();
-
-        // Step 3: Filter by sharding (both allBuckets and recoveryOffsets)
-        Map<Long, String> partitionNames = getPartitionNameMap();
-        Set<TableBucket> filteredBuckets = filterBucketsBySharding(allBuckets, partitionNames);
-        Map<TableBucket, Long> filteredRecoveryOffsets =
-                filterRecoveryOffsetsBySharding(recoveryOffsets, partitionNames);
+        Set<TableBucket> filteredBuckets = filterBucketsBySharding(allBuckets, partitionInfos);
 
         LOG.info(
-                "Subtask {}: filteredBuckets={}, filteredRecoveryOffsets={}",
+                "Subtask {}: filteredBuckets={}, recoveryOffsets={}",
                 subtaskIndex,
                 filteredBuckets,
-                filteredRecoveryOffsets);
+                recoveryOffsets);
 
-        if (filteredBuckets.isEmpty()) {
-            LOG.info("No buckets assigned to subtask {} after filtering", subtaskIndex);
-            return RecoveryDecision.of(RecoveryStrategy.FRESH_START, null, null);
-        }
-
-        // Step 4: Fetch current offsets for all filtered buckets
         Map<TableBucket, Long> currentOffsets =
-                fetchCurrentOffsets(filteredBuckets, partitionNames);
+                fetchCurrentOffsets(filteredBuckets, partitionInfos);
 
         LOG.info("Subtask {}: currentOffsets={}", subtaskIndex, currentOffsets);
 
-        // Step 5: Filter changed buckets and build UndoOffsets in one pass
-        // For buckets not in filteredRecoveryOffsets, use 0 as recovery offset
-        Map<TableBucket, Long> changedOffsets = new HashMap<>();
+        Map<TableBucket, Long> retainedRecoveryOffsets = new HashMap<>();
         Map<TableBucket, UndoOffsets> undoOffsets = new HashMap<>();
+        List<TableBucket> legacyStateGaps = new ArrayList<>();
 
         for (TableBucket bucket : filteredBuckets) {
-            long recovery = filteredRecoveryOffsets.getOrDefault(bucket, 0L);
-            long current = currentOffsets.getOrDefault(bucket, 0L);
-            boolean inRecoveryOffsets = filteredRecoveryOffsets.containsKey(bucket);
+            Long sourceOffset = recoveryOffsets.get(bucket);
+            long baseline = sourceOffset == null ? 0L : sourceOffset;
+            Long currentOffset = currentOffsets.get(bucket);
+            if (currentOffset == null) {
+                throw new IllegalStateException("missing latest offset for live bucket " + bucket);
+            }
+            long current = currentOffset;
+
+            if (stateKind == RecoveryStateKind.V1_LEGACY && sourceOffset == null && current > 0) {
+                legacyStateGaps.add(bucket);
+            }
 
             LOG.info(
-                    "Subtask {}: bucket={}, recovery={} (inCheckpoint={}), current={}",
+                    "Subtask {}: bucket={}, baseline={} (explicit={}), current={}",
                     subtaskIndex,
                     bucket,
-                    recovery,
-                    inRecoveryOffsets,
+                    baseline,
+                    sourceOffset != null,
                     current);
 
-            if (recovery > current) {
+            if (baseline > current) {
                 throw new IllegalStateException(
                         String.format(
-                                "Data inconsistency: bucket %s recovery=%d > current=%d",
-                                bucket, recovery, current));
+                                "Data inconsistency: bucket %s baseline=%d > current=%d",
+                                bucket, baseline, current));
             }
-            if (recovery < current) {
-                changedOffsets.put(bucket, recovery);
-                // Build UndoOffsets with checkpointOffset and logEndOffset (current offset)
-                undoOffsets.put(bucket, new UndoOffsets(recovery, current));
+            if (baseline > 0) {
+                retainedRecoveryOffsets.put(bucket, baseline);
             }
-            // recovery == current: no change, skip
+            if (baseline < current) {
+                undoOffsets.put(bucket, new UndoOffsets(baseline, current));
+            }
         }
 
-        // Only return FRESH_START when changedOffsets is empty (after all checks)
-        if (changedOffsets.isEmpty()) {
-            LOG.info(
-                    "No buckets with changed offsets, fresh start (hasCheckpointState={})",
-                    hasCheckpoint);
-            return RecoveryDecision.of(RecoveryStrategy.FRESH_START, null, null);
+        if (!legacyStateGaps.isEmpty()) {
+            LOG.warn(
+                    "Restoring legacy V1 Undo Recovery state with {} assigned live buckets "
+                            + "missing from the checkpoint state. V1 cannot distinguish buckets "
+                            + "that had offset zero at checkpoint time from buckets whose state "
+                            + "was previously lost. Missing buckets use recovery offset zero, "
+                            + "so Undo Recovery may scan excessive history.",
+                    legacyStateGaps.size());
+            LOG.debug("Legacy V1 state gaps for subtask {}: {}", subtaskIndex, legacyStateGaps);
         }
 
-        // Step 6: Return decision with both recoveryOffsets and undoOffsets
         RecoveryStrategy strategy =
-                hasCheckpoint
-                        ? RecoveryStrategy.CHECKPOINT_RECOVERY
-                        : RecoveryStrategy.PRODUCER_OFFSET_RECOVERY;
+                undoOffsets.isEmpty()
+                        ? RecoveryStrategy.FRESH_START
+                        : stateKind == RecoveryStateKind.NO_FLINK_STATE
+                                ? RecoveryStrategy.PRODUCER_OFFSET_RECOVERY
+                                : RecoveryStrategy.CHECKPOINT_RECOVERY;
         LOG.info(
                 "{}: {} buckets need recovery for subtask {}",
                 strategy,
-                changedOffsets.size(),
+                undoOffsets.size(),
                 subtaskIndex);
-        return RecoveryDecision.of(strategy, changedOffsets, undoOffsets);
+        return RecoveryDecision.of(strategy, retainedRecoveryOffsets, undoOffsets);
     }
 
     /** Cleans up registered producer offsets. Should only be called by Task0. */
@@ -321,34 +328,102 @@ public class RecoveryOffsetManager {
 
     // ==================== Step 1: Get Recovery Offsets ====================
 
-    private Map<TableBucket, Long> mergeCheckpointState(Collection<WriterState> states) {
+    private RecoveryStateKind classifyRecoveredState(
+            @Nullable Collection<WriterState> recoveredState) {
+        if (recoveredState == null) {
+            return RecoveryStateKind.NO_FLINK_STATE;
+        }
+        if (recoveredState.isEmpty()) {
+            // A checkpoint produced by V2 always contains at least one state element, even when
+            // its baseline is empty. An empty restored collection therefore cannot prove a
+            // complete baseline.
+            throw new IllegalStateException(
+                    "The job was restored but Undo Recovery has no state fragments. "
+                            + "Cannot distinguish a legacy empty state from a topology that did "
+                            + "not contain Undo Recovery; perform a controlled stateless restart.");
+        }
+
+        WriterState.StateFormat stateFormat = null;
+        for (WriterState state : recoveredState) {
+            if (state == null) {
+                throw new IllegalStateException("Undo Recovery state contains a null fragment.");
+            }
+            if (stateFormat != null && state.getStateFormat() != stateFormat) {
+                throw new IllegalStateException(
+                        "Undo Recovery state contains mixed V1 and V2 fragments.");
+            }
+            stateFormat = state.getStateFormat();
+        }
+        if (stateFormat == WriterState.StateFormat.V1_LEGACY) {
+            return RecoveryStateKind.V1_LEGACY;
+        }
+        return RecoveryStateKind.V2_COMPLETE;
+    }
+
+    private Map<TableBucket, Long> mergeCheckpointState(
+            Collection<WriterState> states, Map<Long, PartitionInfo> partitionInfos) {
         Map<TableBucket, Long> merged = new HashMap<>();
         for (WriterState state : states) {
-            state.getBucketOffsets()
-                    .forEach((bucket, offset) -> merged.merge(bucket, offset, Math::max));
+            if (state.getStateFormat() == WriterState.StateFormat.V2_COMPLETE
+                    && state.getTableId() != tableId) {
+                throw new IllegalStateException(
+                        String.format(
+                                "V2 state table ID %d does not match current table ID %d for %s.",
+                                state.getTableId(), tableId, tablePath));
+            }
+            for (Map.Entry<TableBucket, Long> entry : state.getBucketOffsets().entrySet()) {
+                TableBucket bucket = entry.getKey();
+                validateTableId(bucket);
+                validateBaselineOffset(bucket, entry.getValue());
+                if (!isLiveStateBucket(bucket, partitionInfos)) {
+                    continue;
+                }
+                putMergedOffset(merged, bucket, entry.getValue());
+            }
         }
         return merged;
     }
 
-    /**
-     * Validates that all buckets in the recovery offsets belong to the current table.
-     *
-     * <p>If the table was dropped and re-created, the checkpoint state will contain buckets with
-     * the old table ID, which won't match the current table ID. In this case, restoring from the
-     * checkpoint is not safe and should fail explicitly.
-     *
-     * @param recoveryOffsets the merged recovery offsets from checkpoint state
-     * @throws IllegalStateException if any bucket has a mismatched table ID
-     */
-    private void validateTableId(Map<TableBucket, Long> recoveryOffsets) {
-        for (TableBucket bucket : recoveryOffsets.keySet()) {
-            if (bucket.getTableId() != tableId) {
+    private void putMergedOffset(Map<TableBucket, Long> merged, TableBucket bucket, Long offset) {
+        Long previous = merged.putIfAbsent(bucket, offset);
+        if (previous != null && !previous.equals(offset)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Conflicting checkpoint offsets for %s: %d and %d.",
+                            bucket, previous, offset));
+        }
+    }
+
+    private void validateTableId(TableBucket bucket) {
+        if (bucket.getTableId() != tableId) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Table '%s' has been re-created (state tableId=%d, current tableId=%d). "
+                                    + "Cannot restore from checkpoint/savepoint after table re-creation.",
+                            tablePath, bucket.getTableId(), tableId));
+        }
+    }
+
+    private boolean isLiveStateBucket(TableBucket bucket, Map<Long, PartitionInfo> partitionInfos) {
+        Long partitionId = bucket.getPartitionId();
+        if (isPartitioned) {
+            if (partitionId == null) {
                 throw new IllegalStateException(
-                        String.format(
-                                "Table '%s' has been re-created (state tableId=%d, current tableId=%d). "
-                                        + "Cannot restore from checkpoint/savepoint after table re-creation.",
-                                tablePath, bucket.getTableId(), tableId));
+                        "State bucket " + bucket + " has no partition ID for a partitioned table.");
             }
+            return partitionInfos.containsKey(partitionId);
+        }
+        if (partitionId != null) {
+            throw new IllegalStateException(
+                    "State bucket " + bucket + " has a partition ID for a non-partitioned table.");
+        }
+        return true;
+    }
+
+    private void validateBaselineOffset(TableBucket bucket, Long offset) {
+        if (offset == null || offset < 0) {
+            throw new IllegalStateException(
+                    "Invalid checkpoint baseline offset for " + bucket + ": " + offset);
         }
     }
 
@@ -414,7 +489,8 @@ public class RecoveryOffsetManager {
         Set<TableBucket> buckets = new HashSet<>();
         if (isPartitioned) {
             for (PartitionInfo partition : getPartitionInfos()) {
-                for (int bucketId = 0; bucketId < numBuckets; bucketId++) {
+                int partitionBucketCount = partition.getBucketCount();
+                for (int bucketId = 0; bucketId < partitionBucketCount; bucketId++) {
                     buckets.add(new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
@@ -429,22 +505,11 @@ public class RecoveryOffsetManager {
     // ==================== Step 3: Filter by Sharding ====================
 
     private Set<TableBucket> filterBucketsBySharding(
-            Set<TableBucket> buckets, Map<Long, String> partitionNames) {
+            Set<TableBucket> buckets, Map<Long, PartitionInfo> partitionInfos) {
         Set<TableBucket> filtered = new HashSet<>();
         for (TableBucket bucket : buckets) {
-            if (isAssignedToSubtask(bucket, partitionNames)) {
+            if (isAssignedToSubtask(bucket, partitionInfos)) {
                 filtered.add(bucket);
-            }
-        }
-        return filtered;
-    }
-
-    private Map<TableBucket, Long> filterRecoveryOffsetsBySharding(
-            Map<TableBucket, Long> recoveryOffsets, Map<Long, String> partitionNames) {
-        Map<TableBucket, Long> filtered = new HashMap<>();
-        for (Map.Entry<TableBucket, Long> entry : recoveryOffsets.entrySet()) {
-            if (isAssignedToSubtask(entry.getKey(), partitionNames)) {
-                filtered.put(entry.getKey(), entry.getValue());
             }
         }
         return filtered;
@@ -454,24 +519,28 @@ public class RecoveryOffsetManager {
      * Determines if a bucket is assigned to the current subtask.
      *
      * <p>Uses {@link ChannelComputer#shouldCombinePartitionInSharding} and {@link
-     * ChannelComputer#select} to ensure consistent sharding logic with {@link
-     * org.apache.fluss.flink.sink.FlinkRowDataChannelComputer}.
+     * ChannelComputer#select} to keep the sharding logic aligned with {@link
+     * org.apache.fluss.flink.sink.FlinkRowDataChannelComputer}. A partition that kept its own
+     * bucket layout across an ALTER bucket.num is sharded by that partition's actual bucket count,
+     * not by the table-level one.
      *
-     * <p>For partitioned tables, if the partition has been deleted (partitionName not found in
-     * partitionNames map), the bucket is considered not assigned to any subtask and will be
+     * <p>For partitioned tables, if the partition has been deleted (partition not found in
+     * partitionInfos map), the bucket is considered not assigned to any subtask and will be
      * skipped.
      *
      * @param bucket the bucket to check
-     * @param partitionNames map of partition ID to partition name
+     * @param partitionInfos map of partition ID to partition info
      * @return true if the bucket is assigned to this subtask, false if not assigned or partition
      *     deleted
      */
-    private boolean isAssignedToSubtask(TableBucket bucket, Map<Long, String> partitionNames) {
-        // For partitioned table bucket, get partition name first
+    private boolean isAssignedToSubtask(
+            TableBucket bucket, Map<Long, PartitionInfo> partitionInfos) {
+        // For partitioned table bucket, get partition name and its own bucket count first
         String partitionName = null;
+        int shardingBucketCount = numBuckets;
         if (bucket.getPartitionId() != null) {
-            partitionName = partitionNames.get(bucket.getPartitionId());
-            if (partitionName == null) {
+            PartitionInfo partitionInfo = partitionInfos.get(bucket.getPartitionId());
+            if (partitionInfo == null) {
                 // Partition has been deleted, skip this bucket
                 LOG.debug(
                         "Partition {} not found (deleted?), skipping bucket {}",
@@ -479,12 +548,14 @@ public class RecoveryOffsetManager {
                         bucket);
                 return false;
             }
+            partitionName = partitionInfo.getPartitionName();
+            shardingBucketCount = partitionInfo.getBucketCount();
         }
 
         // Use shared logic to determine sharding strategy and compute channel
         int channel;
         if (ChannelComputer.shouldCombinePartitionInSharding(
-                isPartitioned, numBuckets, parallelism)) {
+                isPartitioned, shardingBucketCount, parallelism)) {
             // When shouldCombinePartitionInSharding is true, partitionName is guaranteed non-null
             // because: 1) isPartitioned=true means bucket has partitionId
             //          2) deleted partitions already returned false above
@@ -498,7 +569,7 @@ public class RecoveryOffsetManager {
     // ==================== Step 4: Fetch Current Offsets ====================
 
     private Map<TableBucket, Long> fetchCurrentOffsets(
-            Set<TableBucket> buckets, Map<Long, String> partitionNames) throws Exception {
+            Set<TableBucket> buckets, Map<Long, PartitionInfo> partitionInfos) throws Exception {
         Map<TableBucket, Long> offsets = new HashMap<>();
 
         // Group buckets by partition
@@ -522,12 +593,12 @@ public class RecoveryOffsetManager {
         // Fetch partitioned buckets
         for (Map.Entry<Long, List<TableBucket>> entry : byPartition.entrySet()) {
             Long partitionId = entry.getKey();
-            String partitionName = partitionNames.get(partitionId);
-            if (partitionName == null) {
+            PartitionInfo partitionInfo = partitionInfos.get(partitionId);
+            if (partitionInfo == null) {
                 throw new IllegalStateException(
                         "Partition " + partitionId + " not found in partition info cache");
             }
-            fetchBucketOffsets(partitionName, entry.getValue(), offsets);
+            fetchBucketOffsets(partitionInfo.getPartitionName(), entry.getValue(), offsets);
         }
 
         return offsets;
@@ -543,15 +614,15 @@ public class RecoveryOffsetManager {
         return cachedPartitionInfos;
     }
 
-    private Map<Long, String> getPartitionNameMap() throws Exception {
+    private Map<Long, PartitionInfo> getPartitionInfoMap() throws Exception {
         if (!isPartitioned) {
             return new HashMap<>();
         }
-        Map<Long, String> nameMap = new HashMap<>();
+        Map<Long, PartitionInfo> infoMap = new HashMap<>();
         for (PartitionInfo partition : getPartitionInfos()) {
-            nameMap.put(partition.getPartitionId(), partition.getPartitionName());
+            infoMap.put(partition.getPartitionId(), partition);
         }
-        return nameMap;
+        return infoMap;
     }
 
     // ==================== Offset Fetching Helpers ====================
@@ -561,10 +632,13 @@ public class RecoveryOffsetManager {
         if (isPartitioned) {
             for (PartitionInfo partition : getPartitionInfos()) {
                 fetchPartitionOffsets(
-                        partition.getPartitionName(), partition.getPartitionId(), offsets);
+                        partition.getPartitionName(),
+                        partition.getPartitionId(),
+                        partition.getBucketCount(),
+                        offsets);
             }
         } else {
-            fetchPartitionOffsets(null, null, offsets);
+            fetchPartitionOffsets(null, null, numBuckets, offsets);
         }
         return offsets;
     }
@@ -572,10 +646,11 @@ public class RecoveryOffsetManager {
     private void fetchPartitionOffsets(
             @Nullable String partitionName,
             @Nullable Long partitionId,
+            int bucketCount,
             Map<TableBucket, Long> offsets)
             throws Exception {
-        List<Integer> bucketIds = new ArrayList<>(numBuckets);
-        for (int i = 0; i < numBuckets; i++) {
+        List<Integer> bucketIds = new ArrayList<>(bucketCount);
+        for (int i = 0; i < bucketCount; i++) {
             bucketIds.add(i);
         }
         ListOffsetsResult result = listOffsets(partitionName, bucketIds);
@@ -612,7 +687,21 @@ public class RecoveryOffsetManager {
     }
 
     private long getOffset(ListOffsetsResult result, int bucketId) throws Exception {
-        Long offset = result.bucketResult(bucketId).get();
-        return offset != null ? offset : 0L;
+        if (result == null) {
+            throw new IllegalStateException("null latest offset result for bucket ID " + bucketId);
+        }
+        CompletableFuture<Long> bucketResult = result.bucketResult(bucketId);
+        if (bucketResult == null) {
+            throw new IllegalStateException("missing latest offset for bucket ID " + bucketId);
+        }
+        Long offset = bucketResult.get();
+        if (offset == null) {
+            throw new IllegalStateException("null latest offset for bucket ID " + bucketId);
+        }
+        if (offset < 0) {
+            throw new IllegalStateException(
+                    "negative latest offset for bucket ID " + bucketId + ": " + offset);
+        }
+        return offset;
     }
 }

@@ -17,15 +17,20 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.client.initializer.LatestOffsetsInitializer;
+import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.connector.source.Boundedness;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
@@ -42,7 +47,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     public void setup() throws Exception {
         bootstrapServers = conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
 
-        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        createTable(defaultTablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
     }
 
     @Test
@@ -52,7 +57,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -60,6 +65,146 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
         // Then
         assertThat(source).isNotNull();
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.CONTINUOUS_UNBOUNDED);
+        assertThat(source.isStreaming()).isTrue();
+        assertThat(source.getStoppingOffsetsInitializer())
+                .isInstanceOf(NoStoppingOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testRejectUnsupportedStoppingOffsetsInitializer() {
+        FlussSourceBuilder<TestRecord> builder = FlussSource.builder();
+
+        assertThatThrownBy(() -> builder.setStoppingOffsets(OffsetsInitializer.earliest()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Only OffsetsInitializer.latest() and "
+                                + "OffsetsInitializer.timestamp(...) are supported");
+        assertThatThrownBy(() -> builder.setStoppingOffsets(OffsetsInitializer.full()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Only OffsetsInitializer.latest() and "
+                                + "OffsetsInitializer.timestamp(...) are supported");
+
+        assertThat(builder.setStoppingOffsets(OffsetsInitializer.timestamp(1L))).isSameAs(builder);
+    }
+
+    @Test
+    public void testBuildStreamingSourceWithStoppingOffsets() {
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(defaultTablePath.getTableName())
+                        .setStartingOffsets(OffsetsInitializer.earliest())
+                        .setStoppingOffsets(OffsetsInitializer.latest())
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(source.isStreaming()).isTrue();
+        assertThat(source.getStoppingOffsetsInitializer())
+                .isInstanceOf(LatestOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testBuildBatchSource() {
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(defaultTablePath.getTableName())
+                        .setBatch()
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(source.isStreaming()).isFalse();
+        assertThat(source.getStoppingOffsetsInitializer())
+                .isInstanceOf(LatestOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testBatchAndStoppingOffsetsAreOrderIndependent() throws Exception {
+        TablePath logTablePath = tableNames.tablePath(DEFAULT_DB, "batch-with-stopping-offsets");
+        createTable(logTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+
+        FlussSource<TestRecord> batchThenStopping =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(logTablePath.getTableName())
+                        .setBatch()
+                        .setStoppingOffsets(OffsetsInitializer.timestamp(1L))
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+        FlussSource<TestRecord> stoppingThenBatch =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(logTablePath.getTableName())
+                        .setStoppingOffsets(OffsetsInitializer.timestamp(1L))
+                        .setBatch()
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(batchThenStopping.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(batchThenStopping.isStreaming()).isFalse();
+        assertThat(batchThenStopping.getStoppingOffsetsInitializer())
+                .isInstanceOf(TimestampOffsetsInitializer.class);
+        assertThat(stoppingThenBatch.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(stoppingThenBatch.isStreaming()).isFalse();
+        assertThat(stoppingThenBatch.getStoppingOffsetsInitializer())
+                .isInstanceOf(TimestampOffsetsInitializer.class);
+    }
+
+    @Test
+    public void testRejectStoppingOffsetsForPrimaryKeyBatchRead() {
+        assertThatThrownBy(
+                        () ->
+                                FlussSource.<TestRecord>builder()
+                                        .setBootstrapServers(bootstrapServers)
+                                        .setDatabase(DEFAULT_DB)
+                                        .setTable(defaultTablePath.getTableName())
+                                        .setBatch()
+                                        .setStoppingOffsets(OffsetsInitializer.latest())
+                                        .setDeserializationSchema(new TestDeserializationSchema())
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Batch read on primary-key table")
+                .hasMessageContaining("does not support explicit stopping offsets");
+
+        assertThatThrownBy(
+                        () ->
+                                FlussSource.<TestRecord>builder()
+                                        .setBootstrapServers(bootstrapServers)
+                                        .setDatabase(DEFAULT_DB)
+                                        .setTable(defaultTablePath.getTableName())
+                                        .setBatch()
+                                        .setStartingOffsets(OffsetsInitializer.earliest())
+                                        .setStoppingOffsets(OffsetsInitializer.latest())
+                                        .setDeserializationSchema(new TestDeserializationSchema())
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Batch read on primary-key table")
+                .hasMessageContaining("does not support explicit stopping offsets");
+    }
+
+    @Test
+    public void testBuildLegacyBoundedSource() {
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(defaultTablePath.getTableName())
+                        .setBounded()
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        assertThat(source.getBoundedness()).isEqualTo(Boundedness.BOUNDED);
+        assertThat(source.isStreaming()).isFalse();
+        assertThat(source.getStoppingOffsetsInitializer())
+                .isInstanceOf(LatestOffsetsInitializer.class);
     }
 
     @Test
@@ -69,7 +214,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 () ->
                         FlussSource.<TestRecord>builder()
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -89,7 +234,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers("")
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -108,7 +253,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 () ->
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -128,7 +273,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
                                 .setDatabase("")
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(1000L)
                                 .setDeserializationSchema(new TestDeserializationSchema())
@@ -186,7 +331,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -202,7 +347,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
                         .build();
@@ -219,7 +364,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         FlussSource.<TestRecord>builder()
                                 .setBootstrapServers(bootstrapServers)
                                 .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                                .setTable(defaultTablePath.getTableName())
                                 .setStartingOffsets(OffsetsInitializer.earliest())
                                 .setScanPartitionDiscoveryIntervalMs(10000L)
                                 .build();
@@ -237,7 +382,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())
@@ -255,7 +400,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                 FlussSource.<TestRecord>builder()
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setTable(defaultTablePath.getTableName())
                         .setStartingOffsets(OffsetsInitializer.earliest())
                         .setScanPartitionDiscoveryIntervalMs(1000L)
                         .setDeserializationSchema(new TestDeserializationSchema())

@@ -37,10 +37,17 @@ import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFS
 public class BucketOffsetsRetrieverImpl implements OffsetsInitializer.BucketOffsetsRetriever {
     private final Admin flussAdmin;
     private final TablePath tablePath;
+    private final boolean fetchEarliestOffset;
 
     public BucketOffsetsRetrieverImpl(Admin flussAdmin, TablePath tablePath) {
+        this(flussAdmin, tablePath, false);
+    }
+
+    public BucketOffsetsRetrieverImpl(
+            Admin flussAdmin, TablePath tablePath, boolean fetchEarliestOffset) {
         this.flussAdmin = flussAdmin;
         this.tablePath = tablePath;
+        this.fetchEarliestOffset = fetchEarliestOffset;
     }
 
     @Override
@@ -52,11 +59,15 @@ public class BucketOffsetsRetrieverImpl implements OffsetsInitializer.BucketOffs
     @Override
     public Map<Integer, Long> earliestOffsets(
             @Nullable String partitionName, Collection<Integer> buckets) {
-        Map<Integer, Long> bucketWithOffset = new HashMap<>(buckets.size());
-        for (Integer bucket : buckets) {
-            bucketWithOffset.put(bucket, EARLIEST_OFFSET);
+        if (!fetchEarliestOffset) {
+            Map<Integer, Long> bucketWithOffset = new HashMap<>(buckets.size());
+            for (Integer bucket : buckets) {
+                bucketWithOffset.put(bucket, EARLIEST_OFFSET);
+            }
+            return bucketWithOffset;
+        } else {
+            return listOffsets(partitionName, buckets, new OffsetSpec.EarliestSpec());
         }
-        return bucketWithOffset;
     }
 
     @Override

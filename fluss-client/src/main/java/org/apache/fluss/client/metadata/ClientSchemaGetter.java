@@ -67,6 +67,7 @@ public class ClientSchemaGetter implements SchemaGetter {
             try {
                 SchemaInfo schemaInfo =
                         admin.getTableSchema(tablePath, schemaId).get(1, TimeUnit.MINUTES);
+                schemasById.put(schemaId, schemaInfo.getSchema());
                 if (schemaId > latestSchemaInfo.getSchemaId()) {
                     latestSchemaInfo = schemaInfo;
                 }

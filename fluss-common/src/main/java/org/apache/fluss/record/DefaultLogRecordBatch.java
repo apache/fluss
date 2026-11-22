@@ -25,11 +25,8 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.columnar.ColumnarRow;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -244,21 +241,20 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         int schemaId = schemaId();
         long timestamp = commitTimestamp();
         LogFormat logFormat = context.getLogFormat();
-        RowType rowType = context.getRowType(schemaId);
 
         switch (logFormat) {
             case ARROW:
-                return columnRecordIterator(
-                        rowType,
-                        context.getOutputProjectedRow(schemaId),
-                        context.getVectorSchemaRoot(schemaId),
-                        context.getBufferAllocator(),
-                        timestamp);
+                return columnRecordIterator(context.getArrowReadPlan(schemaId));
             case INDEXED:
                 return rowRecordIterator(
-                        rowType, context.getOutputProjectedRow(schemaId), timestamp);
+                        context.getRowType(schemaId),
+                        context.getOutputProjectedRow(schemaId),
+                        timestamp);
             case COMPACTED:
-                return compactedRowRecordIterator(rowType, timestamp);
+                return compactedRowRecordIterator(
+                        context.getRowType(schemaId),
+                        context.getOutputProjectedRow(schemaId),
+                        timestamp);
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
@@ -354,7 +350,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private CloseableIterator<LogRecord> compactedRowRecordIterator(
-            RowType rowType, long timestamp) {
+            RowType rowType, @Nullable ProjectedRow outputProjection, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
             int position = DefaultLogRecordBatch.this.position + recordsDataOffset();
@@ -367,7 +363,15 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                                 segment, position, baseOffset + rowId, timestamp, fieldTypes);
                 rowId++;
                 position += logRecord.getSizeInBytes();
-                return logRecord;
+                if (outputProjection == null) {
+                    return logRecord;
+                } else {
+                    return new GenericRecord(
+                            logRecord.logOffset(),
+                            logRecord.timestamp(),
+                            logRecord.getChangeType(),
+                            outputProjection.replaceRow(logRecord.getRow()));
+                }
             }
 
             @Override
@@ -380,12 +384,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         };
     }
 
-    private CloseableIterator<LogRecord> columnRecordIterator(
-            RowType rowType,
-            @Nullable ProjectedRow outputProjection,
-            VectorSchemaRoot root,
-            BufferAllocator allocator,
-            long timestamp) {
+    private CloseableIterator<LogRecord> columnRecordIterator(ArrowReadPlan plan) {
         boolean isAppendOnly = isAppendOnly();
         int recordsDataOffset = recordsDataOffset();
         if (isAppendOnly) {
@@ -393,15 +392,8 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             // the start of the arrow data is the beginning of the batch records
             int arrowOffset = position + recordsDataOffset;
             int arrowLength = sizeInBytes() - recordsDataOffset;
-            ArrowReader reader =
-                    ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
-                @Override
-                protected ChangeType getChangeType(int rowId) {
-                    return ChangeType.APPEND_ONLY;
-                }
-            };
+            ArrowReader reader = plan.load(segment, arrowOffset, arrowLength);
+            return columnRecordIterator(plan, reader, null);
         } else {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
@@ -410,36 +402,42 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                     new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
             int arrowLength = sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
-            ArrowReader reader =
-                    ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
-                @Override
-                protected ChangeType getChangeType(int rowId) {
-                    return changeTypeVector.getChangeType(rowId);
-                }
-            };
+            ArrowReader reader = plan.load(segment, arrowOffset, arrowLength);
+            return columnRecordIterator(plan, reader, changeTypeVector);
         }
     }
 
-    private boolean isAppendOnly() {
+    /** Creates an iterator from already loaded Arrow data and this batch's header. */
+    CloseableIterator<LogRecord> columnRecordIterator(
+            ArrowReadPlan plan, ArrowReader reader, @Nullable ChangeTypeVector changeTypes) {
+        return new ArrowLogRecordIterator(plan, reader, commitTimestamp(), plan.createOutputRow()) {
+            @Override
+            protected ChangeType getChangeType(int rowId) {
+                return changeTypes == null
+                        ? ChangeType.APPEND_ONLY
+                        : changeTypes.getChangeType(rowId);
+            }
+        };
+    }
+
+    boolean isAppendOnly() {
         return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
     }
 
     /** The basic implementation for Arrow log record iterator. */
     private abstract class ArrowLogRecordIterator extends LogRecordIterator {
-        private final VectorSchemaRoot root;
+        private final ArrowReadPlan plan;
         private final ArrowReader reader;
         private final long timestamp;
         private int rowId = 0;
         @Nullable private final ProjectedRow outputProjection;
 
         private ArrowLogRecordIterator(
-                VectorSchemaRoot root,
+                ArrowReadPlan plan,
                 ArrowReader reader,
                 long timestamp,
                 @Nullable ProjectedRow outputProjection) {
-            this.root = root;
+            this.plan = plan;
             this.reader = reader;
             this.timestamp = timestamp;
             this.outputProjection = outputProjection;
@@ -476,7 +474,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         public void close() {
             // Clear old buffers before the next batch load to avoid temporary
             // duplication of buffers (old + new) during loadFieldBuffers.
-            root.clear();
+            plan.clear();
         }
     }
 

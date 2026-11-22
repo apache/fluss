@@ -26,11 +26,17 @@ public class LogReadInfo {
     private final FetchDataInfo fetchedData;
     private final long highWatermark;
     private final long logEndOffset;
+    private final long minRetainOffset;
 
-    public LogReadInfo(FetchDataInfo fetchedData, long highWatermark, long logEndOffset) {
+    public LogReadInfo(
+            FetchDataInfo fetchedData,
+            long highWatermark,
+            long logEndOffset,
+            long minRetainOffset) {
         this.fetchedData = fetchedData;
         this.highWatermark = highWatermark;
         this.logEndOffset = logEndOffset;
+        this.minRetainOffset = minRetainOffset;
     }
 
     public FetchDataInfo getFetchedData() {
@@ -45,6 +51,14 @@ public class LogReadInfo {
         return logEndOffset;
     }
 
+    public boolean hasMinRetainOffset() {
+        return minRetainOffset >= 0;
+    }
+
+    public long getMinRetainOffset() {
+        return minRetainOffset;
+    }
+
     @Override
     public String toString() {
         return "LogReadInfo("
@@ -54,6 +68,8 @@ public class LogReadInfo {
                 + highWatermark
                 + ", logEndOffset="
                 + logEndOffset
+                + ", minRetainOffset="
+                + minRetainOffset
                 + ')';
     }
 }

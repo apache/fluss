@@ -20,22 +20,30 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.AuthenticateRequest;
 import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.metrics.ConnectionMetrics;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.rpc.protocol.UpdateMetadataRequestCompat;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
@@ -43,11 +51,18 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.NotSslRecordException;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslHandshakeCompletionEvent;
 import org.apache.fluss.utils.ExponentialBackoff;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -62,12 +77,17 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalProduce;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.hasHistoricalPut;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /** Connection to a Netty server used by the {@link NettyClient}. */
 @ThreadSafe
 final class ServerConnection {
     private static final Logger LOG = LoggerFactory.getLogger(ServerConnection.class);
+    private static final short HISTORICAL_PRODUCE_LOG_MIN_VERSION = 1;
+    private static final short HISTORICAL_PUT_KV_MIN_VERSION = 3;
+    private static final short ALTER_BUCKET_COUNT_MIN_VERSION = 1;
 
     private final ServerNode node;
 
@@ -77,6 +97,8 @@ final class ServerConnection {
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
+    @Nullable private final SslContext sslContext;
+    @Nullable private final String endpointIdentificationAlgorithm;
     private final Object lock = new Object();
 
     @GuardedBy("lock")
@@ -100,17 +122,28 @@ final class ServerConnection {
     @GuardedBy("lock")
     private int retryAuthCount = 0;
 
+    /** The cause the connection closed with, null while it is open. */
+    @GuardedBy("lock")
+    @Nullable
+    private Throwable closeCause;
+
     ServerConnection(
             Bootstrap bootstrap,
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            @Nullable SslContext sslContext,
+            @Nullable String endpointIdentificationAlgorithm,
             BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
-        this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.connectionMetrics =
+                clientMetricGroup.createConnectionMetricGroup(
+                        node.uid() + "@" + node.host() + ":" + node.port());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        this.sslContext = sslContext;
+        this.endpointIdentificationAlgorithm = endpointIdentificationAlgorithm;
         whenClose(closeCallback);
 
         // connect and handle should be last in case of other variables are nullable and close
@@ -153,6 +186,7 @@ final class ServerConnection {
             }
 
             switchState(ConnectionState.DISCONNECTED);
+            closeCause = cause;
 
             // when the remote server shutdowns, the exception may be
             // AnnotatedConnectException/ClosedChannelException/
@@ -261,6 +295,28 @@ final class ServerConnection {
                 channel = future.channel();
                 channel.pipeline()
                         .addLast("handler", new NettyClientHandler(new ResponseCallback()));
+                if (sslContext != null) {
+                    SslHandler sslHandler;
+                    try {
+                        sslHandler =
+                                SslContextFactory.createClientSslHandler(
+                                        sslContext,
+                                        channel.alloc(),
+                                        node.host(),
+                                        node.port(),
+                                        endpointIdentificationAlgorithm);
+                    } catch (Throwable t) {
+                        // Without this the connection stays CONNECTING forever and every request
+                        // queues up behind it.
+                        LOG.error("Failed to create the TLS handler for server {}.", node, t);
+                        close(t);
+                        return;
+                    }
+                    sslHandler.setHandshakeTimeoutMillis(
+                            channel.config().getConnectTimeoutMillis());
+                    channel.pipeline().addFirst("ssl", sslHandler);
+                    channel.pipeline().addFirst("tls-record-check", new TlsRecordCheck());
+                }
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server
@@ -277,6 +333,15 @@ final class ServerConnection {
         }
     }
 
+    /**
+     * Check if {@code cause} is a non-retriable authentication failure: a failed TLS handshake or
+     * credentials rejected by the server.
+     */
+    static boolean isAuthenticationFailure(@Nullable Throwable cause) {
+        return cause instanceof AuthenticationException
+                && !(cause instanceof RetriableAuthenticationException);
+    }
+
     private CompletableFuture<ApiMessage> doSend(
             ApiKeys apiKey,
             ApiMessage rawRequest,
@@ -284,6 +349,10 @@ final class ServerConnection {
             boolean isInternalRequest) {
         synchronized (lock) {
             if (state.isDisconnected()) {
+                if (isAuthenticationFailure(closeCause)) {
+                    responseFuture.completeExceptionally(closeCause);
+                    return responseFuture;
+                }
                 Exception exception =
                         new NetworkException(
                                 new DisconnectException(
@@ -309,8 +378,14 @@ final class ServerConnection {
             if (serverApiVersions != null) {
                 try {
                     version = serverApiVersions.highestAvailableVersion(apiKey);
-                } catch (Exception e) {
-                    responseFuture.completeExceptionally(e);
+                    validateVersionCompatibility(apiKey, version, rawRequest);
+                    if (apiKey == ApiKeys.UPDATE_METADATA && version == 0) {
+                        rawRequest =
+                                UpdateMetadataRequestCompat.toVersion0(
+                                        (UpdateMetadataRequest) rawRequest);
+                    }
+                } catch (Throwable t) {
+                    responseFuture.completeExceptionally(t);
                     return responseFuture;
                 }
             }
@@ -321,22 +396,34 @@ final class ServerConnection {
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
-            ByteBuf byteBuf;
+            ByteBuf byteBuf = null;
             try {
                 byteBuf = inflight.toByteBuf(channel.alloc());
-            } catch (Exception e) {
-                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), e);
+                connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
+            } catch (Throwable t) {
+                LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), t);
+                if (byteBuf != null) {
+                    try {
+                        byteBuf.release();
+                    } catch (Throwable releaseFailure) {
+                        if (releaseFailure != t) {
+                            t.addSuppressed(releaseFailure);
+                        }
+                    }
+                }
                 inflightRequests.remove(inflight.requestId);
+                if (t instanceof Error) {
+                    responseFuture.completeExceptionally(t);
+                    return responseFuture;
+                }
                 responseFuture.completeExceptionally(
                         new FlussRuntimeException(
                                 String.format(
                                         "Failed to encode request for '%s'",
                                         ApiKeys.forId(inflight.apiKey)),
-                                e));
+                                t));
                 return responseFuture;
             }
-
-            connectionMetrics.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
             channel.writeAndFlush(byteBuf)
                     .addListener(
@@ -358,6 +445,51 @@ final class ServerConnection {
                                         }
                                     });
             return inflight.responseFuture;
+        }
+    }
+
+    @VisibleForTesting
+    void validateVersionCompatibility(ApiKeys apiKey, short version, ApiMessage rawRequest) {
+        if (apiKey == ApiKeys.PRODUCE_LOG && version < HISTORICAL_PRODUCE_LOG_MIN_VERSION) {
+            ProduceLogRequest produceLogRequest = (ProduceLogRequest) rawRequest;
+            if (hasHistoricalProduce(produceLogRequest)) {
+                throw new UnsupportedVersionException(
+                        "Historical partition writes require PRODUCE_LOG version "
+                                + HISTORICAL_PRODUCE_LOG_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.PUT_KV && version < HISTORICAL_PUT_KV_MIN_VERSION) {
+            PutKvRequest putKvRequest = (PutKvRequest) rawRequest;
+            if (hasHistoricalPut(putKvRequest)) {
+                throw new UnsupportedVersionException(
+                        "Historical partition writes require PUT_KV version "
+                                + HISTORICAL_PUT_KV_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
+        }
+
+        if (apiKey == ApiKeys.ALTER_TABLE && version < ALTER_BUCKET_COUNT_MIN_VERSION) {
+            AlterTableRequest alterTableRequest = (AlterTableRequest) rawRequest;
+            if (alterTableRequest.hasModifyBucketCount()) {
+                throw new UnsupportedVersionException(
+                        "Modifying the bucket count requires ALTER_TABLE version "
+                                + ALTER_BUCKET_COUNT_MIN_VERSION
+                                + " or newer, but server "
+                                + node
+                                + " negotiated version "
+                                + version
+                                + '.');
+            }
         }
     }
 
@@ -585,5 +717,60 @@ final class ServerConnection {
     @VisibleForTesting
     ConnectionState getConnectionState() {
         return state;
+    }
+
+    @VisibleForTesting
+    Channel channel() {
+        synchronized (lock) {
+            return channel;
+        }
+    }
+
+    @VisibleForTesting
+    int numInflightRequests() {
+        return inflightRequests.size();
+    }
+
+    /**
+     * Detects a TLS client connected to a plaintext listener.
+     *
+     * <p>The plaintext server answers with a {@code SERVER_FAILURE} frame. The {@link SslHandler}
+     * reads its first bytes as the start of an incomplete TLS record and waits for more data. The
+     * handshake fails only when the server closes the connection, and then as a retriable error.
+     *
+     * <p>This handler checks the first byte from the server. If it cannot start a TLS record, the
+     * handler fires a failed {@link SslHandshakeCompletionEvent}, which {@link NettyClientHandler}
+     * reports as a non-retriable error, and closes the connection. It removes itself after the
+     * first byte.
+     */
+    private static final class TlsRecordCheck extends ChannelInboundHandlerAdapter {
+
+        /** TLS record content types: change_cipher_spec, alert, handshake, data, heartbeat. */
+        private static final int MIN_TLS_CONTENT_TYPE = 20;
+
+        private static final int MAX_TLS_CONTENT_TYPE = 24;
+
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) {
+            ByteBuf buf = (ByteBuf) msg;
+            if (!buf.isReadable()) {
+                ctx.fireChannelRead(msg);
+                return;
+            }
+            ctx.pipeline().remove(this);
+            int contentType = buf.getUnsignedByte(buf.readerIndex());
+            if (contentType >= MIN_TLS_CONTENT_TYPE && contentType <= MAX_TLS_CONTENT_TYPE) {
+                ctx.fireChannelRead(msg);
+                return;
+            }
+            buf.release();
+            ctx.fireUserEventTriggered(
+                    new SslHandshakeCompletionEvent(
+                            new NotSslRecordException(
+                                    "The server sent data that is not TLS. Check that its "
+                                            + "listener is listed in 'security.ssl.enabled."
+                                            + "listeners'.")));
+            ctx.close();
+        }
     }
 }

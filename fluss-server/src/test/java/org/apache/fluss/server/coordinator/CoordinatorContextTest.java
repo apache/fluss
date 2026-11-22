@@ -17,17 +17,32 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -35,6 +50,87 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
 class CoordinatorContextTest {
+
+    @Test
+    void testCoordinatorStandbysExcludeActiveCoordinator() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        CoordinatorAddress active =
+                new CoordinatorAddress("b", Endpoint.fromListenersString("CLIENT://host-b:9123"));
+        CoordinatorAddress standby1 =
+                new CoordinatorAddress("c", Endpoint.fromListenersString("CLIENT://host-c:9123"));
+        CoordinatorAddress standby2 =
+                new CoordinatorAddress("a", Endpoint.fromListenersString("CLIENT://host-a:9123"));
+        context.setCoordinatorServerId(active.getId());
+        context.setLiveCoordinators(Arrays.asList(active, standby1, standby2));
+
+        assertThat(context.getLiveCoordinatorServers()).containsExactlyInAnyOrder("a", "b", "c");
+        assertThat(context.getCoordinatorStandbys()).containsExactly(standby2, standby1);
+
+        context.removeLiveCoordinator(standby1.getId());
+        assertThat(context.getCoordinatorStandbys()).containsExactly(standby2);
+
+        context.resetContext();
+        assertThat(context.getLiveCoordinatorServers()).isEmpty();
+        assertThat(context.getCoordinatorStandbys()).isEmpty();
+    }
+
+    @Test
+    void testRemovePartitionClearsPartitionInfo() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        PartitionInfo removedPartition = createPartitionInfo(100L, "2026");
+        PartitionInfo retainedPartition = createPartitionInfo(101L, "2027");
+        PhysicalTablePath removedPath = PhysicalTablePath.of("db1", "table1", "2026");
+        PhysicalTablePath retainedPath = PhysicalTablePath.of("db1", "table1", "2027");
+        context.putPartition(100L, removedPath, removedPartition);
+        context.putPartition(101L, retainedPath, retainedPartition);
+
+        assertThat(context.getPartitionInfoById(100L)).isSameAs(removedPartition);
+        assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
+
+        context.removePartition(new TablePartition(1L, 100L));
+
+        assertThat(context.getPhysicalTablePath(100L)).isEmpty();
+        assertThat(context.getPartitionId(removedPath)).isEmpty();
+        assertThat(context.getPhysicalTablePath(101L)).contains(retainedPath);
+        assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
+        assertThat(context.getPartitionInfoById(100L)).isNull();
+    }
+
+    @Test
+    void testResetContextClearsPartitionInfo() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        PartitionInfo partitionInfo = createPartitionInfo(100L, "2026");
+        PhysicalTablePath partitionPath = PhysicalTablePath.of("db1", "table1", "2026");
+        context.putPartition(100L, partitionPath, partitionInfo);
+
+        assertThat(context.getPartitionInfoById(100L)).isSameAs(partitionInfo);
+
+        context.resetContext();
+
+        assertThat(context.getPhysicalTablePath(100L)).isEmpty();
+        assertThat(context.getPartitionId(partitionPath)).isEmpty();
+        assertThat(context.getPartitionInfoById(100L)).isNull();
+    }
+
+    @Test
+    void testKvBucketsAreTrackedIdempotently() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+
+        context.addKvBuckets(Arrays.asList(first, second));
+        context.addKvBuckets(Arrays.asList(first, second));
+
+        assertThat(context.getKvBucketCount()).isEqualTo(2);
+
+        context.removeKvBuckets(Collections.singleton(first));
+        context.removeKvBuckets(Collections.singleton(first));
+
+        assertThat(context.getKvBucketCount()).isEqualTo(1);
+
+        context.resetContext();
+        assertThat(context.getKvBucketCount()).isZero();
+    }
 
     @Test
     void testGetLakeTableCount() {
@@ -69,6 +165,167 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(2);
     }
 
+    @Test
+    void testOfflineReplicasOnLiveTabletServersOnlyReturnsLiveServers() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket liveBucket = new TableBucket(1L, 0);
+        TableBucket deadBucket = new TableBucket(1L, 1);
+
+        context.setLiveTabletServers(Arrays.asList(createTabletServer(0), createTabletServer(1)));
+        context.addOfflineBucketInServer(liveBucket, 0);
+        context.addOfflineBucketInServer(deadBucket, 2);
+
+        assertThat(context.offlineReplicasOnLiveTabletServers())
+                .containsExactly(new TableBucketReplica(liveBucket, 0));
+    }
+
+    @Test
+    void testRemoveOfflineBucketInServerForBucket() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+
+        context.setLiveTabletServers(Collections.singletonList(createTabletServer(0)));
+        context.addOfflineBucketInServer(tb1, 0);
+        context.addOfflineBucketInServer(tb2, 0);
+
+        context.removeOfflineBucketInServer(tb1, 0);
+        assertThat(context.isReplicaOnline(0, tb1)).isTrue();
+        assertThat(context.isReplicaOnline(0, tb2)).isFalse();
+        assertThat(context.offlineReplicasOnLiveTabletServers())
+                .containsExactly(new TableBucketReplica(tb2, 0));
+
+        context.removeOfflineBucketInServer(tb2, 0);
+        assertThat(context.isReplicaOnline(0, tb2)).isTrue();
+        assertThat(context.offlineReplicasOnLiveTabletServers()).isEmpty();
+    }
+
+    // ---- Pending Leader Activation Tracking Tests ----
+
+    @Test
+    void testAddPendingLeaderActivation() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
+
+        context.addPendingLeaderActivation(tb1);
+        context.addPendingLeaderActivation(tb2);
+
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactlyInAnyOrder(tb1, tb2);
+    }
+
+    @Test
+    void testClearPendingLeaderActivation() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+
+        context.addPendingLeaderActivations(Arrays.asList(tb1, tb2));
+
+        context.clearPendingLeaderActivation(tb1);
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactly(tb2);
+
+        context.clearPendingLeaderActivation(tb2);
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @Test
+    void testClearPendingLeaderActivationForNonExistentBucket() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+
+        // Should not throw
+        context.clearPendingLeaderActivation(tb1);
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
+    }
+
+    @Test
+    void testRemoveFromPendingLeaderActivations() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(2L, 0);
+
+        context.addPendingLeaderActivations(Arrays.asList(tb1, tb2, tb3));
+
+        Set<TableBucket> toRemove = new HashSet<>(Arrays.asList(tb1, tb3));
+        context.removeFromPendingLeaderActivations(toRemove);
+
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactly(tb2);
+    }
+
+    @Test
+    void testGetPendingLeaderActivationBucketsReturnsUnmodifiableSet() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        context.addPendingLeaderActivation(tb1);
+
+        Set<TableBucket> pending = context.getPendingLeaderActivationBuckets();
+        assertThat(pending).isUnmodifiable();
+    }
+
+    @Test
+    void testIsLeaderActiveSingleSourceOfTruth() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb = new TableBucket(1L, 0);
+
+        // No LeaderAndIsr → not active
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Set up live server and LeaderAndIsr
+        context.setLiveTabletServers(
+                Collections.singletonList(
+                        new ServerInfo(
+                                0,
+                                "RACK0",
+                                Endpoint.fromListenersString("CLIENT://host0:9124"),
+                                ServerType.TABLET_SERVER)));
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
+
+        // Active leader on live server, not pending → active
+        assertThat(context.isLeaderActive(tb)).isTrue();
+
+        // Add to pending → not active
+        context.addPendingLeaderActivation(tb);
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Clear pending → active again
+        context.clearPendingLeaderActivation(tb);
+        assertThat(context.isLeaderActive(tb)).isTrue();
+
+        // Leader is NO_LEADER → not active
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        LeaderAndIsr.NO_LEADER,
+                        1,
+                        Collections.singletonList(0),
+                        Collections.emptyList(),
+                        0,
+                        1));
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Leader on dead server → not active
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        99, 1, Collections.singletonList(99), Collections.emptyList(), 0, 1));
+        assertThat(context.isLeaderActive(tb)).isFalse();
+    }
+
+    private PartitionInfo createPartitionInfo(long partitionId, String partitionName) {
+        return new PartitionInfo(
+                partitionId,
+                ResolvedPartitionSpec.fromPartitionValue("year", partitionName),
+                DEFAULT_REMOTE_DATA_DIR,
+                1);
+    }
+
     private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -87,5 +344,13 @@ class CoordinatorContextTest {
                 DEFAULT_REMOTE_DATA_DIR,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
+    }
+
+    private ServerInfo createTabletServer(int serverId) {
+        return new ServerInfo(
+                serverId,
+                "RACK" + serverId,
+                Endpoint.fromListenersString("CLIENT://host" + serverId + ":9124"),
+                ServerType.TABLET_SERVER);
     }
 }

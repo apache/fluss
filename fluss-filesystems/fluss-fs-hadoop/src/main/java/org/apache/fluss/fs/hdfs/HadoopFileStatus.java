@@ -52,6 +52,11 @@ public class HadoopFileStatus implements FileStatus {
         return fileStatus.isDirectory();
     }
 
+    @Override
+    public long getModificationTime() {
+        return fileStatus.getModificationTime();
+    }
+
     // ------------------------------------------------------------------------
 
     /**

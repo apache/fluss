@@ -18,6 +18,10 @@
 package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.flink.lake.reader.IndexedLakeSplitRecordIterator;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.GenericRecord;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
@@ -143,6 +147,80 @@ class BoundedSplitReaderTest {
         }
     }
 
+    @Test
+    void testReadPositionIsLocalToIndexedLakeSplit() throws IOException {
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedLakeSplitsScanner(0, 2, 3), 0);
+
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records)
+                .extracting(RecordAndPos::getCurrentSplitIndex)
+                .containsExactly(0, 0, 1, 1, 1);
+        assertThat(records)
+                .extracting(RecordAndPos::readRecordsCount)
+                .containsExactly(1L, 2L, 1L, 2L, 3L);
+    }
+
+    @Test
+    void testRestoreSplitLocalPosition() throws IOException {
+        // restored at the lake split with index 1, after its first record
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedLakeSplitsScanner(1, 4, 3, 2), 1);
+
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records)
+                .extracting(RecordAndPos::getCurrentSplitIndex)
+                .containsExactly(1, 1, 2, 2);
+        assertThat(records)
+                .extracting(RecordAndPos::readRecordsCount)
+                .containsExactly(2L, 3L, 1L, 2L);
+    }
+
+    @Test
+    void testRestoreRecordsToSkipAcrossIndexedLakeSplits() throws IOException {
+        // a position restored from a checkpoint taken before positions were split-local: lake
+        // split index 0 and the records read across all lake splits
+        BoundedSplitReader reader =
+                new BoundedSplitReader(new TestingIndexedLakeSplitsScanner(0, 2, 2, 2), 3);
+
+        List<RecordAndPos> records = collectRecords(reader);
+
+        assertThat(records).extracting(RecordAndPos::getCurrentSplitIndex).containsExactly(1, 2, 2);
+        assertThat(records).extracting(RecordAndPos::readRecordsCount).containsExactly(2L, 1L, 2L);
+    }
+
+    /** A testing {@link BatchScanner} returning one indexed batch for each lake split. */
+    private static class TestingIndexedLakeSplitsScanner implements BatchScanner {
+
+        private final int[] recordsPerSplit;
+        private int nextSplitIndex;
+
+        private TestingIndexedLakeSplitsScanner(int firstSplitIndex, int... recordsPerSplit) {
+            this.recordsPerSplit = recordsPerSplit;
+            this.nextSplitIndex = firstSplitIndex;
+        }
+
+        @Override
+        @Nullable
+        public CloseableIterator<InternalRow> pollBatch(Duration timeout) {
+            if (nextSplitIndex >= recordsPerSplit.length) {
+                return null;
+            }
+            List<LogRecord> records = new ArrayList<>();
+            for (int i = 0; i < recordsPerSplit[nextSplitIndex]; i++) {
+                records.add(
+                        new GenericRecord(-1, -1, ChangeType.INSERT, row(nextSplitIndex, "r" + i)));
+            }
+            return new IndexedLakeSplitRecordIterator(
+                    CloseableIterator.wrap(records.iterator()), nextSplitIndex++);
+        }
+
+        @Override
+        public void close() {}
+    }
+
     /** A testing {@link BatchScanner} with static returned records. */
     private static class TestingBatchScanner implements BatchScanner {
 
@@ -206,7 +284,10 @@ class BoundedSplitReaderTest {
             while (recordIter.hasNext()) {
                 RecordAndPos recordAndPos = recordIter.next();
                 records.add(
-                        new RecordAndPos(recordAndPos.scanRecord, recordAndPos.readRecordsCount));
+                        new RecordAndPos(
+                                recordAndPos.scanRecord,
+                                recordAndPos.readRecordsCount,
+                                recordAndPos.currentSplitIndex));
             }
             recordIter.close();
         }

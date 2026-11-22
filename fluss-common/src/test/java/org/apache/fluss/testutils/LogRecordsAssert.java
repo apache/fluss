@@ -20,7 +20,6 @@ package org.apache.fluss.testutils;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
-import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.types.RowType;
 
 import org.assertj.core.api.AbstractAssert;
@@ -40,7 +39,7 @@ public class LogRecordsAssert extends AbstractAssert<LogRecordsAssert, LogRecord
 
     private RowType rowType;
     private boolean assertCheckSum = true;
-    private SchemaGetter schemaGetter = new TestingSchemaGetter();
+    private SchemaGetter schemaGetter;
 
     private LogRecordsAssert(LogRecords actual) {
         super(actual, LogRecordsAssert.class);

@@ -19,6 +19,9 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.paimon.source.PaimonTableLoader.CatalogTableLoader;
+import org.apache.fluss.lake.paimon.source.PaimonTableLoader.PaimonTableHandle;
+import org.apache.fluss.lake.paimon.source.PaimonTableLoader.ProvidedTableLoader;
 import org.apache.fluss.lake.paimon.utils.FlussToPaimonPredicateConverter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
@@ -26,11 +29,8 @@ import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.utils.ArrayUtils;
 
-import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.CatalogContext;
-import org.apache.paimon.catalog.CatalogFactory;
-import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.PredicateBuilder;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.types.RowType;
@@ -39,10 +39,9 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-
-import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
 /**
  * Paimon Lake format implementation of {@link org.apache.fluss.lake.source.LakeSource} for reading
@@ -51,20 +50,38 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     private static final long serialVersionUID = 1L;
 
-    private final Configuration paimonConfig;
-    private final TablePath tablePath;
+    private final PaimonTableLoader tableLoader;
 
     private @Nullable int[][] project;
     private @Nullable org.apache.paimon.predicate.Predicate predicate;
 
     public PaimonLakeSource(Configuration paimonConfig, TablePath tablePath) {
-        this.paimonConfig = paimonConfig;
-        this.tablePath = tablePath;
+        this.tableLoader = new CatalogTableLoader(paimonConfig, tablePath);
+    }
+
+    /**
+     * Creates a source from a loaded table without query-specific scan options.
+     *
+     * <p>The caller manages metadata freshness and the table's resources.
+     */
+    public PaimonLakeSource(FileStoreTable table) {
+        this.tableLoader = new ProvidedTableLoader(table);
+    }
+
+    private PaimonLakeSource(PaimonLakeSource source) {
+        this.tableLoader = source.tableLoader;
+        this.project = ArrayUtils.deepCopy(source.project);
+        this.predicate = source.predicate;
+    }
+
+    @Override
+    public PaimonLakeSource copy() {
+        return new PaimonLakeSource(this);
     }
 
     @Override
     public void withProject(int[][] project) {
-        this.project = project;
+        this.project = ArrayUtils.deepCopy(project);
     }
 
     @Override
@@ -74,10 +91,15 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
+        if (predicates.isEmpty()) {
+            predicate = null;
+            return FilterPushDownResult.of(Collections.emptyList(), Collections.emptyList());
+        }
+
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
         List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
-        RowType rowType = getRowType(tablePath);
+        RowType rowType = getRowType();
         for (Predicate predicate : predicates) {
             Optional<org.apache.paimon.predicate.Predicate> optPredicate =
                     FlussToPaimonPredicateConverter.convert(rowType, predicate);
@@ -88,22 +110,19 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
                 unConsumedPredicates.add(predicate);
             }
         }
-        if (!converted.isEmpty()) {
-            predicate = PredicateBuilder.and(converted);
-        }
+        predicate = converted.isEmpty() ? null : PredicateBuilder.and(converted);
         return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 
     @Override
     public Planner<PaimonSplit> createPlanner(PlannerContext plannerContext) {
-        return new PaimonSplitPlanner(
-                paimonConfig, tablePath, predicate, plannerContext.snapshotId());
+        return new PaimonSplitPlanner(tableLoader, predicate, plannerContext.snapshotId());
     }
 
     @Override
     public RecordReader createRecordReader(ReaderContext<PaimonSplit> context) throws IOException {
-        try (Catalog catalog = getCatalog()) {
-            FileStoreTable fileStoreTable = getTable(catalog, tablePath);
+        try (PaimonTableHandle handle = tableLoader.load()) {
+            FileStoreTable fileStoreTable = handle.table();
             if (fileStoreTable.primaryKeys().isEmpty()) {
                 return new PaimonRecordReader(
                         fileStoreTable, context.lakeSplit(), project, predicate);
@@ -121,21 +140,11 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         return new PaimonSplitSerializer();
     }
 
-    private Catalog getCatalog() {
-        return CatalogFactory.createCatalog(
-                CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
-    }
-
-    private FileStoreTable getTable(Catalog catalog, TablePath tablePath) throws Exception {
-        return (FileStoreTable) catalog.getTable(toPaimon(tablePath));
-    }
-
-    private RowType getRowType(TablePath tablePath) {
-        try (Catalog catalog = getCatalog()) {
-            FileStoreTable fileStoreTable = getTable(catalog, tablePath);
-            return fileStoreTable.rowType();
+    private RowType getRowType() {
+        try (PaimonTableHandle handle = tableLoader.load()) {
+            return handle.table().rowType();
         } catch (Exception e) {
-            throw new RuntimeException("Fail to get row type of " + tablePath, e);
+            throw new RuntimeException("Fail to get row type for paimon.", e);
         }
     }
 }

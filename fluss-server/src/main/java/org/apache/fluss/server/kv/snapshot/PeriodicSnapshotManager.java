@@ -128,7 +128,8 @@ public class PeriodicSnapshotManager implements Closeable {
                 Executors.directExecutor());
     }
 
-    private PeriodicSnapshotManager(
+    @VisibleForTesting
+    PeriodicSnapshotManager(
             TableBucket tableBucket,
             SnapshotTarget target,
             LongSupplier snapshotIntervalSupplier,

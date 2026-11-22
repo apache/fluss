@@ -23,6 +23,7 @@ import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.MurmurHashUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
 import java.nio.ByteBuffer;
@@ -217,6 +218,11 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         int sizeInBytes = sizeInBytes();
         return sizeInBytes == that.sizeInBytes()
                 && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+    }
+
+    @Override
+    public int hashCode() {
+        return MurmurHashUtils.hashBytes(segment, position, sizeInBytes());
     }
 
     abstract class KvRecordIterator implements CloseableIterator<KvRecord> {

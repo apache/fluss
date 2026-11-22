@@ -1,0 +1,184 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.server.coordinator;
+
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.Set;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
+/** Controls replica creation admission based on in-memory cluster capacity. */
+public class ReplicaCapacityController implements ServerReconfigurable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ReplicaCapacityController.class);
+
+    /** Negative capacity means the automatic capacity limit is disabled. */
+    public static final long CAPACITY_LIMIT_DISABLED = -1L;
+
+    private final CoordinatorMetadataCache metadataCache;
+
+    private volatile long kvLeaderReplicaMemoryReservedBytes;
+    private volatile long observedKvLeaderReplicaCount;
+
+    public ReplicaCapacityController(
+            Configuration conf,
+            CoordinatorMetadataCache metadataCache,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
+        this(conf, metadataCache);
+        registerMetrics(
+                checkNotNull(coordinatorMetricGroup, "coordinatorMetricGroup should not be null."));
+    }
+
+    @VisibleForTesting
+    ReplicaCapacityController(Configuration conf, CoordinatorMetadataCache metadataCache) {
+        this.metadataCache = checkNotNull(metadataCache, "metadataCache should not be null.");
+        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(conf);
+        validateKvLeaderReplicaMemoryReservedBytes(memoryReservedBytes);
+        this.kvLeaderReplicaMemoryReservedBytes = memoryReservedBytes;
+    }
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        long memoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
+        validateKvLeaderReplicaMemoryReservedBytes(memoryReservedBytes);
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) throws ConfigException {
+        kvLeaderReplicaMemoryReservedBytes = getKvLeaderReplicaMemoryReservedBytes(newConfig);
+    }
+
+    /** Checks whether the requested KV leader replicas fit the current observed capacity. */
+    public void checkCanCreateKvLeaderReplicas(long requestedKvLeaderReplicaCount) {
+        if (requestedKvLeaderReplicaCount <= 0) {
+            return;
+        }
+
+        long capacity = getKvLeaderReplicaCapacity();
+        long observedCount = observedKvLeaderReplicaCount;
+        if (capacity != CAPACITY_LIMIT_DISABLED
+                && (observedCount > capacity
+                        || requestedKvLeaderReplicaCount > capacity - observedCount)) {
+            throw new InsufficientKvLeaderReplicaCapacityException(
+                    String.format(
+                            "Not enough KV leader replica capacity. "
+                                    + "observedKvLeaderReplicaCount=%s, "
+                                    + "requestedKvLeaderReplicaCount=%s, "
+                                    + "kvLeaderReplicaCapacity=%s.",
+                            observedCount, requestedKvLeaderReplicaCount, capacity));
+        }
+    }
+
+    /** Replaces the observed KV leader replica count with a CoordinatorContext-derived snapshot. */
+    public void updateObservedKvLeaderReplicaCount(long observedKvLeaderReplicaCount) {
+        checkArgument(
+                observedKvLeaderReplicaCount >= 0,
+                "Observed KV leader replica count must be greater than or equal to 0.");
+        this.observedKvLeaderReplicaCount = observedKvLeaderReplicaCount;
+    }
+
+    /** Returns the latest CoordinatorContext-derived KV leader replica count. */
+    public long getKvLeaderReplicaCount() {
+        return observedKvLeaderReplicaCount;
+    }
+
+    /** Returns the current cluster KV leader replica capacity, or -1 if disabled. */
+    public long getKvLeaderReplicaCapacity() {
+        long memoryReservedBytes = kvLeaderReplicaMemoryReservedBytes;
+        if (memoryReservedBytes == 0) {
+            return CAPACITY_LIMIT_DISABLED;
+        }
+
+        Set<ServerInfo> liveTabletServers = metadataCache.getLiveTabletServerInfos();
+        int liveTabletServerCount = liveTabletServers.size();
+        if (liveTabletServerCount == 0) {
+            return CAPACITY_LIMIT_DISABLED;
+        }
+
+        int knownMemoryTabletServerCount = 0;
+        long knownMemoryBytes = 0;
+        for (ServerInfo serverInfo : liveTabletServers) {
+            if (serverInfo.resource().hasMemory()) {
+                knownMemoryTabletServerCount++;
+                knownMemoryBytes += serverInfo.resource().getMemoryBytes();
+            }
+        }
+
+        if (knownMemoryTabletServerCount * 2 <= liveTabletServerCount) {
+            return CAPACITY_LIMIT_DISABLED;
+        }
+
+        long averageKnownMemoryBytes = knownMemoryBytes / knownMemoryTabletServerCount;
+        long totalMemoryBytes =
+                knownMemoryBytes
+                        + averageKnownMemoryBytes
+                                * (liveTabletServerCount - knownMemoryTabletServerCount);
+        long capacity = totalMemoryBytes / memoryReservedBytes;
+        LOG.debug(
+                "Calculated KV leader replica capacity: liveTabletServerCount={}, "
+                        + "knownMemoryTabletServerCount={}, knownMemoryBytes={}, "
+                        + "averageKnownMemoryBytes={}, estimatedTotalMemoryBytes={}, "
+                        + "kvLeaderReplicaMemoryReservedBytes={}, kvLeaderReplicaCapacity={}.",
+                liveTabletServerCount,
+                knownMemoryTabletServerCount,
+                knownMemoryBytes,
+                averageKnownMemoryBytes,
+                totalMemoryBytes,
+                memoryReservedBytes,
+                capacity);
+        return capacity;
+    }
+
+    @VisibleForTesting
+    long getKvLeaderReplicaMemoryReservedBytes() {
+        return kvLeaderReplicaMemoryReservedBytes;
+    }
+
+    private void registerMetrics(CoordinatorMetricGroup coordinatorMetricGroup) {
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_COUNT, this::getKvLeaderReplicaCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.KV_LEADER_REPLICA_CAPACITY, this::getKvLeaderReplicaCapacity);
+    }
+
+    private static long getKvLeaderReplicaMemoryReservedBytes(Configuration conf) {
+        return conf.get(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED).getBytes();
+    }
+
+    private static void validateKvLeaderReplicaMemoryReservedBytes(long memoryReservedBytes) {
+        if (memoryReservedBytes < 0) {
+            throw new ConfigException(
+                    ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()
+                            + " must be greater than or equal to 0.");
+        }
+    }
+}

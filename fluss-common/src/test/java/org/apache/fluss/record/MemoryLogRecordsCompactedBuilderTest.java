@@ -34,6 +34,7 @@ import static org.apache.fluss.record.TestData.BASE_OFFSET;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_MAGIC;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,7 +72,7 @@ class MemoryLogRecordsCompactedBuilderTest {
 
         try (LogRecordReadContext ctx =
                         LogRecordReadContext.createCompactedRowReadContext(
-                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
                 CloseableIterator<LogRecord> recIt = batch.records(ctx)) {
             for (CompactedRow expRow : expected) {
                 assertThat(recIt.hasNext()).isTrue();
@@ -127,7 +128,7 @@ class MemoryLogRecordsCompactedBuilderTest {
             assertThat(batch.nextLogOffset()).isEqualTo(1);
             try (LogRecordReadContext ctx =
                             LogRecordReadContext.createCompactedRowReadContext(
-                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
                     CloseableIterator<LogRecord> it = batch.records(ctx)) {
                 assertThat(it.hasNext()).isFalse();
             }
@@ -146,7 +147,7 @@ class MemoryLogRecordsCompactedBuilderTest {
             assertThat(batch.nextLogOffset()).isEqualTo(101);
             try (LogRecordReadContext ctx =
                             LogRecordReadContext.createCompactedRowReadContext(
-                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
                     CloseableIterator<LogRecord> it = batch.records(ctx)) {
                 assertThat(it.hasNext()).isFalse();
             }

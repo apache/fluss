@@ -25,9 +25,9 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -37,6 +37,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link AzureFileSystemPlugin}. */
 public class AzureFileSystemPluginTest {
+
+    // Reserved TLD (RFC 2606) so the host is guaranteed to never resolve or be registered.
+    private static final String TEST_FS_URI = "abfs://container@account.dfs.core.windows.invalid/";
+
+    private static Configuration offlineConfig() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString("fs.azure.account.hns.enabled", "false");
+        flussConfig.setString("fs.azure.io.retry.max.retries", "0");
+        return flussConfig;
+    }
 
     @Test
     void testGetHadoopConfiguration() {
@@ -64,29 +74,20 @@ public class AzureFileSystemPluginTest {
     @Test
     void testCreateWithAccountKey() throws Exception {
         AzureFileSystemPlugin plugin = new AbfsFileSystemPlugin();
-        Configuration flussConfig = new Configuration();
-        flussConfig.setString(ACCOUNT_KEY.key(), "some-key");
+        Configuration flussConfig = offlineConfig();
+        // ABFS requires the account key to be base64 encoded.
+        flussConfig.setString(
+                ACCOUNT_KEY.key(),
+                Base64.getEncoder().encodeToString("some-key".getBytes(StandardCharsets.UTF_8)));
 
-        // This will try to initialize AzureBlobFileSystem which might fail in some environments
-        // but we want to check if it reaches the right logic.
-        // Actually, AzureBlobFileSystem.initialize might fail because it tries to parse the URI.
-
-        URI uri = new URI("abfs://container@account.dfs.core.windows.net/");
-        // We don't necessarily need to call create() if we can test the private methods or if they
-        // are called.
-        // Since they are private, we call create().
-
-        try {
-            plugin.create(uri, flussConfig);
-        } catch (Exception e) {
-            // expected or ignored, we just want coverage
-        }
+        assertThat(plugin.create(new URI(TEST_FS_URI), flussConfig))
+                .isInstanceOf(AzureFileSystem.class);
     }
 
     @Test
     void testCreateWithoutAccountKey() throws Exception {
         AzureFileSystemPlugin plugin = new AbfsFileSystemPlugin();
-        Configuration flussConfig = new Configuration();
+        Configuration flussConfig = offlineConfig();
 
         // Prepare credentials so updateHadoopConfig doesn't throw IllegalStateException
         Credentials credentials = new Credentials("id", "secret", "token");
@@ -97,15 +98,8 @@ public class AzureFileSystemPluginTest {
                         "abfs", CredentialsJsonSerde.toJson(credentials), 100L, additionInfos);
         new AbfsDelegationTokenReceiver().onNewTokensObtained(token);
 
-        URI uri = new URI("abfs://container@account.dfs.core.windows.net/");
-        try {
-            plugin.create(uri, flussConfig);
-        } catch (Exception e) {
-            // If the plugin creation fails, it must NOT fail with an "init configuration" error.
-            StringWriter sw = new StringWriter();
-            e.printStackTrace(new PrintWriter(sw));
-            assertThat(sw.toString()).doesNotContain("Failure to initialize configuration");
-        }
+        assertThat(plugin.create(new URI(TEST_FS_URI), flussConfig))
+                .isInstanceOf(AzureFileSystem.class);
     }
 
     @Test

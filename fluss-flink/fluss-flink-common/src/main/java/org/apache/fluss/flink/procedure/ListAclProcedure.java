@@ -36,8 +36,6 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 
-import static org.apache.fluss.security.acl.Resource.FLUSS_CLUSTER;
-
 /** Procedure to list acl. */
 public class ListAclProcedure extends AbstractAclProcedure {
     @ProcedureHint(
@@ -108,10 +106,24 @@ public class ListAclProcedure extends AbstractAclProcedure {
                 ace.getPrincipal() != null
                         ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
                         : null;
-        String resourceName =
-                FLUSS_CLUSTER.equals(resource.getName())
-                        ? "cluster"
-                        : "cluster." + resource.getName();
+        String resourceName;
+        switch (resource.getType()) {
+            case CLUSTER:
+                resourceName = "cluster";
+                break;
+            case DATABASE:
+                resourceName = "database:" + resource.getName();
+                break;
+            case TABLE:
+                resourceName = "table:" + resource.getName();
+                break;
+            case GROUP:
+                resourceName = "group:" + resource.getName();
+                break;
+            default:
+                resourceName = resource.getName();
+                break;
+        }
 
         return String.join(
                 ";",

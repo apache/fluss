@@ -65,5 +65,25 @@ public enum DistributionMode {
      * <p>Note: This mode has overhead costs including data statistics collection and additional
      * shuffle operations.
      */
-    PARTITION_DYNAMIC
+    PARTITION_DYNAMIC,
+
+    /**
+     * Shuffles records by bucket key using an LCM-based logical-slot assignment.
+     *
+     * <p>This improves sink-subtask utilization and expected load distribution, particularly when
+     * the bucket count and sink parallelism do not evenly divide each other. It does not guarantee
+     * that every physical bucket is distributed across all subtasks, or that every subtask receives
+     * data; actual load depends on the bucket-key distribution.
+     *
+     * <p>For a fixed bucket count and sink parallelism, records with the same bucket key always
+     * route to the same subtask, while different bucket keys in the same physical bucket may be
+     * processed by different subtasks assigned to that bucket. In the general LCM assignment, these
+     * are the subtasks whose logical-slot ranges overlap the bucket's range. When the bucket count
+     * is an exact multiple of the sink parallelism, this mode behaves like {@link #BUCKET}.
+     *
+     * <p>Requires 'bucket.key' to be defined and does not guarantee intra-bucket ordering. Not
+     * supported for tables using the aggregation merge engine because Undo Recovery requires each
+     * physical bucket to be written by exactly one subtask.
+     */
+    BUCKET_BALANCE
 }

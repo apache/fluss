@@ -22,6 +22,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -91,6 +92,11 @@ public interface IsrState {
             }
             CommittedIsrState that = (CommittedIsrState) o;
             return isr.equals(that.isr);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(isr);
         }
 
         @Override
@@ -182,6 +188,11 @@ public interface IsrState {
         }
 
         @Override
+        public int hashCode() {
+            return Objects.hash(newInSyncReplicaId, sentLeaderAndIsr, lastCommittedState);
+        }
+
+        @Override
         public String toString() {
             return "PendingExpandIsrState{"
                     + "newInSyncReplicaId="
@@ -252,6 +263,11 @@ public interface IsrState {
             return outOfSyncReplicaIds.equals(that.outOfSyncReplicaIds)
                     && sentLeaderAndIsr.equals(that.sentLeaderAndIsr)
                     && lastCommittedState.equals(that.lastCommittedState);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(outOfSyncReplicaIds, sentLeaderAndIsr, lastCommittedState);
         }
 
         @Override

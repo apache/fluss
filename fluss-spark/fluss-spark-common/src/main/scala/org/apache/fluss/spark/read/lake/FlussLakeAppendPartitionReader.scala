@@ -40,7 +40,7 @@ class FlussLakeAppendPartitionReader(
 
   private var recordIterator: CloseableIterator[LogRecord] = _
 
-  initialize()
+  initializeResources(initialize())
 
   private def initialize(): Unit = {
     logInfo(s"Reading lake split for table $tablePath $partition")

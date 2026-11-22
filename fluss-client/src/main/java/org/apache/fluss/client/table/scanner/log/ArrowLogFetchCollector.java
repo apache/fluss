@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
 
 import org.slf4j.Logger;
@@ -40,11 +39,10 @@ public class ArrowLogFetchCollector
     private static final Logger LOG = LoggerFactory.getLogger(ArrowLogFetchCollector.class);
 
     public ArrowLogFetchCollector(
-            TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
-        super(LOG, tablePath, logScannerStatus, conf, metadataUpdater);
+        super(LOG, logScannerStatus, conf, metadataUpdater);
     }
 
     @Override
@@ -70,14 +68,15 @@ public class ArrowLogFetchCollector
 
     @Override
     protected void closeFetchedRecords(Map<TableBucket, List<ArrowBatchData>> fetched) {
-        for (List<ArrowBatchData> batches : fetched.values()) {
-            for (ArrowBatchData batch : batches) {
+        for (Map.Entry<TableBucket, List<ArrowBatchData>> entry : fetched.entrySet()) {
+
+            for (ArrowBatchData batch : entry.getValue()) {
                 try {
                     batch.close();
                 } catch (Exception e) {
                     LOG.warn(
-                            "Failed to close Arrow batch during cleanup for table {}",
-                            tablePath,
+                            "Failed to close Arrow batch during cleanup for bucket {}",
+                            entry.getKey(),
                             e);
                 }
             }

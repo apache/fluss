@@ -31,6 +31,7 @@ import org.apache.fluss.types.TimestampType;
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION;
+import static org.apache.fluss.types.DataTypeChecks.getLength;
 
 /**
  * A high-performance writer for LogRecordBatch statistics that efficiently serializes statistical
@@ -204,6 +205,10 @@ public class LogRecordBatchStatisticsWriter {
                         break;
                     case DOUBLE:
                         reusableRowWriter.writeDouble(i, row.getDouble(i));
+                        break;
+                    case CHAR:
+                        int charLength = getLength(fieldType);
+                        reusableRowWriter.writeChar(i, row.getChar(i, charLength), charLength);
                         break;
                     case STRING:
                         reusableRowWriter.writeString(i, row.getString(i));

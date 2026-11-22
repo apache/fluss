@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>1.0-SNAPSHOT</version>
+        <version>1.1-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-common</artifactId>
-    <name>Apache Fluss (Incubating) : Common</name>
+    <name>Apache Fluss : Common</name>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -98,8 +98,8 @@
         the rocksdb should be provided as a kv plugin to used by client & server.
          -->
         <dependency>
-            <groupId>com.ververica</groupId>
-            <artifactId>frocksdbjni</artifactId>
+            <groupId>io.github.fluss-contrib</groupId>
+            <artifactId>fluss-rocksdbjni</artifactId>
         </dependency>
 
         <!-- test dependencies -->
@@ -126,6 +126,42 @@
             <artifactId>iceberg-api</artifactId>
             <version>${iceberg.version}</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hudi</groupId>
+            <artifactId>hudi-flink1.20-bundle</artifactId>
+            <version>${hudi.version}</version>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>log4j</groupId>
+                    <artifactId>log4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.commons</groupId>
+                    <artifactId>commons-lang3</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-client</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-framework</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.curator</groupId>
+                    <artifactId>curator-recipes</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.apache.zookeeper</groupId>
+                    <artifactId>zookeeper</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 

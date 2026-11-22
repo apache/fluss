@@ -30,6 +30,10 @@ import org.apache.flink.connector.base.source.reader.RecordEmitter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
+import java.io.Serializable;
+
 /**
  * The {@link RecordEmitter} implementation for {@link FlinkSourceReader}.
  *
@@ -44,10 +48,18 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
     private static final Logger LOG = LoggerFactory.getLogger(FlinkRecordEmitter.class);
 
     private final FlussDeserializationSchema<OUT> deserializationSchema;
+    @Nullable private final OutputProjection<OUT> outputProjection;
     private LakeRecordRecordEmitter<OUT> lakeRecordRecordEmitter;
 
     public FlinkRecordEmitter(FlussDeserializationSchema<OUT> deserializationSchema) {
+        this(deserializationSchema, null);
+    }
+
+    public FlinkRecordEmitter(
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            @Nullable OutputProjection<OUT> outputProjection) {
         this.deserializationSchema = deserializationSchema;
+        this.outputProjection = outputProjection;
     }
 
     @Override
@@ -61,6 +73,11 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
                     splitState.asHybridSnapshotLogSplitState();
 
+            if (recordAndPosition.isSnapshotPhaseFinished()) {
+                hybridSnapshotLogSplitState.markSnapshotFinished();
+                return;
+            }
+
             ScanRecord scanRecord = recordAndPosition.record();
             if (scanRecord.logOffset() >= 0) {
                 // record is with a valid offset, means it's in incremental phase,
@@ -71,22 +88,22 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                 // update the records number to skip
                 hybridSnapshotLogSplitState.setRecordsToSkip(recordAndPosition.readRecordsCount());
             }
-            processAndEmitRecord(scanRecord, sourceOutput);
+            if (!recordAndPosition.skipEmission()) {
+                processAndEmitRecord(scanRecord, sourceOutput);
+            }
         } else if (splitState.isLogSplitState()) {
-            // Attempt to process and emit the record.
-            // For $binlog, this returns true only when a complete row (or the final part of
-            // a split) is emitted.
-            boolean emitted = processAndEmitRecord(recordAndPosition.record(), sourceOutput);
+            boolean consumed =
+                    recordAndPosition.skipEmission()
+                            || processAndEmitRecord(recordAndPosition.record(), sourceOutput);
 
-            if (emitted) {
-                // Only advance the offset in state if the record was successfully emitted.
-                // This ensures that if a crash occurs mid-update (between BEFORE and AFTER),
-                // the source will re-read the same log offset upon recovery,
-                // allowing the BinlogDeserializationSchema to correctly reconstruct the state.
+            if (consumed) {
+                // Buffered $binlog UPDATE_BEFORE records must be replayed after recovery.
                 splitState
                         .asLogSplitState()
                         .setNextOffset(recordAndPosition.record().logOffset() + 1);
             }
+        } else if (splitState.isKvBatchSplitState()) {
+            processAndEmitRecord(recordAndPosition.record(), sourceOutput);
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
                 lakeRecordRecordEmitter = new LakeRecordRecordEmitter<>(this::processAndEmitRecord);
@@ -113,6 +130,10 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                     e);
         }
 
+        if (record != null && outputProjection != null) {
+            record = outputProjection.project(record);
+        }
+
         if (record != null) {
             long timestamp = scanRecord.timestamp();
             if (timestamp > 0) {
@@ -123,5 +144,18 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             return true;
         }
         return false;
+    }
+
+    /** Projection applied after deserialization and before the record is emitted. */
+    public interface OutputProjection<OUT> extends Serializable {
+
+        /**
+         * Projects a deserialized record.
+         *
+         * @param record the deserialized record
+         * @return the projected record, or {@code null} to skip emission
+         */
+        @Nullable
+        OUT project(OUT record);
     }
 }

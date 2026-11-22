@@ -191,6 +191,16 @@ public class ReplicaStateMachine {
      * try to resume table deletion which will really delete the table when all the replicas are in
      * ReplicaDeletionSuccessful
      *
+     * <p>OfflineReplica, ReplicaDeletionStarted -> ReplicaDeletionIneligible
+     *
+     * <p>-- It happens when a tablet server holding a replica to be deleted is offline. Mark the
+     * replica as ReplicaDeletionIneligible until the tablet server comes back.
+     *
+     * <p>ReplicaDeletionIneligible -> OfflineReplica -> ReplicaDeletionStarted
+     *
+     * <p>-- It happens when the tablet server comes back. Move the replica through OfflineReplica
+     * and retry the StopReplica request with delete is true.
+     *
      * <p>ReplicaDeletionSuccessful -> NonExistentReplica
      *
      * <p>-- It happens that the table is deleted successfully. Remove the replicas from state
@@ -345,6 +355,10 @@ public class ReplicaStateMachine {
             case ReplicaDeletionSuccessful:
                 validReplicas.forEach(
                         replica -> doStateChange(replica, ReplicaState.ReplicaDeletionSuccessful));
+                break;
+            case ReplicaDeletionIneligible:
+                validReplicas.forEach(
+                        replica -> doStateChange(replica, ReplicaState.ReplicaDeletionIneligible));
                 break;
             case NonExistentReplica:
                 validReplicas.forEach(replica -> doStateChange(replica, null));

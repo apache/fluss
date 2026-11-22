@@ -39,6 +39,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
@@ -142,15 +143,17 @@ public class TieringTestBase extends AbstractTestBase {
 
     protected static final String DEFAULT_DB = "test-tiering-db";
 
-    protected static final TablePath DEFAULT_TABLE_PATH =
-            TablePath.of(DEFAULT_DB, "tiering-test-table");
-
     protected static Connection conn;
     protected static Admin admin;
     protected static CoordinatorGateway coordinatorGateway;
 
     protected static Configuration clientConf;
     protected static String bootstrapServers;
+
+    protected final TestTableNames tableNames = new TestTableNames();
+
+    protected final TablePath defaultTablePath =
+            tableNames.tablePath(DEFAULT_DB, "tiering-test-table");
 
     @BeforeAll
     protected static void beforeAll() {
@@ -274,8 +277,7 @@ public class TieringTestBase extends AbstractTestBase {
                 KeyEncoder.ofBucketKeyEncoder(
                         rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -285,7 +287,7 @@ public class TieringTestBase extends AbstractTestBase {
                 upsertWriter.upsert(row);
                 // bucket statistics
                 byte[] key = keyEncoder.encodeKey(row);
-                int bucketId = hashBucketAssigner.assignBucket(key);
+                int bucketId = hashBucketAssigner.assignBucket(key, DEFAULT_BUCKET_NUM);
                 bucketRows.merge(bucketId, 1L, Long::sum);
             }
             upsertWriter.flush();
@@ -329,8 +331,7 @@ public class TieringTestBase extends AbstractTestBase {
                 KeyEncoder.ofBucketKeyEncoder(
                         rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
@@ -339,7 +340,7 @@ public class TieringTestBase extends AbstractTestBase {
                         partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
                 appendWriter.append(row);
                 byte[] key = keyEncoder.encodeKey(row);
-                int bucketId = hashBucketAssigner.assignBucket(key);
+                int bucketId = hashBucketAssigner.assignBucket(key, DEFAULT_BUCKET_NUM);
 
                 bucketRows.merge(bucketId, 1L, Long::sum);
             }

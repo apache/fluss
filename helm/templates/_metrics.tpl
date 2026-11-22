@@ -112,11 +112,11 @@ Validates that metrics.reporters is not set via configurationOverrides.
 {{- end -}}
 
 {{/*
-Validates metrics configuration values.
+Collects metrics error messages.
 Usage:
-  include "fluss.metrics.validateValues" .
+  include "fluss.metrics.validateError" .
 */}}
-{{- define "fluss.metrics.validateValues" -}}
+{{- define "fluss.metrics.validateError" -}}
 
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.metrics.validateReporterPorts" .) -}}

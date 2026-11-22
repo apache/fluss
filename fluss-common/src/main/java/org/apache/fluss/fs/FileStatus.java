@@ -46,4 +46,18 @@ public interface FileStatus {
      * @return the corresponding Path to the FileStatus
      */
     FsPath getPath();
+
+    /**
+     * Returns the modification time of the file in milliseconds since the epoch.
+     *
+     * <p>The default implementation returns {@link Long#MAX_VALUE}, which is interpreted by
+     * time-based filters (e.g. orphan-files cleanup) as "always fresh" - effectively a fail-closed
+     * default that prevents deletion when modification time is unavailable. File system
+     * implementations that can expose modification time SHOULD override this.
+     *
+     * @return the modification time in epoch millis, or {@link Long#MAX_VALUE} when unavailable
+     */
+    default long getModificationTime() {
+        return Long.MAX_VALUE;
+    }
 }

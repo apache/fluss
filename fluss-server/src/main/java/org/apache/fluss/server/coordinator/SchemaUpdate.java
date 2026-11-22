@@ -82,7 +82,12 @@ public class SchemaUpdate {
         }
 
         // Delegate the actual addition to the builder
-        builder.column(addColumn.getName(), addColumn.getDataType());
+        if (addColumn.getAggFunction().isPresent()) {
+            builder.column(
+                    addColumn.getName(), addColumn.getDataType(), addColumn.getAggFunction().get());
+        } else {
+            builder.column(addColumn.getName(), addColumn.getDataType());
+        }
 
         // Fixed: Use null check for the String comment
         String comment = addColumn.getComment();

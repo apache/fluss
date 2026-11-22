@@ -21,8 +21,10 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -35,6 +37,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -53,10 +56,9 @@ import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertFetchLogResponseWithRowKind;
@@ -83,6 +85,10 @@ public class ReplicaFetcherITCase {
                     .setClusterConf(initConfig())
                     .build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data1TablePathPk = tableNames.tablePath(TestData.DATA1_TABLE_PATH_PK);
+
     private ZooKeeperClient zkClient;
 
     @BeforeEach
@@ -100,7 +106,7 @@ public class ReplicaFetcherITCase {
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
-        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, tableDescriptor);
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -165,7 +171,7 @@ public class ReplicaFetcherITCase {
             assertThat(resultForBucket.getTableBucket()).isEqualTo(tb);
             LogRecords records = resultForBucket.records();
             assertThat(records).isNotNull();
-            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1);
+            assertLogRecordsEquals(DATA1_ROW_TYPE, records, DATA1, TEST_SCHEMA_GETTER);
         }
     }
 
@@ -176,8 +182,7 @@ public class ReplicaFetcherITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, data1TablePathPk, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -251,8 +256,7 @@ public class ReplicaFetcherITCase {
     void testFlushForPutKvNeedAck() throws Exception {
         // create a table and wait all replica ready
         long tableId =
-                createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, createPkTableDescriptor());
+                createTable(FLUSS_CLUSTER_EXTENSION, data1TablePathPk, createPkTableDescriptor());
         int bucketId = 0;
         TableBucket tb = new TableBucket(tableId, bucketId);
 
@@ -319,7 +323,7 @@ public class ReplicaFetcherITCase {
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                followerToStop, DATA1_TABLE_PATH, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
+                followerToStop, data1TablePath, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
 
         // wait until the put future is done
         putResponse.get();

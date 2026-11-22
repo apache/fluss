@@ -40,6 +40,11 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** A lake flink catalog to delegate the operations on lake table. */
 public class LakeFlinkCatalog implements AutoCloseable {
 
+    // Must match IcebergCatalogUtils in fluss-lake-iceberg, which the server and the tiering
+    // service use: catalogs such as JdbcCatalog scope their tables by catalog name.
+    private static final String ICEBERG_CATALOG_NAME_KEY = "name";
+    private static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
+
     private final String catalogName;
     private final ClassLoader classLoader;
 
@@ -84,7 +89,12 @@ public class LakeFlinkCatalog implements AutoCloseable {
                                         catalogName, catalogProperties, classLoader);
                         this.lakeFormat = PAIMON;
                     } else if (lakeFormat == ICEBERG) {
-                        catalog = IcebergCatalogFactory.create(catalogName, catalogProperties);
+                        catalog =
+                                IcebergCatalogFactory.create(
+                                        catalogProperties.getOrDefault(
+                                                ICEBERG_CATALOG_NAME_KEY,
+                                                ICEBERG_CATALOG_DEFAULT_NAME),
+                                        catalogProperties);
                         this.lakeFormat = ICEBERG;
                     } else {
                         throw new UnsupportedOperationException(

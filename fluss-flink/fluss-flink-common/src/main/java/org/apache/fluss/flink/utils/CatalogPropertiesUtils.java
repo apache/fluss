@@ -80,6 +80,18 @@ public class CatalogPropertiesUtils {
     private static final String COMMENT = "comment";
     private static final Pattern SCHEMA_COLUMN_NAME_SUFFIX = Pattern.compile("\\d+\\.name");
 
+    static String getWatermarkRowtimeKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_ROWTIME);
+    }
+
+    static String getWatermarkExprKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_STRATEGY_EXPR);
+    }
+
+    static String getWatermarkDataTypeKey(int index) {
+        return compoundKey(SCHEMA, WATERMARK, index, WATERMARK_STRATEGY_DATA_TYPE);
+    }
+
     public static Map<String, String> deserializeOptions(Map<String, String> map) {
         return excludeByPrefix(map, SCHEMA + SEPARATOR);
     }

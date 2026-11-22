@@ -32,6 +32,7 @@ import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
@@ -133,6 +134,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     }
 
     @Test
+    @MultiVersionTest
     void testShowDatabases() throws Exception {
         assertThat(CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect()))
                 .isEmpty();

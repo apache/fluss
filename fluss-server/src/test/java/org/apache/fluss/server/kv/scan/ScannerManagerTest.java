@@ -40,7 +40,6 @@ import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.LogTestUtils;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
-import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -55,9 +54,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.server.kv.KvTabletTestUtils.flushAndWait;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -103,6 +104,8 @@ class ScannerManagerTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new AtomicBoolean(
+                                conf.get(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED)),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
@@ -208,7 +211,7 @@ class ScannerManagerTest {
                             String.valueOf(i).getBytes(), new Object[] {i, "v" + i}));
         }
         kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(rows), null);
-        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+        flushAndWait(kvTablet, Long.MAX_VALUE);
     }
 
     @Test

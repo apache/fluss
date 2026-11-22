@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.predicate.Predicate;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
@@ -83,6 +85,23 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
     SimpleVersionedSerializer<Split> getSplitSerializer();
 
     /**
+     * Creates an independent copy of this lake source, including all push-down state that has
+     * already been applied.
+     *
+     * <p>Subsequent calls to {@link #withProject(int[][])}, {@link #withLimit(int)}, or {@link
+     * #withFilters(List)} on either instance must not affect the planning or reading behavior of
+     * the other instance.
+     *
+     * <p>This operation must copy the current state entirely in memory. It must not access a
+     * catalog, load table or schema metadata, or replay ability methods such as push-down
+     * operations. Implementations must also preserve any additional push-down state introduced in
+     * the future.
+     *
+     * @return an independent copy of this lake source
+     */
+    LakeSource<Split> copy();
+
+    /**
      * Context interface for planners, providing the snapshot id of the table in data-lake to plan
      * splits.
      */
@@ -91,12 +110,28 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
     }
 
     /**
-     * Context interface for record readers, providing access to the lake split being read.
+     * Context interface for record readers, providing access to the lake split being read and the
+     * required reading semantics.
      *
      * @param <Split> The type of lake split
      */
     interface ReaderContext<Split extends LakeSplit> extends Serializable {
+        /**
+         * Returns the lake split to read.
+         *
+         * <p>The split can be null when the caller only needs reader-level metadata, such as a sort
+         * comparator.
+         */
+        @Nullable
         Split lakeSplit();
+
+        /**
+         * Returns whether records produced by this reader must follow the order defined by {@link
+         * SortedRecordReader#order()}.
+         */
+        default boolean requireSortedRecords() {
+            return false;
+        }
     }
 
     /**

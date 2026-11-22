@@ -264,7 +264,9 @@ h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
 }
 
-.menu__link--sublist-caret:after {
+/* Categories with a page link use a separate caret button. */
+.menu__link--sublist-caret::after,
+.menu__caret::before {
   background: var(--ifm-menu-link-sublist-icon) 50% / 1.5rem 1.5rem;
 }
 
@@ -525,8 +527,10 @@ h1, h2, h3, h4, h5, h6 {
     margin: 0 8px;
     padding: 7px 16px;
     border: 0;
-    border-radius: var(--fluss-radius-pill);
-    background: linear-gradient(120deg, var(--fluss-cyan) 0%, var(--fluss-blue-600) 50%, var(--fluss-blue-500) 100%);
+    border-radius: var(--fluss-radius-sm);
+    /* Bright cyan -> violet: high contrast against the navy navbar and ties to
+       the hero's "Analytics & AI" violet, marking this as the AI entry point. */
+    background: linear-gradient(120deg, #06b6d4 0%, #4f8ff0 50%, var(--fluss-violet) 100%);
     background-size: 180% 180%;
     color: #ffffff;
     font-family: inherit;
@@ -534,8 +538,9 @@ h1, h2, h3, h4, h5, h6 {
     font-weight: 700;
     letter-spacing: 0.02em;
     cursor: pointer;
-    box-shadow: 0 2px 10px rgba(6, 182, 212, 0.45),
-                0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    box-shadow: 0 2px 12px rgba(124, 58, 237, 0.5),
+                0 2px 10px rgba(6, 182, 212, 0.4),
+                0 0 0 1px rgba(255, 255, 255, 0.12) inset;
     animation: navbar-ask-ai-shimmer 5s ease-in-out infinite,
                navbar-ask-ai-pulse 2.6s ease-in-out infinite;
     transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
@@ -575,10 +580,12 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 @keyframes navbar-ask-ai-pulse {
-    0%, 100% { box-shadow: 0 2px 10px rgba(6, 182, 212, 0.45),
-                           0 0 0 1px rgba(255, 255, 255, 0.1) inset; }
-    50%      { box-shadow: 0 2px 18px rgba(6, 182, 212, 0.75),
-                           0 0 0 1px rgba(255, 255, 255, 0.14) inset; }
+    0%, 100% { box-shadow: 0 2px 12px rgba(124, 58, 237, 0.5),
+                           0 2px 10px rgba(6, 182, 212, 0.4),
+                           0 0 0 1px rgba(255, 255, 255, 0.12) inset; }
+    50%      { box-shadow: 0 2px 20px rgba(124, 58, 237, 0.8),
+                           0 2px 16px rgba(6, 182, 212, 0.65),
+                           0 0 0 1px rgba(255, 255, 255, 0.16) inset; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -751,6 +758,34 @@ h1, h2, h3, h4, h5, h6 {
   padding: 0 4px;
 }
 
+/* Keep navigation readable between the mobile and full desktop layouts. */
+@media (min-width: 997px) and (max-width: 1199px) {
+  .navbar__inner {
+    padding: 0 8px;
+  }
+
+  .navbar__brand {
+    flex-shrink: 0;
+  }
+
+  .navbar__link {
+    padding: 0 8px;
+    white-space: nowrap;
+  }
+
+  .navbar .DocSearch-Button {
+    width: 40px;
+    min-width: 40px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .navbar .DocSearch-Button-Placeholder,
+  .navbar .DocSearch-Button-Keys {
+    display: none;
+  }
+}
+
 /* Version dropdown badge */
 .navbar .navbar__item--version,
 .navbar .badge {
@@ -889,6 +924,10 @@ div[class*='announcementBar'] a {
 .menu__link--sublist {
   font-weight: 600;
   color: var(--fluss-ink-950);
+}
+
+.menu__caret {
+  padding: 6px 10px;
 }
 
 .menu__caret:hover {
@@ -1902,8 +1941,8 @@ kbd {
   font-size: 0.9375rem;
   letter-spacing: 0;
   color: var(--fluss-ink-950);
-  padding-top: 14px;
-  padding-bottom: 6px;
+  padding-top: 10px;
+  padding-bottom: 10px;
 }
 
 /* Nested items at any depth: uniform non-bold styling, regardless of whether
@@ -3305,4 +3344,21 @@ button.clean-btn[class*='toggle'] svg {
 
 [data-theme='dark'] table[class*='compareTable'] tbody tr:hover td[class*='colHighlight'] {
   background-color: rgba(122, 175, 203, 0.2);
+}
+
+html[data-theme='light'] .navbar__search {
+    opacity: 1;
+}
+
+/* =========================================================================
+   Mermaid diagrams
+   ========================================================================= */
+
+/* Mermaid sizes node/edge label boxes assuming its own line-height of 1.5,
+   but the site's paragraph line-height (1.8) also applies inside the SVG's
+   HTML labels — multi-line labels overflow and clip at the bottom. Pin the
+   label line-height back to what mermaid measured with. */
+.docusaurus-mermaid-container foreignObject p {
+  line-height: 1.5;
+  margin: 0;
 }

@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -48,13 +50,23 @@ class LookupQueue {
     private final BlockingQueue<AbstractLookupQuery<?>> reEnqueuedLookupQueue;
     private final int maxBatchSize;
     private final long batchTimeoutNanos;
+    // Retry times are checked against this clock. The sender takes it from here to set them.
+    private final Clock clock;
+    // The thread that drains the queue, i.e. the sender thread.
+    private volatile Thread drainingThread;
 
     LookupQueue(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    @VisibleForTesting
+    LookupQueue(Configuration conf, Clock clock) {
         this.lookupQueue =
                 new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.reEnqueuedLookupQueue = new LinkedBlockingQueue<>();
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
         this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
+        this.clock = clock;
         this.closed = false;
     }
 
@@ -64,6 +76,15 @@ class LookupQueue {
                     "Can not append lookup operation since the LookupQueue is closed.");
         }
 
+        if (Thread.currentThread() == drainingThread) {
+            // A completion callback on the sender thread, e.g. a lookuper rerouting a lookup of a
+            // dropped partition, must not wait for space in the queue, as only this thread drains
+            // it.
+            if (!lookupQueue.offer(lookup)) {
+                reEnqueuedLookupQueue.add(lookup);
+            }
+            return;
+        }
         try {
             lookupQueue.put(lookup);
         } catch (InterruptedException e) {
@@ -84,12 +105,32 @@ class LookupQueue {
         }
     }
 
+    /**
+     * Re-enqueues the lookup unless the queue is closed. Only for the draining thread: a lookup
+     * that it adds just as the queue gets closed is still drained by its final {@link #drainAll()}.
+     *
+     * @return false if the queue is closed and the lookup was not re-enqueued
+     */
+    boolean tryReEnqueue(AbstractLookupQuery<?> lookup) {
+        if (closed) {
+            return false;
+        }
+        reEnqueuedLookupQueue.add(lookup);
+        return true;
+    }
+
+    /** Returns the clock that the retry times of re-enqueued lookups are checked against. */
+    Clock clock() {
+        return clock;
+    }
+
     boolean hasUnDrained() {
         return !lookupQueue.isEmpty() || !reEnqueuedLookupQueue.isEmpty();
     }
 
     /** Drain a batch of {@link LookupQuery}s from the lookup queue. */
     List<AbstractLookupQuery<?>> drain() throws Exception {
+        drainingThread = Thread.currentThread();
         final long startNanos = System.nanoTime();
         List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(maxBatchSize);
         int count = 0;
@@ -99,17 +140,32 @@ class LookupQueue {
                 break;
             }
 
-            while (!reEnqueuedLookupQueue.isEmpty() && count < maxBatchSize) {
-                AbstractLookupQuery<?> lookup =
-                        reEnqueuedLookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            long nextRetryDelayNanos = Long.MAX_VALUE;
+            int reEnqueuedToCheck = reEnqueuedLookupQueue.size();
+            while (reEnqueuedToCheck > 0 && count < maxBatchSize) {
+                AbstractLookupQuery<?> lookup = reEnqueuedLookupQueue.poll();
                 if (lookup == null) {
                     break;
                 }
-                lookupOperations.add(lookup);
-                count++;
+                long retryDelayMs = lookup.nextRetryTimeMs() - clock.milliseconds();
+                if (retryDelayMs <= 0) {
+                    lookupOperations.add(lookup);
+                    count++;
+                } else {
+                    nextRetryDelayNanos =
+                            Math.min(
+                                    nextRetryDelayNanos,
+                                    TimeUnit.MILLISECONDS.toNanos(retryDelayMs));
+                    reEnqueuedLookupQueue.add(lookup);
+                }
+                reEnqueuedToCheck--;
             }
 
-            AbstractLookupQuery<?> lookup = lookupQueue.poll(waitNanos, TimeUnit.NANOSECONDS);
+            long lookupWaitNanos = waitNanos;
+            if (count == 0 && nextRetryDelayNanos != Long.MAX_VALUE) {
+                lookupWaitNanos = Math.min(waitNanos, Math.max(1L, nextRetryDelayNanos));
+            }
+            AbstractLookupQuery<?> lookup = lookupQueue.poll(lookupWaitNanos, TimeUnit.NANOSECONDS);
             if (lookup == null) {
                 break;
             }
@@ -126,6 +182,7 @@ class LookupQueue {
 
     /** Drain all the {@link LookupQuery}s from the lookup queue. */
     List<AbstractLookupQuery<?>> drainAll() {
+        drainingThread = Thread.currentThread();
         List<AbstractLookupQuery<?>> lookupOperations = new ArrayList<>(lookupQueue.size());
         lookupQueue.drainTo(lookupOperations);
         reEnqueuedLookupQueue.drainTo(lookupOperations);

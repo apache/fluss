@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -53,8 +54,26 @@ public class ScanRecords implements Iterable<ScanRecord> {
     public ScanRecords(
             Map<TableBucket, List<ScanRecord>> records,
             Map<TableBucket, Long> consumedUpToOffsets) {
-        this.records = records;
+        this.records = withProgressOnlyBuckets(records, consumedUpToOffsets);
         this.consumedUpToOffsets = consumedUpToOffsets;
+    }
+
+    /**
+     * Ensures every bucket with a consumed offset has a (possibly empty) record list entry, so that
+     * {@link #buckets()} surfaces progress-only buckets as documented. Returns the original map
+     * when the invariant already holds (the common case for collector-produced results).
+     */
+    private static Map<TableBucket, List<ScanRecord>> withProgressOnlyBuckets(
+            Map<TableBucket, List<ScanRecord>> records,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        if (records.keySet().containsAll(consumedUpToOffsets.keySet())) {
+            return records;
+        }
+        Map<TableBucket, List<ScanRecord>> merged = new LinkedHashMap<>(records);
+        for (TableBucket bucket : consumedUpToOffsets.keySet()) {
+            merged.putIfAbsent(bucket, Collections.emptyList());
+        }
+        return merged;
     }
 
     /**
@@ -102,6 +121,16 @@ public class ScanRecords implements Iterable<ScanRecord> {
     /** Returns {@code true} if this {@code ScanRecords} contains no materialized records. */
     public boolean isEmpty() {
         return count() == 0;
+    }
+
+    /**
+     * Returns {@code true} if this {@code ScanRecords} carries any scanner progress.
+     *
+     * <p>A result may have progress even when {@link #isEmpty()} is {@code true}, for example when
+     * a bucket returns no materialized records but advances its consumed offset.
+     */
+    public boolean hasProgress() {
+        return count() > 0 || !consumedUpToOffsets.isEmpty();
     }
 
     @Override

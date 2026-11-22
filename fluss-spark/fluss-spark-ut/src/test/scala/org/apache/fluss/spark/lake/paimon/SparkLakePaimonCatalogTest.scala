@@ -21,10 +21,10 @@ import org.apache.fluss.config.{ConfigOptions, Configuration, FlussConfigUtils}
 import org.apache.fluss.exception.FlussRuntimeException
 import org.apache.fluss.lake.paimon.utils.PaimonConversions
 import org.apache.fluss.metadata._
-import org.apache.fluss.metadata.TableDescriptor.{BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME}
 import org.apache.fluss.server.utils.LakeStorageUtils
 import org.apache.fluss.spark.SparkCatalogTest
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_KEY, BUCKET_NUMBER, PRIMARY_KEY}
+import org.apache.fluss.spark.lake.SparkLakeTest
 
 import org.scalatest.matchers.must.Matchers.contain
 import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
@@ -33,6 +33,7 @@ import java.nio.file.Files
 
 import scala.collection.JavaConverters._
 
+@SparkLakeTest
 class SparkLakePaimonCatalogTest extends SparkCatalogTest {
 
   private var paimonCatalog: org.apache.paimon.catalog.Catalog = _
@@ -132,7 +133,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
 
   test("Lake Catalog: basic table") {
     // bucket log table
-    var tableName = "bucket_log_table"
+    var tableName = scopedTableName("bucket_log_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
@@ -152,12 +153,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         "id",
         2
@@ -165,7 +163,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // non-bucket log table
-    tableName = "non_bucket_log_table"
+    tableName = scopedTableName("non_bucket_log_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
@@ -185,12 +183,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         null,
         2
@@ -198,7 +193,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // pk table
-    tableName = "pk_table"
+    tableName = scopedTableName("pk_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string, pk1 string)
@@ -220,18 +215,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
             Array.apply(
               org.apache.paimon.types.DataTypes.INT.notNull(),
               org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name", "pk1")
           ),
         "id",
         2
@@ -239,7 +225,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
     }
 
     // partitioned pk table
-    tableName = "partitioned_pk_table"
+    tableName = scopedTableName("partitioned_pk_table")
     withTable(tableName) {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string, pk1 string, pt1 string)
@@ -263,19 +249,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               org.apache.paimon.types.DataTypes.INT.notNull(),
               org.apache.paimon.types.DataTypes.STRING,
               org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.STRING.notNull(),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING.notNull()
             ),
-            Array.apply(
-              "id",
-              "name",
-              "pk1",
-              "pt1",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name", "pk1", "pt1")
           ),
         "id",
         2
@@ -284,9 +260,11 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: table with all types") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName
              | (c1 boolean, c2 byte, c3 short, c4 int, c5 long, c6 float, c7 double, c8 date,
              |  c9 timestamp, c10 timestamp_ntz, c11 string, c12 binary, c13 decimal(10, 2),
              |  c14 array<int>, c15 struct<a int, b string>, c16 map<string, int>)
@@ -295,9 +273,10 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
              |  '${BUCKET_NUMBER.key()}' = 2, 'k1' = 'v1', 'paimon.file.format' = 'parquet')
              |""".stripMargin)
 
-      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "t")).get()
+      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, tableName)).get()
       val paimonTable =
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       verifyLakePaimonTable(
         paimonTable,
         flussTable,
@@ -326,10 +305,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               ),
               org.apache.paimon.types.DataTypes.MAP(
                 org.apache.paimon.types.DataTypes.STRING.notNull(),
-                org.apache.paimon.types.DataTypes.INT),
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+                org.apache.paimon.types.DataTypes.INT)
             ),
             Array.apply(
               "c1",
@@ -347,10 +323,7 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
               "c13",
               "c14",
               "c15",
-              "c16",
-              BUCKET_COLUMN_NAME,
-              OFFSET_COLUMN_NAME,
-              TIMESTAMP_COLUMN_NAME)
+              "c16")
           ),
         null,
         2
@@ -359,13 +332,15 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: unsettable properties") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       val unsettableProperties =
         PaimonConversions.PAIMON_UNSETTABLE_OPTIONS.asScala.map(e => s"'$e' = 'v'").mkString(", ")
 
       intercept[java.util.concurrent.ExecutionException] {
         sql(s"""
-               |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string)
+               |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
                | TBLPROPERTIES (
                |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
                |  $unsettableProperties,
@@ -376,23 +351,27 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
   }
 
   test("Lake Catalog: alter table with lake enabled") {
-    withTable("t") {
+    val tableName = scopedTableName("t")
+
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (id int, name string)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id int, name string)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = false,
              |  '${BUCKET_NUMBER.key()}' = 2, 'k1' = 'v1', 'paimon.file.format' = 'parquet')
              |""".stripMargin)
       intercept[org.apache.paimon.catalog.Catalog.TableNotExistException] {
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       }
 
       sql(
-        s"ALTER TABLE $DEFAULT_DATABASE.t SET TBLPROPERTIES ('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true)")
+        s"ALTER TABLE $DEFAULT_DATABASE.$tableName SET TBLPROPERTIES ('${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true)")
 
-      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, "t")).get()
+      val flussTable = admin.getTableInfo(TablePath.of(DEFAULT_DATABASE, tableName)).get()
       val paimonTable =
-        paimonCatalog.getTable(org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, "t"))
+        paimonCatalog.getTable(
+          org.apache.paimon.catalog.Identifier.create(DEFAULT_DATABASE, tableName))
       verifyLakePaimonTable(
         paimonTable,
         flussTable,
@@ -400,12 +379,9 @@ class SparkLakePaimonCatalogTest extends SparkCatalogTest {
           .of(
             Array.apply(
               org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.STRING,
-              org.apache.paimon.types.DataTypes.INT,
-              org.apache.paimon.types.DataTypes.BIGINT,
-              org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS
+              org.apache.paimon.types.DataTypes.STRING
             ),
-            Array.apply("id", "name", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)
+            Array.apply("id", "name")
           ),
         null,
         2

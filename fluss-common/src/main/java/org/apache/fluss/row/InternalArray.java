@@ -19,8 +19,6 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.row.columnar.ColumnarRow;
-import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
@@ -161,23 +159,26 @@ public interface InternalArray extends DataGetters {
         };
     }
 
-    /**
-     * Creates a deep accessor for getting elements in an internal array data structure at the given
-     * position. It returns new objects (GenericArray/GenericMap/GenericMap) for nested
-     * array/map/row types.
-     *
-     * <p>NOTE: Currently, it is only used for deep copying {@link ColumnarRow} for Arrow which
-     * avoid the arrow buffer is released before accessing elements. It doesn't deep copy STRING and
-     * BYTES types, because {@link ColumnarRow} already deep copies the bytes, see {@link
-     * VectorizedColumnBatch#getString(int, int)}. This can be removed once we supports object reuse
-     * for Arrow {@link ColumnarRow}, see {@code CompletedFetch#toScanRecord(LogRecord)}.
-     */
-    static ElementGetter createDeepElementGetter(DataType fieldType) {
+    /** Same as InternalRow.createDeepFieldGetter but for array elements. */
+    static ElementGetter createDeepElementGetter(DataType fieldType, boolean copyStrings) {
         final ElementGetter elementGetter;
         switch (fieldType.getTypeRoot()) {
+            case CHAR:
+                final int charLen = getLength(fieldType);
+                elementGetter =
+                        copyStrings
+                                ? (array, pos) -> array.getChar(pos, charLen).copy()
+                                : (array, pos) -> array.getChar(pos, charLen);
+                break;
+            case STRING:
+                elementGetter =
+                        copyStrings
+                                ? (array, pos) -> array.getString(pos).copy()
+                                : InternalArray::getString;
+                break;
             case ARRAY:
                 DataType nestedType = ((ArrayType) fieldType).getElementType();
-                ElementGetter nestedGetter = createDeepElementGetter(nestedType);
+                ElementGetter nestedGetter = createDeepElementGetter(nestedType, copyStrings);
                 elementGetter =
                         (array, pos) -> {
                             InternalArray inner = array.getArray(pos);
@@ -191,8 +192,8 @@ public interface InternalArray extends DataGetters {
             case MAP:
                 DataType keyType = ((MapType) fieldType).getKeyType();
                 DataType valueType = ((MapType) fieldType).getValueType();
-                ElementGetter keyGetter = createDeepElementGetter(keyType);
-                ElementGetter valueGetter = createDeepElementGetter(valueType);
+                ElementGetter keyGetter = createDeepElementGetter(keyType, copyStrings);
+                ElementGetter valueGetter = createDeepElementGetter(valueType, copyStrings);
                 elementGetter =
                         (array, pos) -> {
                             InternalMap inner = array.getMap(pos);
@@ -212,7 +213,8 @@ public interface InternalArray extends DataGetters {
                 int numFields = rowType.getFieldCount();
                 InternalRow.FieldGetter[] fieldGetters = new InternalRow.FieldGetter[numFields];
                 for (int i = 0; i < numFields; i++) {
-                    fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
+                    fieldGetters[i] =
+                            InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i, copyStrings);
                 }
                 elementGetter =
                         (array, pos) -> {

@@ -121,13 +121,22 @@ public final class AggFunction implements Serializable {
      * <p>This method checks that:
      *
      * <ul>
+     *   <li>All parameters required by the function type are present
      *   <li>All parameter names are supported by the function type
      *   <li>All parameter values are valid
      * </ul>
      *
-     * @throws IllegalArgumentException if any parameter is invalid
+     * @throws IllegalArgumentException if any parameter is missing or invalid
      */
     public void validateParameters() {
+        for (String required : type.getRequiredParameters()) {
+            if (!parameters.containsKey(required)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Parameter '%s' is required for aggregation function '%s'.",
+                                required, type));
+            }
+        }
         for (Map.Entry<String, String> entry : parameters.entrySet()) {
             type.validateParameter(entry.getKey(), entry.getValue());
         }

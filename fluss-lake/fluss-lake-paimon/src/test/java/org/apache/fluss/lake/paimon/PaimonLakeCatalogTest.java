@@ -19,8 +19,12 @@ package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
+import org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -28,22 +32,39 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.SchemaUpdate;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.paimon.CoreOptions;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Identifier;
+import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
+import org.apache.paimon.table.sink.BatchTableCommit;
+import org.apache.paimon.table.sink.BatchTableWrite;
+import org.apache.paimon.table.sink.BatchWriteBuilder;
+import org.apache.paimon.types.DataType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_MERGE_ENGINE;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.LAKESTREAM_ENABLED_OPTION_KEY;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.paimon.utils.PaimonTableValidation.isPaimonSchemaCompatible;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -74,6 +95,247 @@ class PaimonLakeCatalogTest {
     void cleanup() {
         flussPaimonCatalog.close();
         setUp();
+    }
+
+    @Test
+    void testGetTableDescriptor() throws Exception {
+        TablePath tablePath = TablePath.of("get_table_descriptor_db", "get_table_descriptor_table");
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                        .option(CoreOptions.BUCKET.key(), "-1")
+                        .build());
+
+        TableDescriptor descriptor = flussPaimonCatalog.getTableDescriptor(tablePath);
+        assertThat(descriptor.getSchema().getColumnNames()).containsExactly("id");
+        assertThat(descriptor.getTableDistribution()).isPresent();
+    }
+
+    @Test
+    void testGetTableDescriptorWithNonExistentTable() {
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.getTableDescriptor(
+                                        TablePath.of("missing_db", "missing_table")))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table missing_db.missing_table does not exist in Paimon.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRejectDefaultMergeEngineWithExistingFirstRowTable(boolean creatingFlussTable)
+            throws Exception {
+        TablePath tablePath = TablePath.of("merge_engine_db", "first_row_table");
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.INT())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(CoreOptions.MERGE_ENGINE.key(), "first-row")
+                        .build());
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.BIGINT())
+                                        .column("amount", DataTypes.INT())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(1, "id")
+                        .property(TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TestingLakeCatalogContext context =
+                new TestingLakeCatalogContext(creatingFlussTable ? null : descriptor, descriptor) {
+                    @Override
+                    public boolean isCreatingFlussTable() {
+                        return creatingFlussTable;
+                    }
+                };
+
+        // Both ordinary creation and later enablement must reject the mismatched merge engine.
+        assertThatThrownBy(() -> flussPaimonCatalog.createTable(tablePath, descriptor, context))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("schema is not compatible");
+    }
+
+    @Test
+    void testGetLatestSnapshotId() throws Exception {
+        TablePath tablePath = TablePath.of("get_snapshot_db", "get_snapshot_table");
+        assertThatThrownBy(() -> flussPaimonCatalog.getLatestSnapshotId(tablePath))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage("Table get_snapshot_db.get_snapshot_table does not exist in Paimon.");
+
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                        .option(CoreOptions.BUCKET.key(), "-1")
+                        .build());
+
+        assertThat(flussPaimonCatalog.getLatestSnapshotId(tablePath)).isEmpty();
+
+        long snapshotId = writeSingleRow(tablePath);
+
+        assertThat(flussPaimonCatalog.getLatestSnapshotId(tablePath)).contains(snapshotId);
+    }
+
+    @Test
+    void testLatestSnapshotWhenOnlyCompactionSnapshotRemains() throws Exception {
+        TablePath tablePath = TablePath.of("expired_snapshot_db", "expired_snapshot_table");
+        Schema schema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, "false")
+                        .build());
+
+        for (int i = 0; i < 5; i++) {
+            writeSingleRow(tablePath);
+        }
+        FileStoreTable table =
+                (FileStoreTable)
+                        flussPaimonCatalog.getPaimonCatalog().getTable(toPaimon(tablePath));
+        new CompactHelper(table, new File(tempWarehouseDir, "expired-compaction"))
+                .compactBucket(0)
+                .commit();
+        long compactSnapshotId = table.latestSnapshot().get().id();
+        assertThat(table.latestSnapshot().get().commitKind())
+                .isEqualTo(Snapshot.CommitKind.COMPACT);
+
+        // Retain only the COMPACT snapshot after deleting the earlier APPEND snapshots.
+        for (long snapshotId = 1; snapshotId < compactSnapshotId; snapshotId++) {
+            table.snapshotManager().deleteSnapshot(snapshotId);
+        }
+        table.snapshotManager().invalidateCache();
+        assertThat(table.snapshotManager().snapshotExists(compactSnapshotId)).isTrue();
+        assertThat(flussPaimonCatalog.getLatestSnapshotId(tablePath)).contains(compactSnapshotId);
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.createTable(
+                                        tablePath,
+                                        tableDescriptor,
+                                        new TestingLakeCatalogContext(
+                                                tableDescriptor, tableDescriptor)))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Fluss and Paimon snapshot IDs are inconsistent");
+
+        // Earlier APPEND snapshots are no longer needed once the COMPACT is registered.
+        TestingLakeCatalogContext compactContext =
+                new TestingLakeCatalogContext(tableDescriptor, tableDescriptor) {
+                    @Override
+                    public Optional<Long> getCurrentLakeSnapshotId() {
+                        return Optional.of(compactSnapshotId);
+                    }
+                };
+        flussPaimonCatalog.createTable(tablePath, tableDescriptor, compactContext);
+    }
+
+    @Test
+    void testSnapshotConsistencyAfterCompaction() throws Exception {
+        TablePath tablePath = TablePath.of("compact_snapshot_db", "compact_snapshot_table");
+        Schema schema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
+        createPaimonTable(
+                tablePath,
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT())
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, "false")
+                        .build());
+
+        long registeredSnapshotId = -1;
+        for (int i = 0; i < 5; i++) {
+            registeredSnapshotId = writeSingleRow(tablePath);
+        }
+        long expectedRegisteredSnapshotId = registeredSnapshotId;
+        FileStoreTable table =
+                (FileStoreTable)
+                        flussPaimonCatalog.getPaimonCatalog().getTable(toPaimon(tablePath));
+        new CompactHelper(table, new File(tempWarehouseDir, "compaction"))
+                .compactBucket(0)
+                .commit();
+        assertThat(table.latestSnapshot().get().commitKind())
+                .isEqualTo(Snapshot.CommitKind.COMPACT);
+        long compactSnapshotId = table.latestSnapshot().get().id();
+        assertThat(flussPaimonCatalog.getLatestSnapshotId(tablePath)).contains(compactSnapshotId);
+
+        TestingLakeCatalogContext context =
+                new TestingLakeCatalogContext(tableDescriptor, tableDescriptor) {
+                    @Override
+                    public Optional<Long> getCurrentLakeSnapshotId() {
+                        return Optional.of(expectedRegisteredSnapshotId);
+                    }
+                };
+        flussPaimonCatalog.createTable(tablePath, tableDescriptor, context);
+
+        // A registered COMPACT snapshot also remains valid until another data change.
+        TestingLakeCatalogContext compactContext =
+                new TestingLakeCatalogContext(tableDescriptor, tableDescriptor) {
+                    @Override
+                    public Optional<Long> getCurrentLakeSnapshotId() {
+                        return Optional.of(compactSnapshotId);
+                    }
+                };
+        flussPaimonCatalog.createTable(tablePath, tableDescriptor, compactContext);
+
+        // The registered snapshot must still exist even when later snapshots are only COMPACT.
+        table.snapshotManager().deleteSnapshot(expectedRegisteredSnapshotId);
+        table.snapshotManager().invalidateCache();
+        assertThatThrownBy(
+                        () -> flussPaimonCatalog.createTable(tablePath, tableDescriptor, context))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("The registered Paimon snapshot has expired")
+                .hasMessageContaining("Fluss snapshot: " + expectedRegisteredSnapshotId)
+                .hasMessageContaining("Paimon latest snapshot: " + compactSnapshotId);
+
+        long unregisteredSnapshotId = writeSingleRow(tablePath);
+        assertThat(flussPaimonCatalog.getLatestSnapshotId(tablePath))
+                .contains(unregisteredSnapshotId);
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.createTable(
+                                        tablePath, tableDescriptor, compactContext))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("changed table data")
+                .hasMessageContaining("Fluss snapshot: " + compactSnapshotId)
+                .hasMessageContaining("Paimon latest snapshot: " + unregisteredSnapshotId);
+
+        // A later COMPACT must not hide the unregistered APPEND snapshots.
+        for (int i = 0; i < 4; i++) {
+            writeSingleRow(tablePath);
+        }
+        new CompactHelper(table, new File(tempWarehouseDir, "second-compaction"))
+                .compactBucket(0)
+                .commit();
+        assertThat(table.latestSnapshot().get().commitKind())
+                .isEqualTo(Snapshot.CommitKind.COMPACT);
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.createTable(
+                                        tablePath, tableDescriptor, compactContext))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("changed table data");
+
+        long missingSnapshotId = table.latestSnapshot().get().id() - 1;
+        table.snapshotManager().deleteSnapshot(missingSnapshotId);
+        table.snapshotManager().invalidateCache();
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.createTable(
+                                        tablePath, tableDescriptor, compactContext))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Paimon snapshot " + missingSnapshotId + " is missing");
     }
 
     @Test
@@ -156,15 +418,469 @@ class PaimonLakeCatalogTest {
 
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         assertThat(table.rowType().getFieldNames())
-                .containsSequence(
-                        "id",
-                        "name",
-                        "amount",
-                        "address",
-                        "new_col",
-                        "__bucket",
-                        "__offset",
-                        "__timestamp");
+                .containsSequence("id", "name", "amount", "address", "new_col");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "partial-update, , , LAST_VALUE, , false",
+        "partial-update, , , LAST_VALUE_IGNORE_NULLS, , true",
+        "partial-update, , , , , true",
+        "aggregation, , , LAST_VALUE, , false",
+        "aggregation, , , , , true",
+        "aggregation, last_value, , LAST_VALUE, , true",
+        "aggregation, last_value, , , , false",
+        "aggregation, last_value, last_non_null_value, LAST_VALUE, , false",
+        "aggregation, last_value, last_non_null_value, , , true",
+        "aggregation, last_non_null_value, last_value, LAST_VALUE, , true",
+        "aggregation, , sum, SUM, , true",
+        "aggregation, , sum, LAST_VALUE_IGNORE_NULLS, , false",
+        "aggregation, , product, PRODUCT, , false",
+        "aggregation, , first_value, FIRST_VALUE, , false",
+        "deduplicate, , , LAST_VALUE, , true",
+        "deduplicate, , , SUM, , true",
+        "aggregation, , sum, SUM, set-function, true",
+        "aggregation, , sum, LAST_VALUE_IGNORE_NULLS, set-function, false",
+        "aggregation, , last_value, , reset-function, true",
+        "aggregation, , last_value, LAST_VALUE, reset-function, false",
+        "aggregation, last_value, last_non_null_value, LAST_VALUE, reset-function, true",
+        "aggregation, , sum, SUM, set-ignore-retract, false",
+        "aggregation, , sum, SUM, reset-ignore-retract, true"
+    })
+    void testAlterTableAddColumnAggregation(
+            String mergeEngine,
+            String defaultFunction,
+            String fieldFunction,
+            String flussFunction,
+            String optionChange,
+            boolean compatible)
+            throws Exception {
+        TablePath tablePath = TablePath.of("test_add_column_aggregation", "t");
+        org.apache.paimon.schema.Schema.Builder builder =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("id", org.apache.paimon.types.DataTypes.BIGINT().notNull())
+                        .column("amount", org.apache.paimon.types.DataTypes.INT())
+                        .primaryKey("id")
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "id")
+                        .option(CoreOptions.MERGE_ENGINE.key(), mergeEngine)
+                        .option(CoreOptions.IGNORE_DELETE.key(), "true");
+        if (defaultFunction != null) {
+            builder.option(CoreOptions.FIELDS_DEFAULT_AGG_FUNC.key(), defaultFunction);
+        }
+        createPaimonTable(tablePath, builder.build());
+        TableDescriptor current =
+                TableDescriptor.builder(flussPaimonCatalog.getTableDescriptor(tablePath))
+                        .property(TABLE_MERGE_ENGINE.key(), "aggregation")
+                        .build();
+        List<TableChange> changes =
+                new ArrayList<>(
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_col",
+                                        DataTypes.INT(),
+                                        null,
+                                        TableChange.ColumnPosition.last(),
+                                        flussFunction == null
+                                                ? null
+                                                : AggFunctions.of(
+                                                        AggFunctionType.fromString(
+                                                                flussFunction)))));
+        TableDescriptor expected =
+                TableDescriptor.builder(current)
+                        .schema(SchemaUpdate.applySchemaChanges(current.getSchema(), changes))
+                        .build();
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext(current, expected);
+        boolean paimonColumnExists = fieldFunction != null && !"set-function".equals(optionChange);
+        if (paimonColumnExists) {
+            // Paimon requires a column to exist before setting its field-level function.
+            flussPaimonCatalog
+                    .getPaimonCatalog()
+                    .alterTable(
+                            toPaimon(tablePath),
+                            Arrays.asList(
+                                    SchemaChange.addColumn(
+                                            "new_col", org.apache.paimon.types.DataTypes.INT()),
+                                    SchemaChange.setOption(
+                                            "fields.new_col.aggregate-function", fieldFunction)),
+                            false);
+        }
+        if (optionChange != null) {
+            String functionKey = "paimon.fields.new_col.aggregate-function";
+            String retractKey = "paimon.fields.new_col.ignore-retract";
+            switch (optionChange) {
+                case "set-function":
+                    changes.add(TableChange.set(functionKey, fieldFunction));
+                    break;
+                case "reset-function":
+                    changes.add(TableChange.reset(functionKey));
+                    break;
+                case "set-ignore-retract":
+                    changes.add(TableChange.set(retractKey, "true"));
+                    break;
+                case "reset-ignore-retract":
+                    flussPaimonCatalog
+                            .getPaimonCatalog()
+                            .alterTable(
+                                    toPaimon(tablePath),
+                                    Collections.singletonList(
+                                            SchemaChange.setOption(
+                                                    "fields.new_col.ignore-retract", "true")),
+                                    false);
+                    changes.add(TableChange.reset(retractKey));
+                    break;
+                default:
+                    throw new IllegalArgumentException("Unknown option change: " + optionChange);
+            }
+        }
+        if (compatible) {
+            flussPaimonCatalog.alterTable(tablePath, changes, context);
+            assertThat(
+                            flussPaimonCatalog
+                                    .getPaimonCatalog()
+                                    .getTable(toPaimon(tablePath))
+                                    .rowType()
+                                    .getFieldNames())
+                    .containsExactly("id", "amount", "new_col");
+            flussPaimonCatalog.alterTable(tablePath, changes, context);
+        } else {
+            assertThatThrownBy(() -> flussPaimonCatalog.alterTable(tablePath, changes, context))
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining("new_col")
+                    .hasMessageContaining("aggregation function");
+            if (!paimonColumnExists) {
+                assertThat(
+                                flussPaimonCatalog
+                                        .getPaimonCatalog()
+                                        .getTable(toPaimon(tablePath))
+                                        .rowType()
+                                        .getFieldNames())
+                        .containsExactly("id", "amount");
+
+                // A retry must still validate semantics when Paimon already contains the column.
+                flussPaimonCatalog
+                        .getPaimonCatalog()
+                        .alterTable(
+                                toPaimon(tablePath),
+                                Collections.singletonList(
+                                        SchemaChange.addColumn(
+                                                "new_col",
+                                                org.apache.paimon.types.DataTypes.INT())),
+                                false);
+            }
+            assertThatThrownBy(() -> flussPaimonCatalog.alterTable(tablePath, changes, context))
+                    .isInstanceOf(InvalidAlterTableException.class)
+                    .hasMessageContaining("new_col")
+                    .hasMessageContaining("aggregation function");
+        }
+    }
+
+    @Test
+    void testAlterTableAddColumnIgnoresPaimonCommentsAndOptions() throws Exception {
+        String database = "test_alter_table_add_column_ignores_paimon_comments_and_options_db";
+        String tableName = "test_alter_table_add_column_ignores_paimon_comments_and_options_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+        createTable(database, tableName);
+
+        flussPaimonCatalog
+                .getPaimonCatalog()
+                .alterTable(
+                        identifier,
+                        Arrays.asList(
+                                SchemaChange.updateComment(""),
+                                SchemaChange.updateColumnComment(
+                                        "address", "updated address comment"),
+                                SchemaChange.setOption("fluss.key", "value")),
+                        false);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "is_direct_play",
+                                DataTypes.SMALLINT(),
+                                "whether direct play is enabled",
+                                TableChange.ColumnPosition.last()));
+
+        flussPaimonCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(((FileStoreTable) table).schema().toSchema().comment()).isEqualTo("");
+        assertThat(table.options().get("fluss.key")).isEqualTo("value");
+        assertThat(table.rowType().getFieldNames())
+                .containsSequence("id", "name", "amount", "address", "is_direct_play");
+    }
+
+    @Test
+    void testPaimonSchemaCompatibilityChecksPhysicalMetadata() {
+        org.apache.paimon.schema.Schema schema =
+                createPaimonSchema(
+                        Arrays.asList("id", "pt"), Collections.singletonList("pt"), "1", "id");
+
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "2",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "pt")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("pt", "id"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.<String>emptyList(),
+                                        "1",
+                                        "id")))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchema(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id",
+                                        Boolean.TRUE.toString())))
+                .isTrue();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                schema,
+                                createPaimonSchemaWithoutPartitionLegacyName(
+                                        Arrays.asList("id", "pt"),
+                                        Collections.singletonList("pt"),
+                                        "1",
+                                        "id")))
+                .isTrue();
+        assertThat(CoreOptions.IMMUTABLE_OPTIONS).contains(CoreOptions.BUCKET_FUNCTION_TYPE.key());
+        org.apache.paimon.schema.Schema schemaWithExplicitDefault =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(CoreOptions.ROW_TRACKING_ENABLED.key(), "false")
+                        .build();
+        assertThat(isPaimonSchemaCompatible(schemaWithExplicitDefault, schema)).isTrue();
+        org.apache.paimon.schema.Schema schemaWithDifferentImmutableOption =
+                createPaimonSchemaBuilder(
+                                Arrays.asList("id", "pt"),
+                                Collections.singletonList("pt"),
+                                "1",
+                                "id")
+                        .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, Boolean.FALSE.toString())
+                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                        .build();
+        assertThat(isPaimonSchemaCompatible(schema, schemaWithDifferentImmutableOption)).isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "merge-engine,first-row",
+        "merge-engine,aggregation",
+        "aggregation.remove-record-on-delete,true",
+        "partial-update.remove-record-on-delete,true"
+    })
+    void testPaimonSchemaCompatibilityWithExistingMergeOptions(String key, String value) {
+        List<String> primaryKeys = Arrays.asList("id", "pt");
+        List<String> partitionKeys = Collections.singletonList("pt");
+        org.apache.paimon.schema.Schema existingSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                        .option(key, value)
+                        .build();
+        org.apache.paimon.schema.Schema expectedSchema =
+                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id").build();
+
+        assertThat(isPaimonSchemaCompatible(existingSchema, expectedSchema)).isFalse();
+
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "2", "id")
+                                        .option(key, value)
+                                        .build()))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
+                                        .option(CoreOptions.BUCKET_FUNCTION_TYPE.key(), "mod")
+                                        .build()))
+                .isFalse();
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                createPaimonSchemaBuilder(primaryKeys, partitionKeys, "1", "id")
+                                        .option(key, value)
+                                        .column("extra", org.apache.paimon.types.DataTypes.INT())
+                                        .build()))
+                .isFalse();
+    }
+
+    @Test
+    void testPaimonSchemaCompatibilityWithVarCharAndVarBinary() {
+        org.apache.paimon.schema.Schema existingSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("name", org.apache.paimon.types.DataTypes.VARCHAR(20).notNull())
+                        .column("payload", org.apache.paimon.types.DataTypes.VARBINARY(128))
+                        .build();
+        org.apache.paimon.schema.Schema convertedSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column("name", org.apache.paimon.types.DataTypes.STRING().notNull())
+                        .column("payload", org.apache.paimon.types.DataTypes.BYTES())
+                        .build();
+
+        // Fluss loses the declared lengths, but the converted types retain nullability.
+        assertThat(isPaimonSchemaCompatible(existingSchema, convertedSchema)).isTrue();
+
+        // Changing nullability in either column must still make the schemas incompatible.
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                org.apache.paimon.schema.Schema.newBuilder()
+                                        .column("name", org.apache.paimon.types.DataTypes.STRING())
+                                        .column(
+                                                "payload",
+                                                org.apache.paimon.types.DataTypes.BYTES())
+                                        .build()))
+                .isFalse();
+
+        assertThat(
+                        isPaimonSchemaCompatible(
+                                existingSchema,
+                                org.apache.paimon.schema.Schema.newBuilder()
+                                        .column(
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.STRING()
+                                                        .notNull())
+                                        .column(
+                                                "payload",
+                                                org.apache.paimon.types.DataTypes.BYTES().notNull())
+                                        .build()))
+                .isFalse();
+    }
+
+    @Test
+    void testPaimonSchemaCompatibilityWithNestedVarCharAndVarBinary() {
+        org.apache.paimon.schema.Schema existingSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column(
+                                "names",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.VARCHAR(20).notNull()))
+                        .column(
+                                "payloads",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.VARBINARY(128)))
+                        .column(
+                                "attributes",
+                                org.apache.paimon.types.DataTypes.MAP(
+                                        org.apache.paimon.types.DataTypes.VARCHAR(20),
+                                        org.apache.paimon.types.DataTypes.VARBINARY(128)))
+                        .column(
+                                "person",
+                                org.apache.paimon.types.DataTypes.ROW(
+                                        org.apache.paimon.types.DataTypes.FIELD(
+                                                0,
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.VARCHAR(20))))
+                        .build();
+        org.apache.paimon.schema.Schema convertedSchema =
+                org.apache.paimon.schema.Schema.newBuilder()
+                        .column(
+                                "names",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.STRING().notNull()))
+                        .column(
+                                "payloads",
+                                org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.BYTES()))
+                        .column(
+                                "attributes",
+                                org.apache.paimon.types.DataTypes.MAP(
+                                        org.apache.paimon.types.DataTypes.STRING().notNull(),
+                                        org.apache.paimon.types.DataTypes.BYTES()))
+                        .column(
+                                "person",
+                                org.apache.paimon.types.DataTypes.ROW(
+                                        org.apache.paimon.types.DataTypes.FIELD(
+                                                1,
+                                                "name",
+                                                org.apache.paimon.types.DataTypes.STRING())))
+                        .build();
+
+        // Conversion drops bounded lengths and ROW field ids; Fluss also makes MAP keys non-null.
+        assertThat(isPaimonSchemaCompatible(existingSchema, convertedSchema)).isTrue();
+
+        // Nullable changes at an ARRAY element, MAP value, ROW field, or container remain
+        // incompatible even when the bounded lengths are normalized.
+        DataType[][] mismatchedTypes =
+                new DataType[][] {
+                    {
+                        org.apache.paimon.types.DataTypes.ARRAY(
+                                org.apache.paimon.types.DataTypes.VARCHAR(20).notNull()),
+                        org.apache.paimon.types.DataTypes.ARRAY(
+                                org.apache.paimon.types.DataTypes.STRING())
+                    },
+                    {
+                        org.apache.paimon.types.DataTypes.MAP(
+                                org.apache.paimon.types.DataTypes.VARCHAR(20),
+                                org.apache.paimon.types.DataTypes.VARBINARY(128)),
+                        org.apache.paimon.types.DataTypes.MAP(
+                                org.apache.paimon.types.DataTypes.STRING().notNull(),
+                                org.apache.paimon.types.DataTypes.BYTES().notNull())
+                    },
+                    {
+                        org.apache.paimon.types.DataTypes.ROW(
+                                org.apache.paimon.types.DataTypes.FIELD(
+                                        0, "name", org.apache.paimon.types.DataTypes.VARCHAR(20))),
+                        org.apache.paimon.types.DataTypes.ROW(
+                                org.apache.paimon.types.DataTypes.FIELD(
+                                        1,
+                                        "name",
+                                        org.apache.paimon.types.DataTypes.STRING().notNull()))
+                    },
+                    {
+                        org.apache.paimon.types.DataTypes.ARRAY(
+                                        org.apache.paimon.types.DataTypes.VARBINARY(128))
+                                .notNull(),
+                        org.apache.paimon.types.DataTypes.ARRAY(
+                                org.apache.paimon.types.DataTypes.BYTES())
+                    }
+                };
+        for (DataType[] types : mismatchedTypes) {
+            assertThat(
+                            isPaimonSchemaCompatible(
+                                    org.apache.paimon.schema.Schema.newBuilder()
+                                            .column("value", types[0])
+                                            .build(),
+                                    org.apache.paimon.schema.Schema.newBuilder()
+                                            .column("value", types[1])
+                                            .build()))
+                    .isFalse();
+        }
     }
 
     @Test
@@ -291,18 +1007,9 @@ class PaimonLakeCatalogTest {
                                 "the address comment",
                                 TableChange.ColumnPosition.last()));
 
-        assertThatThrownBy(
-                        () ->
-                                flussPaimonCatalog.alterTable(
-                                        tablePath,
-                                        changes4,
-                                        getLakeCatalogContext(FLUSS_SCHEMA, changes4)))
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("Paimon schema is not compatible with Fluss schema")
-                .hasMessageContaining(
-                        String.format(
-                                "therefore you need to add the diff columns all at once, rather than applying other table changes: %s.",
-                                changes4));
+        // column comments don't affect schema compatibility.
+        flussPaimonCatalog.alterTable(
+                tablePath, changes4, getLakeCatalogContext(FLUSS_SCHEMA, changes4));
 
         // no exception thrown only when adding existing column to match fluss and paimon.
         flussPaimonCatalog.alterTable(
@@ -375,11 +1082,186 @@ class PaimonLakeCatalogTest {
                                 changes));
     }
 
+    @Test
+    void testCreateTableSetsLakeStreamEnabledForCleanTable() throws Exception {
+        String database = "test_create_lakestream_db";
+        String tableName = "test_create_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+
+        // getTableDescriptor sets table.datalake.enabled=true, so the clean table advertises its
+        // LakeStream state to Paimon
+        flussPaimonCatalog.createTable(
+                tablePath, getTableDescriptor(FLUSS_SCHEMA), LAKE_CATALOG_CONTEXT);
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+    }
+
+    @Test
+    void testCreateTableWithoutDataLakeEnabledHasNoLakeStreamOption() throws Exception {
+        String database = "test_create_no_lakestream_db";
+        String tableName = "test_create_no_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(FLUSS_SCHEMA)
+                        .property(TABLE_DATALAKE_ENABLED.key(), "false")
+                        .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                        .property(
+                                "table.datalake.paimon.warehouse",
+                                tempWarehouseDir.toURI().toString())
+                        .distributedBy(3)
+                        .build();
+        flussPaimonCatalog.createTable(tablePath, tableDescriptor, LAKE_CATALOG_CONTEXT);
+
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+    }
+
+    @Test
+    void testAlterDataLakeEnabledMaintainsLakeStreamOptionForCleanTable() throws Exception {
+        String database = "test_alter_lakestream_db";
+        String tableName = "test_alter_lakestream_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        Identifier identifier = Identifier.create(database, tableName);
+        createTable(database, tableName);
+
+        // disable lake acceleration removes lakestream.enabled instead of storing false
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "false")),
+                LAKE_CATALOG_CONTEXT);
+        Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+
+        // re-enable lake acceleration adds lakestream.enabled=true again
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true")),
+                LAKE_CATALOG_CONTEXT);
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).containsEntry(LAKESTREAM_ENABLED_OPTION_KEY, "true");
+
+        // resetting datalake.enabled is equivalent to disabling acceleration
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.reset(TABLE_DATALAKE_ENABLED.key())),
+                LAKE_CATALOG_CONTEXT);
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options()).doesNotContainKey(LAKESTREAM_ENABLED_OPTION_KEY);
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return createPaimonSchema(
+                primaryKeys, partitionKeys, bucket, bucketKey, Boolean.FALSE.toString());
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchema(
+            List<String> primaryKeys,
+            List<String> partitionKeys,
+            String bucket,
+            String bucketKey,
+            String partitionLegacyName) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey)
+                .option(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY, partitionLegacyName)
+                .build();
+    }
+
+    private org.apache.paimon.schema.Schema createPaimonSchemaWithoutPartitionLegacyName(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return createPaimonSchemaBuilder(primaryKeys, partitionKeys, bucket, bucketKey).build();
+    }
+
+    private org.apache.paimon.schema.Schema.Builder createPaimonSchemaBuilder(
+            List<String> primaryKeys, List<String> partitionKeys, String bucket, String bucketKey) {
+        return org.apache.paimon.schema.Schema.newBuilder()
+                .column("id", org.apache.paimon.types.DataTypes.INT().notNull())
+                .column("pt", org.apache.paimon.types.DataTypes.STRING().notNull())
+                .primaryKey(primaryKeys.toArray(new String[0]))
+                .partitionKeys(partitionKeys.toArray(new String[0]))
+                .option(CoreOptions.BUCKET.key(), bucket)
+                .option(CoreOptions.BUCKET_KEY.key(), bucketKey);
+    }
+
+    @Test
+    void testUserFacingAlterTableStillRejectsBucketChange() throws Exception {
+        // Fluss's typed bucket-count change is applied, while any attempt to set Paimon's own
+        // bucket option directly through a property change keeps being rejected.
+        String database = "test_user_bucket_reject_db";
+        String tableName = "test_user_bucket_reject_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createFixedBucketTable(database, tableName, 4);
+
+        TableDescriptor fixedBucketDescriptor = fixedBucketTableDescriptor(4);
+        TestingLakeCatalogContext matchingContext =
+                new TestingLakeCatalogContext(fixedBucketDescriptor, fixedBucketDescriptor);
+
+        List<TableChange> userChanges =
+                Collections.singletonList(
+                        TableChange.set(
+                                "paimon." + org.apache.paimon.CoreOptions.BUCKET.key(), "8"));
+        assertThatThrownBy(
+                        () ->
+                                flussPaimonCatalog.alterTable(
+                                        tablePath, userChanges, matchingContext))
+                .hasMessageContaining("bucket")
+                .hasMessageContaining("cannot be changed");
+
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.modifyBucketCount(8)),
+                matchingContext);
+        Identifier identifier = Identifier.create(database, tableName);
+        Table after = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(after.options().get(org.apache.paimon.CoreOptions.BUCKET.key())).isEqualTo("8");
+    }
+
+    private long writeSingleRow(TablePath tablePath) throws Exception {
+        FileStoreTable table =
+                (FileStoreTable)
+                        flussPaimonCatalog.getPaimonCatalog().getTable(toPaimon(tablePath));
+        BatchWriteBuilder writeBuilder =
+                table.copy(Collections.singletonMap(CoreOptions.WRITE_ONLY.key(), "true"))
+                        .newBatchWriteBuilder();
+        try (BatchTableWrite write = writeBuilder.newWrite();
+                BatchTableCommit commit = writeBuilder.newCommit()) {
+            write.write(GenericRow.of(1L));
+            commit.commit(write.prepareCommit());
+        }
+        return table.latestSnapshot().get().id();
+    }
+
+    private TableDescriptor fixedBucketTableDescriptor(int bucketCount) {
+        return TableDescriptor.builder()
+                .schema(FLUSS_SCHEMA)
+                .property(TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(TABLE_DATALAKE_FORMAT.key(), "paimon")
+                .property("table.datalake.paimon.warehouse", tempWarehouseDir.toURI().toString())
+                .distributedBy(bucketCount, "id")
+                .build();
+    }
+
+    private void createFixedBucketTable(String database, String tableName, int initialBucketCount) {
+        TableDescriptor td = fixedBucketTableDescriptor(initialBucketCount);
+        flussPaimonCatalog.createTable(
+                TablePath.of(database, tableName), td, new TestingLakeCatalogContext(td, td));
+    }
+
     private void createTable(String database, String tableName) {
         TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
         TablePath tablePath = TablePath.of(database, tableName);
 
         flussPaimonCatalog.createTable(tablePath, td, LAKE_CATALOG_CONTEXT);
+    }
+
+    private void createPaimonTable(
+            TablePath tablePath, org.apache.paimon.schema.Schema paimonSchema) throws Exception {
+        flussPaimonCatalog.getPaimonCatalog().createDatabase(tablePath.getDatabaseName(), true);
+        flussPaimonCatalog.getPaimonCatalog().createTable(toPaimon(tablePath), paimonSchema, false);
     }
 
     private TestingLakeCatalogContext getLakeCatalogContext(

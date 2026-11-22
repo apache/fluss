@@ -21,10 +21,11 @@ import lightTheme from './src/utils/prismLight';
 import darkTheme from './src/utils/prismDark';
 import versionReplace from './src/plugins/remark-version-replace/index';
 import { loadVersionData } from './src/utils/versionData';
+import {prepareBlogPosts} from './src/utils/blogPosts';
 const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
-  title: 'Apache Fluss™ (Incubating)',
+  title: 'Apache Fluss™',
   tagline: 'The streaming storage layer for real-time analytics and the lakehouse',
   favicon: 'img/logo/fluss_favicon.svg',
 
@@ -90,6 +91,38 @@ const config: Config = {
     },
   ],
 
+  // kapa.ai "Ask AI" widget. Modelled on the Apache Doris integration.
+  // Privacy: `data-consent-required` makes kapa show its own consent screen and
+  // withhold all data from its backend until the user explicitly consents (once
+  // per device, remembered by kapa); `data-user-analytics-cookie-enabled=false`
+  // disables analytics cookies. The matching CSP allowances live in .htaccess
+  // (CSP_PROJECT_DOMAINS), coordinated with the ASF privacy team.
+  scripts: [
+    {
+      src: 'https://widget.kapa.ai/kapa-widget.bundle.js',
+      async: true,
+      'data-website-id': '40ccde97-65ed-46d8-81f2-fe8a8a31f9d9',
+      'data-project-name': 'Apache Fluss',
+      'data-project-color': '#06b6d4',
+      // Icon-only (square) mark: the full wordmark gets cropped to "Fl" in
+      // kapa's small logo slot, so use the notext variant.
+      'data-project-logo': '/img/logo/svg/colored_logo_notext.svg',
+      'data-modal-title': 'Ask Apache Fluss AI',
+      'data-modal-image': '/img/logo/svg/colored_logo_notext.svg',
+      'data-modal-disclaimer':
+        'This is a custom LLM with access to the [Apache Fluss documentation](https://fluss.apache.org/docs/). Answers may be inaccurate — always verify against the official docs.',
+      // Hide kapa's own floating button; open the modal from our navbar pill.
+      'data-button-hide': 'true',
+      'data-modal-override-open-selector': '#navbar-ask-ai-btn',
+      // Privacy hardening (see comment above).
+      'data-consent-required': 'true',
+      'data-user-analytics-cookie-enabled': 'false',
+      // Bot protection uses kapa's default reCAPTCHA (CSP: www.google.com,
+      // www.gstatic.com). Do NOT force 'hcaptcha' unless the kapa project is
+      // provisioned for it in the dashboard, or captcha token fetches fail.
+    },
+  ],
+
   // Set the production url of your site here
   url: 'https://fluss.apache.org/',
   // Set the /<baseUrl>/ pathname under which your site is served
@@ -118,10 +151,13 @@ const config: Config = {
   },
 
   markdown: {
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'warn'
     }
   },
+
+  themes: ['@docusaurus/theme-mermaid'],
 
   presets: [
     [
@@ -135,6 +171,9 @@ const config: Config = {
         },
         blog: {
           showReadingTime: false,
+          // The card index filters the full archive, including older posts.
+          postsPerPage: 'ALL',
+          processBlogPosts: prepareBlogPosts,
           feedOptions: {
             type: ['rss', 'atom'],
             xslt: true,
@@ -197,26 +236,45 @@ const config: Config = {
             if (!existingPath.startsWith('/docs/')) {
               return undefined;
             }
-            
+
             // Extract the relative path after /docs/
-            const relativeDocsPath = existingPath.substring(6); 
+            const relativeDocsPath = existingPath.substring(6);
             const firstSegment = relativeDocsPath.split('/')[0];
-            
+
             // Exclude any known version identifiers aligned with existing routes
             const existingVersionedRoutes = ['next', ...Object.keys(versionsMap)];
             if (existingVersionedRoutes.includes(firstSegment)) {
               return undefined;
             }
-            
-            // Redirect the explicit versioned path to the implicit unversioned path
-            return [`/docs/${latestVersion}${existingPath.replace('/docs', '')}`];
+
+            const redirects = [
+              // Redirect the explicit versioned path to the implicit unversioned path
+              `/docs/${latestVersion}${existingPath.replace('/docs', '')}`,
+            ];
+
+            // Preserve the previously published URLs for docs pages that were
+            // moved/renamed. These are keyed off the new (existing) route, so the
+            // redirect target is always valid, and the old URL is preserved once
+            // the restructured version becomes the latest unversioned release.
+            const renameRules = [
+              { from: '/maintenance/filesystems/', to: '/maintenance/tiered-storage/filesystems/' },
+              { from: '/streaming-lakehouse/integrate-data-lakes/formats/', to: '/streaming-lakehouse/datalake-formats/' },
+              { from: '/streaming-lakehouse/integrate-data-lakes/catalogs/', to: '/streaming-lakehouse/datalake-catalogs/' },
+            ];
+            for (const rule of renameRules) {
+              if (existingPath.includes(rule.to)) {
+                redirects.push(existingPath.replace(rule.to, rule.from));
+              }
+            }
+
+            return redirects;
         },
       },
     ],
 
   ],
   themeConfig: {
-    image: 'img/logo/png/colored_logo.png',
+    image: 'img/social/fluss-social-card.png',
     colorMode: {
       defaultMode: 'light',
       disableSwitch: false,
@@ -243,6 +301,10 @@ const config: Config = {
           type: 'dropdown',
           items: [
             {
+              label: 'User Stories',
+              to: '/user-stories',
+            },
+            {
               label: 'Talks',
               to: '/learn/talks',
             },
@@ -255,6 +317,16 @@ const config: Config = {
         {to: '/community/welcome', label: 'Community', position: 'left'},
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
+        {
+          // "Ask AI" pill that opens the kapa.ai widget. The kapa bundle
+          // (declared in the top-level `scripts` field above) binds its modal
+          // to this button via `data-modal-override-open-selector`, so a plain
+          // HTML button is all that's needed here.
+          type: 'html',
+          position: 'right',
+          value:
+            '<button id="navbar-ask-ai-btn" type="button" class="navbar-ask-ai">Ask AI</button>',
+        },
         {
           type: 'docsVersionDropdown',
           position: 'right',
@@ -284,8 +356,9 @@ const config: Config = {
         {
           title: 'Community',
           items: [
+            {label: 'User Stories', to: '/user-stories'},
             {label: 'GitHub', href: 'https://github.com/apache/fluss'},
-            {label: 'Slack', href: 'https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw'},
+            {label: 'Slack', href: 'https://join.slack.com/t/apache-fluss/shared_invite/zt-473vgmvjr-cmIma~_iAA4cN02o5u2pDQ'},
             {label: 'Welcome', to: '/community/welcome'},
             {label: 'Contribute', to: '/community/welcome'},
           ],
@@ -312,20 +385,13 @@ const config: Config = {
           ],
         },
       ],
-      logo: {
-        width: 200,
-        src: "/img/apache-incubator.svg",
-        href: "https://incubator.apache.org/",
-        alt: "Apache Incubator logo"
-      },
-      copyright: `<br><p>Apache Fluss is an effort undergoing incubation at The Apache Software Foundation (ASF), sponsored by the Apache Incubator. Incubation is required of all newly accepted projects until a further review indicates that the infrastructure, communications, and decision making process have stabilized in a manner consistent with other successful ASF projects. While incubation status is not necessarily a reflection of the completeness or stability of the code, it does indicate that the project has yet to be fully endorsed by the ASF.</p>
-                  <p>Copyright © ${new Date().getFullYear()} The Apache Software Foundation, Licensed under the Apache License, Version 2.0.</p>
+      copyright: `<p>Copyright © ${new Date().getFullYear()} The Apache Software Foundation, Licensed under the Apache License, Version 2.0.</p>
                   <p>Apache, the names of Apache projects, and the feather logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. All other marks mentioned may be trademarks or registered trademarks of their respective owners.</p>`,
     },
     prism: {
       theme: lightTheme,
       darkTheme: darkTheme,
-      additionalLanguages: ['java', 'bash', 'scala']
+      additionalLanguages: ['java', 'bash', 'scala', 'rust', 'toml', 'cmake']
     },
     algolia: {
       appId: "X8KSGGLJW1",

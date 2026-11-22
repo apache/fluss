@@ -26,7 +26,12 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
@@ -34,10 +39,13 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -52,13 +60,12 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newMetadataRequest;
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,6 +76,10 @@ class MetadataUpdateITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data2TablePath = tableNames.tablePath(TestData.DATA2_TABLE_PATH);
 
     private CoordinatorGateway coordinatorGateway;
     private ServerNode coordinatorServerNode;
@@ -88,6 +99,94 @@ class MetadataUpdateITCase {
     }
 
     @Test
+    void testMetadataRequestReloadsIncompleteTableCache() throws Exception {
+        TablePath tablePath = tableNames.tablePath("test_db_1", "incomplete_table_metadata");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        TabletServerMetadataCache cache = tabletServer.getMetadataCache();
+        TableMetadata complete = getTableMetadataFromZk(tablePath, tableId);
+        cache.updateTableMetadata(
+                new TableMetadata(
+                        complete.getTableInfo(),
+                        Collections.singletonList(complete.getBucketMetadataList().get(0))));
+
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.getServerId());
+        MetadataResponse response =
+                gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
+        assertThat(response.getTableMetadatasList()).hasSize(1);
+        assertThat(response.getTableMetadatasList().get(0).getBucketCount()).isEqualTo(3);
+        assertThat(response.getTableMetadatasList().get(0).getBucketMetadatasList())
+                .extracting(PbBucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+        assertThat(cache.getTableMetadata(tablePath).get().getBucketMetadataList())
+                .extracting(BucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMetadataRequestReloadsIncompletePartitionCache(boolean explicitCount)
+            throws Exception {
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "incomplete_partition_metadata_" + explicitCount);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false)
+                        .build();
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, descriptor);
+        String partitionName = "p1";
+        long partitionId =
+                createPartition(
+                        FLUSS_CLUSTER_EXTENSION,
+                        tablePath,
+                        new PartitionSpec(Collections.singletonMap("b", partitionName)),
+                        false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, partitionId);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServers().iterator().next();
+        TabletServerMetadataCache cache = tabletServer.getMetadataCache();
+        PartitionMetadata complete =
+                getPartitionMetadataFromZk(tableId, partitionName, partitionId);
+        cache.clearTableMetadata();
+        cache.updateTableMetadata(
+                new TableMetadata(metadataManager.getTable(tablePath), Collections.emptyList()));
+        cache.updatePartitionMetadata(
+                new PartitionMetadata(
+                        tableId,
+                        partitionName,
+                        partitionId,
+                        Collections.singletonList(complete.getBucketMetadataList().get(0)),
+                        explicitCount ? 3 : null));
+
+        TabletServerGateway gateway =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(tabletServer.getServerId());
+        MetadataRequest request = newMetadataRequest(Collections.singletonList(tablePath));
+        request.addPartitionsId(partitionId);
+        MetadataResponse response = gateway.metadata(request).get();
+        assertThat(response.getTableMetadatasList()).hasSize(1);
+        assertThat(response.getTableMetadatasList().get(0).getBucketMetadatasList()).isEmpty();
+        assertThat(response.getPartitionMetadatasList()).hasSize(1);
+        assertThat(response.getPartitionMetadatasList().get(0).getBucketCount()).isEqualTo(3);
+        assertThat(response.getPartitionMetadatasList().get(0).getBucketMetadatasList())
+                .extracting(PbBucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+        PartitionMetadata restored =
+                cache.getPartitionMetadata(PhysicalTablePath.of(tablePath, partitionName)).get();
+        assertThat(restored.getBucketCount()).isEqualTo(3);
+        assertThat(restored.getBucketMetadataList())
+                .extracting(BucketMetadata::getBucketId)
+                .containsExactlyInAnyOrder(0, 1, 2);
+    }
+
+    @Test
     void testMetadataUpdateForServerStartAndStop() throws Exception {
         // get metadata and check it
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
@@ -95,17 +194,17 @@ class MetadataUpdateITCase {
         Map<Long, TableContext> expectedTablePathById = new HashMap<>();
         // create non-partitioned table
         long tableId1 =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId1, new TableContext(false, false, DATA1_TABLE_PATH, tableId1, null));
+                tableId1, new TableContext(false, false, data1TablePath, tableId1, null));
         // create partitioned table
         long tableId2 =
                 createTable(
                         FLUSS_CLUSTER_EXTENSION,
-                        DATA2_TABLE_PATH,
+                        data2TablePath,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId2, new TableContext(false, true, DATA2_TABLE_PATH, tableId2, null));
+                tableId2, new TableContext(false, true, data2TablePath, tableId2, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -176,10 +275,9 @@ class MetadataUpdateITCase {
         assertUpdateMetadataEquals(
                 coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, data1TablePath, DATA1_TABLE_DESCRIPTOR);
         expectedTablePathById.put(
-                tableId, new TableContext(false, false, DATA1_TABLE_PATH, tableId, null));
+                tableId, new TableContext(false, false, data1TablePath, tableId, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -190,7 +288,7 @@ class MetadataUpdateITCase {
                                 Collections.emptyMap()));
 
         // create a partitioned table.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath partitionTablePath = tableNames.tablePath("test_db_1", "test_partition_table_1");
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -215,11 +313,9 @@ class MetadataUpdateITCase {
         // test drop table.
         coordinatorGateway.dropTable(
                 newDropTableRequest(
-                        DATA1_TABLE_PATH.getDatabaseName(),
-                        DATA1_TABLE_PATH.getTableName(),
-                        false));
+                        data1TablePath.getDatabaseName(), data1TablePath.getTableName(), false));
         expectedTablePathById.put(
-                tableId, new TableContext(true, false, DATA1_TABLE_PATH, tableId, null));
+                tableId, new TableContext(true, false, data1TablePath, tableId, null));
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -259,7 +355,7 @@ class MetadataUpdateITCase {
                 coordinatorServerNode, 3, expectedTablePathById, Collections.emptyMap());
 
         // create a partitioned table.
-        TablePath partitionTablePath = TablePath.of("test_db_1", "test_partition_table_1");
+        TablePath partitionTablePath = tableNames.tablePath("test_db_1", "test_partition_table_1");
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
@@ -366,7 +462,7 @@ class MetadataUpdateITCase {
                                     assertThat(serverMetadataCache.getTablePath(tableId))
                                             .hasValue(tablePath);
 
-                                    // check table info and bucket location and leader only for
+                                    // Check table info and bucket metadata only for a
                                     // non-partitioned table.
                                     if (!tableContext.isPartitionedTable) {
                                         TableMetadata tableMetadataFromZk =
@@ -441,7 +537,9 @@ class MetadataUpdateITCase {
                                                     bucketId,
                                                     leaderAndIsr.leader(),
                                                     leaderAndIsr.leaderEpoch(),
-                                                    replicas));
+                                                    replicas,
+                                                    leaderAndIsr.isr(),
+                                                    leaderAndIsr.bucketEpoch()));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }
@@ -473,12 +571,15 @@ class MetadataUpdateITCase {
                                                     bucketId,
                                                     leaderAndIsr.leader(),
                                                     leaderAndIsr.leaderEpoch(),
-                                                    replicas));
+                                                    replicas,
+                                                    leaderAndIsr.isr(),
+                                                    leaderAndIsr.bucketEpoch()));
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
                                 }
                             });
-            return new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList);
+            return new PartitionMetadata(
+                    tableId, partitionName, partitionId, bucketMetadataList, null);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

@@ -1,0 +1,111 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+.band {
+    position: relative;
+    margin: 72px auto -32px;
+    max-width: 1240px;
+}
+
+.viewport {
+    overflow: hidden;
+    mask-image: linear-gradient(to right, transparent, #000 5%, #000 95%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 5%, #000 95%, transparent);
+}
+
+.track {
+    display: flex;
+    width: max-content;
+    animation: travel 52s linear infinite;
+}
+
+.group {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 48px;
+    padding-right: 48px;
+}
+
+.logoLink {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 144px;
+    height: 48px;
+    border-radius: 4px;
+    opacity: 0.84;
+    transition: opacity 160ms ease;
+}
+
+.logoLink:hover,
+.logoLink:focus-visible {
+    opacity: 1;
+}
+.logoLink:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: -4px;
+}
+.logo {
+    display: block;
+    width: 144px;
+    height: 32px;
+}
+
+.band:hover .track,
+.viewport:focus-within .track {
+    animation-play-state: paused;
+}
+
+/* Keyboard users get a stable, scrollable list with one focus stop per user. */
+.viewport:has(a:focus-visible) {
+    overflow-x: auto;
+}
+.viewport:has(a:focus-visible) .track {
+    animation: none;
+}
+.viewport:has(a:focus-visible) .duplicate {
+    display: none;
+}
+
+@keyframes travel {
+    to {
+        transform: translateX(-50%);
+    }
+}
+
+@media (max-width: 600px), (hover: none), (prefers-reduced-motion: reduce) {
+    .band {
+        margin-top: 40px;
+    }
+    .viewport {
+        overflow-x: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #7aafcb transparent;
+    }
+    .track {
+        animation: none;
+    }
+    .group {
+        gap: 32px;
+        padding: 0 24px;
+    }
+    .duplicate {
+        display: none;
+    }
+}

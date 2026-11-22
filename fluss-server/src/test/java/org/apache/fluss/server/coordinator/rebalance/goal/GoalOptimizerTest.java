@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator.rebalance.goal;
 
+import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -27,11 +28,18 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 
 import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.addBucket;
+import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.assertGoalViolationNotRegressed;
+import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.assertRebalanceInvariants;
+import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.captureReplicaDistribution;
+import static org.apache.fluss.server.coordinator.rebalance.RebalanceTestUtils.violation;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link GoalOptimizer}. */
@@ -66,8 +74,40 @@ public class GoalOptimizerTest {
         goals.add(new ReplicaDistributionGoal());
         goals.add(new LeaderReplicaDistributionGoal());
 
+        Map<TableBucket, List<Integer>> initialDistribution =
+                captureReplicaDistribution(clusterModel);
         List<RebalancePlanForBucket> plans = goalOptimizer.doOptimizeOnce(clusterModel, goals);
         assertThat(plans).isNotEmpty();
+        assertRebalanceInvariants(initialDistribution, clusterModel, plans);
+
+        // Replay the same chain goal by goal to measure, for every goal, that a violation solved by
+        // that goal is still solved once the whole chain has run.
+        ClusterModel replayed = new ClusterModel(freshServers());
+        for (int bucket = 0; bucket < 4; bucket++) {
+            addBucket(replayed, new TableBucket(bucket, 0), Arrays.asList(0, 1, 2));
+        }
+        List<Goal> replayedGoals =
+                Arrays.asList(new ReplicaDistributionGoal(), new LeaderReplicaDistributionGoal());
+        Set<Goal> optimized = new HashSet<>();
+        List<Integer> violationAfterGoal = new ArrayList<>();
+        for (Goal goal : replayedGoals) {
+            goal.optimize(replayed, optimized);
+            optimized.add(goal);
+            violationAfterGoal.add(violation(goal, replayed));
+        }
+        for (int i = 0; i < replayedGoals.size(); i++) {
+            assertGoalViolationNotRegressed(
+                    replayedGoals.get(i), violationAfterGoal.get(i), replayed);
+        }
+    }
+
+    private static SortedSet<ServerModel> freshServers() {
+        SortedSet<ServerModel> freshServers = new TreeSet<>();
+        freshServers.add(new ServerModel(0, "rack0", false));
+        freshServers.add(new ServerModel(1, "rack1", false));
+        freshServers.add(new ServerModel(2, "rack2", false));
+        freshServers.add(new ServerModel(3, "rack0", false));
+        return freshServers;
     }
 
     @Test
@@ -184,5 +224,13 @@ public class GoalOptimizerTest {
                                                 && plan.getNewReplicas().contains(0)
                                                 && !plan.getOriginReplicas().contains(0));
         assertThat(movesFrom1To0).isFalse();
+    }
+
+    @Test
+    void testGoalTypeFactoryForTableGoals() {
+        assertThat(GoalUtils.getGoalByType(GoalType.TABLE_REPLICA_DISTRIBUTION))
+                .isInstanceOf(TableReplicaDistributionGoal.class);
+        assertThat(GoalUtils.getGoalByType(GoalType.TABLE_LEADER_DISTRIBUTION))
+                .isInstanceOf(TableLeaderReplicaDistributionGoal.class);
     }
 }

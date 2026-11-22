@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
@@ -68,9 +69,11 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
     private static final TableDescriptor PK_TABLE =
             TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(BUCKETS, "id").build();
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     void wholeTableScanReturnsAllRows() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "whole-table-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "whole-table-scan");
         long tableId = createTable(tablePath, PK_TABLE, true);
         waitAllReplicasReady(tableId, BUCKETS);
 
@@ -88,7 +91,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void singleBucketScanReturnsOnlyThatBucketsRows() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "single-bucket-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "single-bucket-scan");
         long tableId = createTable(tablePath, PK_TABLE, true);
         waitAllReplicasReady(tableId, BUCKETS);
 
@@ -110,7 +113,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void emptyTableReturnsNoRows() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "empty-table-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "empty-table-scan");
         long tableId = createTable(tablePath, PK_TABLE, true);
         waitAllReplicasReady(tableId, BUCKETS);
 
@@ -124,7 +127,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
     void snapshotIsolationHidesPostOpenWrites() throws Exception {
         // Single bucket so the first poll opens *the* bucket scanner and pins its snapshot;
         // multi-bucket scanners open buckets lazily, which would race the post-open write.
-        TablePath tablePath = TablePath.of(DB, "snapshot-isolation-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "snapshot-isolation-scan");
         TableDescriptor singleBucket =
                 TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1, "id").build();
         long tableId = createTable(tablePath, singleBucket, true);
@@ -162,7 +165,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void projectionAppliedClientSide() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "projection-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "projection-scan");
         long tableId = createTable(tablePath, PK_TABLE, true);
         waitAllReplicasReady(tableId, BUCKETS);
 
@@ -186,7 +189,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void projectionByColumnNamesAppliedClientSide() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "projection-by-name-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "projection-by-name-scan");
         long tableId = createTable(tablePath, PK_TABLE, true);
         waitAllReplicasReady(tableId, BUCKETS);
 
@@ -212,7 +215,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void logTableWithoutLimitFails() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "log-table-needs-limit");
+        TablePath tablePath = tableNames.tablePath(DB, "log-table-needs-limit");
         Schema logSchema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
@@ -231,7 +234,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void partitionedPrimaryKeyTableScanCoversAllPartitions() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "partitioned-pk-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "partitioned-pk-scan");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -283,7 +286,7 @@ class TableKvScanITCase extends ClientToServerITCaseBase {
 
     @Test
     void partitionedTablePerBucketScansCoverAllPartitionBuckets() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "partitioned-per-bucket-scan");
+        TablePath tablePath = tableNames.tablePath(DB, "partitioned-per-bucket-scan");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())

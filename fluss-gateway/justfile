@@ -1,0 +1,85 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+# Recipes for the fluss-gateway module. The module is its own Cargo workspace,
+# so every recipe runs cargo from this directory.
+
+# Build the gateway and every test target in debug mode.
+build:
+    cargo build --all-targets
+
+# Build the gateway with the release profile.
+build-release:
+    cargo build --release
+
+# Build the host-architecture Gateway distribution and image using the pinned
+# Linux builder.
+image image="fluss-gateway:dev":
+    GATEWAY_IMAGE={{image}} ../docker/fluss-gateway/build.sh
+
+# Build and exercise the Gateway distribution and image.
+image-smoke:
+    RUN_SMOKE=true ../docker/fluss-gateway/build.sh
+
+# Run all unit and protocol tests of the gateway.
+test:
+    cargo test --all-targets
+
+# Run the full HTTP-to-Fluss integration test. Requires Docker and a locally available Fluss image;
+# FLUSS_IMAGE and FLUSS_VERSION select it (the client integration CI uses fluss:dev).
+test-e2e:
+    cargo build --manifest-path ../fluss-rust/Cargo.toml -p fluss-test-cluster
+    FLUSS_TEST_CLUSTER_BIN=../fluss-rust/target/debug/fluss-test-cluster cargo test --features integration_tests --test e2e_cluster
+
+# Format the gateway sources in place.
+fmt:
+    cargo fmt --all
+
+# Verify formatting without changing any file.
+fmt-check:
+    cargo fmt --all -- --check
+
+# Lint the gateway with clippy, treating warnings as errors.
+clippy:
+    cargo clippy --all-targets -- -D warnings
+
+# Build the API documentation for this package only.
+doc:
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+
+# Regenerate the checked-in OpenAPI 3.1 document from the typed contract.
+openapi:
+    cargo test --lib protocol::rest::openapi::tests::export_checked_in_document -- --ignored --exact
+
+# Run the gateway binary, forwarding any flags, e.g. just run --config gateway.yaml
+run *flags:
+    cargo run -- {{flags}}
+
+# Check that every dependency license is compatible with the Apache License, and that no banned
+# crate entered the graph. `--locked` only here and in `deps`: editing `Cargo.toml` locally must
+# still be able to update the lockfile.
+licenses:
+    cargo deny --locked check licenses
+    cargo deny --locked check bans
+
+# Regenerate the checked-in dependency license inventory.
+deps:
+    cargo deny --locked list -f tsv -t 0.6 | sed 's/[[:space:]]*$//' > DEPENDENCIES.rust.tsv
+
+# Regenerate the LICENSE and NOTICE used by the Linux binary distribution.
+binary-license:
+    python3 scripts/generate_binary_license.py

@@ -18,11 +18,13 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -94,7 +96,9 @@ public class LimitBatchScanner implements BatchScanner {
         RowType rowType = tableInfo.getRowType();
         this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
         for (int i = 0; i < rowType.getFieldCount(); i++) {
-            this.fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
+            // getRecords() returns a heap copy, so rows don't reference the released buffer.
+            this.fieldGetters[i] =
+                    InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i, false);
         }
 
         LimitScanRequest limitScanRequest =
@@ -103,10 +107,14 @@ public class LimitBatchScanner implements BatchScanner {
                         .setBucketId(tableBucket.getBucket())
                         .setLimit(limit);
 
+        metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
+        Cluster cluster = metadataUpdater.getCluster();
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
-            metadataUpdater.checkAndUpdateMetadata(tableInfo.getTablePath(), tableBucket);
         }
+        cluster.getBucketCount(
+                        TableOrPartition.of(tableBucket.getTableId(), tableBucket.getPartitionId()))
+                .ifPresent(limitScanRequest::setRoutingBucketCount);
 
         // because that rocksdb is not suitable to projection, thus do it in client.
         int leader = metadataUpdater.leaderFor(tableInfo.getTablePath(), tableBucket);
@@ -181,7 +189,12 @@ public class LimitBatchScanner implements BatchScanner {
         } else {
             LogRecordReadContext readContext =
                     LogRecordReadContext.createReadContext(
-                            tableInfo, false, null, schemaGetter, chunkedFactory);
+                            tableInfo,
+                            false,
+                            LogRecordReadContext.SchemaResolution.TARGET,
+                            null,
+                            schemaGetter,
+                            chunkedFactory);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the

@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
+import org.apache.fluss.lake.paimon.utils.PaimonUtils;
 import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -39,12 +40,19 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.LEGACY_SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toChangeType;
-import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 
 /** Record reader for paimon table. */
 public class PaimonRecordReader implements RecordReader {
+
+    /**
+     * Sentinel log offset / timestamp emitted for rows read from a lake table. The lake table does
+     * not carry a per-record log offset (a clean table has no system columns, and for a legacy
+     * table we no longer read them), so a negative value is emitted and interpreted downstream as
+     * "no valid offset" (snapshot phase), see {@code LakeRecordRecordEmitter}.
+     */
+    private static final long NO_SYSTEM_COLUMN_VALUE = -1L;
 
     protected PaimonRowAsFlussRecordIterator iterator;
     protected @Nullable int[][] project;
@@ -57,9 +65,8 @@ public class PaimonRecordReader implements RecordReader {
             @Nullable Predicate predicate)
             throws IOException {
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
-        RowType paimonFullRowType = fileStoreTable.rowType();
         if (project != null) {
-            readBuilder = applyProject(readBuilder, project, paimonFullRowType);
+            readBuilder = applyProject(readBuilder, project);
         }
 
         if (predicate != null) {
@@ -86,20 +93,11 @@ public class PaimonRecordReader implements RecordReader {
         return iterator;
     }
 
-    private ReadBuilder applyProject(
-            ReadBuilder readBuilder, int[][] projects, RowType paimonFullRowType) {
+    private ReadBuilder applyProject(ReadBuilder readBuilder, int[][] projects) {
+        // The projected column ids reference the user (business) columns; the log offset /
+        // timestamp are not read from the lake table, so no system column needs to be projected.
         int[] projectIds = Arrays.stream(projects).mapToInt(project -> project[0]).toArray();
-
-        int offsetFieldPos = paimonFullRowType.getFieldIndex(OFFSET_COLUMN_NAME);
-        int timestampFieldPos = paimonFullRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
-
-        int[] paimonProject =
-                IntStream.concat(
-                                IntStream.of(projectIds),
-                                IntStream.of(offsetFieldPos, timestampFieldPos))
-                        .toArray();
-
-        return readBuilder.withProjection(paimonProject);
+        return readBuilder.withProjection(projectIds);
     }
 
     /** Iterator for paimon row as fluss record. */
@@ -110,18 +108,20 @@ public class PaimonRecordReader implements RecordReader {
         private final ProjectedRow projectedRow;
         private final PaimonRowAsFlussRow paimonRowAsFlussRow;
 
-        private final int logOffsetColIndex;
-        private final int timestampColIndex;
-
         public PaimonRowAsFlussRecordIterator(
                 org.apache.paimon.utils.CloseableIterator<InternalRow> paimonRowIterator,
                 RowType paimonRowType) {
             this.paimonRowIterator = paimonRowIterator;
-            this.logOffsetColIndex = paimonRowType.getFieldIndex(OFFSET_COLUMN_NAME);
-            this.timestampColIndex = paimonRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
 
-            int[] project = IntStream.range(0, paimonRowType.getFieldCount() - 2).toArray();
-            projectedRow = ProjectedRow.from(project);
+            // A legacy table read without projection still exposes its three trailing system
+            // columns; trim them so only the business columns are emitted. A clean table (or any
+            // projected read) has no system columns to trim.
+            int fieldCount = paimonRowType.getFieldCount();
+            int businessFieldCount =
+                    PaimonUtils.isLegacyTable(paimonRowType)
+                            ? fieldCount - LEGACY_SYSTEM_COLUMNS.size()
+                            : fieldCount;
+            projectedRow = ProjectedRow.from(IntStream.range(0, businessFieldCount).toArray());
             paimonRowAsFlussRow = new PaimonRowAsFlussRow();
         }
 
@@ -143,12 +143,9 @@ public class PaimonRecordReader implements RecordReader {
         public LogRecord next() {
             InternalRow paimonRow = paimonRowIterator.next();
             ChangeType changeType = toChangeType(paimonRow.getRowKind());
-            long offset = paimonRow.getLong(logOffsetColIndex);
-            long timestamp = paimonRow.getTimestamp(timestampColIndex, 6).getMillisecond();
-
             return new GenericRecord(
-                    offset,
-                    timestamp,
+                    NO_SYSTEM_COLUMN_VALUE,
+                    NO_SYSTEM_COLUMN_VALUE,
                     changeType,
                     projectedRow.replaceRow(paimonRowAsFlussRow.replaceRow(paimonRow)));
         }

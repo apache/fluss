@@ -19,14 +19,22 @@ package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.log.FetchParams;
@@ -34,21 +42,28 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -59,6 +74,8 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
@@ -71,6 +88,31 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteLogMetricsAfterRepeatedMakeLeader(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        addMultiSegmentsToLogTablet(replica.getLogTablet(), 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
+        AbstractMetricGroup metrics =
+                (AbstractMetricGroup) replica.bucketMetrics().addGroup("remoteLog");
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_NUM_SEGMENTS)).getValue())
+                .isEqualTo(4);
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_START_OFFSET)).getValue())
+                .isEqualTo(remoteLog.getRemoteLogStartOffset());
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.LOG_END_OFFSET)).getValue())
+                .isEqualTo(remoteLog.getRemoteLogEndOffset().getAsLong());
+        assertThat(((Gauge<?>) metrics.getMetrics().get(MetricNames.REMOTE_LOG_SIZE)).getValue())
+                .isEqualTo(remoteLog.getRemoteSizeInBytes());
     }
 
     @ParameterizedTest
@@ -311,6 +353,48 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 .collect(Collectors.toSet()));
     }
 
+    @Test
+    void testFetchRemainsAvailableWhenRemoteOffsetsAdvance() throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tableBucket, false);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tableBucket).getLogTablet();
+
+        // Local segments are [0, 10), [10, 20), [20, 30), [30, 40), and [40, 50).
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        List<RemoteLogSegment> remoteSegments = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            remoteSegments.add(copyLogSegmentToRemote(logTablet, remoteLogStorage, i));
+        }
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tableBucket);
+        remoteLogTablet.loadRemoteLogManifest(
+                new RemoteLogManifest(
+                        logTablet.getPhysicalTablePath(),
+                        tableBucket,
+                        remoteSegments.subList(0, 2),
+                        40L));
+
+        // An older manifest is readable only up to 20 even though copying has advanced to 40.
+        // Cleanup must remain bounded by the readable end, leaving offset 25 available locally.
+        logTablet.updateRemoteLogOffsets(0L, 20L, 40L);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(20L);
+
+        FetchLogResultForBucket localResult = fetch(tableBucket, 25L);
+        assertThat(localResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(localResult.fetchFromRemote()).isFalse();
+
+        remoteLogTablet.loadRemoteLogManifest(
+                new RemoteLogManifest(
+                        logTablet.getPhysicalTablePath(), tableBucket, remoteSegments, 40L));
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(30L);
+        assertThat(logTablet.canFetchFromRemoteLog(25L)).isTrue();
+
+        FetchLogResultForBucket remoteResult = fetch(tableBucket, 25L);
+        assertThat(remoteResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(remoteResult.fetchFromRemote()).isTrue();
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testFetchRecordsFromRemote(boolean partitionTable) throws Exception {
@@ -329,7 +413,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // 1. first, fetch records from remote.
         // mock to update remote log end offset and delete local log segments.
-        logTablet.updateRemoteLogEndOffset(40L);
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
                 new CompletableFuture<>();
         replicaManager.fetchLogRecords(
@@ -368,8 +452,104 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testCleanupLocalSegments(boolean partitionTable) throws Exception {
+    void testRemoteFirstFetchPrefersRemoteWhenLocalStillHasRecords(boolean partitionTable)
+            throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
+
+        Map<TableBucket, FetchReqInfo> fetchData =
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35L, 1024 * 1024));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> localFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                fetchData,
+                null,
+                localFirstFuture::complete);
+        FetchLogResultForBucket localFirstResult = localFirstFuture.get().get(tb);
+        assertThat(localFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(localFirstResult.fetchFromRemote()).isFalse();
+        assertThat(localFirstResult.records()).isNotNull();
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> remoteFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        -1,
+                        true,
+                        Integer.MAX_VALUE,
+                        -1,
+                        -1,
+                        null,
+                        FetchLogReadPreference.REMOTE_FIRST),
+                fetchData,
+                null,
+                remoteFirstFuture::complete);
+        FetchLogResultForBucket remoteFirstResult = remoteFirstFuture.get().get(tb);
+        assertThat(remoteFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(remoteFirstResult.fetchFromRemote()).isTrue();
+        assertThat(remoteFirstResult.records()).isNull();
+        assertThat(remoteFirstResult.remoteLogFetchInfo()).isNotNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteFirstFetchRejectsNonLeader(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
+
+        int newLeaderId = TABLET_SERVER_ID + 1;
+        replica.makeFollower(
+                new NotifyLeaderAndIsrData(
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb,
+                        Arrays.asList(TABLET_SERVER_ID, newLeaderId),
+                        new LeaderAndIsr(
+                                newLeaderId,
+                                INITIAL_LEADER_EPOCH + 1,
+                                Arrays.asList(TABLET_SERVER_ID, newLeaderId),
+                                Collections.emptyList(),
+                                INITIAL_COORDINATOR_EPOCH,
+                                INITIAL_BUCKET_EPOCH + 1),
+                        3,
+                        0L));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> fetchFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        -1,
+                        true,
+                        Integer.MAX_VALUE,
+                        -1,
+                        -1,
+                        null,
+                        FetchLogReadPreference.REMOTE_FIRST),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35L, 1024 * 1024)),
+                null,
+                fetchFuture::complete);
+
+        FetchLogResultForBucket result = fetchFuture.get().get(tb);
+        assertThat(result.getError().exception()).isInstanceOf(NotLeaderOrFollowerException.class);
+        assertThat(result.fetchFromRemote()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCleanupLocalSegments(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable, true);
         // Need to make leader by ReplicaManager.
         makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -381,7 +561,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
 
         // 3. mock to update remote end offset, shouldn't cleanup local segments
-        logTablet.updateRemoteLogEndOffset(40L);
+        logTablet.updateRemoteLogOffsets(0L, 40L, 40L);
         assertThat(logTablet.getSegments()).hasSize(5);
 
         // 4. mock to update min retain, should remove the first 3 segments (end offset < 33)
@@ -666,7 +846,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(2);
 
         // 3. Directly update config via Replica (simulating metadata propagation)
-        replica.updateTieredLogLocalSegments(5);
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "5");
 
         // Verify LogTablet internal state has been updated
         assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(5);
@@ -679,7 +859,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(5);
 
         // 5. Modify config to 3 again, verify multiple modifications work
-        replica.updateTieredLogLocalSegments(3);
+        updateTableConfig(replica, ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS, "3");
 
         // Verify LogTablet internal state updated again
         assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(3);
@@ -690,6 +870,36 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         // Should retain 3 local segments
         assertThat(logTablet.getSegments()).hasSize(3);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testUpdateTableInfo(boolean partitionedTable) throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        201L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        // Verify initial ttl matches the configured default.
+        long defaultTtlMs = ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis();
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(defaultTtlMs);
+
+        // Update the complete TableInfo and verify all config consumers see the new value.
+        long newTtlMs = Duration.ofDays(1).toMillis();
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "1d");
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(newTtlMs);
+        assertThat(replica.getLogTablet().getEffectiveLocalLogTtlMs()).isEqualTo(newTtlMs);
+
+        // no-op: same value must not break anything.
+        updateTableConfig(replica, ConfigOptions.TABLE_LOG_TTL, "1d");
+        assertThat(replica.getTableInfo().getTableConfig().getLogTTLMs()).isEqualTo(newTtlMs);
     }
 
     @ParameterizedTest
@@ -720,16 +930,88 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 .collect(Collectors.toSet()));
     }
 
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
+    @ParameterizedTest
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void testRegisterReplicaUsesAssignedDirectory(
+            boolean partitionTable, boolean withStaleDirectories) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList).hasSize(4);
+
+        // Manifests omit directory assignments. Also accept earlier manifests with stale or
+        // incomplete directory fields, using the replica's assignment for every segment.
+        Optional<RemoteLogManifestHandle> handleOpt = zkClient.getRemoteLogManifestHandle(tb);
+        assertThat(handleOpt).isPresent();
+        FsPath manifestPath = handleOpt.get().getRemoteLogManifestPath();
+        FileSystem fs = manifestPath.getFileSystem();
+
+        RemoteLogManifest currentManifest =
+                remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        byte[] currentJson = currentManifest.toJsonBytes();
+        assertThat(new String(currentJson, StandardCharsets.UTF_8))
+                .doesNotContain("remote_log_dir");
+        byte[] persistedJson = currentJson;
+        if (withStaleDirectories) {
+            String json = new String(currentJson, StandardCharsets.UTF_8);
+            json = json.replaceFirst("\\{", "{\"remote_log_dir\":\"file:/stale/manifest/log\",");
+            // The first segment has a different directory; the remaining segments omit it.
+            json =
+                    json.replaceFirst(
+                            "\"segment_id\":",
+                            "\"remote_log_dir\":\"file:/stale/segment/log\",\"segment_id\":");
+            persistedJson = json.getBytes(StandardCharsets.UTF_8);
+        }
+
+        // Overwrite with the selected persisted format.
+        fs.delete(manifestPath, false);
+        try (FSDataOutputStream out = fs.create(manifestPath, FileSystem.WriteMode.NO_OVERWRITE)) {
+            out.write(persistedJson);
+        }
+
+        // Persisted directory fields must never supply the runtime directory.
+        assertThat(remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath))
+                .isEqualTo(currentManifest);
+
+        // Rebuild replicaManager to load the manifest with the tablet's assigned directory.
+        replicaManager.shutdown();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
+        makeLogTableAsLeader(tb, partitionTable);
+
+        // The tablet owns the assigned directory independently of manifest metadata.
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLogTablet).isNotNull();
+        FsPath expectedRemoteLogDir = FlussPaths.remoteLogDir(conf);
+        assertThat(remoteLogTablet.getRemoteLogDir()).isEqualTo(expectedRemoteLogDir);
+
+        // Loading preserves every segment without attaching directory state.
+        List<RemoteLogSegment> fixedSegments = remoteLogTablet.allRemoteLogSegments();
+        assertThat(fixedSegments).hasSize(4);
+        assertThat(fixedSegments).containsExactlyElementsOf(remoteLogSegmentList);
+
+        // Verify subsequent tiering still works after the fix
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 3);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(4);
     }
 
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
+    private FetchLogResultForBucket fetch(TableBucket tableBucket, long fetchOffset)
+            throws Exception {
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                Collections.singletonMap(
+                        tableBucket,
+                        new FetchReqInfo(tableBucket.getTableId(), fetchOffset, 1024 * 1024)),
+                null,
+                future::complete);
+        return future.get().get(tableBucket);
     }
 
     private static Stream<Arguments> stopArgs() {

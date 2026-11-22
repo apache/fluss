@@ -19,7 +19,9 @@ package org.apache.fluss.client;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.provider.ConfigProviders;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 
 /**
@@ -52,7 +54,7 @@ public class ConnectionFactory {
      * }</pre>
      */
     public static Connection createConnection(Configuration conf) {
-        return new FlussConnection(conf);
+        return new FlussConnection(resolveConfigProviders(conf));
     }
 
     /**
@@ -63,6 +65,16 @@ public class ConnectionFactory {
      * <p>See more comments in method {@link #createConnection(Configuration)}
      */
     public static Connection createConnection(Configuration conf, MetricRegistry metricRegistry) {
-        return new FlussConnection(conf, metricRegistry);
+        return new FlussConnection(resolveConfigProviders(conf), metricRegistry);
+    }
+
+    /** Resolves {@code ${provider:...}} markers without mutating the caller's configuration. */
+    private static Configuration resolveConfigProviders(Configuration conf) {
+        if (conf.get(ConfigOptions.CONFIG_PROVIDERS).isEmpty()) {
+            return conf;
+        }
+        Configuration resolved = new Configuration(conf);
+        ConfigProviders.resolve(resolved);
+        return resolved;
     }
 }

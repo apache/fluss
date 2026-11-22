@@ -46,6 +46,7 @@ import java.util.List;
  * -- Set a configuration
  * CALL sys.set_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB');
  * CALL sys.set_cluster_configs('datalake.format', 'paimon');
+ * CALL sys.set_cluster_configs('server.historical-partition.lookup-cache.max-disk-ratio', '0.12');
  *
  * -- Set multiple configurations at one time
  * CALL sys.set_cluster_configs('kv.rocksdb.shared-rate-limiter.bytes-per-sec', '200MB','datalake.format', 'paimon');

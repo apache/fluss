@@ -38,6 +38,9 @@ public class CommitRemoteLogManifestData {
     /** The end offset of the remote log. */
     private final long remoteLogEndOffset;
 
+    /** The highest exclusive offset successfully copied to remote storage. */
+    private final long highestCopiedEndOffset;
+
     /** The coordinator epoch when the snapshot is triggered. */
     private final int coordinatorEpoch;
 
@@ -51,10 +54,29 @@ public class CommitRemoteLogManifestData {
             long remoteLogEndOffset,
             int coordinatorEpoch,
             int bucketLeaderEpoch) {
+        this(
+                tableBucket,
+                remoteLogManifestPath,
+                remoteLogStartOffset,
+                remoteLogEndOffset,
+                remoteLogEndOffset,
+                coordinatorEpoch,
+                bucketLeaderEpoch);
+    }
+
+    public CommitRemoteLogManifestData(
+            TableBucket tableBucket,
+            FsPath remoteLogManifestPath,
+            long remoteLogStartOffset,
+            long remoteLogEndOffset,
+            long highestCopiedEndOffset,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch) {
         this.tableBucket = tableBucket;
         this.remoteLogManifestPath = remoteLogManifestPath;
         this.remoteLogStartOffset = remoteLogStartOffset;
         this.remoteLogEndOffset = remoteLogEndOffset;
+        this.highestCopiedEndOffset = highestCopiedEndOffset;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketLeaderEpoch = bucketLeaderEpoch;
     }
@@ -75,6 +97,10 @@ public class CommitRemoteLogManifestData {
         return remoteLogEndOffset;
     }
 
+    public long getHighestCopiedEndOffset() {
+        return highestCopiedEndOffset;
+    }
+
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
     }
@@ -92,6 +118,8 @@ public class CommitRemoteLogManifestData {
                 + remoteLogManifestPath
                 + ", remoteLogEndOffset="
                 + remoteLogEndOffset
+                + ", highestCopiedEndOffset="
+                + highestCopiedEndOffset
                 + ", coordinatorEpoch="
                 + coordinatorEpoch
                 + ", bucketLeaderEpoch="
@@ -111,6 +139,7 @@ public class CommitRemoteLogManifestData {
         return Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(remoteLogManifestPath, that.remoteLogManifestPath)
                 && remoteLogEndOffset == that.remoteLogEndOffset
+                && highestCopiedEndOffset == that.highestCopiedEndOffset
                 && coordinatorEpoch == that.coordinatorEpoch
                 && bucketLeaderEpoch == that.bucketLeaderEpoch;
     }
@@ -121,6 +150,7 @@ public class CommitRemoteLogManifestData {
                 tableBucket,
                 remoteLogManifestPath,
                 remoteLogEndOffset,
+                highestCopiedEndOffset,
                 coordinatorEpoch,
                 bucketLeaderEpoch);
     }

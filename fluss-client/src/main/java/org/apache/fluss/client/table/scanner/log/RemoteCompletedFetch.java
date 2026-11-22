@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -39,6 +40,7 @@ class RemoteCompletedFetch extends CompletedFetch {
 
     RemoteCompletedFetch(
             TableBucket tableBucket,
+            TablePath tablePath,
             FileLogRecords fileLogRecords,
             long highWatermark,
             LogRecordReadContext readContext,
@@ -48,6 +50,7 @@ class RemoteCompletedFetch extends CompletedFetch {
             Runnable recycleCallback) {
         super(
                 tableBucket,
+                tablePath,
                 ApiError.NONE,
                 fileLogRecords.sizeInBytes(),
                 highWatermark,

@@ -23,10 +23,21 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
-import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
+import org.apache.fluss.server.coordinator.event.CheckRebalanceTimeoutEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ReconcileRebalanceTaskEvent;
+import org.apache.fluss.server.coordinator.event.RecoverRebalanceEvent;
+import org.apache.fluss.server.coordinator.rebalance.RebalanceExecutor.ExecutionResult;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizer;
 import org.apache.fluss.server.coordinator.rebalance.model.ClusterModel;
@@ -36,14 +47,23 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
+import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -52,52 +72,179 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FAILED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.FINAL_STATUSES;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
+import static org.apache.fluss.server.coordinator.rebalance.goal.GoalOptimizerUtils.getDiff;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
- * A rebalance manager to generate rebalance plan, and execution rebalance plan.
+ * Generates rebalance plans and tracks their bucket migrations through completion.
  *
- * <p>This manager can only be used in {@link CoordinatorEventProcessor} as a single threaded model.
+ * <p>Bucket task state transitions:
+ *
+ * <pre>
+ * NOT_STARTED --admit------------------------> REBALANCING
+ * REBALANCING --current leader acknowledges--> COMPLETED
+ * REBALANCING --execution timeout------------> TIMEOUT
+ * TIMEOUT     --reconcile with backoff-------> TIMEOUT
+ * TIMEOUT     --current leader acknowledges--> COMPLETED
+ * TIMEOUT     --unavailable/no-progress limit-> FAILED
+ * NOT_STARTED / REBALANCING / TIMEOUT
+ *             --cancel before migration-----> CANCELED
+ * Any non-final task --bucket deleted--------> COMPLETED
+ * </pre>
+ *
+ * <p>Normally running buckets occupy the configured execution slots. TIMEOUT releases a slot but
+ * remains non-final and tracked; reaching the configured tracking limit pauses admission of new
+ * buckets. Cancellation is persisted before local state changes, including which buckets were
+ * canceled. New pending tasks are canceled directly; recovered or admitted tasks must still be at
+ * their origin to be canceled. Recovery admits intermediate tasks into reconciliation up to the
+ * configured tracking limit, and still requires a current leader acknowledgement even when the
+ * persisted state already matches the target.
+ *
+ * <p>The overall rebalance remains REBALANCING while buckets are pending, running, or timed out,
+ * and while its final state cannot be persisted. Once all buckets are final, any failed bucket
+ * yields FAILED; otherwise a cancellation request yields CANCELED, and all completed buckets yield
+ * COMPLETED. Final-state persistence is retried before another rebalance can be admitted. A failed
+ * bucket can retain an intermediate assignment for a subsequent rebalance to clean up.
+ *
+ * <p>All rebalance state is confined to the coordinator event thread. The shared scheduler only
+ * reads {@link #hasActiveRebalance} and enqueues a timeout-check event; the event thread performs
+ * the actual timeout and reconciliation work. The dynamic concurrency setting may be updated by a
+ * configuration callback, so that scalar is independently volatile. Startup recovery is tracked by
+ * {@link #recoveryPending}, which fences new rebalance requests until recovery has finished
+ * regardless of when the event loop starts.
  */
-public class RebalanceManager {
+@NotThreadSafe
+public class RebalanceManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(RebalanceManager.class);
 
+    /** Hardcoded timeout for an in-flight rebalance task: 2 minutes. */
+    private static final long REBALANCE_TASK_TIMEOUT_MS = 2 * 60 * 1000L;
+
+    /** Hardcoded interval for the periodic timeout check: 30 seconds. */
+    private static final long TIMEOUT_CHECK_INTERVAL_MS = 30 * 1000L;
+
+    /** Hardcoded upper bound for the exponential reconciliation backoff: 5 minutes. */
+    private static final long MAX_RECONCILE_BACKOFF_MS = 5 * 60 * 1000L;
+
     private final ZooKeeperClient zkClient;
-    private final CoordinatorEventProcessor eventProcessor;
+    private final RebalanceExecutor rebalanceExecutor;
+    private final EventManager eventManager;
+    private final Clock clock;
+    private final Scheduler scheduler;
+    private final long targetUnavailableTimeoutMs;
+    private final long noProgressTimeoutMs;
+    private final int maxTrackedTimedOutTasks;
 
-    /** A queue of in progress table bucket to rebalance. */
-    private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
+    /** Tasks awaiting admission. */
+    private final Queue<TableBucket> pendingRebalanceTasks = new ArrayDeque<>();
 
-    /** A mapping from table bucket to rebalance status of pending and running tasks. */
+    /** Recovered intermediate tasks awaiting bounded reconciliation admission. */
+    private final Queue<TableBucket> pendingRecoveredTasks = new ArrayDeque<>();
+
+    /** A mapping from table bucket to rebalance status of all non-final tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
-            new ConcurrentHashMap<>();
+            new HashMap<>();
+
+    /** Normally running tasks that occupy configured execution slots. */
+    private final Map<TableBucket, RebalanceTaskAttempt> runningRebalanceTasks = new HashMap<>();
+
+    /** Soft-timed-out tasks that no longer occupy the normal execution slot. */
+    private final Map<TableBucket, RebalanceTaskAttempt> timedOutRebalanceTasks = new HashMap<>();
+
+    private final Set<RebalanceExecutionKey> queuedReconcileEvents = new HashSet<>();
 
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
-            new ConcurrentHashMap<>();
+            new HashMap<>();
 
     private final GoalOptimizer goalOptimizer;
-    private volatile long registerTime;
-    private volatile @Nullable RebalanceStatus rebalanceStatus;
-    private volatile @Nullable String currentRebalanceId;
-    private volatile boolean isClosed = false;
 
-    public RebalanceManager(CoordinatorEventProcessor eventProcessor, ZooKeeperClient zkClient) {
-        this.eventProcessor = eventProcessor;
+    /** The only dynamically reconfigured state that may be updated outside the event thread. */
+    private volatile int maxInflightRebalanceTasks;
+
+    /** Cross-thread signal read by the shared scheduler; all task details remain event-confined. */
+    private volatile boolean hasActiveRebalance;
+
+    /**
+     * Whether the startup recovery workflow is pending, not whether the recovered rebalance itself
+     * is still running.
+     *
+     * <p>The coordinator event loop may receive a new rebalance request before the persisted task
+     * has been loaded and its recovery event has updated this manager. Without this fence, the new
+     * request would observe no in-memory rebalance, overwrite the task in ZooKeeper, and then be
+     * replaced locally when the delayed recovery event runs. Keep the flag set until ZooKeeper is
+     * confirmed empty or the recovered task has been fully applied to the in-memory state.
+     *
+     * <p>Recovery may complete on the startup thread when no task exists, or on the coordinator
+     * event thread when a recovery event is applied, hence volatile.
+     */
+    private volatile boolean recoveryPending = true;
+
+    private @Nullable ScheduledFuture<?> timeoutCheckTask;
+    private long registerTime;
+    private @Nullable RebalanceStatus rebalanceStatus;
+    private @Nullable String currentRebalanceId;
+
+    /** Pending tasks loaded from ZooKeeper may have started before the coordinator restarted. */
+    private boolean recoveredRebalance;
+
+    private boolean cancelRequested;
+    private boolean finalizationPending;
+    private boolean isClosed = false;
+
+    /** Creates a manager with validated coordinator rebalance settings. */
+    public RebalanceManager(
+            RebalanceExecutor rebalanceExecutor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            Configuration conf,
+            Scheduler scheduler) {
+        this.targetUnavailableTimeoutMs =
+                getTimeoutMillis(
+                        conf, ConfigOptions.COORDINATOR_REBALANCE_TARGET_UNAVAILABLE_TIMEOUT);
+        this.noProgressTimeoutMs =
+                getTimeoutMillis(conf, ConfigOptions.COORDINATOR_REBALANCE_NO_PROGRESS_TIMEOUT);
+        this.maxTrackedTimedOutTasks =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS);
+        checkArgument(
+                maxTrackedTimedOutTasks > 0,
+                "%s must be at least 1, but was %s.",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_TRACKED_TIMED_OUT_TASKS.key(),
+                maxTrackedTimedOutTasks);
+        this.rebalanceExecutor = rebalanceExecutor;
         this.zkClient = zkClient;
+        this.eventManager = eventManager;
+        this.clock = clock == null ? SystemClock.getInstance() : clock;
+        this.scheduler = scheduler;
         this.goalOptimizer = new GoalOptimizer();
+        validate(conf);
+        this.maxInflightRebalanceTasks =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
     }
 
     public void startup() {
         LOG.info("Start up rebalance manager.");
+        timeoutCheckTask =
+                scheduler.schedule(
+                        "rebalance-timeout-check",
+                        this::enqueueTimeoutCheckSafely,
+                        TIMEOUT_CHECK_INTERVAL_MS,
+                        TIMEOUT_CHECK_INTERVAL_MS);
+        LOG.info(
+                "RebalanceManager timeout checker started: timeoutMs={}, checkIntervalMs={}",
+                REBALANCE_TASK_TIMEOUT_MS,
+                TIMEOUT_CHECK_INTERVAL_MS);
         initialize();
     }
 
@@ -105,85 +252,190 @@ public class RebalanceManager {
         return currentRebalanceId;
     }
 
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        if (newMaxInflightRebalanceTasks < 1) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be at least 1, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                            newMaxInflightRebalanceTasks));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        int newMaxInflightRebalanceTasks =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
+        int oldMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        if (newMaxInflightRebalanceTasks == oldMaxInflightRebalanceTasks) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                    newMaxInflightRebalanceTasks);
+            return;
+        }
+
+        maxInflightRebalanceTasks = newMaxInflightRebalanceTasks;
+        LOG.info(
+                "{} reconfigured: {} -> {}",
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
+                oldMaxInflightRebalanceTasks,
+                newMaxInflightRebalanceTasks);
+    }
+
     private void initialize() {
         try {
-            zkClient.getRebalanceTask()
-                    .ifPresent(
-                            rebalancePlan ->
-                                    registerRebalance(
-                                            rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan(),
-                                            rebalancePlan.getRebalanceStatus()));
+            Optional<RebalanceTask> rebalanceTask = zkClient.getRebalanceTask();
+            if (rebalanceTask.isPresent()) {
+                eventManager.put(new RecoverRebalanceEvent(rebalanceTask.get()));
+            } else {
+                completeEmptyRecovery();
+            }
         } catch (Exception e) {
+            // TODO: Retry loading the persisted rebalance task instead of skipping recovery.
+            recoveryPending = false;
             LOG.error(
-                    "Failed to get rebalance plan from zookeeper, it will be treated as no"
-                            + "rebalance tasks.",
+                    "Failed to get rebalance plan from zookeeper. Skipping recovery and allowing "
+                            + "new rebalance requests; any unfinished task will not be resumed.",
                     e);
         }
     }
 
-    public void registerRebalance(
-            String rebalanceId,
-            Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
-            RebalanceStatus newStatus) {
-        checkNotClosed();
-        registerTime = System.currentTimeMillis();
-        // first clear all exists tasks.
-        inProgressRebalanceTasks.clear();
-        inProgressRebalanceTasksQueue.clear();
-        finishedRebalanceTasks.clear();
+    /** Marks startup recovery complete when ZooKeeper contains no persisted rebalance task. */
+    public void completeEmptyRecovery() {
+        recoveryPending = false;
+    }
 
-        currentRebalanceId = rebalanceId;
+    /** Returns whether startup recovery has not yet completed. */
+    public boolean isRecoveryPending() {
+        return recoveryPending;
+    }
+
+    /** Registers a new rebalance; persisted tasks are handled by {@link #recoverRebalance}. */
+    public void registerRebalance(
+            String rebalanceId, Map<TableBucket, RebalancePlanForBucket> rebalancePlan) {
+        checkNotClosed();
+        checkState(
+                !recoveryPending,
+                "Cannot register a rebalance before startup recovery has completed.");
+        resetRebalance(rebalanceId, false);
         if (rebalancePlan.isEmpty()) {
-            completeRebalance();
+            finalizeRebalance();
             return;
         }
 
-        rebalancePlan.forEach(
-                ((tableBucket, planForBucket) -> {
-                    if (FINAL_STATUSES.contains(newStatus)) {
-                        finishedRebalanceTasks.put(
-                                tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
-                    } else {
-                        inProgressRebalanceTasksQueue.add(tableBucket);
-                        inProgressRebalanceTasks.put(
-                                tableBucket,
-                                RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
-                    }
-                }));
-
-        if (!inProgressRebalanceTasksQueue.isEmpty()) {
-            // Trigger one rebalance task to execute.
-            rebalanceStatus = REBALANCING;
-            processNewRebalanceTask();
-        } else {
-            rebalanceStatus = newStatus;
+        for (Map.Entry<TableBucket, RebalancePlanForBucket> entry : rebalancePlan.entrySet()) {
+            addPendingTask(entry.getKey(), entry.getValue());
         }
+
+        rebalanceStatus = REBALANCING;
+        processNewRebalanceTasks();
+    }
+
+    /** Recovers a persisted task by comparing every bucket plan with current coordinator state. */
+    public void recoverRebalance(RebalanceTask rebalanceTask) {
+        checkNotClosed();
+        resetRebalance(rebalanceTask.getRebalanceId(), rebalanceTask.isCancelRequested());
+        recoveredRebalance = true;
+        if (FINAL_STATUSES.contains(rebalanceTask.getRebalanceStatus())) {
+            for (Map.Entry<TableBucket, RebalancePlanForBucket> entry :
+                    rebalanceTask.getExecutePlan().entrySet()) {
+                finishedRebalanceTasks.put(
+                        entry.getKey(),
+                        RebalanceResultForBucket.of(
+                                entry.getValue(), rebalanceTask.getRebalanceStatus()));
+            }
+            rebalanceStatus = rebalanceTask.getRebalanceStatus();
+            hasActiveRebalance = false;
+            recoveryPending = false;
+            return;
+        }
+
+        for (Map.Entry<TableBucket, RebalancePlanForBucket> entry :
+                rebalanceTask.getExecutePlan().entrySet()) {
+            RebalancePlanForBucket plan = entry.getValue();
+            boolean atOrigin = rebalanceExecutor.isRebalanceTaskAtOrigin(plan);
+            boolean explicitlyCanceled =
+                    rebalanceTask.getCanceledBuckets().contains(entry.getKey());
+            boolean replicaMigration =
+                    !new HashSet<>(plan.getOriginReplicas())
+                            .equals(new HashSet<>(plan.getNewReplicas()));
+            if (explicitlyCanceled && (!replicaMigration || atOrigin)) {
+                finishedRebalanceTasks.put(
+                        entry.getKey(), RebalanceResultForBucket.of(plan, CANCELED));
+            } else if (atOrigin) {
+                addPendingTask(entry.getKey(), plan);
+            } else {
+                // A replica migration recorded as canceled may still have started after an
+                // ambiguous cancellation write. Keep any intermediate assignment tracked.
+                addRecoveredIntermediateTask(entry.getKey(), plan);
+            }
+        }
+        if (cancelRequested) {
+            cancelPendingTasks(findTasksToCancel());
+        }
+
+        if (inProgressRebalanceTasks.isEmpty()) {
+            finalizeRebalance();
+        } else {
+            rebalanceStatus = REBALANCING;
+            processNewRebalanceTasks();
+        }
+        recoveryPending = false;
     }
 
     public void finishRebalanceTask(TableBucket tableBucket, RebalanceStatus statusForBucket) {
-        checkNotClosed();
-        if (inProgressRebalanceTasksQueue.contains(tableBucket)) {
-            inProgressRebalanceTasksQueue.remove(tableBucket);
-            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
-            checkNotNull(resultForBucket, "RebalanceResultForBucket is null.");
-            finishedRebalanceTasks.put(
-                    tableBucket,
-                    RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
-            LOG.info(
-                    "Rebalance task {} in progress: {} tasks pending, {} completed.",
-                    currentRebalanceId,
-                    inProgressRebalanceTasksQueue.size(),
-                    finishedRebalanceTasks.size());
-
-            if (inProgressRebalanceTasksQueue.isEmpty()) {
-                // All rebalance tasks are completed.
-                completeRebalance();
-            } else {
-                // Trigger one rebalance task to execute.
-                processNewRebalanceTask();
-            }
+        RebalanceExecutionKey executionKey = getExecutionKey(tableBucket);
+        if (executionKey != null) {
+            finishRebalanceTask(executionKey, statusForBucket);
         }
+    }
+
+    public boolean finishRebalanceTask(
+            RebalanceExecutionKey executionKey, RebalanceStatus statusForBucket) {
+        boolean completed = completeRebalanceTaskState(executionKey, statusForBucket);
+        if (completed && !inProgressRebalanceTasks.isEmpty()) {
+            processNewRebalanceTasks();
+        }
+        return completed;
+    }
+
+    private boolean completeRebalanceTaskState(
+            RebalanceExecutionKey executionKey, RebalanceStatus statusForBucket) {
+        checkNotClosed();
+        checkArgument(statusForBucket != TIMEOUT, "Use timeoutRebalanceTask for soft timeouts.");
+        RebalanceTaskAttempt attempt = findActiveAttempt(executionKey);
+        if (attempt == null) {
+            LOG.debug("Ignore stale completion for {}.", executionKey);
+            return false;
+        }
+
+        TableBucket tableBucket = executionKey.getTableBucket();
+        runningRebalanceTasks.remove(tableBucket);
+        timedOutRebalanceTasks.remove(tableBucket);
+        queuedReconcileEvents.remove(executionKey);
+        RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.remove(tableBucket);
+        if (resultForBucket == null) {
+            return false;
+        }
+        finishedRebalanceTasks.put(
+                tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+        LOG.info(
+                "Rebalance {} progress: {} pending, {} running, {} timed out and tracking, "
+                        + "{} finished.",
+                currentRebalanceId,
+                pendingRebalanceTasks.size(),
+                runningRebalanceTasks.size(),
+                timedOutRebalanceTasks.size(),
+                finishedRebalanceTasks.size());
+
+        if (inProgressRebalanceTasks.isEmpty()) {
+            finalizeRebalance();
+        }
+        return true;
     }
 
     public @Nullable RebalanceProgress listRebalanceProgress(@Nullable String rebalanceId) {
@@ -215,6 +467,10 @@ public class RebalanceManager {
     public void cancelRebalance(@Nullable String rebalanceId) {
         checkNotClosed();
 
+        if (currentRebalanceId == null) {
+            return;
+        }
+
         if (rebalanceId != null
                 && currentRebalanceId != null
                 && !rebalanceId.equals(currentRebalanceId)) {
@@ -233,32 +489,114 @@ public class RebalanceManager {
             return;
         }
 
-        try {
-            Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
-            if (rebalanceTaskOpt.isPresent()) {
-                RebalanceTask rebalanceTask = rebalanceTaskOpt.get();
-                zkClient.registerRebalanceTask(
-                        new RebalanceTask(
-                                rebalanceTask.getRebalanceId(),
-                                CANCELED,
-                                rebalanceTask.getExecutePlan()));
-            }
-        } catch (Exception e) {
-            LOG.error("Error when delete rebalance plan from zookeeper.", e);
+        if (cancelRequested) {
+            return;
         }
 
-        rebalanceStatus = CANCELED;
-        inProgressRebalanceTasksQueue.clear();
-        inProgressRebalanceTasks.clear();
-        // Here, it will not clear finishedRebalanceTasks, because it will be used by
-        // listRebalanceProgress. It will be cleared when next register.
+        Set<TableBucket> tasksToCancel = findTasksToCancel();
+        Set<TableBucket> canceledBuckets = canceledBuckets();
+        canceledBuckets.addAll(tasksToCancel);
+        RebalanceTask cancellationTask =
+                new RebalanceTask(
+                        currentRebalanceId,
+                        REBALANCING,
+                        allRebalancePlans(),
+                        true,
+                        canceledBuckets);
+        try {
+            zkClient.registerRebalanceTask(cancellationTask);
+        } catch (Exception e) {
+            boolean persisted;
+            try {
+                persisted = isCancellationPersisted(cancellationTask);
+            } catch (Exception verificationFailure) {
+                e.addSuppressed(verificationFailure);
+                throw new RebalanceFailureException(
+                        "Failed to persist rebalance cancellation request.", e);
+            }
+            if (!persisted) {
+                throw new RebalanceFailureException(
+                        "Failed to persist rebalance cancellation request.", e);
+            }
+            LOG.warn(
+                    "Cancellation for rebalance {} was persisted despite the write error. "
+                            + "Continue applying it locally.",
+                    currentRebalanceId,
+                    e);
+        }
 
-        LOG.info("Cancel rebalance task success.");
+        cancelRequested = true;
+        cancelPendingTasks(tasksToCancel);
+
+        // Admitted tasks that have not changed anything yet can be given up on right away: there
+        // is no half-applied assignment to drain, so cancellation does not have to wait for them.
+        for (RebalanceTaskAttempt attempt : activeAttempts()) {
+            if (tasksToCancel.contains(attempt.executionKey.getTableBucket())) {
+                finishRebalanceTask(attempt.executionKey, CANCELED);
+            }
+        }
+
+        if (inProgressRebalanceTasks.isEmpty() && !FINAL_STATUSES.contains(rebalanceStatus)) {
+            finalizeRebalance();
+        }
+        LOG.info(
+                "Accepted cancellation for rebalance {}. Running and timed-out tasks will be "
+                        + "drained before the rebalance becomes canceled.",
+                currentRebalanceId);
     }
 
+    private boolean isCancellationPersisted(RebalanceTask expected) throws Exception {
+        Optional<RebalanceTask> persisted = zkClient.getRebalanceTask();
+        if (!persisted.isPresent()) {
+            return false;
+        }
+        RebalanceTask persistedTask = persisted.get();
+        return persistedTask.getRebalanceId().equals(expected.getRebalanceId())
+                && persistedTask.isCancelRequested()
+                && persistedTask.getCanceledBuckets().containsAll(expected.getCanceledBuckets());
+    }
+
+    private Set<TableBucket> findTasksToCancel() {
+        Set<TableBucket> tasksToCancel = new HashSet<>();
+        for (TableBucket bucket : pendingRebalanceTasks) {
+            RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
+            if (result != null
+                    && (!recoveredRebalance
+                            || rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan()))) {
+                tasksToCancel.add(bucket);
+            }
+        }
+        for (RebalanceTaskAttempt attempt : activeAttempts()) {
+            TableBucket bucket = attempt.executionKey.getTableBucket();
+            RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
+            if (result != null && rebalanceExecutor.isRebalanceTaskAtOrigin(result.plan())) {
+                tasksToCancel.add(bucket);
+            }
+        }
+        return tasksToCancel;
+    }
+
+    private void cancelPendingTasks(Set<TableBucket> tasksToCancel) {
+        Iterator<TableBucket> pending = pendingRebalanceTasks.iterator();
+        while (pending.hasNext()) {
+            TableBucket bucket = pending.next();
+            if (tasksToCancel.contains(bucket)) {
+                RebalanceResultForBucket result = inProgressRebalanceTasks.get(bucket);
+                pending.remove();
+                inProgressRebalanceTasks.remove(bucket);
+                finishedRebalanceTasks.put(
+                        bucket, RebalanceResultForBucket.of(result.plan(), CANCELED));
+            }
+        }
+    }
+
+    /**
+     * Returns whether a rebalance is in progress. This also fences new rebalance requests until
+     * startup recovery has completed.
+     */
     public boolean hasInProgressRebalance() {
         checkNotClosed();
-        return !inProgressRebalanceTasks.isEmpty() || !inProgressRebalanceTasksQueue.isEmpty();
+        return recoveryPending || finalizationPending || !inProgressRebalanceTasks.isEmpty();
     }
 
     public RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
@@ -268,7 +606,14 @@ public class RebalanceManager {
         try {
             // Generate the latest cluster model.
             long startTime = System.currentTimeMillis();
-            ClusterModel clusterModel = buildClusterModel(eventProcessor.getCoordinatorContext());
+            CoordinatorContext context = rebalanceExecutor.getCoordinatorContext();
+            ClusterModel clusterModel = buildClusterModel(context);
+            Map<TableBucket, List<Integer>> actualAssignments = new HashMap<>();
+            Map<TableBucket, Integer> actualLeaders = new HashMap<>();
+            for (TableBucket bucket : clusterModel.getReplicaDistribution().keySet()) {
+                actualAssignments.put(bucket, new ArrayList<>(context.getAssignment(bucket)));
+                actualLeaders.put(bucket, context.getBucketLeaderAndIsr(bucket).get().leader());
+            }
             LOG.info(
                     "Build cluster model for rebalance id {} with {} ms.",
                     rebalanceId,
@@ -276,7 +621,11 @@ public class RebalanceManager {
 
             // do optimize.
             startTime = System.currentTimeMillis();
-            rebalancePlanForBuckets = goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
+            goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
+            // The optimization model excludes excess replicas left by a failed migration. Diff
+            // against the real assignment so that cleanup is still executed and persisted, even
+            // when the requested goals make no further changes to the model.
+            rebalancePlanForBuckets = getDiff(actualAssignments, actualLeaders, clusterModel);
             LOG.info(
                     "Do optimize for rebalance id {} with {} ms.",
                     rebalanceId,
@@ -292,6 +641,10 @@ public class RebalanceManager {
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
         checkNotClosed();
+        if (!runningRebalanceTasks.containsKey(tableBucket)
+                && !timedOutRebalanceTasks.containsKey(tableBucket)) {
+            return null;
+        }
         RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
         if (resultForBucket != null) {
             return resultForBucket.plan();
@@ -299,47 +652,345 @@ public class RebalanceManager {
         return null;
     }
 
-    private void processNewRebalanceTask() {
-        TableBucket tableBucket = inProgressRebalanceTasksQueue.peek();
-        if (tableBucket != null && inProgressRebalanceTasks.containsKey(tableBucket)) {
+    /**
+     * Returns the active execution key. This method must be called on the coordinator event thread.
+     */
+    public @Nullable RebalanceExecutionKey getExecutionKey(TableBucket tableBucket) {
+        RebalanceTaskAttempt attempt = runningRebalanceTasks.get(tableBucket);
+        if (attempt == null) {
+            attempt = timedOutRebalanceTasks.get(tableBucket);
+        }
+        return attempt == null ? null : attempt.executionKey;
+    }
+
+    public boolean timeoutRebalanceTask(RebalanceExecutionKey executionKey) {
+        checkNotClosed();
+        RebalanceTaskAttempt attempt = runningRebalanceTasks.get(executionKey.getTableBucket());
+        if (attempt == null || !attempt.executionKey.equals(executionKey)) {
+            LOG.debug("Ignore stale timeout for {}.", executionKey);
+            return false;
+        }
+        if (timedOutRebalanceTasks.size() >= maxTrackedTimedOutTasks) {
+            // Keep the attempt in the normal running set until a reconciliation slot becomes
+            // available. The next periodic check will try to time it out again.
+            LOG.info(
+                    "Keep timed-out rebalance task {} in the running set because {} other "
+                            + "timed-out tasks are still being reconciled.",
+                    executionKey,
+                    timedOutRebalanceTasks.size());
+            return false;
+        }
+
+        TableBucket tableBucket = executionKey.getTableBucket();
+        runningRebalanceTasks.remove(tableBucket);
+        timedOutRebalanceTasks.put(tableBucket, attempt);
+        RebalanceResultForBucket result = inProgressRebalanceTasks.get(tableBucket);
+        if (result == null) {
+            timedOutRebalanceTasks.remove(tableBucket);
+            return false;
+        }
+        inProgressRebalanceTasks.put(
+                tableBucket, RebalanceResultForBucket.of(result.plan(), TIMEOUT));
+        attempt.onTimedOut(
+                clock.milliseconds(), observeReconciliationState(tableBucket, result.plan()));
+        enqueueReconciliation(attempt);
+        processNewRebalanceTasks();
+        return true;
+    }
+
+    /**
+     * Prepares the given attempt for reconciliation and returns its plan, or null if the attempt is
+     * stale or has just been completed or given up on.
+     *
+     * <p>Reconciliation has to terminate. Otherwise a bucket that can never converge, for example
+     * because a target server is gone for good, keeps the overall rebalance in a non-final status
+     * and every later rebalance request is rejected forever.
+     */
+    public @Nullable RebalancePlanForBucket prepareReconciliation(
+            RebalanceExecutionKey executionKey) {
+        queuedReconcileEvents.remove(executionKey);
+        TableBucket tableBucket = executionKey.getTableBucket();
+        RebalanceTaskAttempt attempt = timedOutRebalanceTasks.get(tableBucket);
+        if (attempt == null || !attempt.executionKey.equals(executionKey)) {
+            return null;
+        }
+        RebalanceResultForBucket result = inProgressRebalanceTasks.get(tableBucket);
+        if (result == null) {
+            return null;
+        }
+        if (rebalanceExecutor.isRebalanceTaskDeleted(tableBucket)) {
+            finishRebalanceTask(executionKey, COMPLETED);
+            return null;
+        }
+
+        // Called on the coordinator event loop, so reading the coordinator state is safe here.
+        long now = clock.milliseconds();
+        String observedState = observeReconciliationState(tableBucket, result.plan());
+        boolean targetsLive =
+                rebalanceExecutor
+                        .getCoordinatorContext()
+                        .liveTabletServerSet()
+                        .containsAll(result.plan().getNewReplicas());
+        if (!observedState.equals(attempt.observedState)) {
+            attempt.onProgress(now, observedState);
+        } else if (targetsLive) {
+            attempt.onTargetsAvailable();
+        } else {
+            attempt.onTargetsUnavailable(now);
+        }
+
+        if (attempt.blockedForMs(now) > targetUnavailableTimeoutMs
+                || now - attempt.lastProgressMs > noProgressTimeoutMs) {
+            LOG.error(
+                    "Giving up on rebalance task {} after {} ms without progress, target replicas "
+                            + "live: {}. The bucket may be left with the intermediate assignment "
+                            + "and can be moved again by a new rebalance.",
+                    executionKey,
+                    now - attempt.lastProgressMs,
+                    targetsLive);
+            finishRebalanceTask(executionKey, FAILED);
+            return null;
+        }
+
+        attempt.onReconcileDispatched(now);
+        return result.plan();
+    }
+
+    private void processNewRebalanceTasks() {
+        TableBucket tableBucket;
+        while (timedOutRebalanceTasks.size() < maxTrackedTimedOutTasks
+                && (tableBucket = pendingRecoveredTasks.poll()) != null) {
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
-            RebalanceResultForBucket rebalanceResultForBucket =
-                    RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING);
-            eventProcessor.tryToExecuteRebalanceTask(rebalanceResultForBucket.plan());
+            if (resultForBucket == null || resultForBucket.status() != TIMEOUT) {
+                continue;
+            }
+            long now = clock.milliseconds();
+            RebalanceTaskAttempt attempt =
+                    new RebalanceTaskAttempt(
+                            new RebalanceExecutionKey(currentRebalanceId, tableBucket), now);
+            attempt.onTimedOut(
+                    now, observeReconciliationState(tableBucket, resultForBucket.plan()));
+            timedOutRebalanceTasks.put(tableBucket, attempt);
+            enqueueReconciliation(attempt);
+        }
+        if (!pendingRecoveredTasks.isEmpty()) {
+            return;
+        }
+        if (timedOutRebalanceTasks.size() >= maxTrackedTimedOutTasks) {
+            // Stop admitting work until some of the timed-out tasks reach a final status, so that
+            // a long cluster operation cannot grow the tracked set, and with it the reconciliation
+            // work and the number of concurrent replica migrations, without bound.
+            LOG.info(
+                    "Hold back new tasks of rebalance {} because {} timed-out tasks are still "
+                            + "being reconciled.",
+                    currentRebalanceId,
+                    timedOutRebalanceTasks.size());
+            return;
+        }
+        while (runningRebalanceTasks.size() < maxInflightRebalanceTasks
+                && (tableBucket = pendingRebalanceTasks.poll()) != null) {
+            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+            if (resultForBucket == null || resultForBucket.status() != NOT_STARTED) {
+                continue;
+            }
+            RebalanceExecutionKey executionKey =
+                    new RebalanceExecutionKey(currentRebalanceId, tableBucket);
+            runningRebalanceTasks.put(
+                    tableBucket, new RebalanceTaskAttempt(executionKey, clock.milliseconds()));
+            inProgressRebalanceTasks.put(
+                    tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING));
+            ExecutionResult executionResult =
+                    rebalanceExecutor.tryToExecuteRebalanceTask(resultForBucket.plan());
+            if (executionResult == ExecutionResult.COMPLETED) {
+                completeRebalanceTaskState(executionKey, COMPLETED);
+            }
         }
     }
 
-    private void completeRebalance() {
+    /** Returns the current rebalance concurrency limit. */
+    @VisibleForTesting
+    public int getMaxInflightRebalanceTasks() {
+        return maxInflightRebalanceTasks;
+    }
+
+    private void finalizeRebalance() {
+        finalizationPending = true;
+        persistFinalStatus();
+    }
+
+    private void persistFinalStatus() {
         checkNotClosed();
+        RebalanceStatus finalStatus = aggregateFinalStatus();
         try {
-            Optional<RebalanceTask> rebalanceTaskOpt = zkClient.getRebalanceTask();
-            Map<TableBucket, RebalancePlanForBucket> bucketPlan;
-            if (rebalanceTaskOpt.isPresent()) {
-                bucketPlan = rebalanceTaskOpt.get().getExecutePlan();
-            } else {
-                LOG.warn(
-                        "Rebalance task is empty in zk when complete rebalance. "
-                                + "It will be treated as no rebalance tasks.");
-                bucketPlan = new HashMap<>();
-            }
             zkClient.registerRebalanceTask(
-                    new RebalanceTask(currentRebalanceId, COMPLETED, bucketPlan));
+                    new RebalanceTask(
+                            currentRebalanceId,
+                            finalStatus,
+                            allRebalancePlans(),
+                            cancelRequested,
+                            canceledBuckets()));
         } catch (Exception e) {
-            LOG.error("Error when update rebalance plan from zookeeper.", e);
+            rebalanceStatus = REBALANCING;
+            finalizationPending = true;
+            LOG.error(
+                    "Failed to persist final state for rebalance {}. It will be retried.",
+                    currentRebalanceId,
+                    e);
+            return;
         }
 
-        rebalanceStatus = COMPLETED;
+        rebalanceStatus = finalStatus;
+        finalizationPending = false;
         inProgressRebalanceTasks.clear();
-        inProgressRebalanceTasksQueue.clear();
+        pendingRebalanceTasks.clear();
+        pendingRecoveredTasks.clear();
+        runningRebalanceTasks.clear();
+        timedOutRebalanceTasks.clear();
+        queuedReconcileEvents.clear();
+        hasActiveRebalance = false;
 
-        // Here, it will not clear finishedRebalanceTasks, because it will be used by
-        // listRebalanceProgress. It will be cleared when next register.
+        LOG.info(
+                "Rebalance {} reached final status {} in {} ms.",
+                currentRebalanceId,
+                finalStatus,
+                System.currentTimeMillis() - registerTime);
+    }
 
-        LOG.info("Rebalance complete with {} ms.", System.currentTimeMillis() - registerTime);
+    private void resetRebalance(String rebalanceId, boolean cancelRequested) {
+        registerTime = System.currentTimeMillis();
+        currentRebalanceId = rebalanceId;
+        recoveredRebalance = false;
+        this.cancelRequested = cancelRequested;
+        finalizationPending = false;
+        inProgressRebalanceTasks.clear();
+        pendingRebalanceTasks.clear();
+        pendingRecoveredTasks.clear();
+        runningRebalanceTasks.clear();
+        timedOutRebalanceTasks.clear();
+        finishedRebalanceTasks.clear();
+        queuedReconcileEvents.clear();
+        hasActiveRebalance = true;
+    }
+
+    private void addPendingTask(TableBucket tableBucket, RebalancePlanForBucket plan) {
+        pendingRebalanceTasks.add(tableBucket);
+        inProgressRebalanceTasks.put(tableBucket, RebalanceResultForBucket.of(plan, NOT_STARTED));
+    }
+
+    private void addRecoveredIntermediateTask(
+            TableBucket tableBucket, RebalancePlanForBucket plan) {
+        pendingRecoveredTasks.add(tableBucket);
+        inProgressRebalanceTasks.put(tableBucket, RebalanceResultForBucket.of(plan, TIMEOUT));
+    }
+
+    private @Nullable RebalanceTaskAttempt findActiveAttempt(RebalanceExecutionKey executionKey) {
+        RebalanceTaskAttempt attempt = runningRebalanceTasks.get(executionKey.getTableBucket());
+        if (attempt == null) {
+            attempt = timedOutRebalanceTasks.get(executionKey.getTableBucket());
+        }
+        return attempt != null && attempt.executionKey.equals(executionKey) ? attempt : null;
+    }
+
+    private List<RebalanceTaskAttempt> activeAttempts() {
+        List<RebalanceTaskAttempt> attempts = new ArrayList<>(runningRebalanceTasks.values());
+        attempts.addAll(timedOutRebalanceTasks.values());
+        return attempts;
+    }
+
+    /**
+     * Returns the target-relevant state of a bucket, used to detect whether a timed-out task is
+     * still making progress.
+     *
+     * <p>The leader and bucket epochs are deliberately left out: a reconciliation re-sends the
+     * current state and can bump them without the migration moving forward at all. Assignment,
+     * leader, and ISR changes involving only replicas outside the target are also excluded because
+     * they do not move the migration toward its target.
+     */
+    private String observeReconciliationState(
+            TableBucket tableBucket, RebalancePlanForBucket plan) {
+        CoordinatorContext coordinatorContext = rebalanceExecutor.getCoordinatorContext();
+        Set<Integer> targetReplicas = new HashSet<>(plan.getNewReplicas());
+        List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
+        Set<Integer> assignedTargetReplicas = new TreeSet<>(assignment);
+        assignedTargetReplicas.retainAll(targetReplicas);
+        StringBuilder observed =
+                new StringBuilder("targetAssignment=")
+                        .append(assignment.equals(plan.getNewReplicas()))
+                        .append("|assignedTargets=")
+                        .append(assignedTargetReplicas);
+        coordinatorContext
+                .getBucketLeaderAndIsr(tableBucket)
+                .ifPresent(
+                        leaderAndIsr -> {
+                            Set<Integer> targetIsr = new TreeSet<>(leaderAndIsr.isr());
+                            targetIsr.retainAll(targetReplicas);
+                            observed.append("|targetLeader=")
+                                    .append(leaderAndIsr.leader() == plan.getNewLeader())
+                                    .append("|targetIsr=")
+                                    .append(targetIsr);
+                        });
+        return observed.toString();
+    }
+
+    private static long getTimeoutMillis(Configuration conf, ConfigOption<Duration> option) {
+        Duration timeout = conf.get(option);
+        checkArgument(
+                timeout.compareTo(Duration.ofMillis(1)) >= 0
+                        && timeout.compareTo(Duration.ofMillis(Long.MAX_VALUE)) <= 0,
+                "%s must be between 1 ms and %s ms, but was %s.",
+                option.key(),
+                Long.MAX_VALUE,
+                timeout);
+        return timeout.toMillis();
+    }
+
+    private static long reconcileBackoffMs(int dispatchedAttempts) {
+        long backoff = TIMEOUT_CHECK_INTERVAL_MS << Math.min(dispatchedAttempts, 8);
+        return Math.min(backoff, MAX_RECONCILE_BACKOFF_MS);
+    }
+
+    private void enqueueReconciliation(RebalanceTaskAttempt attempt) {
+        if (queuedReconcileEvents.add(attempt.executionKey)) {
+            eventManager.put(new ReconcileRebalanceTaskEvent(attempt.executionKey));
+        }
+    }
+
+    private Map<TableBucket, RebalancePlanForBucket> allRebalancePlans() {
+        Map<TableBucket, RebalancePlanForBucket> plans = new HashMap<>();
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> entry :
+                inProgressRebalanceTasks.entrySet()) {
+            plans.put(entry.getKey(), entry.getValue().plan());
+        }
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> entry :
+                finishedRebalanceTasks.entrySet()) {
+            plans.put(entry.getKey(), entry.getValue().plan());
+        }
+        return plans;
+    }
+
+    private Set<TableBucket> canceledBuckets() {
+        Set<TableBucket> canceledBuckets = new HashSet<>();
+        for (Map.Entry<TableBucket, RebalanceResultForBucket> entry :
+                finishedRebalanceTasks.entrySet()) {
+            if (entry.getValue().status() == CANCELED) {
+                canceledBuckets.add(entry.getKey());
+            }
+        }
+        return canceledBuckets;
+    }
+
+    private RebalanceStatus aggregateFinalStatus() {
+        for (RebalanceResultForBucket result : finishedRebalanceTasks.values()) {
+            if (result.status() == FAILED) {
+                return FAILED;
+            }
+        }
+        return cancelRequested ? CANCELED : COMPLETED;
     }
 
     private ClusterModel buildClusterModel(CoordinatorContext coordinatorContext) {
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        Set<Integer> liveTabletServerIds = coordinatorContext.liveTabletServerSet();
         Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
 
         Map<Integer, ServerModel> serverModelMap = new HashMap<>();
@@ -354,10 +1005,18 @@ public class RebalanceManager {
             }
         }
 
+        // Failed migrations can leave an unavailable target in the persisted assignment. Keep
+        // such servers in the model as ineligible sources so the goals can evacuate their replicas.
+        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
+        for (TableBucket tableBucket : allBuckets) {
+            for (Integer replica : coordinatorContext.getAssignment(tableBucket)) {
+                serverModelMap.computeIfAbsent(
+                        replica, id -> new ServerModel(id, RackModel.DEFAULT_RACK, true));
+            }
+        }
         ClusterModel clusterModel = initialClusterModel(serverModelMap);
 
         // Try to update the cluster model with the latest bucket states.
-        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
         for (TableBucket tableBucket : allBuckets) {
             List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
             Optional<LeaderAndIsr> bucketLeaderAndIsrOpt =
@@ -374,12 +1033,49 @@ public class RebalanceManager {
             if (leader == -1 || !assignment.contains(leader)) {
                 continue;
             }
+            assignment =
+                    assignmentForOptimization(
+                            coordinatorContext, liveTabletServerIds, tableBucket, assignment, isr);
             for (int i = 0; i < assignment.size(); i++) {
                 int replica = assignment.get(i);
                 clusterModel.createReplica(replica, tableBucket, i, leader == replica);
             }
         }
         return clusterModel;
+    }
+
+    private List<Integer> assignmentForOptimization(
+            CoordinatorContext context,
+            Set<Integer> liveTabletServerIds,
+            TableBucket bucket,
+            List<Integer> assignment,
+            LeaderAndIsr leaderAndIsr) {
+        TableInfo tableInfo = context.getTableInfoById(bucket.getTableId());
+        int replicationFactor =
+                tableInfo == null
+                        ? assignment.size()
+                        : tableInfo
+                                .getProperties()
+                                .getOptional(ConfigOptions.TABLE_REPLICATION_FACTOR)
+                                .orElse(assignment.size());
+        if (assignment.size() <= replicationFactor) {
+            return assignment;
+        }
+
+        // A Phase A union is not a new replication factor. Prefer the current leader and live,
+        // caught-up replicas when selecting the model's starting assignment. The requested goals
+        // can then relocate these replicas; execution retains the full real origin for cleanup.
+        List<Integer> replicas = new ArrayList<>(assignment);
+        replicas.sort(
+                Comparator.comparing((Integer replica) -> replica != leaderAndIsr.leader())
+                        .thenComparing(replica -> !liveTabletServerIds.contains(replica))
+                        .thenComparing(replica -> !leaderAndIsr.isr().contains(replica))
+                        .thenComparing(
+                                replica ->
+                                        context.getServerTag(replica)
+                                                .map(this::isOfflineTagged)
+                                                .orElse(false)));
+        return new ArrayList<>(replicas.subList(0, replicationFactor));
     }
 
     private RebalanceTask buildRebalanceTask(
@@ -400,22 +1096,143 @@ public class RebalanceManager {
         return new ClusterModel(servers);
     }
 
+    private void enqueueTimeoutCheckSafely() {
+        if (!hasActiveRebalance) {
+            return;
+        }
+        try {
+            eventManager.put(new CheckRebalanceTimeoutEvent());
+        } catch (Throwable t) {
+            LOG.error("Failed to enqueue rebalance timeout check.", t);
+        }
+    }
+
+    /** Checks timeout and reconciliation state on the coordinator event thread. */
+    public void checkTimeout() {
+        if (!hasActiveRebalance) {
+            return;
+        }
+
+        long now = clock.milliseconds();
+        List<RebalanceExecutionKey> timedOutAttempts = new ArrayList<>();
+        for (RebalanceTaskAttempt attempt : runningRebalanceTasks.values()) {
+            long elapsed = now - attempt.startMs;
+            if (elapsed > REBALANCE_TASK_TIMEOUT_MS) {
+                LOG.warn(
+                        "In-flight rebalance task {} timed out after {}ms. It will continue to be "
+                                + "tracked while the next pending task is admitted.",
+                        attempt.executionKey,
+                        elapsed);
+                timedOutAttempts.add(attempt.executionKey);
+            }
+        }
+        for (RebalanceExecutionKey executionKey : timedOutAttempts) {
+            timeoutRebalanceTask(executionKey);
+        }
+
+        // Reconcile timed-out tasks on a growing backoff, so that a long cluster operation such as
+        // a rolling upgrade does not turn into a constant retry storm on the event loop.
+        for (RebalanceTaskAttempt attempt : timedOutRebalanceTasks.values()) {
+            if (now >= attempt.nextReconcileMs) {
+                enqueueReconciliation(attempt);
+            }
+        }
+
+        if (finalizationPending) {
+            persistFinalStatus();
+        }
+    }
+
     private void checkNotClosed() {
-        checkArgument(!isClosed, "RebalanceManager is already closed.");
+        checkState(!isClosed, "RebalanceManager is already closed.");
+    }
+
+    /** Stops the periodic producer before the coordinator event loop is shut down. */
+    public void stopTimeoutChecker() {
+        hasActiveRebalance = false;
+        if (timeoutCheckTask != null) {
+            timeoutCheckTask.cancel(false);
+            timeoutCheckTask = null;
+        }
     }
 
     public void close() {
+        stopTimeoutChecker();
         isClosed = true;
     }
 
     @VisibleForTesting
     public ClusterModel buildClusterModel() {
-        return buildClusterModel(eventProcessor.getCoordinatorContext());
+        return buildClusterModel(rebalanceExecutor.getCoordinatorContext());
     }
 
     @VisibleForTesting
     @Nullable
     RebalanceStatus getRebalanceStatus() {
         return rebalanceStatus;
+    }
+
+    @VisibleForTesting
+    boolean isCancelRequested() {
+        return cancelRequested;
+    }
+
+    private static final class RebalanceTaskAttempt {
+        private final RebalanceExecutionKey executionKey;
+        private final long startMs;
+
+        /** The last time this task was observed to change any bucket state. */
+        private long lastProgressMs;
+
+        /** The bucket state observed at {@link #lastProgressMs}. */
+        private String observedState = "";
+
+        /** Since when the target replicas are not all live, or -1 if they are. */
+        private long blockedSinceMs = -1;
+
+        /** The number of reconciliations already dispatched, used to grow the backoff. */
+        private int reconcileAttempts;
+
+        private long nextReconcileMs;
+
+        private RebalanceTaskAttempt(RebalanceExecutionKey executionKey, long startMs) {
+            this.executionKey = executionKey;
+            this.startMs = startMs;
+        }
+
+        private void onTimedOut(long nowMs, String observedState) {
+            this.lastProgressMs = nowMs;
+            this.observedState = observedState;
+            this.blockedSinceMs = -1;
+            this.reconcileAttempts = 0;
+            this.nextReconcileMs = nowMs;
+        }
+
+        private void onProgress(long nowMs, String observedState) {
+            this.lastProgressMs = nowMs;
+            this.observedState = observedState;
+            this.blockedSinceMs = -1;
+            // A task that moves forward is worth probing at the base interval again.
+            this.reconcileAttempts = 0;
+        }
+
+        private void onTargetsAvailable() {
+            this.blockedSinceMs = -1;
+        }
+
+        private void onTargetsUnavailable(long nowMs) {
+            if (blockedSinceMs < 0) {
+                this.blockedSinceMs = nowMs;
+            }
+        }
+
+        private long blockedForMs(long nowMs) {
+            return blockedSinceMs < 0 ? 0 : nowMs - blockedSinceMs;
+        }
+
+        private void onReconcileDispatched(long nowMs) {
+            this.nextReconcileMs = nowMs + reconcileBackoffMs(reconcileAttempts);
+            this.reconcileAttempts++;
+        }
     }
 }

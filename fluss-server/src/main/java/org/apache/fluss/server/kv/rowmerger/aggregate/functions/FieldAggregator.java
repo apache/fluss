@@ -61,6 +61,14 @@ public abstract class FieldAggregator implements Serializable {
         return agg(inputField, accumulator);
     }
 
+    /**
+     * Whether the first value written for a key must go through {@code agg(null, value)} instead of
+     * being stored as is.
+     */
+    public boolean requiresAggOnFirstWrite() {
+        return false;
+    }
+
     /** Resets the aggregator to a clean start state. */
     public void reset() {}
 }

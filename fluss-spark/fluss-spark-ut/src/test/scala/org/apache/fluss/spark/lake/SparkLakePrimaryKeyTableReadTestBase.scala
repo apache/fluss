@@ -18,7 +18,7 @@
 package org.apache.fluss.spark.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.metadata.DataLakeFormat
+import org.apache.fluss.metadata.{DataLakeFormat, TableBucketSnapshot}
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 import org.apache.fluss.spark.read.FlussMetrics
 import org.apache.fluss.spark.read.FlussUpsertInputPartition
@@ -35,107 +35,35 @@ import java.nio.file.Files
 abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTestBase {
 
   test("Spark Lake Read: pk table falls back when no lake snapshot") {
+    val nonPartitionedTableName = scopedTableName("t_non_partitioned")
+    val partitionedTableName = scopedTableName("t_partitioned")
     // Test non-partitioned table
-    withTable("t_non_partitioned") {
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_non_partitioned (id INT, name STRING, score INT)
-             | TBLPROPERTIES (
-             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
-             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
-             |  '${PRIMARY_KEY.key()}' = 'id',
-             |  '${BUCKET_NUMBER.key()}' = 1)
-             |""".stripMargin)
+    withTable(nonPartitionedTableName) {
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.$nonPartitionedTableName (id INT, name STRING, score INT)
+           | TBLPROPERTIES (
+           |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+           |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+           |  '${PRIMARY_KEY.key()}' = 'id',
+           |  '${BUCKET_NUMBER.key()}' = 1)
+           |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_non_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$nonPartitionedTableName VALUES
              |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
              |""".stripMargin)
 
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_non_partitioned ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$nonPartitionedTableName ORDER BY id"),
         Row(1, "alice", 90) :: Row(2, "bob", 85) :: Row(3, "charlie", 95) :: Nil
       )
     }
 
     // Test partitioned table
-    withTable("t_partitioned") {
-      sql(
-        s"""
-           |CREATE TABLE $DEFAULT_DATABASE.t_partitioned (id INT, name STRING, score INT, dt STRING)
-           | PARTITIONED BY (dt)
-           | TBLPROPERTIES (
-           |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
-           |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
-           |  '${PRIMARY_KEY.key()}' = 'id,dt',
-           |  '${BUCKET_NUMBER.key()}' = 1)
-           |""".stripMargin)
-
+    withTable(partitionedTableName) {
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_partitioned VALUES
-             |(1, "alice", 90, "2026-01-01"),
-             |(2, "bob", 85, "2026-01-01"),
-             |(3, "charlie", 95, "2026-01-02")
-             |""".stripMargin)
-
-      checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_partitioned ORDER BY id"),
-        Row(1, "alice", 90, "2026-01-01") ::
-          Row(2, "bob", 85, "2026-01-01") ::
-          Row(3, "charlie", 95, "2026-01-02") :: Nil
-      )
-
-      // Test column projection with different order
-      checkAnswer(
-        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.t_partitioned ORDER BY id"),
-        Row("2026-01-01", "alice", 1) ::
-          Row("2026-01-01", "bob", 2) ::
-          Row("2026-01-02", "charlie", 3) :: Nil
-      )
-    }
-  }
-
-  test("Spark Lake Read: pk table fallback uses Fluss kv snapshot for log tail merge") {
-    // Non-partitioned table
-    withTable("t_fb_hybrid") {
-      val tablePath = createTablePath("t_fb_hybrid")
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_fb_hybrid (id INT, name STRING, score INT)
-             | TBLPROPERTIES (
-             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
-             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
-             |  '${PRIMARY_KEY.key()}' = 'id',
-             |  '${BUCKET_NUMBER.key()}' = 1)
-             |""".stripMargin)
-
-      sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_fb_hybrid VALUES
-             |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
-             |""".stripMargin)
-
-      flussServer.triggerAndWaitSnapshot(tablePath)
-
-      sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_fb_hybrid VALUES
-             |(2, "bob_updated", 100), (4, "david", 88)
-             |""".stripMargin)
-
-      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid ORDER BY id")
-      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
-      assert(
-        partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
-      checkAnswer(
-        df,
-        Row(1, "alice", 90) :: Row(2, "bob_updated", 100) ::
-          Row(3, "charlie", 95) :: Row(4, "david", 88) :: Nil
-      )
-    }
-
-    // Partitioned table
-    withTable("t_fb_hybrid_partitioned") {
-      val tablePath = createTablePath("t_fb_hybrid_partitioned")
-      sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_fb_hybrid_partitioned (id INT, name STRING, score INT, dt STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$partitionedTableName (id INT, name STRING, score INT, dt STRING)
              | PARTITIONED BY (dt)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
@@ -145,7 +73,84 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_fb_hybrid_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$partitionedTableName VALUES
+             |(1, "alice", 90, "2026-01-01"),
+             |(2, "bob", 85, "2026-01-01"),
+             |(3, "charlie", 95, "2026-01-02")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$partitionedTableName ORDER BY id"),
+        Row(1, "alice", 90, "2026-01-01") ::
+          Row(2, "bob", 85, "2026-01-01") ::
+          Row(3, "charlie", 95, "2026-01-02") :: Nil
+      )
+
+      // Test column projection with different order
+      checkAnswer(
+        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.$partitionedTableName ORDER BY id"),
+        Row("2026-01-01", "alice", 1) ::
+          Row("2026-01-01", "bob", 2) ::
+          Row("2026-01-02", "charlie", 3) :: Nil
+      )
+    }
+  }
+
+  test("Spark Lake Read: pk table fallback uses Fluss kv snapshot for log tail merge") {
+    val fbHybridTableName = scopedTableName("t_fb_hybrid")
+    val fbHybridPartitionedTableName = scopedTableName("t_fb_hybrid_partitioned")
+    // Non-partitioned table
+    withTable(fbHybridTableName) {
+      val tablePath = createTablePath(fbHybridTableName)
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.$fbHybridTableName (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$fbHybridTableName VALUES
+             |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
+             |""".stripMargin)
+
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$fbHybridTableName VALUES
+             |(2, "bob_updated", 100), (4, "david", 88)
+             |""".stripMargin)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.$fbHybridTableName ORDER BY id")
+      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
+      assert(
+        partitions.exists(_.snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID),
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}"
+      )
+      checkAnswer(
+        df,
+        Row(1, "alice", 90) :: Row(2, "bob_updated", 100) ::
+          Row(3, "charlie", 95) :: Row(4, "david", 88) :: Nil
+      )
+    }
+
+    // Partitioned table
+    withTable(fbHybridPartitionedTableName) {
+      val tablePath = createTablePath(fbHybridPartitionedTableName)
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.$fbHybridPartitionedTableName (id INT, name STRING, score INT, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id,dt',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.$fbHybridPartitionedTableName VALUES
              |(1, "alice", 90, "2026-01-01"),
              |(2, "bob", 85, "2026-01-01"),
              |(3, "charlie", 95, "2026-01-02")
@@ -154,16 +159,17 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       flussServer.triggerAndWaitSnapshot(tablePath)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_fb_hybrid_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$fbHybridPartitionedTableName VALUES
              |(2, "bob_updated", 100, "2026-01-01"),
              |(4, "david", 88, "2026-01-02")
              |""".stripMargin)
 
-      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid_partitioned ORDER BY id")
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.$fbHybridPartitionedTableName ORDER BY id")
       val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
-        partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
+        partitions.exists(_.snapshotId != TableBucketSnapshot.NO_SNAPSHOT_ID),
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}"
+      )
       checkAnswer(
         df,
         Row(1, "alice", 90, "2026-01-01") ::
@@ -175,10 +181,12 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 
   test("Spark Lake Read: pk table lake-only (all data in lake, no kv tail)") {
+    val lakeOnlyTableName = scopedTableName("t_lake_only")
+    val lakeOnlyPartitionedTableName = scopedTableName("t_lake_only_partitioned")
     // Test non-partitioned table
-    withTable("t_lake_only") {
+    withTable(lakeOnlyTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_lake_only (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$lakeOnlyTableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -187,22 +195,22 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_lake_only VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$lakeOnlyTableName VALUES
              |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
              |""".stripMargin)
 
-      tierToLake("t_lake_only")
+      tierToLake(lakeOnlyTableName)
 
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_lake_only ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$lakeOnlyTableName ORDER BY id"),
         Row(1, "alice", 90) :: Row(2, "bob", 85) :: Row(3, "charlie", 95) :: Nil
       )
     }
 
     // Test partitioned table
-    withTable("t_lake_only_partitioned") {
+    withTable(lakeOnlyPartitionedTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_lake_only_partitioned (id INT, name STRING, score INT, dt STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$lakeOnlyPartitionedTableName (id INT, name STRING, score INT, dt STRING)
              | PARTITIONED BY (dt)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
@@ -212,16 +220,16 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_lake_only_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$lakeOnlyPartitionedTableName VALUES
              |(1, "alice", 90, "2026-01-01"),
              |(2, "bob", 85, "2026-01-01"),
              |(3, "charlie", 95, "2026-01-02")
              |""".stripMargin)
 
-      tierToLake("t_lake_only_partitioned")
+      tierToLake(lakeOnlyPartitionedTableName)
 
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_lake_only_partitioned ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$lakeOnlyPartitionedTableName ORDER BY id"),
         Row(1, "alice", 90, "2026-01-01") ::
           Row(2, "bob", 85, "2026-01-01") ::
           Row(3, "charlie", 95, "2026-01-02") :: Nil
@@ -229,7 +237,8 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
       // Test column projection with different order
       checkAnswer(
-        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.t_lake_only_partitioned ORDER BY id"),
+        sql(
+          s"SELECT dt, name, id FROM $DEFAULT_DATABASE.$lakeOnlyPartitionedTableName ORDER BY id"),
         Row("2026-01-01", "alice", 1) ::
           Row("2026-01-01", "bob", 2) ::
           Row("2026-01-02", "charlie", 3) :: Nil
@@ -238,10 +247,12 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 
   test("Spark Lake Read: pk table union read (lake + kv tail)") {
+    val unionTableName = scopedTableName("t_union")
+    val unionPartitionedTableName = scopedTableName("t_union_partitioned")
     // Test non-partitioned table
-    withTable("t_union") {
+    withTable(unionTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_union (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$unionTableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -250,30 +261,30 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_union VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$unionTableName VALUES
              |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
              |""".stripMargin)
 
-      tierToLake("t_union")
+      tierToLake(unionTableName)
 
       // Insert more data after tiering (this will be in kv tail)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_union VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$unionTableName VALUES
              |(4, "david", 88), (5, "eve", 92)
              |""".stripMargin)
 
       // Union read: should see both lake data and kv tail data
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_union ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$unionTableName ORDER BY id"),
         Row(1, "alice", 90) :: Row(2, "bob", 85) :: Row(3, "charlie", 95) ::
           Row(4, "david", 88) :: Row(5, "eve", 92) :: Nil
       )
     }
 
     // Test partitioned table
-    withTable("t_union_partitioned") {
+    withTable(unionPartitionedTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_union_partitioned (id INT, name STRING, score INT, dt STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$unionPartitionedTableName (id INT, name STRING, score INT, dt STRING)
              | PARTITIONED BY (dt)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
@@ -283,17 +294,17 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_union_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$unionPartitionedTableName VALUES
              |(1, "alice", 90, "2026-01-01"),
              |(2, "bob", 85, "2026-01-01"),
              |(3, "charlie", 95, "2026-01-02")
              |""".stripMargin)
 
-      tierToLake("t_union_partitioned")
+      tierToLake(unionPartitionedTableName)
 
       // Insert more data after tiering
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_union_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$unionPartitionedTableName VALUES
              |(4, "david", 88, "2026-01-01"),
              |(5, "eve", 92, "2026-01-03")
              |""".stripMargin)
@@ -301,7 +312,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       // Union read with partition filter
       checkAnswer(
         sql(s"""
-               |SELECT * FROM $DEFAULT_DATABASE.t_union_partitioned
+               |SELECT * FROM $DEFAULT_DATABASE.$unionPartitionedTableName
                |WHERE dt = '2026-01-01' ORDER BY id""".stripMargin),
         Row(1, "alice", 90, "2026-01-01") ::
           Row(2, "bob", 85, "2026-01-01") ::
@@ -310,7 +321,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
       // Union read all partitions
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_union_partitioned ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$unionPartitionedTableName ORDER BY id"),
         Row(1, "alice", 90, "2026-01-01") ::
           Row(2, "bob", 85, "2026-01-01") ::
           Row(3, "charlie", 95, "2026-01-02") ::
@@ -320,7 +331,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
       // Test column projection with different order
       checkAnswer(
-        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.t_union_partitioned ORDER BY id"),
+        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.$unionPartitionedTableName ORDER BY id"),
         Row("2026-01-01", "alice", 1) ::
           Row("2026-01-01", "bob", 2) ::
           Row("2026-01-02", "charlie", 3) ::
@@ -331,10 +342,12 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 
   test("Spark Lake Read: pk table union read with updates") {
+    val updateTableName = scopedTableName("t_update")
+    val updatePartitionedTableName = scopedTableName("t_update_partitioned")
     // Test non-partitioned table
-    withTable("t_update") {
+    withTable(updateTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_update (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$updateTableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -343,30 +356,30 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_update VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$updateTableName VALUES
              |(1, "alice", 90), (2, "bob", 85), (3, "charlie", 95)
              |""".stripMargin)
 
-      tierToLake("t_update")
+      tierToLake(updateTableName)
 
       // Update existing record and insert new record
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_update VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$updateTableName VALUES
              |(2, "bob_updated", 100), (4, "david", 88)
              |""".stripMargin)
 
       // Union read: should see updated value for id=2 from kv tail
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_update ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$updateTableName ORDER BY id"),
         Row(1, "alice", 90) :: Row(2, "bob_updated", 100) ::
           Row(3, "charlie", 95) :: Row(4, "david", 88) :: Nil
       )
     }
 
     // Test partitioned table
-    withTable("t_update_partitioned") {
+    withTable(updatePartitionedTableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_update_partitioned (id INT, name STRING, score INT, dt STRING)
+             |CREATE TABLE $DEFAULT_DATABASE.$updatePartitionedTableName (id INT, name STRING, score INT, dt STRING)
              | PARTITIONED BY (dt)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
@@ -376,24 +389,24 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_update_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$updatePartitionedTableName VALUES
              |(1, "alice", 90, "2026-01-01"),
              |(2, "bob", 85, "2026-01-01"),
              |(3, "charlie", 95, "2026-01-02")
              |""".stripMargin)
 
-      tierToLake("t_update_partitioned")
+      tierToLake(updatePartitionedTableName)
 
       // Update existing record and insert new record
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_update_partitioned VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$updatePartitionedTableName VALUES
              |(2, "bob_updated", 100, "2026-01-01"),
              |(4, "david", 88, "2026-01-02")
              |""".stripMargin)
 
       // Union read: should see updated value for id=2 from kv tail
       checkAnswer(
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_update_partitioned ORDER BY id"),
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$updatePartitionedTableName ORDER BY id"),
         Row(1, "alice", 90, "2026-01-01") ::
           Row(2, "bob_updated", 100, "2026-01-01") ::
           Row(3, "charlie", 95, "2026-01-02") ::
@@ -402,7 +415,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
       // Test column projection with different order
       checkAnswer(
-        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.t_update_partitioned ORDER BY id"),
+        sql(s"SELECT dt, name, id FROM $DEFAULT_DATABASE.$updatePartitionedTableName ORDER BY id"),
         Row("2026-01-01", "alice", 1) ::
           Row("2026-01-01", "bob_updated", 2) ::
           Row("2026-01-02", "charlie", 3) ::
@@ -412,9 +425,10 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 
   test("Spark Lake Read: pk filter pushdown — lake-only on non-pk column") {
-    withTable("t_pd_pk_lake") {
+    val tableName = scopedTableName("t_pd_pk_lake")
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_pd_pk_lake (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -422,22 +436,23 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_lake VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95), (4, 'dave', 70)
              |""".stripMargin)
-      tierToLake("t_pd_pk_lake")
+      tierToLake(tableName)
 
       val query =
-        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_pd_pk_lake WHERE score >= 90 ORDER BY id")
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.$tableName WHERE score >= 90 ORDER BY id")
       checkAnswer(query, Row(1, "alice", 90) :: Row(3, "charlie", 95) :: Nil)
       assertPushedNames(query, Set(">="))
     }
   }
 
   test("Spark Lake Read: pk filter pushdown — union (lake + kv tail)") {
-    withTable("t_pd_pk_union") {
+    val tableName = scopedTableName("t_pd_pk_union")
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_pd_pk_union (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -445,26 +460,27 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_union VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
              |""".stripMargin)
-      tierToLake("t_pd_pk_union")
+      tierToLake(tableName)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_union VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(4, 'dave', 88), (5, 'eve', 92)
              |""".stripMargin)
 
       val query =
-        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pd_pk_union WHERE score >= 90 ORDER BY id")
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName WHERE score >= 90 ORDER BY id")
       checkAnswer(query, Row(1, 90) :: Row(3, 95) :: Row(5, 92) :: Nil)
       assertPushedNames(query, Set(">="))
     }
   }
 
   test("Spark Lake Read: union with limit pushdown") {
-    withTable("t_pk_union_limit") {
+    val tableName = scopedTableName("t_pk_union_limit")
+    withTable(tableName) {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t_pk_union_limit (id INT, name STRING, score INT)
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (id INT, name STRING, score INT)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
              |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
@@ -472,17 +488,17 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
              |""".stripMargin)
-      tierToLake("t_pk_union_limit")
+      tierToLake(tableName)
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(4, 'dave', 88), (5, 'eve', 92)
              |""".stripMargin)
 
       val query =
-        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pk_union_limit LIMIT 2")
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.$tableName LIMIT 2")
       assert(flussScan(query).flatMap(_.limit).distinct == Seq(2))
 
       // Verify limit pushdown actually reduces rows read via metrics
@@ -496,10 +512,11 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 
   test("Spark Lake Read: primary key table projection with type-dependent columns") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
+    val tableName = scopedTableName("t")
+    withTable(tableName) {
+      val tablePath = createTablePath(tableName)
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (
+             |CREATE TABLE $DEFAULT_DATABASE.$tableName (
              |pk INT,
              |ts TIMESTAMP,
              |name STRING,
@@ -515,7 +532,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, TIMESTAMP "2026-01-01 12:00:00", "a", ARRAY(1, 2), STRUCT(10, 'x'),
              | TIMESTAMP "2026-01-01 12:00:00"),
              |(2, TIMESTAMP "2026-01-02 12:00:00", "b", ARRAY(3, 4), STRUCT(20, 'y'),
@@ -524,7 +541,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
       // Log-only: projection reorders type-dependent columns (PK not in projection)
       checkAnswer(
-        sql(s"SELECT arr, ts, struct_col FROM $DEFAULT_DATABASE.t ORDER BY ts"),
+        sql(s"SELECT arr, ts, struct_col FROM $DEFAULT_DATABASE.$tableName ORDER BY ts"),
         Row(Seq(1, 2), java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), Row(10, "x")) ::
           Row(Seq(3, 4), java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Row(20, "y")) :: Nil
       )
@@ -532,17 +549,17 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       // Trigger snapshot, then test with snapshot + log merge
       flussServer.triggerAndWaitSnapshot(tablePath)
 
-      tierToLake("t")
+      tierToLake(tableName)
 
       sql(s"""
-             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
              |(1, TIMESTAMP "2026-03-01 12:00:00", "a_updated", ARRAY(10, 20), STRUCT(100, 'xx'),
              | TIMESTAMP "2026-03-01 12:00:00")
              |""".stripMargin)
 
       // Snapshot + log: projection with type-dependent columns at shifted ordinals
       checkAnswer(
-        sql(s"SELECT ts_ltz, arr, name FROM $DEFAULT_DATABASE.t ORDER BY name"),
+        sql(s"SELECT ts_ltz, arr, name FROM $DEFAULT_DATABASE.$tableName ORDER BY name"),
         Row(java.sql.Timestamp.valueOf("2026-03-01 12:00:00"), Seq(10, 20), "a_updated") ::
           Row(java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Seq(3, 4), "b") :: Nil
       )
@@ -551,6 +568,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
 
 }
 
+@SparkLakeTest
 class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {
 
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON

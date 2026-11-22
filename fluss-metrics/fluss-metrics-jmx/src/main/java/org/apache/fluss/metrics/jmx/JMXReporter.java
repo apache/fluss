@@ -305,6 +305,9 @@ public class JMXReporter implements MetricReporter {
     public interface JmxHistogramMBean extends MetricMBean {
         long getCount();
 
+        /** Returns the number of observations in the current histogram sample window. */
+        int getWindowCount();
+
         double getMean();
 
         double getStdDev();
@@ -337,6 +340,11 @@ public class JMXReporter implements MetricReporter {
         @Override
         public long getCount() {
             return histogram.getCount();
+        }
+
+        @Override
+        public int getWindowCount() {
+            return histogram.getStatistics().size();
         }
 
         @Override

@@ -354,5 +354,5 @@ public final class TestData {
     // ------------------- Statistics test data and schemas end ------------------------
 
     public static final TestingSchemaGetter TEST_SCHEMA_GETTER =
-            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);
+            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
 }

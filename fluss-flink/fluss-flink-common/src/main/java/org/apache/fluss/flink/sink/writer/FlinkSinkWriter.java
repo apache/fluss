@@ -48,6 +48,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
@@ -182,7 +183,13 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
 
         try {
             if (connection != null) {
-                connection.close();
+                // Close the connection immediately without waiting for pending write requests:
+                // all records that must be persisted have already been flushed on checkpoints
+                // (see #flush), and on failover/cancellation the un-flushed records will be
+                // replayed from the last checkpoint anyway. A graceful close could block the
+                // task indefinitely when the Fluss cluster is unavailable, preventing failover
+                // from proceeding. This mirrors Kafka's FlinkKafkaInternalProducer#close().
+                connection.close(Duration.ZERO);
             }
         } catch (Exception e) {
             LOG.warn("Exception occurs while closing Fluss Connection.", e);

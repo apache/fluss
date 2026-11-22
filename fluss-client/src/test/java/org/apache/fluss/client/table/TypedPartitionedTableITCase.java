@@ -28,6 +28,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
@@ -152,9 +153,11 @@ class TypedPartitionedTableITCase extends ClientToServerITCaseBase {
                     "2025-05-31-03-42-35_428",
                     "2025-05-31-03-42-35_428");
 
+    private final TestTableNames tableNames = new TestTableNames();
+
     @Test
     public void testPartitionedTable() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "person");
+        TablePath tablePath = tableNames.tablePath("fluss", "person");
 
         TableDescriptor partitionedTable =
                 TableDescriptor.builder()
@@ -183,7 +186,8 @@ class TypedPartitionedTableITCase extends ClientToServerITCaseBase {
         for (int i = 0; i < allPartitionKeyTypes.length; i++) {
             String partitionKey = extraColumn[i].getName();
             TablePath tablePath =
-                    TablePath.of("fluss", "test_static_partitioned_pk_table_" + partitionKey);
+                    tableNames.tablePath(
+                            "fluss", "test_static_partitioned_pk_table_" + partitionKey);
             createPartitionedTable(tablePath, partitionKey);
 
             // append a record to the table will dynamically create the corresponding partition

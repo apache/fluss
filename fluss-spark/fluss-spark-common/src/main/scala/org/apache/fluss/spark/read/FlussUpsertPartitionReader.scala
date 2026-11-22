@@ -22,13 +22,13 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.memory.MemorySegment
-import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.metadata.{TableBucket, TableBucketSnapshot, TablePath}
 import org.apache.fluss.record.LogRecord
 import org.apache.fluss.row.{encode, InternalRow => FlussInternalRow, KeyValueRow}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.LogChangesIterator
 import org.apache.fluss.types.{DataField, RowType}
-import org.apache.fluss.utils.CloseableIterator
+import org.apache.fluss.utils.{CloseableIterator, IOUtils}
 
 import org.apache.spark.internal.Logging
 
@@ -59,9 +59,10 @@ class FlussUpsertPartitionReader(
   private val snapshotId: Long = flussPartition.snapshotId
   private val logStartingOffset: Long = flussPartition.logStartingOffset
   private val logStoppingOffset: Long = flussPartition.logStoppingOffset
+  private val timeRange: Option[FlussTimeRange] = flussPartition.timeRange
   private val logScanFinished = logStartingOffset >= logStoppingOffset || logStoppingOffset <= 0
 
-  private val (projectionWithPks, pkProjection) = {
+  private val (projectionWithPks, pkProjection) = initializeResources {
     val pkIndexes = tableInfo.getSchema.getPrimaryKeyIndexes
     var i = 0
     val _pkProjection = mutable.ArrayBuffer.empty[Int]
@@ -85,7 +86,7 @@ class FlussUpsertPartitionReader(
   private var mergedIterator: Iterator[FlussInternalRow] = _
 
   // initialize scanners
-  initialize()
+  initializeResources(initialize())
 
   override def next0(): Boolean = {
     if (closed) {
@@ -122,7 +123,7 @@ class FlussUpsertPartitionReader(
       }
     }
 
-    def createLogChangesIterator(): LogChangesIterator = {
+    def createLogChangesIterator(): CloseableIterator[KeyValueRow] = {
       // Initialize the log scanner
       logScanner = table.newScan().project(projectionWithPks).createLogScanner()
       if (tableBucket.getPartitionId == null) {
@@ -140,20 +141,33 @@ class FlussUpsertPartitionReader(
         if (!records.isEmpty) {
           val flatRecords = records.asScala
           for (scanRecord <- flatRecords) {
-            // Maybe data with logStoppingOffset doesn't exist.
-            if (scanRecord.logOffset() < logStoppingOffset - 1) {
-              allLogRecords += scanRecord
-            } else if (scanRecord.logOffset() == logStoppingOffset - 1) {
-              allLogRecords += scanRecord
+            if (timeRange.exists(_.isAfter(scanRecord.timestamp()))) {
+              // Past the end of the requested window, and commit timestamps only grow from here.
               continue = false
             } else {
-              continue = false // Stop if we reach the stopping offset
+              // Maybe data with logStoppingOffset doesn't exist.
+              if (
+                scanRecord.logOffset() <= logStoppingOffset - 1 &&
+                timeRange.forall(_.contains(scanRecord.timestamp()))
+              ) {
+                allLogRecords += scanRecord
+              }
+              if (scanRecord.logOffset() >= logStoppingOffset - 1) {
+                continue = false // Stop if we reach the stopping offset
+              }
             }
           }
         }
       }
 
-      LogChangesIterator(allLogRecords.toArray, pkProjection, comparator)
+      // An incremental read scans up to the latest offset and applies its end bound above, so a
+      // non-empty offset range can still leave nothing behind. LogChangesIterator seeds its cursor
+      // from the first record, so it must not be handed an empty batch.
+      if (allLogRecords.isEmpty) {
+        CloseableIterator.emptyIterator[KeyValueRow]()
+      } else {
+        LogChangesIterator(allLogRecords.toArray, pkProjection, comparator)
+      }
     }
 
     def createSnapshotIterator(): CloseableIterator[LogRecord] = {
@@ -197,7 +211,7 @@ class FlussUpsertPartitionReader(
       createLogChangesIterator()
     }
 
-    val snapshotIterators = if (snapshotId == -1) {
+    val snapshotIterators = if (snapshotId == TableBucketSnapshot.NO_SNAPSHOT_ID) {
       null
     } else {
       createSnapshotIterator()
@@ -234,18 +248,10 @@ class FlussUpsertPartitionReader(
   }
 
   override def close0(): Unit = {
-    if (mergedIterator != null) {
-      mergedIterator match {
-        case closeable: AutoCloseable => closeable.close()
-        case _ => // Do nothing
-      }
+    val closeableIterator = mergedIterator match {
+      case closeable: AutoCloseable => closeable
+      case _ => null
     }
-
-    if (logScanner != null) {
-      logScanner.close()
-    }
-    if (snapshotScanner != null) {
-      snapshotScanner.close()
-    }
+    IOUtils.closeAll(closeableIterator, logScanner, snapshotScanner)
   }
 }

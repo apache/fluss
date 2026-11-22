@@ -66,11 +66,13 @@ templates:
 tests:
   - it: fails when client plain users are empty
     set:
+      coordinator.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
+      tablet.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users: []
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.plain.users must contain at least one user when the matching mechanism is plain"
 
 ---
 
@@ -245,6 +247,8 @@ templates:
 tests:
   - it: fails for invalid client mechanism value
     set:
+      coordinator.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
+      tablet.readinessProbe.healthCheckAuth: "client.security.protocol:SASL"
       security.client.sasl.mechanism: bogus
     asserts:
       - failedTemplate:

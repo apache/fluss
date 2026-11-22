@@ -44,6 +44,8 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * Helper class that encapsulates Arrow-dependent batch writing logic for append-only tables.
  *
@@ -53,10 +55,14 @@ import java.util.List;
  */
 class AppendOnlyArrowBatchHelper implements AutoCloseable {
 
+    // Fluss and its Arrow schema preserve column-name case, so use exact field matching.
+    private static final boolean CASE_SENSITIVE = true;
+
     private final FileStoreTable fileStoreTable;
     private final TableWriteImpl<InternalRow> tableWrite;
     private final RowType tableRowType;
     private final int bucket;
+    private final boolean paimonIncludingSystemColumns;
 
     private static final Field BUCKET_FIELD =
             new Field(
@@ -88,11 +94,13 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
             FileStoreTable fileStoreTable,
             TableWriteImpl<InternalRow> tableWrite,
             RowType tableRowType,
-            int bucket) {
+            int bucket,
+            boolean paimonIncludingSystemColumns) {
         this.fileStoreTable = fileStoreTable;
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = bucket;
+        this.paimonIncludingSystemColumns = paimonIncludingSystemColumns;
     }
 
     /**
@@ -100,13 +108,27 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
      * system columns (__bucket, __offset, __timestamp) and uses Paimon's {@link ArrowBundleRecords}
      * for efficient batch writing.
      */
-    void writeArrowBatch(ArrowBatchData arrowBatchData, BinaryRow partition) throws Exception {
+    void writeArrowBatch(
+            ArrowBatchData arrowBatchData,
+            @Nullable BinaryRow fixedPartition,
+            boolean historicalPartition)
+            throws Exception {
         int writtenBucket = bucket;
         if (fileStoreTable.store().bucketMode() == BucketMode.BUCKET_UNAWARE) {
             writtenBucket = 0;
         }
 
         VectorSchemaRoot originalRoot = arrowBatchData.getVectorSchemaRoot();
+
+        if (!paimonIncludingSystemColumns) {
+            // Clean tables contain only user columns, so the incoming Arrow batch already matches
+            // the Paimon table schema. Write it directly without enriching system columns.
+            ArrowBundleRecords cleanRecords =
+                    new ArrowBundleRecords(originalRoot, tableRowType, CASE_SENSITIVE);
+            writeArrowBundle(cleanRecords, fixedPartition, historicalPartition, writtenBucket);
+            return;
+        }
+
         long baseOffset = arrowBatchData.getBaseLogOffset();
         long timestamp = arrowBatchData.getTimestamp();
         int rowCount = originalRoot.getRowCount();
@@ -115,9 +137,27 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
         updateEnrichedVectorSchemaRoot(writtenBucket, baseOffset, timestamp, rowCount);
 
         ArrowBundleRecords arrowBundleRecords =
-                new ArrowBundleRecords(enrichedRoot, tableRowType, false);
+                new ArrowBundleRecords(enrichedRoot, tableRowType, CASE_SENSITIVE);
 
-        tableWrite.writeBundle(partition, writtenBucket, arrowBundleRecords);
+        writeArrowBundle(arrowBundleRecords, fixedPartition, historicalPartition, writtenBucket);
+    }
+
+    private void writeArrowBundle(
+            ArrowBundleRecords arrowBundleRecords,
+            @Nullable BinaryRow fixedPartition,
+            boolean historicalPartition,
+            int writtenBucket)
+            throws Exception {
+        if (historicalPartition) {
+            // writeBundle accepts one fixed partition, but a historical batch may contain rows
+            // from multiple original partitions.
+            for (InternalRow row : arrowBundleRecords) {
+                BinaryRow partition = tableWrite.getPartition(row);
+                tableWrite.getWrite().write(partition, writtenBucket, row);
+            }
+        } else {
+            tableWrite.writeBundle(checkNotNull(fixedPartition), writtenBucket, arrowBundleRecords);
+        }
     }
 
     /**

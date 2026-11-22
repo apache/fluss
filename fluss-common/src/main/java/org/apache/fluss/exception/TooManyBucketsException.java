@@ -20,7 +20,8 @@ package org.apache.fluss.exception;
 import org.apache.fluss.annotation.PublicEvolving;
 
 /**
- * This exception is thrown if the number of table buckets is exceed max.bucket.num.
+ * This exception is thrown if the number of buckets for a non-partitioned table or partition
+ * exceeds max.bucket.num.
  *
  * @since 0.7
  */

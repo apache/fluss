@@ -17,15 +17,22 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.metadata.{Schema, TableDescriptor}
+import org.apache.fluss.client.table.writer.{AppendResult, TableWriter}
+import org.apache.fluss.config.Configuration
+import org.apache.fluss.metadata.{Schema, TableDescriptor, TablePath}
 import org.apache.fluss.row.{BinaryString, GenericRow, InternalRow}
+import org.apache.fluss.spark.row.SparkAsFlussRow
 import org.apache.fluss.spark.util.TestUtils.{createGenericRow, FLUSS_ROWTYPE}
+import org.apache.fluss.spark.write.{FlussDataWriter, FlussWriterCommitMessage}
 import org.apache.fluss.types.DataTypes
 
-import org.assertj.core.api.Assertions.assertThat
+import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
+import org.apache.spark.sql.types.StructType
+import org.assertj.core.api.Assertions.{assertThat, assertThatThrownBy}
 
+import java.io.IOException
 import java.sql.Timestamp
-import java.time.Duration
+import java.util.concurrent.CompletableFuture
 
 import scala.collection.JavaConverters._
 
@@ -34,14 +41,15 @@ class SparkWriteTest extends FlussSparkTestBase {
   import SparkWriteTest._
 
   test("Fluss Write: all data types") {
-    val tablePath = createTablePath("test_all_data_types")
+    val tableName = scopedTableName("test_all_data_types")
+    val tablePath = createTablePath(tableName)
     val tableDescriptor: TableDescriptor = TableDescriptor.builder
       .schema(Schema.newBuilder().fromRowType(FLUSS_ROWTYPE).build)
       .build()
     createFlussTable(tablePath, tableDescriptor)
 
     spark.sql(s"""
-                 |INSERT INTO $DEFAULT_DATABASE.test_all_data_types
+                 |INSERT INTO $DEFAULT_DATABASE.$tableName
                  |VALUES (
                  |  true, 1, 10, 100, 1000L, 12.3F, 45.6D,
                  |  1234567.89, 12345678900987654321.12,
@@ -85,11 +93,12 @@ class SparkWriteTest extends FlussSparkTestBase {
   }
 
   test("Fluss Write: log table") {
-    val tablePath = createTablePath(logTableName)
+    val tableName = scopedTableName(logTableName)
+    val tablePath = createTablePath(tableName)
     createFlussTable(tablePath, logTableDescriptor)
 
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$logTableName VALUES
+           |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
            |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
            |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
            |(1000L, 25L, 605, "addr5")
@@ -110,7 +119,8 @@ class SparkWriteTest extends FlussSparkTestBase {
   }
 
   test("Fluss Write: upsert table") {
-    val tablePath = createTablePath(pkTableName)
+    val tableName = scopedTableName(pkTableName)
+    val tablePath = createTablePath(tableName)
     createFlussTable(tablePath, pkTableDescriptor)
     val table = loadFlussTable(tablePath)
     val logScanner = table.newScan.createLogScanner
@@ -118,7 +128,7 @@ class SparkWriteTest extends FlussSparkTestBase {
 
     // insert data
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName VALUES
+           |INSERT INTO $DEFAULT_DATABASE.$tableName VALUES
            |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
            |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
            |(1000L, 25L, 605, "addr5")
@@ -137,7 +147,7 @@ class SparkWriteTest extends FlussSparkTestBase {
 
     // update data
     sql(s"""
-           |INSERT INTO $DEFAULT_DATABASE.$pkTableName
+           |INSERT INTO $DEFAULT_DATABASE.$tableName
            |VALUES (800L, 230L, 603, "addr3"), (900L, 240L, 604, "addr4")
            |""".stripMargin)
 
@@ -150,6 +160,66 @@ class SparkWriteTest extends FlussSparkTestBase {
     )
     assertThat(flussRows2.length).isEqualTo(4)
     assertThat(flussRows2).containsAll(expectRows2.toIterable.asJava)
+  }
+
+  test("asynchronous failure is propagated on the next write") {
+    val result = new CompletableFuture[AppendResult]()
+    val writer = createWriter(result)
+    val failure = new IOException("Fluss append failed")
+
+    writer.write(SparkInternalRow.empty)
+    result.completeExceptionally(failure)
+
+    assertThatThrownBy(() => writer.write(SparkInternalRow.empty))
+      .isInstanceOf(classOf[IOException])
+      .hasCause(failure)
+  }
+
+  test("asynchronous failure during flush is propagated on commit") {
+    val result = new CompletableFuture[AppendResult]()
+    val failure = new IOException("Fluss append failed")
+    val writer = createWriter(
+      result,
+      () => {
+        result.completeExceptionally(failure)
+        ()
+      })
+
+    writer.write(SparkInternalRow.empty)
+
+    assertThatThrownBy(() => writer.commit())
+      .isInstanceOf(classOf[IOException])
+      .hasCause(failure)
+  }
+
+  test("successful asynchronous write can commit") {
+    val result = new CompletableFuture[AppendResult]()
+    val writer = createWriter(
+      result,
+      () => {
+        result.complete(new AppendResult())
+        ()
+      })
+
+    writer.write(SparkInternalRow.empty)
+
+    assertThat(writer.commit()).isEqualTo(FlussWriterCommitMessage())
+    assertThat(result.isDone).isTrue
+  }
+
+  private def createWriter(
+      result: CompletableFuture[AppendResult],
+      onFlush: () => Unit = () => ()): FlussDataWriter[AppendResult] = {
+    new FlussDataWriter[AppendResult](
+      TablePath.of("test", "log_table"),
+      new StructType(),
+      new Configuration()) {
+      override val writer: TableWriter = new TableWriter {
+        override def flush(): Unit = onFlush()
+      }
+
+      override def writeRow(record: SparkAsFlussRow): CompletableFuture[AppendResult] = result
+    }
   }
 }
 

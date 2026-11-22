@@ -25,6 +25,14 @@ import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Configuration;
+import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
@@ -119,6 +127,71 @@ public class ZkNodeChangeNotificationWatcherTest {
                 () -> assertThat(zookeeperClient.getChildren(seqNodeRoot)).hasSize(2));
     }
 
+    @Test
+    void testNotificationDeletedByAnotherWatcherDuringPurge() throws Exception {
+        String seqNodeRoot = ZkData.AclChangesNode.path();
+        String seqNodePrefix = ZkData.AclChangeNotificationNode.prefix();
+        ZooKeeperClient zooKeeperClient =
+                ZOO_KEEPER_EXTENSION_WRAPPER
+                        .getCustomExtension()
+                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        Resource resource = Resource.cluster();
+        zooKeeperClient.insertAclChangeNotification(resource);
+
+        TestingNotificationHandler handler =
+                new TestingNotificationHandler() {
+                    @Override
+                    public void processNotification(byte[] notification) {
+                        super.processNotification(notification);
+                        try {
+                            for (String child : zooKeeperClient.getChildren(seqNodeRoot)) {
+                                zooKeeperClient.deletePath(seqNodeRoot + "/" + child);
+                            }
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                };
+        ZkNodeChangeNotificationWatcher watcher =
+                new ZkNodeChangeNotificationWatcher(
+                        zooKeeperClient,
+                        seqNodeRoot,
+                        seqNodePrefix,
+                        Duration.ofMinutes(5).toMillis(),
+                        handler,
+                        new ManualClock());
+
+        TestingAppender appender = new TestingAppender();
+        appender.start();
+        LoggerContext loggerContext = (LoggerContext) LogManager.getContext(false);
+        Configuration configuration = loggerContext.getConfiguration();
+        LoggerConfig loggerConfig =
+                new LoggerConfig(
+                        ZkNodeChangeNotificationWatcher.class.getName(), Level.DEBUG, false);
+        loggerConfig.addAppender(appender, Level.DEBUG, null);
+        configuration.addLogger(loggerConfig.getName(), loggerConfig);
+        loggerContext.updateLoggers();
+        try {
+            watcher.start();
+            assertThat(handler.resourceNotifications).containsExactly(resource);
+            assertThat(appender.messages)
+                    .anyMatch(
+                            message ->
+                                    message.startsWith(
+                                                    "Notification "
+                                                            + seqNodeRoot
+                                                            + "/"
+                                                            + seqNodePrefix)
+                                            && message.endsWith(
+                                                    " has already been purged by another watcher"));
+        } finally {
+            watcher.stop();
+            configuration.removeLogger(loggerConfig.getName());
+            loggerContext.updateLoggers();
+            appender.stop();
+        }
+    }
+
     private static class TestingNotificationHandler
             implements ZkNodeChangeNotificationWatcher.NotificationHandler {
         public BlockingQueue<Resource> resourceNotifications = new LinkedBlockingQueue<>();
@@ -127,6 +200,19 @@ public class ZkNodeChangeNotificationWatcherTest {
         public void processNotification(byte[] notification) {
             Resource resource = ZkData.AclChangeNotificationNode.decode(notification);
             resourceNotifications.add(resource);
+        }
+    }
+
+    private static class TestingAppender extends AbstractAppender {
+        private final List<String> messages = new ArrayList<>();
+
+        private TestingAppender() {
+            super("testing", null, null, true, Property.EMPTY_ARRAY);
+        }
+
+        @Override
+        public void append(LogEvent event) {
+            messages.add(event.getMessage().getFormattedMessage());
         }
     }
 }

@@ -239,8 +239,9 @@ class DataStatisticsCoordinator implements OperatorCoordinator {
 
     private void sendGlobalStatisticsToSubtasks(DataStatistics statistics, long checkpointId) {
         LOG.info(
-                "Broadcast latest global statistics from checkpoint {} to all subtasks",
-                checkpointId);
+                "Broadcast latest global statistics from checkpoint {} to all subtasks with statistics {}",
+                checkpointId,
+                statistics);
         // applyImmediately is set to false so that operator subtasks can
         // apply the change at checkpoint boundary
         StatisticsEvent statisticsEvent =
@@ -256,10 +257,12 @@ class DataStatisticsCoordinator implements OperatorCoordinator {
                     .sendEvent(statisticsEvent)
                     .whenComplete(
                             (ack, error) -> {
-                                LOG.warn(
-                                        "Failed to send global statistics to subtask {}",
-                                        subtaskIndex,
-                                        error);
+                                if (error != null) {
+                                    LOG.warn(
+                                            "Failed to send global statistics to subtask {}",
+                                            subtaskIndex,
+                                            error);
+                                }
                             });
         }
     }

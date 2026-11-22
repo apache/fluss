@@ -29,6 +29,7 @@ import com.google.cloud.hadoop.gcsio.testing.InMemoryGoogleCloudStorage;
 import org.apache.commons.lang3.reflect.FieldUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.parallel.ResourceLock;
 
 import java.io.IOException;
 import java.net.URI;
@@ -37,13 +38,16 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /** Tests that validate the behavior of the Google Cloud Storage File System Plugin. */
+@ResourceLock("gs-security-token")
 class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
     private static MockAuthServer mockGSServer;
     private static FileSystem fileSystem;
+    private static Map<String, String> originalEnv;
 
     @BeforeAll
     static void setup() throws IOException {
+        originalEnv = new HashMap<>(System.getenv());
         mockGSServer = MockAuthServer.create();
         fileSystem = createFileSystem();
     }
@@ -59,8 +63,9 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     }
 
     private static FileSystem createFileSystem() throws IOException {
+        String mockEndpoint = "127.0.0.1:" + mockGSServer.getPort();
         Map<String, String> map = new HashMap<>();
-        map.put("GCE_METADATA_HOST", "localhost:8080");
+        map.put("GCE_METADATA_HOST", mockEndpoint);
         CommonTestUtils.setEnv(map);
 
         String path =
@@ -71,9 +76,8 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
         GSFileSystemPlugin gsFileSystemPlugin = new GSFileSystemPlugin();
         Configuration configuration = new Configuration();
-        configuration.setString("fs.gs.storage.root.url", "http://localhost:8080");
-        configuration.setString("fs.gs.token.server.url", "http://localhost:8080/token");
-        configuration.setString("fs.gs.auth.type", "SERVICE_ACCOUNT_JSON_KEYFILE");
+        configuration.setString("fs.gs.storage.root.url", "http://" + mockEndpoint);
+        configuration.setString("fs.gs.token.server.url", "http://" + mockEndpoint + "/token");
         configuration.setString("fs.gs.auth.service.account.json.keyfile", path);
         configuration.setString("fs.gs.inputstream.support.gzip.encoding.enable", "false");
 
@@ -109,5 +113,6 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     @AfterAll
     static void tearDown() throws IOException {
         mockGSServer.close();
+        CommonTestUtils.setEnv(originalEnv);
     }
 }

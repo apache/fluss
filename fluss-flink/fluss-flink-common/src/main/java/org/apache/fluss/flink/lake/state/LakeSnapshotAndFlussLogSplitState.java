@@ -49,6 +49,11 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
         this.currentLakeSplitIndex = currentLakeSplitIndex;
     }
 
+    /** Marks the lake split as finished. */
+    public void markLakeSplitFinished() {
+        isLakeSplitFinished = true;
+    }
+
     public void setNextLogOffset(long nextOffset) {
         // if set offset, means lake splits is finished
         isLakeSplitFinished = true;
@@ -57,9 +62,7 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
 
     @Override
     public SourceSplitBase toSourceSplit() {
-        return split.updateWithCurrentLakeSplitIndex(currentLakeSplitIndex)
-                .updateWithRecordsToSkip(recordsToSkip)
-                .updateWithStartingOffset(nextLogOffset)
-                .updateWithLakeSplitFinished(isLakeSplitFinished);
+        return split.copyWithPosition(
+                recordsToSkip, currentLakeSplitIndex, nextLogOffset, isLakeSplitFinished);
     }
 }

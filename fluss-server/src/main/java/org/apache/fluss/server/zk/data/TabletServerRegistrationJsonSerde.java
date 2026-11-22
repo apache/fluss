@@ -19,6 +19,7 @@ package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonDeserializer;
@@ -40,13 +41,16 @@ public class TabletServerRegistrationJsonSerde
             new TabletServerRegistrationJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 3;
+    private static final int VERSION = 5;
 
     @Deprecated private static final String HOST = "host";
     @Deprecated private static final String PORT = "port";
     private static final String REGISTER_TIMESTAMP = "register_timestamp";
     private static final String LISTENERS = "listeners";
     private static final String RACK = "rack";
+    private static final String CPU_CORES = "cpu_cores";
+    private static final String MEMORY_BYTES = "memory_bytes";
+    private static final String SOFTWARE_VERSION = "software_version";
 
     @Override
     public void serialize(
@@ -61,6 +65,17 @@ public class TabletServerRegistrationJsonSerde
         if (tabletServerRegistration.getRack() != null) {
             generator.writeStringField(RACK, tabletServerRegistration.getRack());
         }
+        TabletServerResource resource = tabletServerRegistration.getResource();
+        if (resource.getCpuCores() != null) {
+            generator.writeNumberField(CPU_CORES, resource.getCpuCores());
+        }
+        if (resource.getMemoryBytes() != null) {
+            generator.writeNumberField(MEMORY_BYTES, resource.getMemoryBytes());
+        }
+        if (tabletServerRegistration.getSoftwareVersion() != null) {
+            generator.writeStringField(
+                    SOFTWARE_VERSION, tabletServerRegistration.getSoftwareVersion());
+        }
         generator.writeEndObject();
     }
 
@@ -69,6 +84,7 @@ public class TabletServerRegistrationJsonSerde
         int version = node.get(VERSION_KEY).asInt();
         List<Endpoint> endpoints;
         String rack = null;
+        TabletServerResource resource = TabletServerResource.unknown();
         if (version == 1) {
             String host = node.get(HOST).asText();
             int port = node.get(PORT).asInt();
@@ -80,9 +96,17 @@ public class TabletServerRegistrationJsonSerde
             if (node.has(RACK)) {
                 rack = node.get(RACK).asText();
             }
+            if (version >= 4) {
+                Double cpuCores = node.has(CPU_CORES) ? node.get(CPU_CORES).asDouble() : null;
+                Long memoryBytes = node.has(MEMORY_BYTES) ? node.get(MEMORY_BYTES).asLong() : null;
+                resource = new TabletServerResource(cpuCores, memoryBytes);
+            }
         }
 
         long registerTimestamp = node.get(REGISTER_TIMESTAMP).asLong();
-        return new TabletServerRegistration(rack, endpoints, registerTimestamp);
+        String softwareVersion =
+                node.hasNonNull(SOFTWARE_VERSION) ? node.get(SOFTWARE_VERSION).asText() : null;
+        return new TabletServerRegistration(
+                rack, endpoints, registerTimestamp, resource, softwareVersion);
     }
 }

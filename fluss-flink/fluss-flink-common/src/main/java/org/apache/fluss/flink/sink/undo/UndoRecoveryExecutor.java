@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,10 +30,13 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Executes undo recovery for multiple buckets using streaming execution.
@@ -102,21 +106,27 @@ public class UndoRecoveryExecutor {
      * Executes undo recovery for the given bucket contexts.
      *
      * @param contexts the bucket recovery contexts (must have target offsets set)
+     * @return safe bucket baselines after all recovery writes have completed
      * @throws Exception if recovery fails
      */
-    public void execute(List<BucketRecoveryContext> contexts) throws Exception {
+    public Map<TableBucket, Long> execute(List<BucketRecoveryContext> contexts) throws Exception {
+        Map<TableBucket, Long> recoveredOffsets = new ConcurrentHashMap<>();
+        for (BucketRecoveryContext ctx : contexts) {
+            recoveredOffsets.put(ctx.getBucket(), ctx.getLogEndOffset());
+        }
         // Filter contexts that need recovery
         List<BucketRecoveryContext> toRecover = filterContextsNeedingRecovery(contexts);
         if (toRecover.isEmpty()) {
             LOG.debug("No buckets need recovery after filtering");
-            return;
+            return recoveredOffsets;
         }
 
         LOG.debug("Executing undo recovery for {} bucket(s)", toRecover.size());
 
         // Subscribe and read changelog with streaming execution
         subscribeAll(toRecover);
-        List<CompletableFuture<?>> allFutures = readChangelogAndExecute(toRecover);
+        List<CompletableFuture<?>> allFutures =
+                readChangelogAndExecute(toRecover, recoveredOffsets);
 
         // Flush first, then wait for all async writes to complete
         writer.flush();
@@ -134,6 +144,7 @@ public class UndoRecoveryExecutor {
                 "Undo recovery execution completed: {} bucket(s), {} total undo operation(s)",
                 toRecover.size(),
                 totalUndoOps);
+        return new HashMap<>(recoveredOffsets);
     }
 
     private List<BucketRecoveryContext> filterContextsNeedingRecovery(
@@ -166,7 +177,8 @@ public class UndoRecoveryExecutor {
         }
     }
 
-    private List<CompletableFuture<?>> readChangelogAndExecute(List<BucketRecoveryContext> contexts)
+    private List<CompletableFuture<?>> readChangelogAndExecute(
+            List<BucketRecoveryContext> contexts, Map<TableBucket, Long> recoveredOffsets)
             throws Exception {
         List<CompletableFuture<?>> allFutures = new ArrayList<>();
 
@@ -179,11 +191,40 @@ public class UndoRecoveryExecutor {
         long startTimeMs = System.currentTimeMillis();
         long lastProgressLogTime = System.currentTimeMillis();
         Set<TableBucket> unsubscribedBuckets = new HashSet<>();
+        Map<TableBucket, BucketRecoveryContext> contextsByBucket = new HashMap<>();
+        for (BucketRecoveryContext context : contexts) {
+            contextsByBucket.put(context.getBucket(), context);
+        }
 
         while (!allComplete(contexts)) {
-            ScanRecords records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+            ScanRecords records;
+            if (scanner instanceof LogScannerImpl) {
+                // Reserve keys only within this poll. Persistent deduplication is updated after
+                // the selected rows have been copied and their undo writes have been submitted.
+                Map<TableBucket, Set<ByteArrayWrapper>> selectedKeys = new HashMap<>();
+                records =
+                        ((LogScannerImpl) scanner)
+                                .pollFiltered(
+                                        Duration.ofMillis(POLL_TIMEOUT_MS),
+                                        (bucket, record) -> {
+                                            BucketRecoveryContext context =
+                                                    contextsByBucket.get(bucket);
+                                            return context != null
+                                                    && !context.isComplete()
+                                                    && record.logOffset()
+                                                            < context.getLogEndOffset()
+                                                    && undoComputer.selectRecord(
+                                                            record,
+                                                            context.getProcessedKeys(),
+                                                            selectedKeys.computeIfAbsent(
+                                                                    bucket,
+                                                                    ignored -> new HashSet<>()));
+                                        });
+            } else {
+                records = scanner.poll(Duration.ofMillis(POLL_TIMEOUT_MS));
+            }
 
-            if (records.isEmpty()) {
+            if (!records.hasProgress()) {
                 // Check if we've exceeded the maximum total wait time
                 long elapsedMs = System.currentTimeMillis() - startTimeMs;
                 if (elapsedMs >= maxTotalWaitTimeMs) {
@@ -196,20 +237,24 @@ public class UndoRecoveryExecutor {
                 }
 
                 LOG.debug("Empty poll (total elapsed: {}ms)", elapsedMs);
-            } else {
-                // Process records for each bucket
-                for (BucketRecoveryContext ctx : contexts) {
-                    if (ctx.isComplete()) {
-                        continue;
-                    }
-                    List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
-                    if (!bucketRecords.isEmpty()) {
-                        processRecords(ctx, bucketRecords, allFutures);
-                    }
-                    // Unsubscribe completed buckets to stop fetching data from them
-                    if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
-                        unsubscribeBucket(ctx.getBucket());
-                    }
+            }
+
+            // Process records before applying the post-poll progress. A poll may consume the
+            // complete recovery range while returning its final records.
+            for (BucketRecoveryContext ctx : contexts) {
+                if (ctx.isComplete()) {
+                    continue;
+                }
+                List<ScanRecord> bucketRecords = records.records(ctx.getBucket());
+                if (!bucketRecords.isEmpty()) {
+                    processRecords(ctx, bucketRecords, allFutures, recoveredOffsets);
+                }
+                Long consumedUpToOffset = records.consumedUpToOffset(ctx.getBucket());
+                if (consumedUpToOffset != null) {
+                    ctx.updateScanPosition(consumedUpToOffset);
+                }
+                if (ctx.isComplete() && unsubscribedBuckets.add(ctx.getBucket())) {
+                    unsubscribeBucket(ctx.getBucket());
                 }
             }
 
@@ -231,7 +276,7 @@ public class UndoRecoveryExecutor {
         if (LOG.isDebugEnabled()) {
             for (BucketRecoveryContext ctx : contexts) {
                 LOG.debug(
-                        "Bucket {} read {} records, executed {} undo operations",
+                        "Bucket {} processed {} returned records, executed {} undo operations",
                         ctx.getBucket(),
                         ctx.getTotalRecordsProcessed(),
                         ctx.getProcessedKeys().size());
@@ -252,17 +297,22 @@ public class UndoRecoveryExecutor {
     private void processRecords(
             BucketRecoveryContext ctx,
             List<ScanRecord> records,
-            List<CompletableFuture<?>> futures) {
+            List<CompletableFuture<?>> futures,
+            Map<TableBucket, Long> recoveredOffsets) {
         Set<ByteArrayWrapper> processedKeys = ctx.getProcessedKeys();
         for (ScanRecord record : records) {
-            CompletableFuture<?> future = undoComputer.processRecord(record, processedKeys);
+            if (record.logOffset() >= ctx.getLogEndOffset()) {
+                continue;
+            }
+            CompletableFuture<Long> future = undoComputer.processRecord(record, processedKeys);
             if (future != null) {
-                futures.add(future);
+                futures.add(
+                        future.thenAccept(
+                                offset ->
+                                        recoveredOffsets.merge(
+                                                ctx.getBucket(), offset, Math::max)));
             }
-            ctx.recordProcessed(record.logOffset());
-            if (ctx.isComplete()) {
-                break;
-            }
+            ctx.recordProcessed();
         }
     }
 

@@ -29,6 +29,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.utils.ProtoCodecUtils;
 
 import java.io.PrintWriter;
+import java.util.Map;
 
 import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
@@ -67,6 +68,7 @@ public class ProtoGenUtil {
                 ErrorMessage.class,
                 FileRegionBytesView.class,
                 MemorySegmentBytesView.class,
+                Map.class,
                 ProtoCodecUtils.class,
                 WritableOutput.class,
                 // netty dependencies

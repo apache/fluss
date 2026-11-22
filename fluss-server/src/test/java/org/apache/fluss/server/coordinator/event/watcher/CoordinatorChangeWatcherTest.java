@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator.event.watcher;
 
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeadCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewCoordinatorEvent;
@@ -58,9 +59,11 @@ class CoordinatorChangeWatcherTest {
         // register new servers
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            expectedEvents.add(new NewCoordinatorEvent(String.valueOf(i)));
             CoordinatorAddress coordinatorAddress =
-                    new CoordinatorAddress(String.valueOf(i), new ArrayList<>());
+                    new CoordinatorAddress(
+                            String.valueOf(i),
+                            Endpoint.fromListenersString("CLIENT://host" + i + ":" + (9123 + i)));
+            expectedEvents.add(new NewCoordinatorEvent(coordinatorAddress));
             zookeeperClient.registerCoordinatorServer(coordinatorAddress);
         }
 

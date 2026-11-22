@@ -89,21 +89,33 @@ SELECT shop_id, user_id, num_orders FROM source;
 
 ## DELETE FROM
 
-Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. Currently, only single data deletions based on the primary key are supported.
+Fluss supports deleting data for primary-key tables in batch mode via `DELETE FROM` statement. The `WHERE` clause can be any condition and does not need to cover all primary key columns.
 
-* the Primary Key Table
+:::note
+`DELETE FROM` and `UPDATE` are only supported for primary-key tables using the default merge engine. Tables with the `first_row`, `versioned`, or `aggregation` merge engine reject both statements.
+:::
+
 ```sql title="Flink SQL"
 -- DELETE statement requires batch mode
 SET 'execution.runtime-mode' = 'batch';
 ```
 
 ```sql title="Flink SQL"
--- The condition must include all primary key equality conditions.
+-- Delete a single row by primary key
 DELETE FROM pk_table WHERE shop_id = 10000 AND user_id = 123456;
+
+-- Delete rows by a non-primary-key condition
+DELETE FROM pk_table WHERE total_amount > 100;
 ```
 
+If the `WHERE` clause consists only of equality predicates on every primary key column, the row is deleted directly by primary key. Otherwise, Fluss scans the table (pruned by any partition column predicates) and deletes all matching rows.
+
+:::note
+`DELETE FROM` respects the table's `table.delete.behavior` option: `disable` rejects the statement, and `ignore` succeeds without deleting any rows.
+:::
+
 ## UPDATE
-Fluss enables data updates for primary-key tables in batch mode using the `UPDATE` statement. Currently, only single-row updates based on the primary key are supported.
+Fluss enables data updates for primary-key tables in batch mode using the `UPDATE` statement. The `WHERE` clause can be any condition and does not need to cover all primary key columns.
 
 ```sql title="Flink SQL"
 -- Execute the flink job in batch mode for current session context
@@ -111,6 +123,19 @@ SET execution.runtime-mode = batch;
 ```
 
 ```sql title="Flink SQL"
--- The condition must include all primary key equality conditions.
+-- Update a single row by primary key
 UPDATE pk_table SET total_amount = 2 WHERE shop_id = 10000 AND user_id = 123456;
+
+-- Update rows by a non-primary-key condition
+UPDATE pk_table SET total_amount = 0 WHERE num_orders = 0;
 ```
+
+If the `WHERE` clause consists only of equality predicates on every primary key column, the row is read by a single primary key lookup. Otherwise, Fluss scans the table (pruned by any partition column predicates) and updates all matching rows.
+
+:::note
+Primary key columns cannot be updated. For partitioned primary-key tables this includes the partition columns, which are always part of the primary key.
+:::
+
+:::caution
+`UPDATE` and `DELETE FROM` are not atomic. Each statement reads the table once and then writes matching rows independently: rows written after the read starts are not affected, concurrent writes to a matching row may be overwritten (`UPDATE` writes back the entire row), and a failed job leaves already-written rows modified. Avoid running these statements concurrently with other writers to the same keys.
+:::

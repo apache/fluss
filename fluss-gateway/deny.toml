@@ -1,0 +1,47 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+exceptions = [
+    # open data licenses that SHOULD be OK
+    { crate = "webpki-roots", allow = [
+        "CDLA-Permissive-2.0",
+    ] },
+]
+
+[bans]
+# Duplicate versions are a transitive fact of life, not what this section guards.
+multiple-versions = "allow"
+deny = [
+    # HTTP/2 does not arrive through a decision in this crate but through Cargo feature
+    # unification: any dependency enabling `hyper-util/server-auto` (for example
+    # `metrics-exporter-prometheus`'s default features) pulls `hyper/http2` in for the whole graph,
+    # and no test would fail. Banning the stack keeps adding HTTP/2 a deliberate change.
+    { crate = "h2", reason = "the gateway listener serves HTTP/1.1 only; see fluss-gateway/src/lifecycle.rs" },
+]

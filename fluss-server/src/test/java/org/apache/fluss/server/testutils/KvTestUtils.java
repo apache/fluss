@@ -35,12 +35,15 @@ import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.PlaceholderKvFileHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
-import org.rocksdb.RocksDB;
-import org.rocksdb.RocksIterator;
+import io.github.fluss_contrib.rocksdb.RocksDB;
+import io.github.fluss_contrib.rocksdb.RocksIterator;
 
 import javax.annotation.Nullable;
 
@@ -57,6 +60,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils related to Kv. */
 public class KvTestUtils {
+
+    /** Prepares an ordinary snapshot reference and its recovery selection for tests. */
+    public static void registerRecoverySnapshot(
+            ZooKeeperClient client, TableBucket bucket, BucketSnapshot snapshot) throws Exception {
+        if (!client.getTableBucketSnapshot(bucket, snapshot.getSnapshotId()).isPresent()) {
+            client.registerTableBucketSnapshot(bucket, snapshot);
+        }
+        client.getCuratorClient()
+                .create()
+                .orSetData()
+                .creatingParentsIfNeeded()
+                .forPath(
+                        ZkData.RecoverySnapshotZNode.path(bucket),
+                        ZkData.RecoverySnapshotZNode.encode(snapshot.getSnapshotId()));
+    }
 
     public static void checkSnapshot(
             CompletedSnapshot completedSnapshot,
@@ -128,7 +146,7 @@ public class KvTestUtils {
                                         tableBucket.getTableId(),
                                         tableBucket.getBucket(),
                                         snapshotId)),
-                new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
+                KvSnapshotHandle.create(Collections.emptyList(), Collections.emptyList(), 0),
                 0,
                 null,
                 null);

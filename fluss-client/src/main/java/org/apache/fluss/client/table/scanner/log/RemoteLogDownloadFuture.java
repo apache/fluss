@@ -23,17 +23,29 @@ import org.apache.fluss.record.FileLogRecords;
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 /** Represents the future of a remote log download request. */
 public class RemoteLogDownloadFuture {
 
     private final CompletableFuture<File> logFileFuture;
     private final Runnable recycleCallback;
+    private final Runnable discardCallback;
+    private final AtomicBoolean discarded = new AtomicBoolean(false);
 
     public RemoteLogDownloadFuture(
             CompletableFuture<File> logFileFuture, Runnable recycleCallback) {
+        this(logFileFuture, recycleCallback, () -> {});
+    }
+
+    RemoteLogDownloadFuture(
+            CompletableFuture<File> logFileFuture,
+            Runnable recycleCallback,
+            Runnable discardCallback) {
         this.logFileFuture = logFileFuture;
         this.recycleCallback = recycleCallback;
+        this.discardCallback = discardCallback;
     }
 
     public boolean isDone() {
@@ -57,7 +69,22 @@ public class RemoteLogDownloadFuture {
         return recycleCallback;
     }
 
+    public void discard() {
+        if (discarded.compareAndSet(false, true)) {
+            discardCallback.run();
+        }
+    }
+
     public void onComplete(Runnable callback) {
         logFileFuture.thenRun(callback);
+    }
+
+    public void whenComplete(Consumer<Throwable> callback) {
+        logFileFuture.whenComplete(
+                (file, throwable) -> {
+                    if (!logFileFuture.isCancelled()) {
+                        callback.accept(throwable);
+                    }
+                });
     }
 }

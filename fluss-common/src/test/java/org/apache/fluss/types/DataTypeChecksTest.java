@@ -18,10 +18,15 @@
 package org.apache.fluss.types;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Stream;
 
+import static org.apache.fluss.types.DataTypeChecks.equalsIgnoreFieldDescriptionsAndIds;
 import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
 import static org.apache.fluss.types.DataTypeChecks.getFieldTypes;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
@@ -29,9 +34,144 @@ import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /** Tests for the {@link org.apache.fluss.types.DataTypeChecks} utilities. */
 public class DataTypeChecksTest {
+
+    @ParameterizedTest
+    @MethodSource("rowsWithDifferentFieldMetadata")
+    void testEqualsIgnoreFieldDescriptionsAndIds(RowType differentMetadata) {
+        RowType original =
+                DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT(), "Original field", 1));
+        List<DataType> originalTypes =
+                Arrays.asList(
+                        DataTypes.INT(),
+                        original,
+                        DataTypes.ARRAY(original),
+                        DataTypes.MAP(original, original),
+                        DataTypes.ROW(
+                                DataTypes.FIELD(
+                                        "envelope",
+                                        DataTypes.ARRAY(
+                                                DataTypes.MAP(DataTypes.STRING(), original)),
+                                        2)));
+        List<DataType> equivalentTypes =
+                Arrays.asList(
+                        DataTypes.INT(),
+                        differentMetadata,
+                        DataTypes.ARRAY(differentMetadata),
+                        DataTypes.MAP(differentMetadata, differentMetadata),
+                        DataTypes.ROW(
+                                DataTypes.FIELD(
+                                        "envelope",
+                                        DataTypes.ARRAY(
+                                                DataTypes.MAP(
+                                                        DataTypes.STRING(), differentMetadata)),
+                                        20)));
+
+        for (int i = 0; i < originalTypes.size(); i++) {
+            assertThat(
+                            equalsIgnoreFieldDescriptionsAndIds(
+                                    originalTypes.get(i), equivalentTypes.get(i)))
+                    .isTrue();
+            assertThat(
+                            equalsIgnoreFieldDescriptionsAndIds(
+                                    equivalentTypes.get(i), originalTypes.get(i)))
+                    .isTrue();
+        }
+    }
+
+    private static Stream<RowType> rowsWithDifferentFieldMetadata() {
+        return Stream.of(
+                DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT(), "Updated field", 1)),
+                DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT(), "Original field", 10)),
+                DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT(), "Updated field", 10)),
+                DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT(), null, 10)));
+    }
+
+    @Test
+    void testEqualsIgnoreFieldDescriptionsAndIdsPreservesFieldNames() {
+        RowType original = DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT()));
+        RowType renamed = DataTypes.ROW(DataTypes.FIELD("other", DataTypes.INT()));
+        assertDifferentTypes(original, renamed);
+        assertDifferentTypes(renamed, original);
+        assertDifferentTypes(
+                DataTypes.MAP(original, DataTypes.STRING()),
+                DataTypes.MAP(renamed, DataTypes.STRING()));
+        assertDifferentTypes(
+                DataTypes.ROW(
+                        DataTypes.FIELD("first", DataTypes.INT()),
+                        DataTypes.FIELD("second", DataTypes.INT())),
+                DataTypes.ROW(
+                        DataTypes.FIELD("second", DataTypes.INT()),
+                        DataTypes.FIELD("first", DataTypes.INT())));
+    }
+
+    @ParameterizedTest
+    @MethodSource("differentTypeClasses")
+    void testEqualsIgnoreFieldDescriptionsAndIdsWithDifferentTypeClasses(
+            DataType first, DataType second) {
+        assertDifferentTypes(first, second);
+        assertDifferentTypes(second, first);
+        assertThat(
+                        equalsIgnoreFieldDescriptionsAndIds(
+                                DataTypes.MAP(first, DataTypes.STRING()),
+                                DataTypes.MAP(second, DataTypes.STRING())))
+                .isFalse();
+        assertThat(
+                        equalsIgnoreFieldDescriptionsAndIds(
+                                DataTypes.MAP(second, DataTypes.STRING()),
+                                DataTypes.MAP(first, DataTypes.STRING())))
+                .isFalse();
+    }
+
+    private static Stream<Arguments> differentTypeClasses() {
+        DataType scalar = DataTypes.INT();
+        DataType row = DataTypes.ROW(DataTypes.FIELD("value", DataTypes.INT()));
+        DataType array = DataTypes.ARRAY(DataTypes.INT());
+        DataType map = DataTypes.MAP(DataTypes.STRING(), DataTypes.INT());
+        return Stream.of(
+                arguments(scalar, row),
+                arguments(scalar, array),
+                arguments(scalar, map),
+                arguments(row, array),
+                arguments(row, map),
+                arguments(array, map));
+    }
+
+    @Test
+    void testEqualsIgnoreFieldDescriptionsAndIdsPreservesTypeDetails() {
+        assertDifferentTypes(DataTypes.INT(), DataTypes.BIGINT());
+        assertDifferentTypes(DataTypes.INT(), DataTypes.INT().copy(false));
+        assertDifferentTypes(DataTypes.CHAR(1), DataTypes.CHAR(2));
+        assertDifferentTypes(DataTypes.BINARY(1), DataTypes.BINARY(2));
+        assertDifferentTypes(DataTypes.DECIMAL(10, 2), DataTypes.DECIMAL(11, 2));
+        assertDifferentTypes(DataTypes.DECIMAL(10, 2), DataTypes.DECIMAL(10, 3));
+        assertDifferentTypes(DataTypes.TIME(3), DataTypes.TIME(6));
+        assertDifferentTypes(DataTypes.TIMESTAMP(3), DataTypes.TIMESTAMP(6));
+        assertDifferentTypes(DataTypes.TIMESTAMP_LTZ(3), DataTypes.TIMESTAMP_LTZ(6));
+        assertDifferentTypes(DataTypes.TIMESTAMP(3), DataTypes.TIMESTAMP_LTZ(3));
+        assertDifferentTypes(DataTypes.INT(), DataTypes.ARRAY(DataTypes.INT()));
+        assertDifferentTypes(
+                DataTypes.ARRAY(DataTypes.INT()), DataTypes.ARRAY(DataTypes.INT()).copy(false));
+        assertDifferentTypes(
+                DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                DataTypes.MAP(DataTypes.INT(), DataTypes.INT()));
+        assertDifferentTypes(
+                DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()).copy(false));
+        RowType row = DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT()));
+        assertDifferentTypes(row, row.copy(false));
+        assertDifferentTypes(row, RowType.builder().build());
+        assertDifferentTypes(
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("name", DataTypes.STRING())),
+                DataTypes.ROW(
+                        DataTypes.FIELD("name", DataTypes.STRING()),
+                        DataTypes.FIELD("id", DataTypes.INT())));
+    }
 
     @Test
     void testDataTypeVisitorForLengthExtract() {
@@ -170,5 +310,24 @@ public class DataTypeChecksTest {
         assertThatThrownBy(() -> getFieldTypes(DataTypes.ARRAY(DataTypes.INT())))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Invalid use of extractor FieldTypesExtractor");
+    }
+
+    private static void assertDifferentTypes(DataType first, DataType second) {
+        assertThat(equalsIgnoreFieldDescriptionsAndIds(first, second)).isFalse();
+        assertThat(equalsIgnoreFieldDescriptionsAndIds(second, first)).isFalse();
+        assertThat(
+                        equalsIgnoreFieldDescriptionsAndIds(
+                                DataTypes.ARRAY(first), DataTypes.ARRAY(second)))
+                .isFalse();
+        assertThat(
+                        equalsIgnoreFieldDescriptionsAndIds(
+                                DataTypes.MAP(DataTypes.STRING(), first),
+                                DataTypes.MAP(DataTypes.STRING(), second)))
+                .isFalse();
+        assertThat(
+                        equalsIgnoreFieldDescriptionsAndIds(
+                                DataTypes.ROW(DataTypes.FIELD("a", first)),
+                                DataTypes.ROW(DataTypes.FIELD("a", second))))
+                .isFalse();
     }
 }

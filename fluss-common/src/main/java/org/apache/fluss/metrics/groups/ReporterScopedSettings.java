@@ -17,19 +17,36 @@
 
 package org.apache.fluss.metrics.groups;
 
+import org.apache.fluss.metrics.filter.MetricFilter;
+
 import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Encapsulates all settings that are defined per reporter. */
 public class ReporterScopedSettings {
 
     private final int reporterIndex;
+    private final MetricFilter filter;
 
+    /** Creates settings that allow all metrics for the given reporter index. */
     public ReporterScopedSettings(int reporterIndex) {
-        checkArgument(reporterIndex >= 0);
-        this.reporterIndex = reporterIndex;
+        this(reporterIndex, MetricFilter.NO_OP_FILTER);
     }
 
+    /** Creates settings with the given reporter index and metric filter. */
+    public ReporterScopedSettings(int reporterIndex, MetricFilter filter) {
+        checkArgument(reporterIndex >= 0);
+        this.reporterIndex = reporterIndex;
+        this.filter = checkNotNull(filter);
+    }
+
+    /** Returns the reporter's index in the registry. */
     public int getReporterIndex() {
         return reporterIndex;
+    }
+
+    /** Returns the filter applied before notifying this reporter of metric changes. */
+    public MetricFilter getFilter() {
+        return filter;
     }
 }

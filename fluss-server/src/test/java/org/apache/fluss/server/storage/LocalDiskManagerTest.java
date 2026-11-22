@@ -358,6 +358,40 @@ class LocalDiskManagerTest {
                 .hasMessageContaining("None of the specified data dirs");
     }
 
+    @Test
+    void testDiskWriteLimitConfigValidation() throws Exception {
+        File dataDir = new File(tempDir, "data-1");
+
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(createConf(dataDir))) {
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskWriteRecoverRatio()).isEqualTo(0.80);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteRecoverRatio())
+                    .isEqualTo(0.80);
+        }
+
+        Configuration disabledRatioConf = createConf(new File(tempDir, "disabled-ratio"));
+        disabledRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(disabledRatioConf)) {
+            localDiskManager.getDiskUsageMonitor().update(1.0);
+            assertThat(localDiskManager.isDiskWriteLocked()).isFalse();
+        }
+
+        Configuration invalidRatioConf = createConf(new File(tempDir, "invalid-ratio"));
+        invalidRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.1);
+        assertThatThrownBy(() -> LocalDiskManager.create(invalidRatioConf))
+                .isInstanceOf(IllegalConfigurationException.class);
+
+        Configuration zeroRecoverRatioConf = createConf(new File(tempDir, "zero-recover-ratio"));
+        zeroRecoverRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO, 0.0);
+        assertThatThrownBy(() -> LocalDiskManager.create(zeroRecoverRatioConf))
+                .isInstanceOf(IllegalConfigurationException.class);
+
+        Configuration equalRecoverRatioConf = createConf(new File(tempDir, "equal-recover-ratio"));
+        equalRecoverRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_RECOVER_RATIO, 0.85);
+        assertThatThrownBy(() -> LocalDiskManager.create(equalRecoverRatioConf))
+                .isInstanceOf(IllegalConfigurationException.class);
+    }
+
     private Configuration createConf(File... dataDirs) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);

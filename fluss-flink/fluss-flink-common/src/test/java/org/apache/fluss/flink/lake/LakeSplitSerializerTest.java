@@ -71,7 +71,8 @@ class LakeSplitSerializerTest {
                         LAKE_SNAPSHOT_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
+                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                        true);
 
         assertThat(deserializedSplit instanceof LakeSnapshotSplit).isTrue();
         LakeSnapshotSplit result = (LakeSnapshotSplit) deserializedSplit;
@@ -80,6 +81,27 @@ class LakeSplitSerializerTest {
         assertThat("2025-08-18").isEqualTo(result.getPartitionName());
         assertThat(LAKE_SPLIT).isEqualTo(result.getLakeSplit());
         assertThat(splitIndex).isEqualTo(result.getSplitIndex());
+    }
+
+    @Test
+    void testSerializeAndDeserializeLakeSnapshotSplitWithRecordsToSkip() throws IOException {
+        LakeSnapshotSplit originalSplit =
+                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT, 3, 42L);
+
+        DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
+        serializer.serialize(output, originalSplit);
+        DataInputDeserializer input = new DataInputDeserializer(output.getCopyOfBuffer());
+
+        LakeSnapshotSplit result =
+                (LakeSnapshotSplit)
+                        serializer.deserialize(
+                                LAKE_SNAPSHOT_SPLIT_KIND, tableBucket, "2025-08-18", input, true);
+
+        assertThat(result.getSplitIndex()).isEqualTo(3);
+        assertThat(result.getRecordsToSkip()).isEqualTo(42L);
+        assertThat(result.getLakeSplit()).isEqualTo(LAKE_SPLIT);
+        // the whole lake split section is consumed
+        assertThat(input.available()).isZero();
     }
 
     @Test
@@ -104,7 +126,8 @@ class LakeSplitSerializerTest {
                         LAKE_SNAPSHOT_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
+                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                        true);
 
         assertThat(deserializedSplit instanceof LakeSnapshotSplit).isTrue();
         LakeSnapshotSplit result = (LakeSnapshotSplit) deserializedSplit;
@@ -136,7 +159,8 @@ class LakeSplitSerializerTest {
                         LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
+                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                        true);
 
         assertThat(deserializedSplit instanceof LakeSnapshotAndFlussLogSplit).isTrue();
         LakeSnapshotAndFlussLogSplit result = (LakeSnapshotAndFlussLogSplit) deserializedSplit;
@@ -162,7 +186,8 @@ class LakeSplitSerializerTest {
                                         (byte) 99,
                                         tableBucket,
                                         "2023-10-01",
-                                        new DataInputDeserializer(output.getCopyOfBuffer())))
+                                        new DataInputDeserializer(output.getCopyOfBuffer()),
+                                        true))
                 .withFailMessage(() -> "Unsupported split kind: ")
                 .isInstanceOf(UnsupportedOperationException.class);
     }

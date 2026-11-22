@@ -26,9 +26,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
@@ -63,6 +63,17 @@ public class RemoteLogDownloader implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(RemoteLogDownloader.class);
 
     private static final long POLL_TIMEOUT = 5000L;
+    private static final long RETRY_BACKOFF_INITIAL_MS = 100L;
+    private static final int RETRY_BACKOFF_MULTIPLIER = 2;
+    private static final long RETRY_BACKOFF_MAX_MS = 5000L;
+    private static final double RETRY_BACKOFF_JITTER = 0.25D;
+    private static final ExponentialBackoff RETRY_BACKOFF =
+            new ExponentialBackoff(
+                    RETRY_BACKOFF_INITIAL_MS,
+                    RETRY_BACKOFF_MULTIPLIER,
+                    RETRY_BACKOFF_MAX_MS,
+                    RETRY_BACKOFF_JITTER);
+    private final int maxRetryCount;
 
     private final Path localLogDir;
 
@@ -88,17 +99,17 @@ public class RemoteLogDownloader implements Closeable {
     private volatile boolean closed = false;
 
     public RemoteLogDownloader(
-            TablePath tablePath,
+            String scannerName,
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup) {
         // default we give a 5s long interval to avoid frequent loop
-        this(tablePath, conf, remoteFileDownloader, scannerMetricGroup, POLL_TIMEOUT);
+        this(scannerName, conf, remoteFileDownloader, scannerMetricGroup, POLL_TIMEOUT);
     }
 
     @VisibleForTesting
     RemoteLogDownloader(
-            TablePath tablePath,
+            String scannerName,
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup,
@@ -108,6 +119,7 @@ public class RemoteLogDownloader implements Closeable {
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
         this.pollTimeout = pollTimeout;
+        this.maxRetryCount = conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_FETCH_MAX_RETRIES);
         this.prefetchSemaphore =
                 new Semaphore(conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM));
         // The local tmp dir to store the fetched log segment files,
@@ -116,7 +128,7 @@ public class RemoteLogDownloader implements Closeable {
                 Paths.get(
                         conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
                         "remote-logs-" + UUID.randomUUID());
-        this.downloadThread = new DownloadRemoteLogThread(tablePath);
+        this.downloadThread = new DownloadRemoteLogThread(scannerName);
     }
 
     public void start() {
@@ -127,7 +139,8 @@ public class RemoteLogDownloader implements Closeable {
     public RemoteLogDownloadFuture requestRemoteLog(FsPath logTabletDir, RemoteLogSegment segment) {
         RemoteLogDownloadRequest request = new RemoteLogDownloadRequest(segment, logTabletDir);
         segmentsToFetch.add(request);
-        return new RemoteLogDownloadFuture(request.future, () -> recycleRemoteLog(segment));
+        return new RemoteLogDownloadFuture(
+                request.future, () -> recycleRemoteLog(segment), () -> discardRemoteLog(request));
     }
 
     /**
@@ -137,6 +150,14 @@ public class RemoteLogDownloader implements Closeable {
     void recycleRemoteLog(RemoteLogSegment segment) {
         segmentsToRecycle.add(segment);
         prefetchSemaphore.release();
+    }
+
+    private void discardRemoteLog(RemoteLogDownloadRequest request) {
+        if (request.future.cancel(false)) {
+            segmentsToFetch.remove(request);
+        } else if (!request.future.isCompletedExceptionally()) {
+            recycleRemoteLog(request.segment);
+        }
     }
 
     /**
@@ -158,8 +179,26 @@ public class RemoteLogDownloader implements Closeable {
             prefetchSemaphore.release();
             return;
         }
+        if (request.future.isCancelled()) {
+            prefetchSemaphore.release();
+            return;
+        }
 
-        TableBucket tableBucket = request.getTableBucket();
+        downloadRemoteLog(request, maxRetryCount, System.currentTimeMillis());
+    }
+
+    private void downloadRemoteLog(
+            RemoteLogDownloadRequest request, int retryCount, long startTime) {
+        if (closed || request.future.isCancelled()) {
+            if (!request.future.isDone()) {
+                request.future.cancel(false);
+            }
+            prefetchSemaphore.release();
+            if (closed) {
+                deleteDirectoryQuietly(localLogDir.toFile());
+            }
+            return;
+        }
         try {
             // 1. cleanup the finished logs first to free up disk space
             cleanupRemoteLogs();
@@ -168,7 +207,6 @@ public class RemoteLogDownloader implements Closeable {
             FsPathAndFileName fsPathAndFileName = request.getFsPathAndFileName();
             scannerMetricGroup.remoteFetchRequestCount().inc();
 
-            long startTime = System.currentTimeMillis();
             // download the remote file to local
             CompletableFuture<Long> completableFuture =
                     remoteFileDownloader.downloadFileAsync(fsPathAndFileName, localLogDir);
@@ -178,7 +216,7 @@ public class RemoteLogDownloader implements Closeable {
                             LOG.warn(
                                     "RemoteLogDownloader closed when remote log segment file {} for table bucket {}.",
                                     fsPathAndFileName.getFileName(),
-                                    tableBucket);
+                                    request.getTableBucket());
                             // In-flight download completed after close. Cancel the
                             // external future so consumers blocked on .get() are
                             // unblocked, release the semaphore (no consumer will
@@ -191,39 +229,96 @@ public class RemoteLogDownloader implements Closeable {
                             deleteDirectoryQuietly(localLogDir.toFile());
                             return;
                         }
-                        if (throwable != null) {
-                            LOG.error(
-                                    "Failed to download remote log segment file {} for table bucket {}.",
-                                    fsPathAndFileName.getFileName(),
-                                    tableBucket,
-                                    ExceptionUtils.stripExecutionException(throwable));
+                        if (request.future.isCancelled()) {
                             prefetchSemaphore.release();
-                            segmentsToFetch.add(request);
-                            scannerMetricGroup.remoteFetchErrorCount().inc();
+                            if (throwable == null) {
+                                cleanupFinishedRemoteLog(request.segment);
+                            }
+                            return;
+                        }
+                        if (throwable != null) {
+                            handleFetchException(request, throwable, retryCount, startTime);
                         } else {
                             LOG.info(
                                     "Successfully downloaded remote log segment file {} to local for "
                                             + "table bucket {} cost {} ms.",
                                     fsPathAndFileName.getFileName(),
-                                    tableBucket,
+                                    request.getTableBucket(),
                                     System.currentTimeMillis() - startTime);
                             File localFile =
                                     new File(localLogDir.toFile(), fsPathAndFileName.getFileName());
                             scannerMetricGroup.remoteFetchBytes().inc(bytes);
-                            request.future.complete(localFile);
+                            if (!request.future.complete(localFile)) {
+                                prefetchSemaphore.release();
+                                cleanupFinishedRemoteLog(request.segment);
+                            }
                         }
                     });
         } catch (Throwable t) {
-            prefetchSemaphore.release();
-            // only re-queue the request if the downloader is still active
-            if (!closed) {
-                segmentsToFetch.add(request);
+            if (closed || request.future.isCancelled()) {
+                if (!request.future.isDone()) {
+                    request.future.cancel(false);
+                }
+                prefetchSemaphore.release();
+                if (closed) {
+                    deleteDirectoryQuietly(localLogDir.toFile());
+                }
             } else {
+                handleFetchException(request, t, retryCount, startTime);
+            }
+        }
+    }
+
+    private void handleFetchException(
+            RemoteLogDownloadRequest request, Throwable throwable, int retryCount, long startTime) {
+        if (closed || request.future.isCancelled()) {
+            if (!request.future.isDone()) {
                 request.future.cancel(false);
             }
-            scannerMetricGroup.remoteFetchErrorCount().inc();
-            // log the error and continue instead of shutdown the download thread
-            LOG.error("Failed to download remote log segment for table bucket {}.", tableBucket, t);
+            prefetchSemaphore.release();
+            if (closed) {
+                deleteDirectoryQuietly(localLogDir.toFile());
+            }
+            return;
+        }
+
+        LOG.error(
+                "Failed to download remote log segment file {} for table bucket {}.",
+                request.getFsPathAndFileName().getFileName(),
+                request.getTableBucket(),
+                ExceptionUtils.stripExecutionException(throwable));
+        scannerMetricGroup.remoteFetchErrorCount().inc();
+        if (retryCount >= 1) {
+            long backoffMs = RETRY_BACKOFF.backoff(maxRetryCount - retryCount);
+            LOG.warn(
+                    "Retrying download of remote log segment file {} for table bucket {} "
+                            + "in {} ms (retry {}/{}).",
+                    request.getFsPathAndFileName().getFileName(),
+                    request.getTableBucket(),
+                    backoffMs,
+                    maxRetryCount - retryCount + 1,
+                    maxRetryCount);
+            try {
+                Thread.sleep(backoffMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                prefetchSemaphore.release();
+                request.future.completeExceptionally(
+                        new IOException(
+                                "Interrupted while retrying download of remote log segment file "
+                                        + request.getFsPathAndFileName().getFileName(),
+                                e));
+                return;
+            }
+            downloadRemoteLog(request, retryCount - 1, startTime);
+        } else {
+            prefetchSemaphore.release();
+            request.future.completeExceptionally(
+                    new IOException(
+                            String.format(
+                                    "Failed to download remote log segment file %s, retry count %d",
+                                    request.getFsPathAndFileName().getFileName(), maxRetryCount),
+                            throwable));
         }
     }
 
@@ -315,8 +410,8 @@ public class RemoteLogDownloader implements Closeable {
      * until it is interrupted.
      */
     private class DownloadRemoteLogThread extends ShutdownableThread {
-        public DownloadRemoteLogThread(TablePath tablePath) {
-            super(String.format("DownloadRemoteLog-[%s]", tablePath.toString()), true);
+        public DownloadRemoteLogThread(String scannerName) {
+            super(String.format("DownloadRemoteLog-[%s]", scannerName), true);
         }
 
         @Override

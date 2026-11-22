@@ -19,29 +19,36 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
+import org.apache.fluss.client.tiering.TieringWriterInitContext;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -56,6 +63,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -72,7 +80,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The {@link SplitReader} implementation which will read Fluss and write to lake. */
 public class TieringSplitReader<WriteResult>
-        implements SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit> {
+        implements SplitReader<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSplitReader.class);
 
@@ -114,19 +122,29 @@ public class TieringSplitReader<WriteResult>
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
     private final Map<TableBucket, Long> currentTableStoppingOffsets;
 
+    // partition id -> actual bucket count for the current table's partitions
+    private final Map<Long, Integer> currentTablePartitionBucketCounts = new HashMap<>();
+
     private final Map<TableBucket, LogOffsetAndTimestamp> currentTableTieredOffsetAndTimestamp;
 
     private final Set<TieringSplit> currentEmptySplits;
 
     private final TieringMetrics tieringMetrics;
     private final boolean unshadedArrowAvailable;
+    @Nullable private final String[] ioTmpDirs;
 
     public TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             ClassLoader userClassLoader,
             TieringMetrics tieringMetrics) {
-        this(connection, lakeTieringFactory, userClassLoader, DEFAULT_POLL_TIMEOUT, tieringMetrics);
+        this(
+                connection,
+                lakeTieringFactory,
+                userClassLoader,
+                DEFAULT_POLL_TIMEOUT,
+                tieringMetrics,
+                null);
     }
 
     @VisibleForTesting
@@ -136,6 +154,17 @@ public class TieringSplitReader<WriteResult>
             ClassLoader userClassLoader,
             Duration pollTimeout,
             TieringMetrics tieringMetrics) {
+        this(connection, lakeTieringFactory, userClassLoader, pollTimeout, tieringMetrics, null);
+    }
+
+    @VisibleForTesting
+    protected TieringSplitReader(
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
+            Duration pollTimeout,
+            TieringMetrics tieringMetrics,
+            @Nullable String[] ioTmpDirs) {
         this.lakeTieringFactory = lakeTieringFactory;
         // owned by TieringSourceReader
         this.connection = connection;
@@ -151,6 +180,7 @@ public class TieringSplitReader<WriteResult>
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
         this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
+        this.ioTmpDirs = ioTmpDirs;
     }
 
     @Override
@@ -210,14 +240,15 @@ public class TieringSplitReader<WriteResult>
     }
 
     @Override
-    public void handleSplitsChanges(SplitsChange<TieringSplit> splitsChange) {
+    public void handleSplitsChanges(SplitsChange<FlinkTieringSplit> splitsChange) {
         if (!(splitsChange instanceof SplitsAddition)) {
             throw new UnsupportedOperationException(
                     String.format(
                             "The SplitChange type of %s is not supported.",
                             splitsChange.getClass()));
         }
-        for (TieringSplit split : splitsChange.splits()) {
+        for (FlinkTieringSplit flinkSplit : splitsChange.splits()) {
+            TieringSplit split = flinkSplit.unwrap();
             LOG.info("add split {}", split.splitId());
             if (split.shouldSkipCurrentRound()) {
                 // if the split is forced to ignore,
@@ -313,6 +344,22 @@ public class TieringSplitReader<WriteResult>
                     currentTableInfo.getTableId(),
                     tablePath,
                     split.getTableBucket().getTableId());
+            // Snapshot each partition's actual bucket count so lake writers can stamp per-partition
+            // bucket layouts correctly after an ALTER bucket.num.
+            if (currentTableInfo.isPartitioned()) {
+                try {
+                    // the admin is a shared per-connection instance, so it must not be closed here
+                    Admin admin = connection.getAdmin();
+                    for (PartitionInfo partitionInfo :
+                            admin.listPartitionInfos(tablePath, true).get()) {
+                        currentTablePartitionBucketCounts.put(
+                                partitionInfo.getPartitionId(), partitionInfo.getBucketCount());
+                    }
+                } catch (Exception e) {
+                    throw new FlussRuntimeException(
+                            "Failed to list partition infos for table " + tablePath, e);
+                }
+            }
             LOG.info("Start to tier table {} with table id {}.", currentTablePath, currentTableId);
         }
         return currentTable;
@@ -447,12 +494,15 @@ public class TieringSplitReader<WriteResult>
             long lastWrittenTimestamp =
                     handler.handleRecords(
                             records,
-                            () ->
-                                    getOrCreateLakeWriter(
-                                            bucket,
-                                            currentTableSplitsByBucket
-                                                    .get(bucket)
-                                                    .getPartitionName()),
+                            () -> {
+                                TieringSplit split =
+                                        checkNotNull(currentTableSplitsByBucket.get(bucket));
+                                return getOrCreateLakeWriter(
+                                        bucket,
+                                        split.getPartitionName(),
+                                        split.getSplitIndex(),
+                                        split.getTieringRoundTimestamp());
+                            },
                             stoppingOffset);
 
             // The split owns offsets before stoppingOffset only. If the scanner consumed past
@@ -589,16 +639,28 @@ public class TieringSplitReader<WriteResult>
     }
 
     private LakeWriter<WriteResult> getOrCreateLakeWriter(
-            TableBucket bucket, @Nullable String partitionName) throws IOException {
+            TableBucket bucket,
+            @Nullable String partitionName,
+            int splitIndex,
+            long tieringRoundTimestamp)
+            throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.get(bucket);
         if (lakeWriter == null) {
+            Integer partitionBucketCount =
+                    bucket.getPartitionId() != null
+                            ? currentTablePartitionBucketCounts.get(bucket.getPartitionId())
+                            : null;
             lakeWriter =
                     lakeTieringFactory.createLakeWriter(
                             new TieringWriterInitContext(
                                     currentTablePath,
                                     bucket,
                                     partitionName,
-                                    currentTable.getTableInfo()));
+                                    currentTable.getTableInfo(),
+                                    splitIndex,
+                                    tieringRoundTimestamp,
+                                    partitionBucketCount,
+                                    ioTmpDirs));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
@@ -613,7 +675,14 @@ public class TieringSplitReader<WriteResult>
         LakeWriter<WriteResult> lakeWriter = lakeWriters.remove(bucket);
         WriteResult writeResult = null;
         if (lakeWriter != null) {
-            writeResult = lakeWriter.complete();
+            try {
+                writeResult = lakeWriter.complete();
+            } catch (Exception e) {
+                // make sure the lake writer is always closed to release resources
+                // when complete fails, otherwise resources like arrow buffers leak
+                IOUtils.closeQuietly(lakeWriter, "lake writer for bucket " + bucket);
+                throw e;
+            }
             lakeWriter.close();
         }
         return toTableBucketWriteResult(
@@ -683,7 +752,10 @@ public class TieringSplitReader<WriteResult>
             if (lakeWriter == null) {
                 lakeWriter =
                         getOrCreateLakeWriter(
-                                bucket, checkNotNull(currentSnapshotSplit).getPartitionName());
+                                bucket,
+                                checkNotNull(currentSnapshotSplit).getPartitionName(),
+                                currentSnapshotSplit.getSplitIndex(),
+                                currentSnapshotSplit.getTieringRoundTimestamp());
             }
             lakeWriter.write(scanRecord);
             if (scanRecord.getSizeInBytes() > 0) {
@@ -709,6 +781,10 @@ public class TieringSplitReader<WriteResult>
     }
 
     private void finishCurrentTable() throws IOException {
+        // defensive cleanup: lake writers should have been completed and closed when
+        // their splits finished, close any residual writers before closing the log
+        // scanner since their resources may be allocated from the scanner
+        closeAllLakeWriters();
         try {
             if (currentLogScanner != null) {
                 currentLogScanner.close();
@@ -737,6 +813,7 @@ public class TieringSplitReader<WriteResult>
         currentTableStoppingOffsets.clear();
         currentTableTieredOffsetAndTimestamp.clear();
         currentTableSplitsByBucket.clear();
+        currentTablePartitionBucketCounts.clear();
     }
 
     /**
@@ -764,12 +841,35 @@ public class TieringSplitReader<WriteResult>
 
     @Override
     public void close() throws Exception {
-        if (currentLogScanner != null) {
-            currentLogScanner.close();
+        // lake writers must be closed before the log scanner since their resources
+        // (e.g. arrow buffers) may be allocated from the scanner;
+        // the connection is owned and closed by TieringSourceReader
+        List<AutoCloseable> closeables = new ArrayList<>(lakeWriters.values());
+        closeables.add(currentSnapshotSplitReader);
+        closeables.add(currentLogScanner);
+        closeables.add(currentTable);
+
+        // clear the fields to make close() idempotent
+        lakeWriters.clear();
+        currentSnapshotSplitReader = null;
+        currentLogScanner = null;
+        currentTable = null;
+
+        IOUtils.closeAll(closeables);
+    }
+
+    private void closeAllLakeWriters() {
+        if (lakeWriters.isEmpty()) {
+            return;
         }
-        if (currentTable != null) {
-            currentTable.close();
+        LOG.warn(
+                "{} lake writer(s) of table {} are still in-flight, closing them.",
+                lakeWriters.size(),
+                currentTablePath);
+        for (Map.Entry<TableBucket, LakeWriter<WriteResult>> entry : lakeWriters.entrySet()) {
+            IOUtils.closeQuietly(entry.getValue(), "lake writer for bucket " + entry.getKey());
         }
+        lakeWriters.clear();
 
         // don't need to close connection, will be closed by TieringSourceReader
     }

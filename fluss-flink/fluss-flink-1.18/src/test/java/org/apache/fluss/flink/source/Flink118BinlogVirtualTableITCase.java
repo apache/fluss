@@ -17,5 +17,14 @@
 
 package org.apache.fluss.flink.source;
 
+import org.junit.jupiter.api.Disabled;
+
 /** IT case for {@link BinlogVirtualTableITCase} in Flink 1.18. */
-public class Flink118BinlogVirtualTableITCase extends BinlogVirtualTableITCase {}
+public class Flink118BinlogVirtualTableITCase extends BinlogVirtualTableITCase {
+
+    @Disabled("Flink 1.18 has a bug in timestamp_ltz type, see FLINK-35318")
+    @Override
+    public void testBatchReadBinlogTableWithCommitTimestampFilter() throws Exception {
+        super.testBatchReadBinlogTableWithCommitTimestampFilter();
+    }
+}

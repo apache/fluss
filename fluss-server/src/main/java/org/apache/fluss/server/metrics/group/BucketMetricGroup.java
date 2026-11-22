@@ -50,6 +50,14 @@ public class BucketMetricGroup extends AbstractMetricGroup {
     // RocksDB statistics for this bucket (null for non-KV tables)
     private volatile @Nullable RocksDBStatistics rocksDBStatistics;
 
+    // Latest normalized KV backpressure level observed on this bucket, in [0, 1]. Only meaningful
+    // for KV (primary-key) tables: written when a successful PutKv response samples recent
+    // pressure,
+    // read by the table-level aggregating gauges. Defaults to 0 ("no pressure") for non-KV tables
+    // and for KV buckets that haven't seen a write yet, so the table-level aggregation is
+    // well-defined in both cases.
+    private volatile float kvBackpressureLevel = 0f;
+
     public BucketMetricGroup(
             MetricRegistry registry,
             @Nullable String partitionName,
@@ -122,6 +130,25 @@ public class BucketMetricGroup extends AbstractMetricGroup {
     @Nullable
     public RocksDBStatistics getRocksDBStatistics() {
         return rocksDBStatistics;
+    }
+
+    /**
+     * Record the latest normalized KV backpressure level observed on this bucket. Called when a
+     * successful PutKv response samples recent pressure so table-level aggregating gauges can read
+     * it without going through RocksDB again. Only meaningful for KV (primary-key) tables.
+     *
+     * @param level normalized pressure in {@code [0, 1]}
+     */
+    public void recordKvBackpressureLevel(float level) {
+        this.kvBackpressureLevel = level;
+    }
+
+    /**
+     * @return the latest KV backpressure level recorded on this bucket, in {@code [0, 1]}. Always 0
+     *     for non-KV tables.
+     */
+    public float getKvBackpressureLevel() {
+        return kvBackpressureLevel;
     }
 
     @Override

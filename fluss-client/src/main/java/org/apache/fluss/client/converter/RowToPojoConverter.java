@@ -141,9 +141,19 @@ public final class RowToPojoConverter<T> {
                 return InternalRow::getDouble;
             case CHAR:
             case STRING:
-                return (row, pos) ->
-                        FlussTypeToPojoTypeConverter.convertTextValue(
-                                fieldType, prop.name, prop.type, row.getString(pos));
+                {
+                    final Map<String, Object> enumConstantsMap =
+                            prop.type.isEnum()
+                                    ? FlussTypeToPojoTypeConverter.buildEnumConstantsMap(prop.type)
+                                    : null;
+                    return (row, pos) ->
+                            FlussTypeToPojoTypeConverter.convertTextValue(
+                                    fieldType,
+                                    prop.name,
+                                    prop.type,
+                                    row.getString(pos),
+                                    enumConstantsMap);
+                }
             case BINARY:
             case BYTES:
                 return InternalRow::getBytes;

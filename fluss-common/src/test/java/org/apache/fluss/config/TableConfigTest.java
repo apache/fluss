@@ -21,10 +21,24 @@ import org.apache.fluss.metadata.DeleteBehavior;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link TableConfig}. */
 class TableConfigTest {
+
+    @Test
+    void testMinInSyncReplicas() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getMinInSyncReplicas()).isEmpty();
+        conf.setString("table.min-in-sync-replicas", "2");
+        assertThat(tableConfig.getMinInSyncReplicas()).hasValue(2);
+        conf.removeConfig(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS);
+        assertThat(tableConfig.getMinInSyncReplicas()).isEmpty();
+    }
 
     @Test
     void testDeleteBehavior() {
@@ -43,5 +57,30 @@ class TableConfigTest {
         conf.set(ConfigOptions.TABLE_DELETE_BEHAVIOR, DeleteBehavior.IGNORE);
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+    }
+
+    @Test
+    void testTieredLogLocalTtl() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(3));
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(3).toMillis());
+
+        conf.set(ConfigOptions.TABLE_LOG_LOCAL_TTL, Duration.ofHours(6));
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofHours(6).toMillis());
+
+        conf.removeConfig(ConfigOptions.TABLE_LOG_LOCAL_TTL);
+        assertThat(tableConfig.getLocalLogTTLMs()).isEqualTo(Duration.ofDays(3).toMillis());
+    }
+
+    @Test
+    void testKvValueLayoutVersion() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        assertThat(tableConfig.getKvValueLayoutVersion()).isEmpty();
+        conf.set(ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION, 2);
+        assertThat(tableConfig.getKvValueLayoutVersion()).hasValue(2);
     }
 }

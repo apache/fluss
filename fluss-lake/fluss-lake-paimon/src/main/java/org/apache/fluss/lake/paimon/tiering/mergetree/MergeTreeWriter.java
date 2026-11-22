@@ -23,6 +23,7 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.KeyValue;
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.RowKeyExtractor;
@@ -31,16 +32,12 @@ import org.apache.paimon.table.sink.TableWriteImpl;
 import javax.annotation.Nullable;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 
 /** A {@link RecordWriter} to write to Paimon's primary-key table. */
 public class MergeTreeWriter extends RecordWriter<KeyValue> {
-
-    // the option key to configure the temporary directory used by fluss tiering
-    private static final String FLUSS_TIERING_TMP_DIR_KEY = "fluss.tiering.io-tmpdir";
 
     private final KeyValue keyValue = new KeyValue();
 
@@ -53,14 +50,19 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            @Nullable String[] ioTmpDirs,
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         this(
                 fileStoreTable,
-                createIOManager(fileStoreTable),
+                createIOManager(ioTmpDirs),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns,
+                historicalPartition);
     }
 
     MergeTreeWriter(
@@ -69,27 +71,31 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
             TableBucket tableBucket,
             @Nullable String partition,
             List<String> partitionKeys,
-            RowType flussRowType) {
+            RowType flussRowType,
+            boolean paimonIncludingSystemColumns,
+            boolean historicalPartition) {
         super(
                 createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
                 partitionKeys,
-                flussRowType);
+                flussRowType,
+                paimonIncludingSystemColumns,
+                historicalPartition);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
         this.ioManager = ioManager;
     }
 
-    private static IOManager createIOManager(FileStoreTable fileStoreTable) {
-        // we allow users to configure the temporary directory used by fluss tiering
-        // since the default java.io.tmpdir may not be suitable.
-        // currently, we don't expose the option, as a workaround way, maybe in the future we can
-        // expose it if it's needed
-        Map<String, String> props = fileStoreTable.options();
-        String tmpDir =
-                props.getOrDefault(FLUSS_TIERING_TMP_DIR_KEY, System.getProperty("java.io.tmpdir"));
-        return IOManager.create(tmpDir);
+    private static IOManager createIOManager(@Nullable String[] ioTmpDirs) {
+        return IOManager.create(getIoManagerTmpDirs(ioTmpDirs));
+    }
+
+    static String[] getIoManagerTmpDirs(@Nullable String[] ioTmpDirs) {
+        if (ioTmpDirs != null && ioTmpDirs.length > 0) {
+            return ioTmpDirs;
+        }
+        return new String[] {System.getProperty("java.io.tmpdir")};
     }
 
     private static TableWriteImpl<KeyValue> createTableWrite(
@@ -110,7 +116,7 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
 
     @Override
     public void write(LogRecord record) throws Exception {
-        flussRecordAsPaimonRow.setFlussRecord(record);
+        BinaryRow targetPartition = prepareRecordAndGetPartition(record);
 
         rowKeyExtractor.setRecord(flussRecordAsPaimonRow);
         keyValue.replace(
@@ -121,6 +127,6 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly
-        tableWrite.getWrite().write(partition, bucket, keyValue);
+        tableWrite.getWrite().write(targetPartition, bucket, keyValue);
     }
 }

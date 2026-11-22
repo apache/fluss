@@ -29,9 +29,11 @@ import org.apache.fluss.utils.json.JsonSerializer;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /** Json serializer and deserializer for {@link RebalanceTask}. */
 public class RebalanceTaskJsonSerde
@@ -42,6 +44,7 @@ public class RebalanceTaskJsonSerde
     private static final String VERSION_KEY = "version";
     private static final String REBALANCE_ID = "rebalance_id";
     private static final String REBALANCE_STATUS = "rebalance_status";
+    private static final String CANCEL_REQUESTED = "cancel_requested";
     private static final String REBALANCE_PLAN = "rebalance_plan";
 
     private static final String TABLE_ID = "table_id";
@@ -49,12 +52,13 @@ public class RebalanceTaskJsonSerde
 
     private static final String BUCKETS = "buckets";
     private static final String BUCKET_ID = "bucket_id";
+    private static final String CANCELED = "canceled";
     private static final String ORIGINAL_LEADER = "original_leader";
     private static final String NEW_LEADER = "new_leader";
     private static final String ORIGIN_REPLICAS = "origin_replicas";
     private static final String NEW_REPLICAS = "new_replicas";
 
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     @Override
     public void serialize(RebalanceTask rebalanceTask, JsonGenerator generator) throws IOException {
@@ -62,6 +66,7 @@ public class RebalanceTaskJsonSerde
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeStringField(REBALANCE_ID, rebalanceTask.getRebalanceId());
         generator.writeNumberField(REBALANCE_STATUS, rebalanceTask.getRebalanceStatus().getCode());
+        generator.writeBooleanField(CANCEL_REQUESTED, rebalanceTask.isCancelRequested());
 
         generator.writeArrayFieldStart(REBALANCE_PLAN);
         // first to write none-partitioned tables.
@@ -71,7 +76,10 @@ public class RebalanceTaskJsonSerde
             generator.writeNumberField(TABLE_ID, entry.getKey());
             generator.writeArrayFieldStart(BUCKETS);
             for (RebalancePlanForBucket bucketPlan : entry.getValue()) {
-                serializeRebalancePlanForBucket(generator, bucketPlan);
+                serializeRebalancePlanForBucket(
+                        generator,
+                        bucketPlan,
+                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()));
             }
             generator.writeEndArray();
             generator.writeEndObject();
@@ -85,7 +93,10 @@ public class RebalanceTaskJsonSerde
             generator.writeNumberField(PARTITION_ID, entry.getKey().getPartitionId());
             generator.writeArrayFieldStart(BUCKETS);
             for (RebalancePlanForBucket bucketPlan : entry.getValue()) {
-                serializeRebalancePlanForBucket(generator, bucketPlan);
+                serializeRebalancePlanForBucket(
+                        generator,
+                        bucketPlan,
+                        rebalanceTask.getCanceledBuckets().contains(bucketPlan.getTableBucket()));
             }
             generator.writeEndArray();
             generator.writeEndObject();
@@ -102,8 +113,11 @@ public class RebalanceTaskJsonSerde
 
         String rebalanceId = node.get(REBALANCE_ID).asText();
         RebalanceStatus rebalanceStatus = RebalanceStatus.of(node.get(REBALANCE_STATUS).asInt());
+        boolean cancelRequested =
+                node.has(CANCEL_REQUESTED) && node.get(CANCEL_REQUESTED).asBoolean();
 
         Map<TableBucket, RebalancePlanForBucket> planForBuckets = new HashMap<>();
+        Set<TableBucket> canceledBuckets = new HashSet<>();
         for (JsonNode tablePartitionPlanNode : rebalancePlanNode) {
             long tableId = tablePartitionPlanNode.get(TABLE_ID).asLong();
 
@@ -116,6 +130,9 @@ public class RebalanceTaskJsonSerde
             for (JsonNode bucketPlanNode : bucketPlanNodes) {
                 int bucketId = bucketPlanNode.get(BUCKET_ID).asInt();
                 TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+                if (bucketPlanNode.has(CANCELED) && bucketPlanNode.get(CANCELED).asBoolean()) {
+                    canceledBuckets.add(tableBucket);
+                }
 
                 int originLeader = bucketPlanNode.get(ORIGINAL_LEADER).asInt();
 
@@ -140,13 +157,18 @@ public class RebalanceTaskJsonSerde
             }
         }
 
-        return new RebalanceTask(rebalanceId, rebalanceStatus, planForBuckets);
+        return new RebalanceTask(
+                rebalanceId, rebalanceStatus, planForBuckets, cancelRequested, canceledBuckets);
     }
 
     private void serializeRebalancePlanForBucket(
-            JsonGenerator generator, RebalancePlanForBucket bucketPlan) throws IOException {
+            JsonGenerator generator, RebalancePlanForBucket bucketPlan, boolean canceled)
+            throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(BUCKET_ID, bucketPlan.getBucketId());
+        if (canceled) {
+            generator.writeBooleanField(CANCELED, true);
+        }
         generator.writeNumberField(ORIGINAL_LEADER, bucketPlan.getOriginalLeader());
         generator.writeNumberField(NEW_LEADER, bucketPlan.getNewLeader());
         generator.writeArrayFieldStart(ORIGIN_REPLICAS);

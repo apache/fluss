@@ -23,11 +23,13 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -37,6 +39,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
  * A client that lookups value of keys from server.
  *
@@ -44,8 +48,8 @@ import java.util.concurrent.TimeUnit;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean)} method is asynchronous, when
- * called, it adds the lookup operation to a queue of pending lookup operations and immediately
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean, String)} method is asynchronous,
+ * when called, it adds the lookup operation to a queue of pending lookup operations and immediately
  * returns. This allows the lookup operations to batch together individual lookup operations for
  * efficiency.
  */
@@ -63,6 +67,7 @@ public class LookupClient {
     private final LookupSender lookupSender;
 
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
+        ExponentialBackoff retryBackoff = createRetryBackoff(conf);
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
         short acks = configureAcks(conf);
@@ -72,9 +77,24 @@ public class LookupClient {
                         lookupQueue,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES),
+                        retryBackoff,
                         acks,
                         (int) conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis());
         lookupSenderThreadPool.submit(lookupSender);
+    }
+
+    private static ExponentialBackoff createRetryBackoff(Configuration conf) {
+        Duration initial = conf.get(ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF);
+        Duration maximum = conf.get(ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF_MAX);
+        checkArgument(
+                !initial.isNegative()
+                        && initial.compareTo(maximum) <= 0
+                        && maximum.compareTo(Duration.ofMillis(Integer.MAX_VALUE)) <= 0,
+                "%s and %s must satisfy 0ms <= initial <= maximum <= %sms.",
+                ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF.key(),
+                ConfigOptions.CLIENT_LOOKUP_RETRY_BACKOFF_MAX.key(),
+                Integer.MAX_VALUE);
+        return new ExponentialBackoff(initial.toMillis(), 2, maximum.toMillis(), 0.2);
     }
 
     private short configureAcks(Configuration conf) {
@@ -95,19 +115,41 @@ public class LookupClient {
         return Executors.newFixedThreadPool(1, new ExecutorThreadFactory(LOOKUP_THREAD_PREFIX));
     }
 
+    /**
+     * Looks up a key from the specified table bucket.
+     *
+     * @param tablePath path of the table to look up
+     * @param tableBucket bucket to look up
+     * @param keyBytes serialized key to look up
+     * @param insertIfNotExists whether to insert the key when it does not exist
+     * @param originalPartitionName null for a regular lookup against an active Fluss partition; the
+     *     original partition name for a historical lookup against a partition whose Fluss data has
+     *     expired and is looked up from lake storage
+     * @return a future containing the serialized value, or null if the key does not exist
+     */
     public CompletableFuture<byte[]> lookup(
             TablePath tablePath,
             TableBucket tableBucket,
             byte[] keyBytes,
-            boolean insertIfNotExists) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
+            boolean insertIfNotExists,
+            @Nullable String originalPartitionName,
+            int bucketCount) {
+        LookupQuery lookup =
+                new LookupQuery(
+                        tablePath,
+                        tableBucket,
+                        keyBytes,
+                        insertIfNotExists,
+                        originalPartitionName,
+                        bucketCount);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }
 
     public CompletableFuture<List<byte[]>> prefixLookup(
-            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
-        PrefixLookupQuery prefixLookup = new PrefixLookupQuery(tablePath, tableBucket, keyBytes);
+            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes, int bucketCount) {
+        PrefixLookupQuery prefixLookup =
+                new PrefixLookupQuery(tablePath, tableBucket, keyBytes, bucketCount);
         lookupQueue.appendLookup(prefixLookup);
         return prefixLookup.future();
     }
@@ -122,7 +164,7 @@ public class LookupClient {
         if (lookupSenderThreadPool != null) {
             lookupSenderThreadPool.shutdown();
             try {
-                if (lookupSenderThreadPool.awaitTermination(
+                if (!lookupSenderThreadPool.awaitTermination(
                         timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                     lookupSenderThreadPool.shutdownNow();
 

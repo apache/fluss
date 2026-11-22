@@ -44,7 +44,26 @@ public class RowToPojoConverterTest {
 
         ConvertersTestFixtures.TestPojo pojo = ConvertersTestFixtures.TestPojo.sample();
         GenericRow row = writer.toRow(pojo);
-        assertThat(row.getFieldCount()).isEqualTo(17);
+        assertThat(row.getFieldCount()).isEqualTo(22);
+
+        ConvertersTestFixtures.TestPojo back = scanner.fromRow(row);
+        assertThat(back).isEqualTo(pojo);
+    }
+
+    @Test
+    public void testRoundTripFullSchemaWithLowerCaseEnum() {
+        RowType table = ConvertersTestFixtures.fullSchema();
+        RowType projection = table;
+
+        PojoToRowConverter<ConvertersTestFixtures.TestPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.TestPojo.class, table, projection);
+        RowToPojoConverter<ConvertersTestFixtures.TestPojo> scanner =
+                RowToPojoConverter.of(ConvertersTestFixtures.TestPojo.class, table, projection);
+
+        ConvertersTestFixtures.TestPojo pojo = ConvertersTestFixtures.TestPojo.sample();
+        pojo.enumField = ConvertersTestFixtures.StatusEnum.error;
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.getFieldCount()).isEqualTo(22);
 
         ConvertersTestFixtures.TestPojo back = scanner.fromRow(row);
         assertThat(back).isEqualTo(pojo);

@@ -18,15 +18,34 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.server.kv.KvCloseMode;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
+import io.github.fluss_contrib.rocksdb.ColumnFamilyOptions;
+import io.github.fluss_contrib.rocksdb.FlushOptions;
+import io.github.fluss_contrib.rocksdb.RocksDBException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKv}. */
 class RocksDBKvTest {
@@ -34,15 +53,7 @@ class RocksDBKvTest {
     @Test
     void testRocksDbKv(@TempDir Path tempDir) throws Exception {
         File instanceBasePath = tempDir.toFile();
-        RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
-        RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        instanceBasePath,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
-
-        try (RocksDBKv rocksDBKv = rocksDBKvBuilder.build()) {
+        try (RocksDBKv rocksDBKv = buildRocksDBKv(instanceBasePath)) {
             // put the k/v
             byte[] key = new byte[] {1, 2, 3};
             byte[] val = new byte[] {1, 2};
@@ -63,5 +74,502 @@ class RocksDBKvTest {
 
             assertThat(rocksDBKv.multiGet(Arrays.asList(key, key2))).containsExactly(null, val2);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixLookupByteBoundaries(boolean flush, @TempDir Path tempDir) throws Exception {
+        // Already in unsigned bytewise order, including exact prefixes and their upper bounds.
+        byte[][] keys = {
+            {},
+            {0},
+            {0, 0},
+            {0, (byte) 0xff},
+            {1},
+            {1, 0},
+            {1, (byte) 0xfe},
+            {1, (byte) 0xff},
+            {1, (byte) 0xff, 0},
+            {1, (byte) 0xff, (byte) 0xff},
+            {2},
+            {0x7f},
+            {0x7f, (byte) 0xff},
+            {(byte) 0x80},
+            {(byte) 0x80, 0},
+            {(byte) 0xfe},
+            {(byte) 0xff},
+            {(byte) 0xff, 0},
+            {(byte) 0xff, (byte) 0xff},
+            {(byte) 0xff, (byte) 0xff, (byte) 0xff}
+        };
+        byte[][] prefixes = {
+            {},
+            {0},
+            {0, (byte) 0xff},
+            {1},
+            {1, (byte) 0xff},
+            {1, (byte) 0xff, (byte) 0xff},
+            {1, (byte) 0xff, (byte) 0xff, 0},
+            {2},
+            {3},
+            {0x7f},
+            {0x7f, (byte) 0xff},
+            {(byte) 0x80},
+            {(byte) 0xff},
+            {(byte) 0xff, (byte) 0xff},
+            {(byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff}
+        };
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            for (byte[] key : keys) {
+                kv.put(key, key);
+            }
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            for (byte[] prefix : prefixes) {
+                byte[][] expected =
+                        Arrays.stream(keys)
+                                .filter(
+                                        key ->
+                                                key.length >= prefix.length
+                                                        && Arrays.equals(
+                                                                Arrays.copyOf(key, prefix.length),
+                                                                prefix))
+                                .toArray(byte[][]::new);
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .as("prefix %s (flushed=%s)", Arrays.toString(prefix), flush)
+                            .containsExactly(expected);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testPrefixLookupWithEncodedKeysAndMixedSstAndMemtable(@TempDir Path tempDir)
+            throws Exception {
+        RowType keyType = RowType.of(DataTypes.STRING(), DataTypes.INT());
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(keyType);
+        CompactedKeyEncoder prefixEncoder = new CompactedKeyEncoder(keyType, new int[] {0});
+        byte[] prefix = prefixEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 0));
+        byte[] key1 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 1));
+        byte[] key2 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 2));
+        byte[] key3 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 3));
+        byte[] key4 = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ab"), 4));
+        byte[] other = keyEncoder.encodeKey(GenericRow.of(BinaryString.fromString("ac"), 1));
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(key1, new byte[] {1});
+            kv.put(key2, new byte[] {2});
+            kv.put(key3, new byte[] {3});
+            kv.put(other, new byte[] {9});
+            try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                kv.db.flush(options);
+                kv.put(key1, new byte[] {5});
+                kv.delete(key2);
+                kv.put(key4, new byte[] {4});
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+                kv.db.flush(options);
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+                kv.db.compactRange();
+                try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                    assertThat(lookup.readAll())
+                            .containsExactly(new byte[] {5}, new byte[] {3}, new byte[] {4});
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testPrefixReadViewSurvivesConcurrentMutations(boolean flush, @TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            kv.put(new byte[] {1, 0}, new byte[] {10});
+            kv.put(new byte[] {1, 1}, new byte[] {11});
+            kv.put(new byte[] {2}, new byte[] {20});
+            if (flush) {
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+            }
+            byte[] prefix = {1};
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(prefix)) {
+                prefix[0] = 2;
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                kv.put(new byte[] {1, 0}, new byte[] {12});
+                kv.delete(new byte[] {1, 1});
+                kv.put(new byte[] {1, 2}, new byte[] {13});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                // Seek has not run yet: the view must date from opening, not the first seek.
+                assertThat(lookup.readAll()).containsExactly(new byte[] {10}, new byte[] {11});
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {1})) {
+                assertThat(lookup.readAll()).containsExactly(new byte[] {12}, new byte[] {13});
+            }
+            try (RocksDBKv.PrefixLookup lookup = kv.openPrefixLookup(new byte[] {3})) {
+                assertThat(lookup.readAll()).isEmpty();
+            }
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+        }
+    }
+
+    @Test
+    void testMultiGetSnapshotSurvivesFlushCompactionAndDelete(@TempDir Path tempDir)
+            throws Exception {
+        try (RocksDBKv kv = buildRocksDBKv(tempDir.toFile())) {
+            byte[] key = new byte[] {1};
+            byte[] missing = new byte[] {2};
+            kv.put(key, new byte[] {10});
+            RocksDBKv.MultiGetLookup lookup = kv.openMultiGet();
+            try {
+                assertThat(kv.getResourceGuard().getLeaseCount()).isEqualTo(1);
+                assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isEqualTo(1);
+                kv.delete(key);
+                kv.put(missing, new byte[] {20});
+                try (FlushOptions options = new FlushOptions().setWaitForFlush(true)) {
+                    kv.db.flush(options);
+                }
+                kv.db.compactRange();
+                assertThat(lookup.read(Arrays.asList(key, missing, key)))
+                        .containsExactly(new byte[] {10}, null, new byte[] {10});
+            } finally {
+                lookup.close();
+            }
+            lookup.close();
+            assertThat(kv.getResourceGuard().getLeaseCount()).isZero();
+            assertThat(kv.db.getLongProperty("rocksdb.num-snapshots")).isZero();
+            assertThatThrownBy(() -> lookup.read(Arrays.asList(key)))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("closed");
+            assertThat(kv.multiGet(Arrays.asList(key, missing)))
+                    .containsExactly(null, new byte[] {20});
+        }
+    }
+
+    @Test
+    void testLiveSstFilesSize(@TempDir Path tempDir) throws Exception {
+        try (RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile())) {
+            rocksDBKv.put(new byte[] {1}, new byte[] {2});
+            try (FlushOptions flushOptions = new FlushOptions().setWaitForFlush(true)) {
+                rocksDBKv.db.flush(flushOptions);
+            }
+
+            assertThat(rocksDBKv.liveSstFilesSize()).isPositive();
+        }
+    }
+
+    @Test
+    void testClosePreservesUnflushedStateByDefault(@TempDir Path tempDir) throws Exception {
+        byte[] key = new byte[] {1};
+        byte[] value = new byte[] {2};
+
+        RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile());
+        rocksDBKv.put(key, value);
+        rocksDBKv.close();
+
+        try (RocksDBKv reopened = buildRocksDBKv(tempDir.toFile())) {
+            assertThat(reopened.get(key)).isEqualTo(value);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  Backpressure tests
+    // ------------------------------------------------------------------
+
+    @Test
+    void testDefaultWriteBatchAllowsRocksDbSlowdown(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, container.getColumnOptions());
+
+        try (RocksDBKv kv = builder.build();
+                RocksDBWriteBatchWrapper writer =
+                        kv.newWriteBatch(1024, new SimpleCounter(), new TestHistogram())) {
+            assertThat(noSlowdown(writer)).isFalse();
+        }
+    }
+
+    @Test
+    void testNoSlowdownWriteBatchFailsFastOnRocksDbDelay(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, container.getColumnOptions());
+
+        try (RocksDBKv kv = builder.build();
+                RocksDBWriteBatchWrapper writer =
+                        kv.newNoSlowdownWriteBatch(
+                                1024, new SimpleCounter(), new TestHistogram())) {
+            assertThat(noSlowdown(writer)).isTrue();
+        }
+    }
+
+    /**
+     * Verifies that the L0 property is actually readable on fluss-rocksdbjni 11.8.1-fluss-3.
+     *
+     * <p>This is a regression test: {@code getLongProperty("rocksdb.num-files-at-level0")} throws
+     * {@code RocksDBException: NotFound} because the property is parametric (string-type), not an
+     * int-type property. The fix uses {@code getProperty} + {@code Long.parseLong} instead.
+     */
+    @Test
+    void testCurrentPressure_l0PropertyReadable(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        try (RocksDBKv kv = builder.build()) {
+            // Initially 0 L0 files, should return 0 pressure.
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+
+            // Write + flush to produce exactly 1 L0 SST.
+            kv.put(new byte[] {1}, new byte[] {1});
+            try (FlushOptions flushOpts = new FlushOptions()) {
+                flushOpts.setWaitForFlush(true);
+                kv.db.flush(flushOpts);
+            }
+            kv.refreshL0FileCount();
+
+            // L0 = 1, still below flussL0SlowdownTrigger (2), should still be 0.
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+        }
+    }
+
+    /**
+     * Verifies the proactive backpressure pressure curve. Configuration: flussTrigger=2,
+     * rocksdbSlowdownTrigger=5.
+     */
+    @Test
+    void testPressureCurve(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+        // slowdownTrigger = 6; with default maxWriteBufferNumber = 2 the gate closes when
+        // L0 + 2 >= 6, i.e. L0 >= 4. High compaction/stop triggers prevent RocksDB from
+        // interfering during the test.
+        cfOpts.setLevel0SlowdownWritesTrigger(6);
+        cfOpts.setLevel0FileNumCompactionTrigger(100);
+        cfOpts.setLevel0StopWritesTrigger(100);
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        try (RocksDBKv kv = builder.build()) {
+            // --- L0 = 0: no pressure ---
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+
+            // Flush to L0 = 2 (reaches flussTrigger). p = (2-2)/(6-2) = 0.
+            flushNTimes(kv, 2);
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+
+            // Flush to L0 = 3: proactive throttle signal kicks in. p = (3-2)/(6-2) = 1/4.
+            flushNTimes(kv, 1);
+            float p = kv.currentPressure();
+            assertThat(p).isCloseTo(1f / 4f, org.assertj.core.data.Offset.offset(0.01f));
+
+            // Flush to L0 = 4: p = (4-2)/(6-2) = 2/4 = 0.5.
+            flushNTimes(kv, 1);
+            p = kv.currentPressure();
+            assertThat(p).isCloseTo(0.5f, org.assertj.core.data.Offset.offset(0.01f));
+
+            // Flush to L0 = 5: p clamped to (window-1)/window = 3/4.
+            flushNTimes(kv, 1);
+            p = kv.currentPressure();
+            assertThat(p).isLessThan(1f);
+            assertThat(p).isCloseTo(3f / 4f, org.assertj.core.data.Offset.offset(0.01f));
+        }
+    }
+
+    @Test
+    void testDiscardCloseDoesNotPersistUnflushedState(@TempDir Path tempDir) throws Exception {
+        byte[] key = new byte[] {1};
+
+        RocksDBKv rocksDBKv = buildRocksDBKv(tempDir.toFile());
+        rocksDBKv.put(key, new byte[] {2});
+        rocksDBKv.close(KvCloseMode.DISCARD_UNPERSISTED_STATE);
+
+        try (RocksDBKv reopened = buildRocksDBKv(tempDir.toFile())) {
+            assertThat(reopened.get(key)).isNull();
+        }
+    }
+
+    @Test
+    void testWriteRejectionStaysRaisedUntilWriteSuccess(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+        cfOpts.setLevel0SlowdownWritesTrigger(6);
+        cfOpts.setLevel0FileNumCompactionTrigger(100);
+        cfOpts.setLevel0StopWritesTrigger(100);
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        try (RocksDBKv kv = builder.build()) {
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+
+            kv.recordWriteRejected();
+
+            assertThat(kv.currentPressure())
+                    .isCloseTo(0.8f, org.assertj.core.data.Offset.offset(0.01f));
+            assertThat(kv.wouldExceedFlushBudget(0)).isTrue();
+
+            Thread.sleep(150L);
+
+            assertThat(kv.currentPressure())
+                    .isCloseTo(0.8f, org.assertj.core.data.Offset.offset(0.01f));
+            assertThat(kv.wouldExceedFlushBudget(0)).isTrue();
+
+            kv.recordWriteSucceeded();
+
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+            assertThat(kv.wouldExceedFlushBudget(0)).isFalse();
+        }
+    }
+
+    /** Writes a unique key and flushes the memtable N times to produce N L0 SST files. */
+    private static void flushNTimes(RocksDBKv kv, int n) throws Exception {
+        for (int i = 0; i < n; i++) {
+            // Write a unique key to dirty the memtable.
+            byte[] key = ("flush-key-" + System.nanoTime() + "-" + i).getBytes();
+            kv.put(key, key);
+            try (FlushOptions flushOpts = new FlushOptions()) {
+                flushOpts.setWaitForFlush(true);
+                kv.db.flush(flushOpts);
+            }
+        }
+        kv.refreshL0FileCount();
+    }
+
+    private static boolean noSlowdown(RocksDBWriteBatchWrapper writer) {
+        return writer.options.noSlowdown();
+    }
+
+    /**
+     * Verifies that {@link RocksDBKv#wouldExceedFlushBudget(long)} correctly rejects writes when
+     * the pending buffer bytes would produce enough L0 SSTs to breach the slowdown trigger.
+     *
+     * <p>Configuration: slowdownTrigger=6, maxWriteBufferNumber=2, writeBufferSize=1024. The
+     * admission gate rejects when {@code currentL0 + maxWriteBufferNumber + estimatedFlushFiles >=
+     * slowdownTrigger}.
+     *
+     * <ul>
+     *   <li>L0=0 → 3 estimated files is safe, 4 estimated files rejected.
+     *   <li>L0=2 → 1 estimated file is safe, 2 estimated files rejected.
+     *   <li>L0=4 → remainingSlots=0 → always rejected (L0 gate).
+     * </ul>
+     */
+    @Test
+    void testFlushBudgetRejectsLargeBuffer(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+        cfOpts.setLevel0SlowdownWritesTrigger(6);
+        cfOpts.setWriteBufferSize(1024);
+        cfOpts.setMaxWriteBufferNumber(2);
+        cfOpts.setLevel0FileNumCompactionTrigger(100);
+        cfOpts.setLevel0StopWritesTrigger(100);
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        try (RocksDBKv kv = builder.build()) {
+            assertThat(kv.wouldExceedFlushBudget(0)).isFalse();
+            assertThat(kv.wouldExceedFlushBudget(3072)).isFalse();
+            assertThat(kv.wouldExceedFlushBudget(3073)).isTrue();
+            assertThat(kv.wouldExceedFlushBudget(8192)).isTrue();
+
+            flushNTimes(kv, 2);
+            assertThat(kv.wouldExceedFlushBudget(0)).isFalse();
+            assertThat(kv.wouldExceedFlushBudget(1024)).isFalse();
+            assertThat(kv.wouldExceedFlushBudget(1025)).isTrue();
+
+            // Flush to L0=4: remainingSlots = 6 - 4 - 2 = 0 → L0 gate always rejects
+            flushNTimes(kv, 2);
+            assertThat(kv.wouldExceedFlushBudget(0)).isTrue();
+        }
+    }
+
+    /**
+     * Regression test for the JVM crash (exit 134 / SIGABRT) observed in CI for {@code
+     * KvReplicaRestoreITCase}: after {@link RocksDBKv#close()} releases the native handle, late
+     * pressure sampling (a write response racing with a concurrent tablet close) could still reach
+     * {@link RocksDBKv#currentPressure()} → {@code db.getProperty(...)} and touch the disposed
+     * native handle. The pressure-sampling fence must turn those late calls into a benign "no
+     * pressure" reading instead of a native crash.
+     */
+    @Test
+    void testPressureQueriesAfterCloseAreSafe(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+        cfOpts.setLevel0SlowdownWritesTrigger(5);
+        cfOpts.setLevel0FileNumCompactionTrigger(100);
+        cfOpts.setLevel0StopWritesTrigger(100);
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        RocksDBKv kv = builder.build();
+        // Produce a couple of L0 SSTs so a non-fenced query would otherwise observe non-zero L0.
+        flushNTimes(kv, 2);
+
+        kv.close();
+
+        // Pressure sampling must degrade gracefully once the native handle is gone.
+        assertThat(kv.currentPressure()).isEqualTo(0f);
+    }
+
+    @Test
+    void testDiscardOptionFailureStillClosesNativeResources(@TempDir Path tempDir)
+            throws Exception {
+        RocksDBKv rocksDBKv = spy(buildRocksDBKv(tempDir.toFile()));
+        doThrow(new RocksDBException("expected")).when(rocksDBKv).setAvoidFlushDuringShutdown();
+
+        assertThatCode(() -> rocksDBKv.close(KvCloseMode.DISCARD_UNPERSISTED_STATE))
+                .doesNotThrowAnyException();
+        assertThatThrownBy(rocksDBKv::checkIfRocksDBClosed)
+                .isInstanceOf(FlussRuntimeException.class);
+
+        // Reopening the same path also proves the native DB handle was released.
+        try (RocksDBKv ignored = buildRocksDBKv(tempDir.toFile())) {}
+    }
+
+    private RocksDBKv buildRocksDBKv(File instanceBasePath) throws Exception {
+        RocksDBResourceContainer rocksDBResourceContainer =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        RocksDBKvBuilder rocksDBKvBuilder =
+                new RocksDBKvBuilder(
+                        instanceBasePath,
+                        rocksDBResourceContainer,
+                        rocksDBResourceContainer.getColumnOptions());
+        return rocksDBKvBuilder.build();
     }
 }

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
@@ -35,9 +36,13 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -64,7 +69,7 @@ public class CompletedSnapshotStoreManager {
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
             makeZookeeperCompletedSnapshotHandleStore;
-    private final SnapshotInUseChecker snapshotInUseChecker;
+    private final SnapshotInUseChecker snapshotLeaseChecker;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
@@ -72,14 +77,14 @@ public class CompletedSnapshotStoreManager {
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         this(
                 maxNumberOfSnapshotsToRetain,
                 ioExecutor,
                 zooKeeperClient,
                 ZooKeeperCompletedSnapshotHandleStore::new,
                 coordinatorMetricGroup,
-                snapshotInUseChecker);
+                snapshotLeaseChecker);
     }
 
     @VisibleForTesting
@@ -90,14 +95,14 @@ public class CompletedSnapshotStoreManager {
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
                     makeZookeeperCompletedSnapshotHandleStore,
             CoordinatorMetricGroup coordinatorMetricGroup,
-            SnapshotInUseChecker snapshotInUseChecker) {
+            SnapshotInUseChecker snapshotLeaseChecker) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new ConcurrentHashMap<>();
         this.ioExecutor = ioExecutor;
-        this.snapshotInUseChecker = snapshotInUseChecker;
+        this.snapshotLeaseChecker = snapshotLeaseChecker;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
 
@@ -115,14 +120,6 @@ public class CompletedSnapshotStoreManager {
         return bucketCompletedSnapshotStores.values().stream()
                 .map(CompletedSnapshotStore::getPhysicalStorageRemoteKvSize)
                 .reduce(0L, Long::sum);
-    }
-
-    private long getNumSnapshots(TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.get(tableBucket).getNumSnapshots();
-    }
-
-    private long getAllSnapshotSize(TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.get(tableBucket).getPhysicalStorageRemoteKvSize();
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
@@ -147,10 +144,10 @@ public class CompletedSnapshotStoreManager {
                         if (bucketMetricGroup != null) {
                             LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
                             bucketMetricGroup.gauge(
-                                    MetricNames.KV_NUM_SNAPSHOTS, () -> getNumSnapshots(bucket));
+                                    MetricNames.KV_NUM_SNAPSHOTS, snapshotStore::getNumSnapshots);
                             bucketMetricGroup.gauge(
                                     MetricNames.KV_ALL_SNAPSHOT_SIZE,
-                                    () -> getAllSnapshotSize(bucket));
+                                    snapshotStore::getPhysicalStorageRemoteKvSize);
                         } else {
                             LOG.warn(
                                     "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",
@@ -198,8 +195,8 @@ public class CompletedSnapshotStoreManager {
                 retrievedSnapshots.add(
                         checkNotNull(snapshotStateHandle.retrieveCompleteSnapshot()));
             } catch (Exception e) {
-                if (e.getMessage()
-                        .contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
+                if (CompletedSnapshot.isSnapshotDataNotExists(
+                        e, snapshotStateHandle.getMetadataFilePath())) {
                     LOG.error(
                             "Metadata not found for snapshot {} of table bucket {}, maybe snapshot already removed or broken.",
                             snapshotStateHandle.getSnapshotId(),
@@ -243,7 +240,53 @@ public class CompletedSnapshotStoreManager {
                 retrievedSnapshots,
                 completedSnapshotHandleStore,
                 ioExecutor,
-                snapshotInUseChecker);
+                snapshotLeaseChecker);
+    }
+
+    /**
+     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. The result
+     * includes both cached snapshots and every persistent snapshot handle. A persistent handle may
+     * be visible before the in-memory store adopts it. Failure to read persistent handles fails the
+     * query so callers cannot mistake an uncertain result for an empty active set.
+     */
+    public Map<Integer, Set<Long>> getActiveSnapshotIdsByBucket(
+            long tableId, @Nullable Long partitionId, int numBuckets) {
+        Map<Integer, Set<Long>> result = new HashMap<>();
+        for (int i = 0; i < numBuckets; i++) {
+            TableBucket tb = new TableBucket(tableId, partitionId, i);
+            CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
+            Set<Long> ids = new HashSet<>(readActiveSnapshotIdsFromZk(tb));
+            if (store != null) {
+                ids.addAll(store.getActiveSnapshotIds());
+            }
+            if (!ids.isEmpty()) {
+                result.put(i, ids);
+            }
+        }
+        return result;
+    }
+
+    private Set<Long> readActiveSnapshotIdsFromZk(TableBucket tableBucket) {
+        List<Long> snapshotIds;
+        try {
+            snapshotIds = zooKeeperClient.listBucketSnapshotIds(tableBucket);
+        } catch (Exception e) {
+            throw new ApiException(
+                    "Failed to read snapshot IDs from ZK for "
+                            + tableBucket
+                            + ": "
+                            + e.getMessage(),
+                    e);
+        }
+        if (snapshotIds.isEmpty()) {
+            return Collections.emptySet();
+        }
+        // Treat every snapshot still referenced in ZK as active. As long as the
+        // coordinator has not pruned a snapshot's ZK handle, it is potentially in use
+        // (lease, in-flight RPC, recovery, etc.), so the orphan cleaner must keep its
+        // files. Orphan cleanup is conservative by design — a slightly broader active
+        // set is harmless, while excluding a still-referenced snapshot is not.
+        return new HashSet<>(snapshotIds);
     }
 
     @VisibleForTesting

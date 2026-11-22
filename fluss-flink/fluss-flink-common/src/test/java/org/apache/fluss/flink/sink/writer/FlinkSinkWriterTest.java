@@ -51,7 +51,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.BiConsumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,8 +63,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class FlinkSinkWriterTest extends FlinkTestBase {
     private static final String DEFAULT_SINK_DB = "test-sink-db";
 
-    private static final TablePath DEFAULT_SINK_TABLE_PATH =
-            TablePath.of(DEFAULT_SINK_DB, "test-sink-table");
+    private final TablePath sinkTablePath =
+            tableNames.tablePath(DEFAULT_SINK_DB, "test-sink-table");
 
     private static final TableDescriptor TABLE_DESCRIPTOR =
             TableDescriptor.builder()
@@ -76,9 +78,8 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(strings = {"", "1"})
     void testSinkMetrics(String clientId) throws Exception {
-        admin.createDatabase(
-                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
-        createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
+        admin.createDatabase(sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+        createTable(sinkTablePath, TABLE_DESCRIPTOR);
 
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         flussConf.set(ConfigOptions.CLIENT_ID, clientId);
@@ -109,11 +110,10 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
 
     @Test
     void testFlussSchemaChange() throws Exception {
-        admin.createDatabase(
-                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
-        createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
+        admin.createDatabase(sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true).get();
+        createTable(sinkTablePath, TABLE_DESCRIPTOR);
         admin.alterTable(
-                        DEFAULT_SINK_TABLE_PATH,
+                        sinkTablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "c1",
@@ -202,6 +202,53 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
     }
 
     @Test
+    void testCloseReturnsPromptlyWhenFlussUnavailable() throws Exception {
+        // Regression test for the sink blocking in close during failover: with pending records
+        // that can never be sent (cluster down + infinite writer retries by default), a graceful
+        // close would wait indefinitely. The sink must close the connection immediately instead.
+        FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
+        try {
+            flussClusterExtension.start();
+
+            Configuration clientConfig = flussClusterExtension.getClientConfig();
+            // keep the default infinite retries so that pending records are never given up,
+            // which is exactly the situation that used to block close forever
+            try (Connection connection = ConnectionFactory.createConnection(clientConfig);
+                    Admin admin = connection.getAdmin()) {
+                admin.createDatabase(
+                                sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
+                        .get();
+                admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
+            }
+
+            MockWriterInitContext mockWriterInitContext =
+                    new MockWriterInitContext(new InterceptingOperatorMetricGroup());
+            FlinkSinkWriter<RowData> writer =
+                    createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor());
+            writer.initialize(mockWriterInitContext.metricGroup());
+            // make the cluster unavailable while a record is still pending in the writer
+            flussClusterExtension.close();
+            writer.write(
+                    GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
+
+            // close must return promptly instead of waiting for the pending record
+            CompletableFuture<Void> closeFuture =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    writer.close();
+                                } catch (Exception e) {
+                                    // exceptions (e.g. pending record failures) are
+                                    // acceptable; blocking is not
+                                }
+                            });
+            assertThat(closeFuture).succeedsWithin(Duration.ofSeconds(30));
+        } finally {
+            flussClusterExtension.close();
+        }
+    }
+
+    @Test
     void testMailBoxExceptionWhenFlussUnavailable() throws Exception {
         testExceptionWhenFlussUnavailable(
                 (writer, mailboxExecutor) -> {
@@ -232,11 +279,9 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             try (Connection connection = ConnectionFactory.createConnection(clientConfig);
                     Admin admin = connection.getAdmin()) {
                 admin.createDatabase(
-                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
-                                DatabaseDescriptor.EMPTY,
-                                true)
+                                sinkTablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
-                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+                admin.createTable(sinkTablePath, TABLE_DESCRIPTOR, true).get();
             }
 
             MockWriterInitContext mockWriterInitContext =
@@ -266,11 +311,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
         RowDataSerializationSchema serializationSchema =
                 new RowDataSerializationSchema(true, false);
         return new AppendSinkWriter<>(
-                DEFAULT_SINK_TABLE_PATH,
-                configuration,
-                tableRowType,
-                mailboxExecutor,
-                serializationSchema);
+                sinkTablePath, configuration, tableRowType, mailboxExecutor, serializationSchema);
     }
 
     static class MockSinkWriterContext implements SinkWriter.Context {

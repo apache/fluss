@@ -35,7 +35,6 @@ import org.apache.fluss.utils.ExceptionUtils;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +47,7 @@ import java.util.stream.IntStream;
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -109,14 +109,8 @@ public class LakeSplitGenerator {
         Map<TableBucket, Long> tableBucketsOffset = lakeSnapshotInfo.getTableBucketsOffset();
         if (isPartitioned) {
             Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
-            Map<Long, String> partitionNameById =
-                    partitionInfos.stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            PartitionInfo::getPartitionId,
-                                            PartitionInfo::getPartitionName));
             return generatePartitionTableSplit(
-                    lakeSplits, isLogTable, tableBucketsOffset, partitionNameById);
+                    lakeSplits, isLogTable, tableBucketsOffset, partitionInfos);
         } else {
             Map<Integer, List<LakeSplit>> nonPartitionLakeSplits =
                     lakeSplits.isEmpty() ? null : lakeSplits.values().iterator().next();
@@ -144,42 +138,61 @@ public class LakeSplitGenerator {
             Map<String, Map<Integer, List<LakeSplit>>> lakeSplits,
             boolean isLogTable,
             Map<TableBucket, Long> tableBucketSnapshotLogOffset,
-            Map<Long, String> partitionNameById) {
+            Set<PartitionInfo> partitionInfos) {
         List<SourceSplitBase> splits = new ArrayList<>();
-        Map<String, Long> flussPartitionIdByName =
-                partitionNameById.entrySet().stream()
+        Map<String, PartitionInfo> flussPartitionByName =
+                partitionInfos.stream()
                         .collect(
                                 Collectors.toMap(
-                                        Map.Entry::getValue,
-                                        Map.Entry::getKey,
+                                        PartitionInfo::getPartitionName,
+                                        partitionInfo -> partitionInfo,
                                         (existing, replacement) -> existing,
                                         LinkedHashMap::new));
         long lakeSplitPartitionId = -1L;
+        // Primary-key tables must emit a key's snapshot row before its later updates/deletes.
+        // Group their lake splits with the historical log to preserve this order.
+        // Log tables only append records, so their lake splits can be read independently.
+        boolean groupHistoricalLakeSplits =
+                !isLogTable && flussPartitionByName.containsKey(HISTORICAL_PARTITION_VALUE);
+        Map<Integer, List<LakeSplit>> historicalLakeSplits = new HashMap<>();
 
         // iterate lake splits
         for (Map.Entry<String, Map<Integer, List<LakeSplit>>> lakeSplitEntry :
                 lakeSplits.entrySet()) {
             String partitionName = lakeSplitEntry.getKey();
             Map<Integer, List<LakeSplit>> lakeSplitsOfPartition = lakeSplitEntry.getValue();
-            Long partitionId = flussPartitionIdByName.remove(partitionName);
-            if (partitionId != null) {
+            PartitionInfo flussPartition = flussPartitionByName.remove(partitionName);
+            if (flussPartition != null) {
                 // mean the partition also exist in fluss partition
+                int partitionBucketCount = flussPartition.getBucketCount();
                 Map<Integer, Long> bucketEndOffset =
                         stoppingOffsetInitializer.getBucketOffsets(
                                 partitionName,
-                                IntStream.range(0, bucketCount)
+                                IntStream.range(0, partitionBucketCount)
                                         .boxed()
                                         .collect(Collectors.toList()),
                                 bucketOffsetsRetriever);
                 splits.addAll(
                         generateSplit(
                                 lakeSplitsOfPartition,
-                                partitionId,
+                                flussPartition.getPartitionId(),
                                 partitionName,
+                                partitionBucketCount,
                                 isLogTable,
                                 tableBucketSnapshotLogOffset,
                                 bucketEndOffset));
 
+            } else if (groupHistoricalLakeSplits) {
+                // Expired business partitions still have data in the lake, but share the
+                // historical partition for later writes. Lake data and historical writes use the
+                // same bucket IDs, so collect all expired partitions' lake splits for each bucket.
+                // A single hybrid split will read these snapshots before that bucket's log.
+                lakeSplitsOfPartition.forEach(
+                        (bucket, bucketSplits) -> {
+                            historicalLakeSplits
+                                    .computeIfAbsent(bucket, ignored -> new ArrayList<>())
+                                    .addAll(bucketSplits);
+                        });
             } else {
                 // only lake data
                 splits.addAll(
@@ -196,22 +209,28 @@ public class LakeSplitGenerator {
         }
 
         // iterate remain fluss splits
-        for (Map.Entry<String, Long> partitionIdByNameEntry : flussPartitionIdByName.entrySet()) {
-            String partitionName = partitionIdByNameEntry.getKey();
-            Long partitionId = partitionIdByNameEntry.getValue();
+        for (PartitionInfo flussPartition : flussPartitionByName.values()) {
+            String partitionName = flussPartition.getPartitionName();
+            boolean historical =
+                    groupHistoricalLakeSplits && HISTORICAL_PARTITION_VALUE.equals(partitionName);
+            int partitionBucketCount = flussPartition.getBucketCount();
             Map<Integer, Long> bucketEndOffset =
                     stoppingOffsetInitializer.getBucketOffsets(
                             partitionName,
-                            IntStream.range(0, bucketCount).boxed().collect(Collectors.toList()),
+                            IntStream.range(0, partitionBucketCount)
+                                    .boxed()
+                                    .collect(Collectors.toList()),
                             bucketOffsetsRetriever);
             splits.addAll(
                     generateSplit(
-                            null,
-                            partitionId,
+                            historical ? historicalLakeSplits : null,
+                            flussPartition.getPartitionId(),
                             partitionName,
+                            partitionBucketCount,
                             isLogTable,
-                            // pass empty map since we won't read lake splits
-                            Collections.emptyMap(),
+                            // Lake splits may be pruned while the partition still has tiered
+                            // offsets.
+                            tableBucketSnapshotLogOffset,
                             bucketEndOffset));
         }
         return splits;
@@ -221,6 +240,7 @@ public class LakeSplitGenerator {
             @Nullable Map<Integer, List<LakeSplit>> lakeSplits,
             @Nullable Long partitionId,
             @Nullable String partitionName,
+            int numBuckets,
             boolean isLogTable,
             Map<TableBucket, Long> tableBucketSnapshotLogOffset,
             Map<Integer, Long> bucketEndOffset) {
@@ -229,7 +249,7 @@ public class LakeSplitGenerator {
             if (lakeSplits != null) {
                 splits.addAll(toLakeSnapshotSplits(lakeSplits, partitionName, partitionId));
             }
-            for (int bucket = 0; bucket < bucketCount; bucket++) {
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
@@ -259,7 +279,28 @@ public class LakeSplitGenerator {
             }
         } else {
             // it's primary key table
-            for (int bucket = 0; bucket < bucketCount; bucket++) {
+            if (lakeSplits != null) {
+                // Pairing below only visits buckets in [0, numBuckets), so any lake split with a
+                // bucket id outside that range would otherwise be lost from the union read.
+                List<Integer> outOfRangeBuckets =
+                        lakeSplits.keySet().stream()
+                                .filter(bucket -> bucket >= numBuckets)
+                                .sorted()
+                                .collect(Collectors.toList());
+                if (!outOfRangeBuckets.isEmpty()) {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "Lake snapshot of table %s partition %s contains buckets %s "
+                                            + "outside the enumerated range [0, %d); refusing to "
+                                            + "generate union-read splits that would silently "
+                                            + "drop lake data.",
+                                    tableInfo.getTablePath(),
+                                    partitionName,
+                                    outOfRangeBuckets,
+                                    numBuckets));
+                }
+            }
+            for (int bucket = 0; bucket < numBuckets; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
@@ -300,15 +341,24 @@ public class LakeSplitGenerator {
             @Nullable String partitionName,
             @Nullable Long snapshotLogOffset,
             long stoppingOffset) {
-        // no snapshot data for this bucket or no a corresponding log offset in this bucket,
-        // can only scan from change log
-        if (snapshotLogOffset == null || snapshotLogOffset < 0) {
+        if (snapshotLogOffset != null && snapshotLogOffset >= 0) {
+            // Read the lake snapshot, then continue from its corresponding log offset.
             return new LakeSnapshotAndFlussLogSplit(
-                    tableBucket, partitionName, null, EARLIEST_OFFSET, stoppingOffset);
+                    tableBucket, partitionName, lakeSplits, snapshotLogOffset, stoppingOffset);
         }
 
+        if (HISTORICAL_PARTITION_VALUE.equals(partitionName)) {
+            // Rows may have been tiered before their business partition expired, while no
+            // historical writes have been tiered yet. Keep those lake rows and read the
+            // historical log from earliest; the historical log alone cannot recover those rows.
+            return new LakeSnapshotAndFlussLogSplit(
+                    tableBucket, partitionName, lakeSplits, EARLIEST_OFFSET, stoppingOffset);
+        }
+
+        // Without a snapshot offset, we cannot tell where an ordinary partition's lake snapshot
+        // ends in its log. Fall back to reading only the retained log to avoid overlapping reads.
         return new LakeSnapshotAndFlussLogSplit(
-                tableBucket, partitionName, lakeSplits, snapshotLogOffset, stoppingOffset);
+                tableBucket, partitionName, null, EARLIEST_OFFSET, stoppingOffset);
     }
 
     private List<SourceSplitBase> generateNoPartitionedTableSplit(
@@ -323,6 +373,12 @@ public class LakeSplitGenerator {
                         IntStream.range(0, bucketCount).boxed().collect(Collectors.toList()),
                         bucketOffsetsRetriever);
         return generateSplit(
-                lakeSplits, null, null, isLogTable, tableBucketSnapshotLogOffset, bucketEndOffset);
+                lakeSplits,
+                null,
+                null,
+                bucketCount,
+                isLogTable,
+                tableBucketSnapshotLogOffset,
+                bucketEndOffset);
     }
 }

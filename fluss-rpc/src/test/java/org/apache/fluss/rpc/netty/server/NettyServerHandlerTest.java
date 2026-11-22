@@ -18,37 +18,91 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Metric;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.GenericMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
+import org.apache.fluss.rpc.TestingTabletGatewayService;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
+import org.apache.fluss.rpc.messages.LimitScanRequest;
+import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrRespForBucket;
+import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
+import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
+import org.apache.fluss.shaded.netty4.io.netty.channel.embedded.EmbeddedChannel;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
+import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -57,29 +111,574 @@ import static org.mockito.Mockito.when;
 /** Test for {@link NettyServerHandler}. */
 final class NettyServerHandlerTest {
 
+    private static final InetSocketAddress REMOTE_ADDRESS =
+            new InetSocketAddress("127.0.0.1", 9092);
+
     private NettyServerHandler serverHandler;
     private TestingRequestChannel requestChannel;
     private ChannelHandlerContext ctx;
 
-    @BeforeEach
-    void beforeEach() throws Exception {
-        this.requestChannel = new TestingRequestChannel(100);
-        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        this.serverHandler =
+    @Test
+    void testFailedRequestMarksAggregateAndErrorMetrics() {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        HandlerFixture fixture = createTabletServerHandler(metricRegistry);
+        try {
+            writeRequest(fixture, ApiKeys.LOOKUP, new LookupRequest().setTableId(1), 1001);
+            FlussRequest request = (FlussRequest) fixture.requestChannel.getAndRemoveRequest(0);
+            request.fail(new TableNotExistException("table does not exist"));
+            fixture.channel.runPendingTasks();
+
+            assertResponse(fixture.channel, ResponseType.ERROR_RESPONSE, 1001);
+            assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                    .hasSize(2)
+                    .allSatisfy(
+                            registered ->
+                                    assertThat(((Meter) registered.metric).getCount()).isEqualTo(1))
+                    .anySatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .doesNotContainKey("error"))
+                    .anySatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .containsEntry("error", Errors.TABLE_NOT_EXIST.name()));
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testInactiveLazyRequestIsRejectedBeforeQueuing() throws Exception {
+        RecordingRequestChannel channel = new RecordingRequestChannel();
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            ChannelHandlerContext context = embeddedChannel.pipeline().context(handler);
+            handler.exceptionCaught(context, new RuntimeException("close connection"));
+            handler.channelRead(context, requestBuffer);
+
+            assertThat(channel.getPutRequestInvocations()).isZero();
+            assertThat(channel.requestsCount()).isZero();
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testActiveLazyRequestRetainsBufferUntilProcessed() throws Exception {
+        TestingRequestChannel channel = new TestingRequestChannel(100);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try {
+            handler.channelRead(embeddedChannel.pipeline().context(handler), requestBuffer);
+
+            assertThat(channel.requestsCount()).isOne();
+            assertThat(requestBuffer.refCnt()).isOne();
+
+            RpcRequest request = channel.pollRequest(0);
+            assertThat(request).isNotNull();
+            request.releaseBuffer();
+            assertThat(requestBuffer.refCnt()).isZero();
+        } finally {
+            embeddedChannel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testInactiveProduceRequestCannotAppendReleasedBuffer(@TempDir Path tempDir)
+            throws Exception {
+        CompletableFuture<MemoryLogRecords> capturedRecords = new CompletableFuture<>();
+        CompletableFuture<Void> continueAppend = new CompletableFuture<>();
+        AtomicInteger produceInvocations = new AtomicInteger();
+        AtomicReference<Boolean> validBeforeRelease = new AtomicReference<>();
+        AtomicReference<Throwable> appendFailure = new AtomicReference<>();
+        AtomicReference<Throwable> coordinationFailure = new AtomicReference<>();
+        RequestChannel channel =
+                new CoordinatedRequestChannel(capturedRecords, coordinationFailure);
+        NettyServerHandler handler = newServerHandler(channel);
+        TestEmbeddedChannel embeddedChannel = new TestEmbeddedChannel(handler);
+        ChannelHandlerContext context = embeddedChannel.pipeline().context(handler);
+        ByteBuf requestBuffer = encodeProduceLogRequest();
+
+        try (FileLogRecords fileRecords =
+                FileLogRecords.open(tempDir.resolve("inactive-request.log").toFile())) {
+            TestingTabletGatewayService service =
+                    new TestingTabletGatewayService() {
+                        @Override
+                        public CompletableFuture<ProduceLogResponse> produceLog(
+                                ProduceLogRequest request) {
+                            produceInvocations.incrementAndGet();
+                            ByteBuf recordsSlice = request.getBucketsReqAt(0).getRecordsSlice();
+                            MemoryLogRecords records =
+                                    MemoryLogRecords.pointToByteBuffer(recordsSlice.nioBuffer());
+                            validBeforeRelease.set(records.batches().iterator().next().isValid());
+                            capturedRecords.complete(records);
+                            try {
+                                getWithTimeout(continueAppend, "permission to append records");
+                                fileRecords.append(records);
+                            } catch (Throwable t) {
+                                appendFailure.set(t);
+                            }
+                            return CompletableFuture.completedFuture(new ProduceLogResponse());
+                        }
+                    };
+            RequestHandler<?>[] requestHandlers =
+                    new RequestHandler<?>[RequestType.values().length - 1];
+            requestHandlers[RequestType.FLUSS.id] = new FlussRequestHandler(service);
+            RequestProcessor processor = new RequestProcessor(0, channel, service, requestHandlers);
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            Future<?> processorTask = executor.submit(processor);
+
+            try {
+                handler.exceptionCaught(context, new RuntimeException("close connection"));
+                handler.channelRead(context, requestBuffer);
+
+                assertThat(requestBuffer.refCnt()).isZero();
+                MemoryLogRecords records = capturedRecords.getNow(null);
+                if (records != null) {
+                    int lastByte = records.getPosition() + records.sizeInBytes() - 1;
+                    byte value = records.getMemorySegment().get(lastByte);
+                    // Model the Netty pool reusing released request memory before the append.
+                    records.getMemorySegment().put(lastByte, (byte) (value ^ 1));
+                }
+
+                processor.initiateShutdown();
+                continueAppend.complete(null);
+                processor.getShutdownFuture().get(5, TimeUnit.SECONDS);
+                processorTask.get(5, TimeUnit.SECONDS);
+
+                boolean validOnDisk =
+                        fileRecords.sizeInBytes() == 0
+                                || fileRecords.batches().iterator().next().isValid();
+                assertThat(coordinationFailure.get()).isNull();
+                assertThat(appendFailure.get()).isNull();
+                if (fileRecords.sizeInBytes() > 0) {
+                    assertThat(validBeforeRelease).hasValue(true);
+                    assertThat(validOnDisk).isFalse();
+                }
+                assertThat(fileRecords.sizeInBytes())
+                        .withFailMessage(
+                                "Inactive ProduceLogRequest appended %s bytes; valid before release: "
+                                        + "%s, valid on disk: %s",
+                                fileRecords.sizeInBytes(), validBeforeRelease.get(), validOnDisk)
+                        .isZero();
+                assertThat(produceInvocations)
+                        .as("inactive requests must not reach the RPC service")
+                        .hasValue(0);
+            } finally {
+                continueAppend.complete(null);
+                if (!processor.getShutdownFuture().isDone()) {
+                    processor.initiateShutdown();
+                }
+                executor.shutdownNow();
+                embeddedChannel.finishAndReleaseAll();
+            }
+        }
+    }
+
+    @Test
+    void testSuccessfulResponseMarksBucketErrorsWithoutAggregate() {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        HandlerFixture fixture = createTabletServerHandler(metricRegistry);
+        try {
+            writeRequest(fixture, ApiKeys.LOOKUP, new LookupRequest().setTableId(1), 1001);
+
+            LookupResponse response = new LookupResponse();
+            response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            response.addBucketsResp().setBucketId(2).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            response.addBucketsResp().setBucketId(3).setErrorCode(Integer.MAX_VALUE);
+            response.addBucketsResp().setBucketId(4);
+            response.addBucketsResp().setBucketId(5).setErrorCode(Errors.NONE.code());
+            completeRequest(fixture, response);
+
+            assertResponse(fixture.channel, ResponseType.SUCCESS_RESPONSE, 1001);
+            assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                    .hasSize(3)
+                    .anySatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .doesNotContainKey("error")
+                                            .isEqualTo(
+                                                    Collections.singletonMap("request", "lookup")));
+            assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                    .filteredOn(
+                            registered -> registered.group.getAllVariables().containsKey("error"))
+                    .anySatisfy(
+                            registered -> {
+                                assertThat(registered.group.getAllVariables())
+                                        .containsEntry("error", Errors.TABLE_NOT_EXIST.name());
+                                assertThat(((Meter) registered.metric).getCount()).isEqualTo(2);
+                            })
+                    .anySatisfy(
+                            registered -> {
+                                assertThat(registered.group.getAllVariables())
+                                        .containsEntry("error", Errors.UNKNOWN_SERVER_ERROR.name());
+                                assertThat(((Meter) registered.metric).getCount()).isEqualTo(1);
+                            });
+            assertAggregateErrorsAreZero(metricRegistry, "lookup");
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testEncodingFailureMarksOnlyWholeRpcError() {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        HandlerFixture fixture = createTabletServerHandler(metricRegistry);
+        try {
+            writeRequest(fixture, ApiKeys.LOOKUP, new LookupRequest().setTableId(1), 1001);
+
+            LookupResponse response = new LookupResponse();
+            response.addBucketsResp().setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            completeRequest(fixture, response);
+
+            assertResponse(fixture.channel, ResponseType.ERROR_RESPONSE, 1001);
+            assertThat(fixture.channel.outboundMessages()).isEmpty();
+            assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                    .hasSize(2)
+                    .allSatisfy(
+                            registered ->
+                                    assertThat(((Meter) registered.metric).getCount()).isEqualTo(1))
+                    .anySatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .doesNotContainKey("error"))
+                    .anySatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .containsEntry(
+                                                    "error", Errors.UNKNOWN_SERVER_ERROR.name()));
+            assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, "lookup"))
+                    .filteredOn(
+                            registered -> registered.group.getAllVariables().containsKey("error"))
+                    .noneSatisfy(
+                            registered ->
+                                    assertThat(registered.group.getAllVariables())
+                                            .containsEntry("error", Errors.TABLE_NOT_EXIST.name()));
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    @Test
+    void testBatchResponsesCollectErrorCounts() {
+        Map<Integer, Integer> errorCounts = new HashMap<>();
+
+        ProduceLogResponse produceLogResponse = new ProduceLogResponse();
+        produceLogResponse.addBucketsResp().setBucketId(1).setErrorCode(1);
+        PutKvResponse putKvResponse = new PutKvResponse();
+        putKvResponse.addBucketsResp().setBucketId(1).setErrorCode(2);
+        LookupResponse lookupResponse = new LookupResponse();
+        lookupResponse.addBucketsResp().setBucketId(1).setErrorCode(3);
+        FetchLogResponse fetchLogResponse = new FetchLogResponse();
+        PbFetchLogRespForTable tableResponse = fetchLogResponse.addTablesResp().setTableId(1);
+        tableResponse.addBucketsResp().setBucketId(1).setErrorCode(4);
+
+        produceLogResponse.collectErrorCounts(errorCounts);
+        putKvResponse.collectErrorCounts(errorCounts);
+        lookupResponse.collectErrorCounts(errorCounts);
+        fetchLogResponse.collectErrorCounts(errorCounts);
+
+        assertThat(errorCounts)
+                .containsEntry(1, 1)
+                .containsEntry(2, 1)
+                .containsEntry(3, 1)
+                .containsEntry(4, 1);
+    }
+
+    @Test
+    void testResponseMetricsFailureDoesNotSendErrorResponse() {
+        MetricGroup metricGroup =
+                new GenericMetricGroup(
+                        new ErrorMetricRegistrationFailureRegistry(), null, "tabletserver");
+        HandlerFixture fixture = createTabletServerHandler(metricGroup);
+        try {
+            writeRequest(fixture, ApiKeys.LOOKUP, new LookupRequest().setTableId(1), 1001);
+
+            LookupResponse response = new LookupResponse();
+            response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            completeRequest(fixture, response);
+
+            assertResponse(fixture.channel, ResponseType.SUCCESS_RESPONSE, 1001);
+            assertThat(fixture.channel.outboundMessages()).isEmpty();
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    private static class ErrorMetricRegistrationFailureRegistry
+            extends RequestsMetricsTest.RecordingMetricRegistry {
+
+        @Override
+        public void register(Metric metric, String metricName, AbstractMetricGroup group) {
+            if (group.getAllVariables().containsKey("error")) {
+                throw new Error("metric registration failed");
+            }
+            super.register(metric, metricName, group);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("successfulResponsesWithErrors")
+    void successfulResponsesWithErrorsOnlyMarkPerErrorMetric(
+            ApiKeys apiKey, String requestName, ApiMessage request, ApiMessage response) {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        HandlerFixture fixture = createTabletServerHandler(metricRegistry);
+        try {
+            writeRequest(fixture, apiKey, request, 1001);
+            completeRequest(fixture, response);
+
+            assertResponse(fixture.channel, ResponseType.SUCCESS_RESPONSE, 1001);
+            assertPerErrorMetric(metricRegistry, requestName);
+            assertAggregateErrorsAreZero(metricRegistry, requestName);
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("requestsByOrigin")
+    void fetchLogAndListOffsetsMetricsAreIsolatedByRequestOrigin(
+            ApiKeys apiKey, int followerServerId, String requestName, String otherRequestName) {
+        RequestsMetricsTest.RecordingMetricRegistry metricRegistry =
+                new RequestsMetricsTest.RecordingMetricRegistry();
+        HandlerFixture fixture = createTabletServerHandler(metricRegistry);
+        try {
+            writeRequest(fixture, apiKey, requestWithOrigin(apiKey, followerServerId), 1001);
+            completeRequest(fixture, responseWithError(apiKey));
+
+            assertResponse(fixture.channel, ResponseType.SUCCESS_RESPONSE, 1001);
+            assertRequestMetricCount(metricRegistry, requestName, 1);
+            assertRequestMetricCount(metricRegistry, otherRequestName, 0);
+            assertPerErrorMetric(metricRegistry, requestName);
+            assertNoPerErrorMetric(metricRegistry, otherRequestName);
+            assertAggregateErrorsAreZero(metricRegistry, requestName);
+            assertAggregateErrorsAreZero(metricRegistry, otherRequestName);
+        } finally {
+            fixture.channel.finishAndReleaseAll();
+        }
+    }
+
+    private static Stream<Arguments> successfulResponsesWithErrors() {
+        return Stream.of(
+                Arguments.of(
+                        ApiKeys.LIST_OFFSETS,
+                        "listOffsetsClient",
+                        listOffsetsRequest(-1),
+                        listOffsetsResponse()),
+                Arguments.of(
+                        ApiKeys.LIMIT_SCAN,
+                        "limitScan",
+                        new LimitScanRequest().setTableId(1).setBucketId(1).setLimit(1),
+                        new LimitScanResponse().setErrorCode(Errors.TABLE_NOT_EXIST.code())),
+                Arguments.of(
+                        ApiKeys.SCAN_KV,
+                        "scanKv",
+                        new ScanKvRequest(),
+                        new ScanKvResponse().setErrorCode(Errors.TABLE_NOT_EXIST.code())),
+                Arguments.of(
+                        ApiKeys.GET_TABLE_STATS,
+                        "tableStats",
+                        new GetTableStatsRequest().setTableId(1),
+                        tableStatsResponse()),
+                Arguments.of(
+                        ApiKeys.NOTIFY_LEADER_AND_ISR,
+                        "notifyLeaderAndIsr",
+                        new NotifyLeaderAndIsrRequest().setCoordinatorEpoch(1),
+                        notifyLeaderAndIsrResponse()),
+                Arguments.of(
+                        ApiKeys.STOP_REPLICA,
+                        "stopReplica",
+                        new StopReplicaRequest().setCoordinatorEpoch(1),
+                        stopReplicaResponse()));
+    }
+
+    private static Stream<Arguments> requestsByOrigin() {
+        return Stream.of(
+                Arguments.of(ApiKeys.FETCH_LOG, -1, "fetchLogClient", "fetchLogFollower"),
+                Arguments.of(ApiKeys.FETCH_LOG, 0, "fetchLogFollower", "fetchLogClient"),
+                Arguments.of(ApiKeys.LIST_OFFSETS, -1, "listOffsetsClient", "listOffsetsFollower"),
+                Arguments.of(ApiKeys.LIST_OFFSETS, 0, "listOffsetsFollower", "listOffsetsClient"));
+    }
+
+    private static ApiMessage requestWithOrigin(ApiKeys apiKey, int followerServerId) {
+        if (apiKey == ApiKeys.FETCH_LOG) {
+            return new FetchLogRequest().setFollowerServerId(followerServerId).setMaxBytes(1);
+        }
+        return listOffsetsRequest(followerServerId);
+    }
+
+    private static ApiMessage responseWithError(ApiKeys apiKey) {
+        if (apiKey == ApiKeys.FETCH_LOG) {
+            FetchLogResponse response = new FetchLogResponse();
+            PbFetchLogRespForTable tableResponse = response.addTablesResp().setTableId(1);
+            tableResponse
+                    .addBucketsResp()
+                    .setBucketId(1)
+                    .setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            return response;
+        }
+        return listOffsetsResponse();
+    }
+
+    private static ListOffsetsRequest listOffsetsRequest(int followerServerId) {
+        return new ListOffsetsRequest()
+                .setFollowerServerId(followerServerId)
+                .setOffsetType(0)
+                .setTableId(1);
+    }
+
+    private static ListOffsetsResponse listOffsetsResponse() {
+        ListOffsetsResponse response = new ListOffsetsResponse();
+        response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        return response;
+    }
+
+    private static GetTableStatsResponse tableStatsResponse() {
+        GetTableStatsResponse response = new GetTableStatsResponse();
+        response.addBucketsResp().setBucketId(1).setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        return response;
+    }
+
+    private static NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse() {
+        NotifyLeaderAndIsrResponse response = new NotifyLeaderAndIsrResponse();
+        PbNotifyLeaderAndIsrRespForBucket bucketResponse = response.addNotifyBucketsLeaderResp();
+        bucketResponse.setTableBucket().setTableId(1).setBucketId(1);
+        bucketResponse.setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        return response;
+    }
+
+    private static StopReplicaResponse stopReplicaResponse() {
+        StopReplicaResponse response = new StopReplicaResponse();
+        PbStopReplicaRespForBucket bucketResponse = response.addStopReplicasResp();
+        bucketResponse.setTableBucket().setTableId(1).setBucketId(1);
+        bucketResponse.setErrorCode(Errors.TABLE_NOT_EXIST.code());
+        return response;
+    }
+
+    private static HandlerFixture createTabletServerHandler(
+            RequestsMetricsTest.RecordingMetricRegistry metricRegistry) {
+        return createTabletServerHandler(
+                new GenericMetricGroup(metricRegistry, null, "tabletserver"));
+    }
+
+    private static HandlerFixture createTabletServerHandler(MetricGroup metricGroup) {
+        TestingRequestChannel requestChannel = new TestingRequestChannel(100);
+        NettyServerHandler handler =
                 new NettyServerHandler(
                         requestChannel,
                         new ApiManager(ServerType.TABLET_SERVER),
                         "FLUSS",
                         true,
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                        RequestsMetrics.createTabletServerRequestMetrics(metricGroup),
                         new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
-        this.ctx = mockChannelHandlerContext();
-        serverHandler.channelActive(ctx);
+        EmbeddedChannel channel =
+                new EmbeddedChannel(handler) {
+                    @Override
+                    public SocketAddress remoteAddress() {
+                        return REMOTE_ADDRESS;
+                    }
+                };
+        return new HandlerFixture(channel, requestChannel);
+    }
+
+    private static void writeRequest(
+            HandlerFixture fixture, ApiKeys apiKey, ApiMessage request, int requestId) {
+        fixture.channel.writeInbound(
+                MessageCodec.encodeRequest(
+                        ByteBufAllocator.DEFAULT,
+                        apiKey.id,
+                        apiKey.highestSupportedVersion,
+                        requestId,
+                        request));
+    }
+
+    private static void completeRequest(HandlerFixture fixture, ApiMessage response) {
+        FlussRequest request = (FlussRequest) fixture.requestChannel.getAndRemoveRequest(0);
+        request.complete(response);
+        fixture.channel.runPendingTasks();
+    }
+
+    private static void assertResponse(
+            EmbeddedChannel channel, ResponseType expectedResponseType, int expectedRequestId) {
+        ByteBuf response = channel.readOutbound();
+        try {
+            assertThat(response).isNotNull();
+            int frameLength = response.readInt();
+            assertThat(frameLength).isEqualTo(response.readableBytes());
+            assertThat(ResponseType.forId(response.readByte())).isEqualTo(expectedResponseType);
+            assertThat(response.readInt()).isEqualTo(expectedRequestId);
+        } finally {
+            if (response != null) {
+                response.release();
+            }
+        }
+    }
+
+    private static void assertPerErrorMetric(
+            RequestsMetricsTest.RecordingMetricRegistry metricRegistry, String requestName) {
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, requestName))
+                .filteredOn(registered -> registered.group.getAllVariables().containsKey("error"))
+                .singleElement()
+                .satisfies(
+                        registered -> {
+                            assertThat(registered.group.getAllVariables())
+                                    .containsEntry("error", Errors.TABLE_NOT_EXIST.name());
+                            assertThat(((Meter) registered.metric).getCount()).isEqualTo(1);
+                        });
+    }
+
+    private static void assertAggregateErrorsAreZero(
+            RequestsMetricsTest.RecordingMetricRegistry metricRegistry, String requestName) {
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, requestName))
+                .filteredOn(registered -> !registered.group.getAllVariables().containsKey("error"))
+                .singleElement()
+                .satisfies(
+                        registered -> assertThat(((Meter) registered.metric).getCount()).isZero());
+    }
+
+    private static void assertNoPerErrorMetric(
+            RequestsMetricsTest.RecordingMetricRegistry metricRegistry, String requestName) {
+        assertThat(metricRegistry.metrics(MetricNames.ERRORS_RATE, requestName))
+                .filteredOn(registered -> registered.group.getAllVariables().containsKey("error"))
+                .isEmpty();
+    }
+
+    private static void assertRequestMetricCount(
+            RequestsMetricsTest.RecordingMetricRegistry metricRegistry,
+            String requestName,
+            int expectedCount) {
+        assertThat(metricRegistry.metrics(MetricNames.REQUESTS_RATE, requestName))
+                .singleElement()
+                .satisfies(
+                        registered ->
+                                assertThat(((Meter) registered.metric).getCount())
+                                        .isEqualTo(expectedCount));
+    }
+
+    private static final class HandlerFixture {
+        private final EmbeddedChannel channel;
+        private final TestingRequestChannel requestChannel;
+
+        private HandlerFixture(EmbeddedChannel channel, TestingRequestChannel requestChannel) {
+            this.channel = channel;
+            this.requestChannel = requestChannel;
+        }
     }
 
     @Test
     @Disabled("TODO: add back in https://github.com/apache/fluss/issues/771")
     void testResponseReturnInOrder() throws Exception {
+        initializeLegacyFixture();
         // first write 10 requests to serverHandler.
         for (int i = 0; i < 10; i++) {
             ApiVersionsRequest request = new ApiVersionsRequest();
@@ -151,6 +750,7 @@ final class NettyServerHandlerTest {
     @Test
     @Disabled("TODO: add back in https://github.com/apache/fluss/issues/771")
     void testDifferentResponseTypeReturnInSeparateOrder() throws Exception {
+        initializeLegacyFixture();
         // 1. first write 5 requests with api as ApiKeys.API_VERSIONS to serverHandler.
         for (int i = 0; i < 5; i++) {
             ApiVersionsRequest request = new ApiVersionsRequest();
@@ -203,6 +803,56 @@ final class NettyServerHandlerTest {
         assertThat(inflightApiVersionResponses.size()).isEqualTo(5);
     }
 
+    private static NettyServerHandler newServerHandler(RequestChannel requestChannel) {
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        return new NettyServerHandler(
+                requestChannel,
+                new ApiManager(ServerType.TABLET_SERVER),
+                "FLUSS",
+                true,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+    }
+
+    private static ByteBuf encodeProduceLogRequest() throws Exception {
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        PbProduceLogReqForBucket bucketRequest =
+                new PbProduceLogReqForBucket()
+                        .setBucketId(0)
+                        .setRecordsBytesView(
+                                new MemorySegmentBytesView(
+                                        records.getMemorySegment(),
+                                        records.getPosition(),
+                                        records.sizeInBytes()));
+        ProduceLogRequest request =
+                new ProduceLogRequest()
+                        .setTableId(1001L)
+                        .setAcks(1)
+                        .setTimeoutMs(10_000)
+                        .addAllBucketsReqs(Collections.singletonList(bucketRequest));
+        return MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.PRODUCE_LOG.id,
+                ApiKeys.PRODUCE_LOG.highestSupportedVersion,
+                1,
+                request);
+    }
+
+    private void initializeLegacyFixture() throws Exception {
+        requestChannel = new TestingRequestChannel(100);
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        serverHandler =
+                new NettyServerHandler(
+                        requestChannel,
+                        new ApiManager(ServerType.TABLET_SERVER),
+                        "FLUSS",
+                        true,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        ctx = mockChannelHandlerContext();
+        serverHandler.channelActive(ctx);
+    }
+
     private static ChannelHandlerContext mockChannelHandlerContext() {
         ChannelId channelId = mock(ChannelId.class);
         when(channelId.asShortText()).thenReturn("short_text");
@@ -225,6 +875,81 @@ final class NettyServerHandlerTest {
                 .setMaxVersion(ApiKeys.API_VERSIONS.highestSupportedVersion);
         response.addAllApiVersions(Collections.singletonList(apiVersion));
         return response;
+    }
+
+    private static <T> T getWithTimeout(CompletableFuture<T> future, String operation) {
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for " + operation, e);
+        } catch (Exception e) {
+            throw new AssertionError("Failed while waiting for " + operation, e);
+        }
+    }
+
+    private static final class RecordingRequestChannel extends RequestChannel {
+        private int putRequestInvocations;
+
+        private RecordingRequestChannel() {
+            super(100);
+        }
+
+        @Override
+        public void putRequest(RpcRequest request) {
+            putRequestInvocations++;
+            super.putRequest(request);
+        }
+
+        private int getPutRequestInvocations() {
+            return putRequestInvocations;
+        }
+    }
+
+    private static final class CoordinatedRequestChannel extends RequestChannel {
+        private final CompletableFuture<MemoryLogRecords> capturedRecords;
+        private final AtomicReference<Throwable> coordinationFailure;
+
+        private CoordinatedRequestChannel(
+                CompletableFuture<MemoryLogRecords> capturedRecords,
+                AtomicReference<Throwable> coordinationFailure) {
+            super(100);
+            this.capturedRecords = capturedRecords;
+            this.coordinationFailure = coordinationFailure;
+        }
+
+        @Override
+        public void putRequest(RpcRequest request) {
+            super.putRequest(request);
+            if (request != ShutdownRequest.INSTANCE) {
+                try {
+                    getWithTimeout(capturedRecords, "request processor to capture records");
+                } catch (Throwable t) {
+                    coordinationFailure.set(t);
+                    throw t;
+                }
+            }
+        }
+    }
+
+    private static final class TestEmbeddedChannel extends EmbeddedChannel {
+
+        private static final InetSocketAddress REMOTE_ADDRESS =
+                new InetSocketAddress("127.0.0.1", 8080);
+
+        private TestEmbeddedChannel(NettyServerHandler serverHandler) {
+            super(serverHandler);
+        }
+
+        @Override
+        protected SocketAddress remoteAddress0() {
+            return REMOTE_ADDRESS;
+        }
+
+        @Override
+        protected SocketAddress localAddress0() {
+            return new InetSocketAddress("127.0.0.1", 18080);
+        }
     }
 
     private LookupResponse makeLookupResponse() {

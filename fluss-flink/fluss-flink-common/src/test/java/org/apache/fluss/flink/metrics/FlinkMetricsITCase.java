@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.MultiVersionTest;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.JobID;
@@ -149,6 +150,7 @@ abstract class FlinkMetricsITCase {
     }
 
     @Test
+    @MultiVersionTest
     void testMetricsReport() throws Exception {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()

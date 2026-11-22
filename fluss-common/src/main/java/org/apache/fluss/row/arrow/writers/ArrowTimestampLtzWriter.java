@@ -27,6 +27,8 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 
+import static org.apache.fluss.utils.DateTimeUtils.timestampToMicros;
+import static org.apache.fluss.utils.DateTimeUtils.timestampToNanos;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for TimestampLtz. */
@@ -64,8 +66,8 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter {
             }
         } else if (vector instanceof TimeStampMicroVector) {
             long microSec =
-                    timestamp.getEpochMillisecond() * 1000
-                            + timestamp.getNanoOfMillisecond() / 1000;
+                    timestampToMicros(
+                            timestamp.getEpochMillisecond(), timestamp.getNanoOfMillisecond());
             if (handleSafe) {
                 vector.setSafe(rowIndex, microSec);
             } else {
@@ -73,7 +75,8 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter {
             }
         } else {
             long nanoSec =
-                    timestamp.getEpochMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
+                    timestampToNanos(
+                            timestamp.getEpochMillisecond(), timestamp.getNanoOfMillisecond());
             if (handleSafe) {
                 vector.setSafe(rowIndex, nanoSec);
             } else {

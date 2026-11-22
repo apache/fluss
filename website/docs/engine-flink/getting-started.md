@@ -15,6 +15,7 @@ Apache Fluss publishes the following JARs to Maven Central:
 
 | Artifact | Jar |
 |----------|-----|
+| Fluss connector for Flink 2.3 | [fluss-flink-2.3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-2.3/$FLUSS_VERSION$/fluss-flink-2.3-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 2.2 | [fluss-flink-2.2-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-2.2/$FLUSS_VERSION$/fluss-flink-2.2-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 1.20 | [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) |
 | Fluss connector for Flink 1.19 | [fluss-flink-1.19-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.19/$FLUSS_VERSION$/fluss-flink-1.19-$FLUSS_VERSION$.jar) |
@@ -30,13 +31,13 @@ Maven coordinates (example for Flink 1.20):
 </dependency>
 ```
 
-Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+Verify downloaded JARs using the [verification instructions](/downloads#verifying-downloads).
 
 
 ## Supported Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
-| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20         |
+| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20, 2.2, 2.3 |
 
 
 ## Feature Support
@@ -85,8 +86,8 @@ Download the Fluss Flink connector JAR from the [Dependencies](#dependencies) se
 cp fluss-flink-1.20-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
-If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
-you should download the corresponding Fluss filesystem JAR (see [Filesystems](../maintenance/filesystems/overview.md)) and also copy it to the lib directory of your Flink home.
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md),
+you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
 :::
 
 - **Start a local cluster**
@@ -124,7 +125,7 @@ CREATE CATALOG fluss_catalog WITH (
 
 :::note
 1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
-   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
+   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.mdx#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
 2. The`bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
@@ -166,7 +167,7 @@ INSERT INTO pk_table VALUES
   (123456, 123456, 3, 3);
 ```
 
-To update data record with the primary key (1234, 1234) in a Flink streaming job, use the UPDATE statement as follows:
+To update the data record with the primary key `(1234, 1234)`, use the `UPDATE` statement. `UPDATE` and `DELETE FROM` are only supported in batch mode, and the `WHERE` clause can be any condition (see [UPDATE](writes.md#update) and [DELETE FROM](writes.md#delete-from)):
 
 ```sql title="Flink SQL"
 -- should run in batch mode

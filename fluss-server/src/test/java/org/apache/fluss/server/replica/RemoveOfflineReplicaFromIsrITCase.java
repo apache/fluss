@@ -21,11 +21,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.testutils.TestTableNames;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,7 +39,6 @@ import java.util.List;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.assertProduceLogResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -53,6 +55,9 @@ class RemoveOfflineReplicaFromIsrITCase {
                     .setNumOfTabletServers(3)
                     .setClusterConf(initConfig())
                     .build();
+
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
 
     private ZooKeeperClient zkClient;
 
@@ -147,6 +152,6 @@ class RemoveOfflineReplicaFromIsrITCase {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
         return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+                FLUSS_CLUSTER_EXTENSION, data1TablePath, tableDescriptor);
     }
 }

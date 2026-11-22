@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.procedure;
 
+import org.apache.fluss.testutils.common.MultiVersionTest;
+
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,6 +30,7 @@ public class Flink118ProcedureITCase extends FlinkProcedureITCase {
     void testIndexArgument() throws Exception {}
 
     @Test
+    @MultiVersionTest
     void testLackParams() {
         assertThatThrownBy(
                         () ->

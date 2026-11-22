@@ -29,12 +29,13 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ChunkedAllocationManager}. */
 class ChunkedAllocationManagerTest {
 
     /** Use a small chunk size (1KB) for testing to make chunk transitions easy to trigger. */
-    private static final long TEST_CHUNK_SIZE = 1024;
+    private static final int TEST_CHUNK_SIZE = 1024;
 
     private static final int TEST_MAX_FREE_CHUNKS = 2;
 
@@ -68,6 +69,45 @@ class ChunkedAllocationManagerTest {
         buf1.close();
         buf2.close();
         buf3.close();
+    }
+
+    @Test
+    void testDirectMemoryAllocatedBytesTracksChunksAndDirectAllocations() {
+        assertThat(factory.getDirectMemoryAllocatedBytes()).isZero();
+
+        try (ArrowBuf small = allocator.buffer(64)) {
+            assertThat(small.capacity()).isEqualTo(64L);
+            assertThat(factory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
+
+            try (ArrowBuf direct = allocator.buffer(TEST_CHUNK_SIZE + 1)) {
+                assertThat(direct.capacity()).isEqualTo(2 * TEST_CHUNK_SIZE);
+                // allocate a new direct buffer(which not resued)
+                assertThat(factory.getDirectMemoryAllocatedBytes())
+                        .isEqualTo(TEST_CHUNK_SIZE + direct.capacity());
+            }
+
+            assertThat(factory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
+
+            try (ArrowBuf anotherSmall = allocator.buffer(64)) {
+                assertThat(anotherSmall.capacity()).isEqualTo(64L);
+                // reuse the same chunk.
+                assertThat(factory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
+            }
+        }
+
+        // The empty active chunk remains cached until the factory is closed.
+        assertThat(factory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
+        factory.close();
+        assertThat(factory.getDirectMemoryAllocatedBytes()).isZero();
+    }
+
+    @Test
+    void testAllocationRejectedAfterFactoryClose() {
+        factory.close();
+
+        assertThatThrownBy(() -> allocator.buffer(64))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("ChunkedFactory has been closed.");
     }
 
     @Test
@@ -280,6 +320,7 @@ class ChunkedAllocationManagerTest {
         for (int i = 0; i < 4; i++) {
             bufs.add(localAllocator.buffer(64));
         }
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
 
         // Close factory while ArrowBufs are still alive.
 
@@ -287,12 +328,74 @@ class ChunkedAllocationManagerTest {
 
         // Active chunk was not destroyed (subAllocCount > 0), just nulled.
         assertThat(localFactory.getActiveChunk()).isNull();
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isEqualTo(TEST_CHUNK_SIZE);
 
         // Release all ArrowBufs — onChunkDrained should destroy the chunk, not recycle it.
         bufs.forEach(ArrowBuf::close);
 
         // The chunk must NOT have been added to freeChunks (would be a leak).
         assertThat(localFactory.getFreeChunks()).isEmpty();
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isZero();
+        localAllocator.close();
+    }
+
+    @Test
+    void testDirectAllocationReleaseAfterFactoryClose() {
+        // Verify that closing the factory while a direct (large) ArrowBuf is alive
+        // does not leak memory, and the counter correctly drops to zero after release.
+        ChunkedFactory localFactory = new ChunkedFactory(TEST_CHUNK_SIZE, TEST_MAX_FREE_CHUNKS);
+        BufferAllocator localAllocator = BufferAllocatorUtil.createBufferAllocator(localFactory);
+
+        // Allocate a large buffer that bypasses chunk sub-allocation.
+        ArrowBuf directBuf = localAllocator.buffer(TEST_CHUNK_SIZE + 1);
+        long directCapacity = directBuf.capacity();
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isEqualTo(directCapacity);
+
+        // Close factory while the direct ArrowBuf is still alive.
+        localFactory.close();
+
+        // Memory is still tracked (ArrowBuf not yet released).
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isEqualTo(directCapacity);
+
+        // Release the ArrowBuf — should properly free the direct ByteBuf and decrement.
+        directBuf.close();
+
+        // The direct allocation is freed.
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isZero();
+        localAllocator.close();
+    }
+
+    @Test
+    void testDirectAllocationExceedsMaxIntSize() {
+        ChunkedFactory localFactory = new ChunkedFactory(TEST_CHUNK_SIZE, TEST_MAX_FREE_CHUNKS);
+        BufferAllocator localAllocator = BufferAllocatorUtil.createBufferAllocator(localFactory);
+
+        // Request a size larger than Integer.MAX_VALUE — should be rejected.
+        assertThatThrownBy(() -> localAllocator.buffer(Integer.MAX_VALUE + 1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Allocation size");
+
+        localAllocator.close();
+        localFactory.close();
+    }
+
+    @Test
+    void testDirectAllocationMultipleCycles() {
+        // Verify that multiple direct allocate-release cycles keep the counter accurate.
+        ChunkedFactory localFactory = new ChunkedFactory(TEST_CHUNK_SIZE, TEST_MAX_FREE_CHUNKS);
+        BufferAllocator localAllocator = BufferAllocatorUtil.createBufferAllocator(localFactory);
+
+        long directSize = TEST_CHUNK_SIZE + 1;
+        for (int cycle = 0; cycle < 5; cycle++) {
+            ArrowBuf directBuf = localAllocator.buffer(directSize);
+            long directCapacity = directBuf.capacity();
+            assertThat(localFactory.getDirectMemoryAllocatedBytes()).isEqualTo(directCapacity);
+            directBuf.close();
+            assertThat(localFactory.getDirectMemoryAllocatedBytes()).isZero();
+        }
+
+        localFactory.close();
+        assertThat(localFactory.getDirectMemoryAllocatedBytes()).isZero();
         localAllocator.close();
     }
 }

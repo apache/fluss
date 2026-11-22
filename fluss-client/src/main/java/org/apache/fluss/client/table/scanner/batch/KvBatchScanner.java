@@ -20,10 +20,12 @@ package org.apache.fluss.client.table.scanner.batch;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TableOrPartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.ValueRecord;
@@ -35,6 +37,7 @@ import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.SchemaUtil;
 
@@ -51,6 +54,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -89,6 +93,7 @@ public final class KvBatchScanner implements BatchScanner {
     @Nullable private CompletableFuture<ScanKvResponse> inFlight;
 
     private int callSeqId = 0;
+    @Nullable private Long snapshotLogOffset;
     private int openRetries = 0;
     private boolean drained = false;
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -142,25 +147,49 @@ public final class KvBatchScanner implements BatchScanner {
         }
         inFlight = null;
 
-        if (response.hasErrorCode() && response.getErrorCode() != 0) {
-            return handleErrorResponse(response);
-        }
+        try {
+            if (response.hasErrorCode() && response.getErrorCode() != 0) {
+                return handleErrorResponse(response);
+            }
 
-        if (response.hasScannerId()) {
-            scannerId = response.getScannerId();
-        }
+            if (response.hasScannerId()) {
+                scannerId = response.getScannerId();
+            }
 
-        boolean hasMore = response.hasHasMoreResults() && response.isHasMoreResults();
-        if (hasMore) {
-            sendContinuation();
-        } else {
-            drained = true;
-        }
+            if (callSeqId == 0 && response.hasLogOffset()) {
+                snapshotLogOffset = response.getLogOffset();
+            }
 
-        if (!response.hasRecords()) {
-            return drained ? null : CloseableIterator.emptyIterator();
+            boolean hasMore = response.hasHasMoreResults() && response.isHasMoreResults();
+            if (hasMore) {
+                sendContinuation();
+            } else {
+                drained = true;
+            }
+
+            if (!response.hasRecords()) {
+                return drained ? null : CloseableIterator.emptyIterator();
+            }
+            return CloseableIterator.wrap(parseRecords(response).iterator());
+        } finally {
+            // getRecords() copies the data, so returned rows no longer reference this buffer.
+            releaseResponse(response);
         }
-        return CloseableIterator.wrap(parseRecords(response).iterator());
+    }
+
+    /**
+     * Returns the exclusive log offset captured when the server opened the RocksDB snapshot backing
+     * this scanner.
+     *
+     * <p>The offset is available for empty buckets as well as non-empty buckets. Changelog
+     * consumption starting from this offset covers writes that occur after the captured snapshot.
+     * The result is empty until the first successful scan response has been received, or if that
+     * response does not contain the snapshot offset.
+     */
+    public OptionalLong getSnapshotLogOffset() {
+        return snapshotLogOffset == null
+                ? OptionalLong.empty()
+                : OptionalLong.of(snapshotLogOffset);
     }
 
     @Override
@@ -177,6 +206,7 @@ public final class KvBatchScanner implements BatchScanner {
                     "Leader for bucket " + bucket + " is not available. Please retry the scan.");
         }
 
+        Cluster cluster = metadataUpdater.getCluster();
         PbScanReqForBucket bucketReq =
                 new PbScanReqForBucket()
                         .setTableId(bucket.getTableId())
@@ -184,6 +214,8 @@ public final class KvBatchScanner implements BatchScanner {
         if (bucket.getPartitionId() != null) {
             bucketReq.setPartitionId(bucket.getPartitionId());
         }
+        cluster.getBucketCount(TableOrPartition.of(bucket.getTableId(), bucket.getPartitionId()))
+                .ifPresent(bucketReq::setRoutingBucketCount);
 
         ScanKvRequest request =
                 new ScanKvRequest()
@@ -270,9 +302,10 @@ public final class KvBatchScanner implements BatchScanner {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
-        if (inFlight != null) {
-            inFlight.cancel(true);
-            inFlight = null;
+        CompletableFuture<ScanKvResponse> pending = inFlight;
+        inFlight = null;
+        if (pending != null) {
+            pending.whenComplete((response, throwable) -> releaseResponse(response));
         }
         sendBestEffortClose();
     }
@@ -291,6 +324,7 @@ public final class KvBatchScanner implements BatchScanner {
                                     .setCloseScanner(true))
                     .whenComplete(
                             (resp, ex) -> {
+                                releaseResponse(resp);
                                 if (ex != null) {
                                     LOG.debug(
                                             "close_scanner RPC failed for scanner of bucket {};"
@@ -301,6 +335,15 @@ public final class KvBatchScanner implements BatchScanner {
                             });
         } catch (Throwable t) {
             LOG.debug("close_scanner RPC dispatch failed for bucket {}.", bucket, t);
+        }
+    }
+
+    private static void releaseResponse(@Nullable ScanKvResponse response) {
+        if (response != null) {
+            ByteBuf parsedByteBuf = response.getParsedByteBuf();
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
         }
     }
 

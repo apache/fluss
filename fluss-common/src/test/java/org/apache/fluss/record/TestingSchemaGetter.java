@@ -21,6 +21,7 @@ import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.types.RowType;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -31,16 +32,14 @@ public class TestingSchemaGetter implements SchemaGetter {
     private SchemaInfo schemaInfo;
     private final Map<Integer, Schema> schemaCaches;
 
-    public TestingSchemaGetter() {
-        this.schemaInfo = null;
-        this.schemaCaches = new HashMap<>();
-    }
-
-    // todo: remove it(简化测试代码）
     public TestingSchemaGetter(SchemaInfo schemaInfo) {
         this.schemaInfo = schemaInfo;
         this.schemaCaches = new HashMap<>();
         this.schemaCaches.put(schemaInfo.getSchemaId(), schemaInfo.getSchema());
+    }
+
+    public TestingSchemaGetter(int schemaId, RowType rowType) {
+        this(schemaId, Schema.newBuilder().fromRowType(rowType).build());
     }
 
     public TestingSchemaGetter(int schemaId, Schema schema) {

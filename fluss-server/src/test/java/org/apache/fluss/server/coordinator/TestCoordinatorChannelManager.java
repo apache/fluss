@@ -21,6 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
 import java.util.Collections;
 import java.util.Map;
@@ -36,7 +37,11 @@ public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
     }
 
     public TestCoordinatorChannelManager(Map<Integer, TabletServerGateway> gateways) {
-        super(RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance()));
+        super(
+                RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance()),
+                () -> 0,
+                new Configuration(),
+                TestingMetricGroups.COORDINATOR_METRICS);
         this.gateways = gateways;
     }
 
@@ -44,6 +49,7 @@ public class TestCoordinatorChannelManager extends CoordinatorChannelManager {
         this.gateways = gateways;
     }
 
+    @Override
     protected Optional<TabletServerGateway> getTabletServerGateway(int serverId) {
         return Optional.ofNullable(gateways.get(serverId));
     }

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import javax.annotation.Nullable;
+
 /** An interface for reporting a {@link CompletedSnapshot}. */
 public interface CompletedKvSnapshotCommitter {
 
@@ -26,8 +28,13 @@ public interface CompletedKvSnapshotCommitter {
      * @param snapshot CompletedSnapshot to be reported
      * @param coordinatorEpoch the coordinator epoch when the snapshot is triggered
      * @param bucketLeaderEpoch the bucket leader epoch when the snapshot is triggered
+     * @param previousRecoverySnapshotId recovery snapshot this commit expects to replace
      * @throws Exception if report completed snapshot failed
      */
-    void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
+    void commitKvSnapshot(
+            CompletedSnapshot snapshot,
+            int coordinatorEpoch,
+            int bucketLeaderEpoch,
+            @Nullable Long previousRecoverySnapshotId)
             throws Exception;
 }

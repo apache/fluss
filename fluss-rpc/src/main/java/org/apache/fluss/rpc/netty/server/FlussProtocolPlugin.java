@@ -17,32 +17,49 @@
 
 package org.apache.fluss.rpc.netty.server;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.netty.ssl.SslConfig;
+import org.apache.fluss.rpc.netty.ssl.SslContextFactory;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
+import org.apache.fluss.security.auth.ServerAuthenticator;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslProxyAuthorization;
+import org.apache.fluss.security.auth.sasl.plain.PlainSaslServerConfigManager;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.ssl.SslContext;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /** Build-in protocol plugin for Fluss. */
-public class FlussProtocolPlugin implements NetworkProtocolPlugin {
+public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
+
     private final ApiManager apiManager;
     private final List<String> listeners;
-    private final RequestsMetrics requestsMetrics;
     private Configuration conf;
+    private PlainSaslServerConfigManager plainSaslServerConfigManager;
+    private Map<String, Supplier<ServerAuthenticator>> authenticatorSuppliers;
+    @Nullable private SslConfig sslConfig;
+    /** Shared by every TLS listener; {@code null} when no listener enables TLS. */
+    @Nullable private SslContext sslContext;
 
-    public FlussProtocolPlugin(
-            ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
+    public FlussProtocolPlugin(ServerType serverType, List<String> listeners) {
         this.apiManager = new ApiManager(serverType);
         this.listeners = listeners;
-        this.requestsMetrics = requestsMetrics;
     }
 
     @Override
@@ -52,7 +69,22 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
 
     @Override
     public void setup(Configuration conf) {
-        this.conf = conf;
+        // Fail fast on invalid proxy grants before accepting connections. Authenticators resolve
+        // the per-listener policy from the configuration when initialized, like the JAAS config.
+        PlainSaslProxyAuthorization.loadForListeners(conf, listeners);
+        this.plainSaslServerConfigManager = new PlainSaslServerConfigManager(conf);
+        this.conf = plainSaslServerConfigManager.getConfiguration();
+        this.authenticatorSuppliers =
+                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf);
+        // Built once here so that invalid TLS settings fail the server at startup rather than
+        // every accepted connection later.
+        this.sslConfig = SslConfig.fromServerConfig(conf).orElse(null);
+        if (sslConfig != null) {
+            checkTlsListenersExist(sslConfig.enabledListeners());
+        }
+        checkInternalListenerMatchesClientTls();
+        this.sslContext =
+                sslConfig == null ? null : SslContextFactory.createServerSslContext(sslConfig);
     }
 
     @Override
@@ -62,7 +94,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
 
     @Override
     public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName) {
+            RequestChannel[] requestChannels,
+            String listenerName,
+            RequestsMetrics requestsMetrics) {
         return new ServerChannelInitializer(
                 requestChannels,
                 apiManager,
@@ -71,10 +105,10 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
-                Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
-                                        .get(listenerName))
-                        .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new));
+                Optional.ofNullable(authenticatorSuppliers.get(listenerName))
+                        .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new),
+                isTlsListener(listenerName) ? sslContext : null,
+                sslConfig != null && sslConfig.requiresClientAuth(listenerName));
     }
 
     @Override
@@ -82,8 +116,70 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
         return new FlussRequestHandler(service);
     }
 
-    @VisibleForTesting
-    ApiManager getApiManager() {
-        return apiManager;
+    private boolean isTlsListener(String listenerName) {
+        return sslConfig != null && sslConfig.enabledListeners().contains(listenerName);
+    }
+
+    /**
+     * A misspelled name in {@code security.ssl.enabled.listeners} would otherwise leave the
+     * intended listener accepting plaintext without any notice.
+     */
+    private void checkTlsListenersExist(List<String> tlsListeners) {
+        List<String> unknown = new ArrayList<>(tlsListeners);
+        unknown.removeAll(listeners);
+        if (!unknown.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    "Listener(s) %s in '%s' are not Fluss protocol listeners %s. TLS is supported "
+                            + "only on Fluss protocol listeners; check the name for a typo, or "
+                            + "remove listeners served by another protocol (e.g. Kafka).",
+                    unknown, ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(), listeners);
+        }
+    }
+
+    /**
+     * Servers connect to each other over the internal listener with a client built from this server
+     * configuration.
+     *
+     * <p>With {@code client.security.ssl.enabled} they communicate via TLS, so the internal
+     * listener must be TLS-enabled exactly when this option is true. A mismatch in either direction
+     * would fail every request between servers at runtime, so it is rejected at startup. The check
+     * runs even without any server TLS configuration, to reject outbound TLS towards a plaintext
+     * internal listener.
+     */
+    private void checkInternalListenerMatchesClientTls() {
+        String internalListener = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
+        boolean internalListenerTls = isTlsListener(internalListener);
+        boolean clientTls = conf.get(ConfigOptions.CLIENT_SSL_ENABLED);
+        if (internalListenerTls != clientTls) {
+            throw new IllegalConfigurationException(
+                    "The internal listener '%s' (see '%s') is %s in '%s', but '%s' is %s. Servers "
+                            + "connect to each other over the internal listener with the "
+                            + "'client.security.ssl.*' options of the server configuration, so "
+                            + "both must agree.",
+                    internalListener,
+                    ConfigOptions.INTERNAL_LISTENER_NAME.key(),
+                    internalListenerTls ? "listed" : "not listed",
+                    ConfigOptions.SERVER_SSL_ENABLED_LISTENERS.key(),
+                    ConfigOptions.CLIENT_SSL_ENABLED.key(),
+                    clientTls);
+        }
+    }
+
+    // --- ServerReconfigurable ---
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        plainSaslServerConfigManager.validate(newConfig);
+    }
+
+    @Override
+    public void validate(Configuration newConfig, @Nullable FlussPrincipal requester)
+            throws ConfigException {
+        plainSaslServerConfigManager.validate(newConfig, requester);
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) throws ConfigException {
+        plainSaslServerConfigManager.reconfigure(newConfig);
     }
 }

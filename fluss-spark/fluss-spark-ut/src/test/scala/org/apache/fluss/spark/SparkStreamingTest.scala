@@ -38,7 +38,10 @@ import java.io.File
 import scala.collection.JavaConverters._
 
 class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
+
   import testImplicits._
+
+  private def testTableName: String = scopedTableName("t")
 
   /**
    * Will run streaming write twice with same checkpoint dir and verify each write results
@@ -101,9 +104,9 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   }
 
   test("write: write to log table") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
-      spark.sql(s"CREATE TABLE t (id bigint, data string)")
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
+      spark.sql(s"CREATE TABLE $testTableName (id bigint, data string)")
       val table = loadFlussTable(tablePath)
       assert(!table.getTableInfo.hasPrimaryKey)
       assert(!table.getTableInfo.hasBucketKey)
@@ -115,16 +118,17 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
       val input2 = Seq((4L, "d"), (5L, "e"), (6L, "f"))
       val expect1 = input1.map(r => ("+A", r._1, r._2))
       val expect2 = (input1 ++ input2).map(r => ("+A", r._1, r._2))
-      runTestWithStream("t", input1, input2, expect1, expect2)
+      runTestWithStream(testTableName, input1, input2, expect1, expect2)
     }
   }
 
   test("write: write to primary key table") {
-    withTable("t") {
-      val tablePath = createTablePath("t")
-      spark.sql(s"""
-                   |CREATE TABLE t (id bigint, data string) TBLPROPERTIES("primary.key" = "id")
-                   |""".stripMargin)
+    withTable(testTableName) {
+      val tablePath = createTablePath(testTableName)
+      spark.sql(
+        s"""
+           |CREATE TABLE $testTableName (id bigint, data string) TBLPROPERTIES("primary.key" = "id")
+           |""".stripMargin)
       val table = loadFlussTable(tablePath)
       assert(table.getTableInfo.hasBucketKey)
       assert(table.getTableInfo.hasPrimaryKey)
@@ -144,15 +148,15 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
         ("+U", 1L, "d"),
         ("+I", 5L, "e"),
         ("+I", 6L, "f"))
-      runTestWithStream("t", input1, input2, expect1, expect2)
+      runTestWithStream(testTableName, input1, input2, expect1, expect2)
     }
   }
 
   test("read: log table") {
-    val tableName = "t"
+    val tableName = testTableName
     withTable(tableName) {
-      sql("CREATE TABLE t (id int, data string)")
-      sql("INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c')")
+      sql(s"CREATE TABLE $testTableName (id int, data string)")
+      sql(s"INSERT INTO $testTableName VALUES (1, 'a'), (2, 'b'), (3, 'c')")
 
       val schema = StructType(Seq(StructField("id", IntegerType), StructField("data", StringType)))
 
@@ -186,10 +190,10 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   }
 
   test("read: log partition table") {
-    val tableName = "t"
+    val tableName = testTableName
     withTable(tableName) {
-      sql("CREATE TABLE t (id int, data string, pt string) PARTITIONED BY (pt)")
-      sql("INSERT INTO t VALUES (1, 'a', '11'), (2, 'b', '11'), (3, 'c', '22')")
+      sql(s"CREATE TABLE $testTableName (id int, data string, pt string) PARTITIONED BY (pt)")
+      sql(s"INSERT INTO $testTableName VALUES (1, 'a', '11'), (2, 'b', '11'), (3, 'c', '22')")
 
       val schema = StructType(
         Seq(
@@ -231,11 +235,12 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   }
 
   test("read: primary key table") {
-    val tableName = "t"
+    val tableName = testTableName
     withTable(tableName) {
       sql(
-        "CREATE TABLE t (pk1 int, pk2 string, id int, data string) TBLPROPERTIES('primary.key' = 'pk1, pk2',  'bucket.num' = 1)")
-      sql("INSERT INTO t VALUES (1, 'a', 11, 'aa'), (2, 'b', 22, 'bb'), (3, 'c', 33, 'cc')")
+        s"CREATE TABLE $testTableName (pk1 int, pk2 string, id int, data string) TBLPROPERTIES('primary.key' = 'pk1, pk2',  'bucket.num' = 1)")
+      sql(
+        s"INSERT INTO $testTableName VALUES (1, 'a', 11, 'aa'), (2, 'b', 22, 'bb'), (3, 'c', 33, 'cc')")
 
       val schema = StructType(
         Seq(
@@ -278,12 +283,12 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
   }
 
   test("read: primary key partition table") {
-    val tableName = "t"
+    val tableName = testTableName
     withTable(tableName) {
       sql(
-        "CREATE TABLE t (pk1 int, pk2 string, id int, data string, dt string) PARTITIONED BY(dt) TBLPROPERTIES('primary.key' = 'pk1, pk2, dt',  'bucket.num' = 1)")
+        s"CREATE TABLE $testTableName (pk1 int, pk2 string, id int, data string, dt string) PARTITIONED BY(dt) TBLPROPERTIES('primary.key' = 'pk1, pk2, dt',  'bucket.num' = 1)")
       sql(
-        "INSERT INTO t VALUES (1, 'a', 11, 'aa', 'a'), (2, 'b', 22, 'bb', 'b'), (3, 'c', 33, 'cc', 'b')")
+        s"INSERT INTO $testTableName VALUES (1, 'a', 11, 'aa', 'a'), (2, 'b', 22, 'bb', 'b'), (3, 'c', 33, 'cc', 'b')")
 
       val schema = StructType(
         Seq(

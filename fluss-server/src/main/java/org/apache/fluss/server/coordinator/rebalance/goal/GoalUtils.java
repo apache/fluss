@@ -39,6 +39,10 @@ public class GoalUtils {
                 return new LeaderReplicaDistributionGoal();
             case RACK_AWARE:
                 return new RackAwareGoal();
+            case TABLE_REPLICA_DISTRIBUTION:
+                return new TableReplicaDistributionGoal();
+            case TABLE_LEADER_DISTRIBUTION:
+                return new TableLeaderReplicaDistributionGoal();
             default:
                 throw new IllegalArgumentException("Unsupported goal type " + goalType);
         }

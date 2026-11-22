@@ -137,12 +137,8 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
 
     /** Converts this {@link TimestampNtz} object to a {@link LocalDateTime}. */
     public LocalDateTime toLocalDateTime() {
-        int date = (int) (millisecond / MILLIS_PER_DAY);
-        long time = millisecond % MILLIS_PER_DAY;
-        if (time < 0) {
-            --date;
-            time += MILLIS_PER_DAY;
-        }
+        long date = Math.floorDiv(millisecond, MILLIS_PER_DAY);
+        long time = Math.floorMod(millisecond, MILLIS_PER_DAY);
         long nanoOfDay = time * 1_000_000L + nanoOfMillisecond;
         LocalDate localDate = LocalDate.ofEpochDay(date);
         LocalTime localTime = LocalTime.ofNanoOfDay(nanoOfDay);

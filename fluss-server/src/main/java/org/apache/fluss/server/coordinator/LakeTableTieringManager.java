@@ -158,6 +158,8 @@ public class LakeTableTieringManager implements AutoCloseable {
     public LakeTableTieringManager(LakeTieringMetricGroup lakeTieringMetricGroup) {
         this(
                 new DefaultTimer("delay lake tiering", 1_000, 20),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newSingleThreadScheduledExecutor(
                         new ExecutorThreadFactory("fluss-lake-tiering-timeout-checker")),
                 SystemClock.getInstance(),
@@ -277,6 +279,11 @@ public class LakeTableTieringManager implements AutoCloseable {
                                     LastTieringResult r = lastTieringResult.get(tableId);
                                     return r != null ? clock.milliseconds() - r.tieredTime : -1L;
                                 }));
+
+        // tieredTimestamp: epoch timestamp (ms) of the last successful tiering
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_TIERED_TIMESTAMP,
+                () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.tieredTime)));
 
         // tierDuration: duration of last tiering job
         tableMetricGroup.gauge(
@@ -440,6 +447,19 @@ public class LakeTableTieringManager implements AutoCloseable {
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieredEpoch);
+                    TieringState tieringState = tieringStates.get(tableId);
+                    if (tieringState == TieringState.Scheduled) {
+                        // Completion reports use at-least-once delivery. Heartbeats can copy one
+                        // finished entry twice, and a lost response can trigger a retry. The first
+                        // report moves the table to Scheduled.
+                        // Ignore repeats to preserve statistics and state.
+                        LOG.debug(
+                                "Ignore the duplicate tiering completion report for table {} at epoch {} "
+                                        + "because the table is already in Scheduled state.",
+                                tableId,
+                                tieredEpoch);
+                        return;
+                    }
                     updateTableTieringResult(tableId, stats);
                     // to tiered state firstly
                     doHandleStateChange(tableId, TieringState.Tiered);

@@ -19,6 +19,9 @@ package org.apache.fluss.config.cluster;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.security.acl.FlussPrincipal;
+
+import javax.annotation.Nullable;
 
 /** Server Reconfigurable Interface which can dynamically respond to configuration changes. */
 public interface ServerReconfigurable {
@@ -42,6 +45,22 @@ public interface ServerReconfigurable {
      *     component
      */
     void validate(Configuration newConfig) throws ConfigException;
+
+    /**
+     * Validates the provided configuration on behalf of the requester, which allows implementations
+     * to additionally reject changes the requester is not allowed to make. The default
+     * implementation ignores the requester and delegates to {@link #validate(Configuration)}.
+     *
+     * @param newConfig the new configuration, see {@link #validate(Configuration)}
+     * @param requester the principal that requested the change, or null if the reconfiguration is
+     *     triggered by the server itself
+     * @throws ConfigException if the configuration is invalid or cannot be applied to this
+     *     component
+     */
+    default void validate(Configuration newConfig, @Nullable FlussPrincipal requester)
+            throws ConfigException {
+        validate(newConfig);
+    }
 
     /**
      * Reconfigures the component with the provided configuration.

@@ -22,7 +22,15 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.utils.FileDownloadSpec;
 import org.apache.fluss.fs.utils.FileDownloadUtils;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FileUtils;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -64,24 +72,111 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
         List<FileDownloadSpec> fileDownloadSpecs = new ArrayList<>();
         for (KvSnapshotDownloadSpec kvSnapshotDownloadSpec : kvSnapshotDownloadSpecs) {
             KvSnapshotHandle kvSnapshotHandle = kvSnapshotDownloadSpec.getKvSnapshotHandle();
-            List<FsPathAndFileName> fsPathAndFileNames =
-                    Stream.concat(
-                                    kvSnapshotHandle.getSharedKvFileHandles().stream(),
-                                    kvSnapshotHandle.getPrivateFileHandles().stream())
-                            .map(
-                                    kvFileHandleAndLocalPath ->
-                                            new FsPathAndFileName(
-                                                    new FsPath(
-                                                            kvFileHandleAndLocalPath
-                                                                    .getKvFileHandle()
-                                                                    .getFilePath()),
-                                                    kvFileHandleAndLocalPath.getLocalPath()))
-                            .collect(Collectors.toList());
+            List<KvFileHandleAndLocalPath> handles = fileHandles(kvSnapshotHandle);
+            List<FsPathAndFileName> fsPathAndFileNames = new ArrayList<>(handles.size());
+            for (KvFileHandleAndLocalPath handle : handles) {
+                resolveSafeLocalPath(
+                        kvSnapshotDownloadSpec.getDownloadDestination(), handle.getLocalPath());
+                fsPathAndFileNames.add(
+                        new FsPathAndFileName(
+                                new FsPath(handle.getKvFileHandle().getFilePath()),
+                                handle.getLocalPath()));
+            }
             fileDownloadSpecs.add(
                     new FileDownloadSpec(
                             fsPathAndFileNames, kvSnapshotDownloadSpec.getDownloadDestination()));
         }
-        FileDownloadUtils.transferAllDataToDirectory(
-                fileDownloadSpecs, closeableRegistry, dataTransferThreadPool);
+        try {
+            FileDownloadUtils.transferAllDataToDirectory(
+                    fileDownloadSpecs, closeableRegistry, dataTransferThreadPool);
+            verifyDownloadedFiles(kvSnapshotDownloadSpecs);
+        } catch (Exception failure) {
+            for (KvSnapshotDownloadSpec downloadSpec : kvSnapshotDownloadSpecs) {
+                FileUtils.deleteDirectoryQuietly(downloadSpec.getDownloadDestination().toFile());
+            }
+            throw failure;
+        }
+    }
+
+    private static void verifyDownloadedFiles(
+            Collection<KvSnapshotDownloadSpec> kvSnapshotDownloadSpecs) throws IOException {
+        for (KvSnapshotDownloadSpec downloadSpec : kvSnapshotDownloadSpecs) {
+            for (KvFileHandleAndLocalPath handle :
+                    fileHandles(downloadSpec.getKvSnapshotHandle())) {
+                String expectedSha256 = handle.getKvFileHandle().getSha256();
+                if (expectedSha256 == null) {
+                    continue;
+                }
+                Path localFile =
+                        resolveSafeLocalPath(
+                                downloadSpec.getDownloadDestination(), handle.getLocalPath());
+                if (Files.size(localFile) != handle.getKvFileHandle().getSize()) {
+                    throw new IOException(
+                            "Downloaded KV snapshot file length differs: " + localFile + '.');
+                }
+                if (!expectedSha256.equals(sha256Hex(localFile))) {
+                    throw new IOException(
+                            "Downloaded KV snapshot file SHA-256 differs: " + localFile + '.');
+                }
+            }
+        }
+    }
+
+    private static List<KvFileHandleAndLocalPath> fileHandles(KvSnapshotHandle handle) {
+        return Stream.concat(
+                        handle.getSharedKvFileHandles().stream(),
+                        handle.getPrivateFileHandles().stream())
+                .collect(Collectors.toList());
+    }
+
+    private static Path resolveSafeLocalPath(Path root, String localPath) throws IOException {
+        if (localPath == null
+                || localPath.isEmpty()
+                || localPath.startsWith("/")
+                || localPath.endsWith("/")
+                || localPath.indexOf('\\') >= 0
+                || localPath.contains("//")) {
+            throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
+        }
+        String[] components = localPath.split("/", -1);
+        for (String component : components) {
+            if (component.isEmpty() || ".".equals(component) || "..".equals(component)) {
+                throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
+            }
+        }
+        Path normalized = Paths.get(localPath).normalize();
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        Path resolved = normalizedRoot.resolve(normalized).normalize();
+        if (normalized.isAbsolute()
+                || !localPath.equals(normalized.toString().replace('\\', '/'))
+                || !resolved.startsWith(normalizedRoot)) {
+            throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
+        }
+        return resolved;
+    }
+
+    private static String sha256Hex(Path path) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is unavailable.", e);
+        }
+        try (InputStream input = Files.newInputStream(path)) {
+            byte[] buffer = new byte[64 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+        }
+        byte[] hash = digest.digest();
+        char[] result = new char[hash.length * 2];
+        char[] alphabet = "0123456789abcdef".toCharArray();
+        for (int i = 0; i < hash.length; i++) {
+            int value = hash[i] & 0xff;
+            result[i * 2] = alphabet[value >>> 4];
+            result[i * 2 + 1] = alphabet[value & 0xf];
+        }
+        return new String(result);
     }
 }

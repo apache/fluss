@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
@@ -241,11 +242,21 @@ public class LookupNormalizer implements Serializable {
             // the table support prefix lookup iff the bucket key is a prefix of the encoding pk
             boolean supportPrefixLookup = ArrayUtils.isPrefix(encodedPrimaryKeys, bucketKeys);
             if (supportPrefixLookup) {
-                // try to create prefix lookup normalizer
-                // TODO: support prefix lookup with arbitrary part of prefix of primary key
+                // extend the bucket keys with the next primary keys present in the lookup keys, so
+                // Fluss filters them; stop before the last one, which would be a primary key lookup
+                Set<Integer> lookupKeySet = new HashSet<>();
+                for (int lookupKey : lookupKeysBeforeProjection) {
+                    lookupKeySet.add(lookupKey);
+                }
+                int prefixLength = bucketKeys.length;
+                while (prefixLength < encodedPrimaryKeys.length - 1
+                        && lookupKeySet.contains(encodedPrimaryKeys[prefixLength])) {
+                    prefixLength++;
+                }
+                int[] prefixKeys = Arrays.copyOf(encodedPrimaryKeys, prefixLength);
                 int[] expectedLookupKeys =
                         ArrayUtils.intersection(
-                                primaryKeys, ArrayUtils.concat(bucketKeys, partitionKeys));
+                                primaryKeys, ArrayUtils.concat(prefixKeys, partitionKeys));
                 return createLookupNormalizer(
                         lookupKeyNames,
                         fieldNames(expectedLookupKeys, schema),

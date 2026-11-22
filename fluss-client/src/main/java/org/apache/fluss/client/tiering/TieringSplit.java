@@ -1,0 +1,220 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.client.tiering;
+
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+
+import javax.annotation.Nullable;
+
+import java.io.Serializable;
+import java.util.Objects;
+
+/** The base table split for tiering service. */
+public abstract class TieringSplit implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
+    public static final byte TIERING_LOG_SPLIT_FLAG = 2;
+    public static final int UNKNOWN_SPLIT_INDEX = -1;
+    public static final long UNKNOWN_TIERING_ROUND_TIMESTAMP = -1L;
+
+    protected static final int UNKNOWN_NUMBER_OF_SPLITS = -1;
+
+    protected final TablePath tablePath;
+    protected final TableBucket tableBucket;
+    @Nullable protected final String partitionName;
+
+    // the total number of splits in one round of tiering
+    protected final int numberOfSplits;
+    // the split index in one round of tiering
+    protected final int splitIndex;
+    // the timestamp when one round of tiering was generated
+    protected final long tieringRoundTimestamp;
+
+    /**
+     * Indicates whether to skip tiering data for this split in the current round of tiering. When
+     * set to true, the split will not be processed and tiering for the split will be skipped.
+     */
+    protected boolean skipCurrentRound;
+
+    public TieringSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            int numberOfSplits,
+            boolean skipCurrentRound) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                UNKNOWN_SPLIT_INDEX,
+                UNKNOWN_TIERING_ROUND_TIMESTAMP);
+    }
+
+    public TieringSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            int splitIndex,
+            long tieringRoundTimestamp) {
+        this.tablePath = tablePath;
+        this.tableBucket = tableBucket;
+        this.partitionName = partitionName;
+        if ((tableBucket.getPartitionId() == null && partitionName != null)
+                || (tableBucket.getPartitionId() != null && partitionName == null)) {
+            throw new IllegalArgumentException(
+                    "Partition name and partition id must be both null or both not null.");
+        }
+        this.numberOfSplits = numberOfSplits;
+        this.skipCurrentRound = skipCurrentRound;
+        this.splitIndex = splitIndex;
+        this.tieringRoundTimestamp = tieringRoundTimestamp;
+    }
+
+    /** Returns the unique identifier for this split. */
+    public abstract String splitId();
+
+    /** Checks whether this split is a primary key table split to tier. */
+    public final boolean isTieringSnapshotSplit() {
+        return getClass() == TieringSnapshotSplit.class;
+    }
+
+    /** Casts this split into a {@link TieringSnapshotSplit}. */
+    public TieringSnapshotSplit asTieringSnapshotSplit() {
+        return (TieringSnapshotSplit) this;
+    }
+
+    /** Checks whether this split is a log split to tier. */
+    public final boolean isTieringLogSplit() {
+        return getClass() == TieringLogSplit.class;
+    }
+
+    /**
+     * Marks this split to skip reading data in the current round. Once called, the split will not
+     * be processed and data reading will be skipped.
+     */
+    public void skipCurrentRound() {
+        this.skipCurrentRound = true;
+    }
+
+    /**
+     * Returns whether this split should skip tiering data in the current round of tiering.
+     *
+     * @return true if the split should skip tiering data, false otherwise
+     */
+    public boolean shouldSkipCurrentRound() {
+        return skipCurrentRound;
+    }
+
+    /** Casts this split into a {@link TieringLogSplit}. */
+    public TieringLogSplit asTieringLogSplit() {
+        return (TieringLogSplit) this;
+    }
+
+    public byte splitKind() {
+        if (isTieringSnapshotSplit()) {
+            return TIERING_SNAPSHOT_SPLIT_FLAG;
+        } else if (isTieringLogSplit()) {
+            return TIERING_LOG_SPLIT_FLAG;
+        } else {
+            throw new IllegalArgumentException("Unsupported split kind for " + getClass());
+        }
+    }
+
+    public int getNumberOfSplits() {
+        return numberOfSplits;
+    }
+
+    public int getSplitIndex() {
+        return splitIndex;
+    }
+
+    public boolean isFirstSplit() {
+        return splitIndex == 0;
+    }
+
+    public long getTieringRoundTimestamp() {
+        return tieringRoundTimestamp;
+    }
+
+    protected static String toSplitId(String splitPrefix, TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() != null) {
+            return splitPrefix
+                    + tableBucket.getTableId()
+                    + "-p"
+                    + tableBucket.getPartitionId()
+                    + "-"
+                    + tableBucket.getBucket();
+        } else {
+            return splitPrefix + tableBucket.getTableId() + "-" + tableBucket.getBucket();
+        }
+    }
+
+    public TablePath getTablePath() {
+        return tablePath;
+    }
+
+    public TableBucket getTableBucket() {
+        return tableBucket;
+    }
+
+    @Nullable
+    public String getPartitionName() {
+        return partitionName;
+    }
+
+    public TieringSplit copy(int numberOfSplits) {
+        return copy(numberOfSplits, splitIndex, tieringRoundTimestamp);
+    }
+
+    public abstract TieringSplit copy(
+            int numberOfSplits, int splitIndex, long tieringRoundTimestamp);
+
+    @Override
+    public boolean equals(Object object) {
+        if (!(object instanceof TieringSplit)) {
+            return false;
+        }
+        TieringSplit that = (TieringSplit) object;
+        return Objects.equals(tablePath, that.tablePath)
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(partitionName, that.partitionName)
+                && numberOfSplits == that.numberOfSplits
+                && skipCurrentRound == that.skipCurrentRound
+                && splitIndex == that.splitIndex
+                && tieringRoundTimestamp == that.tieringRoundTimestamp;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                splitIndex,
+                tieringRoundTimestamp);
+    }
+}

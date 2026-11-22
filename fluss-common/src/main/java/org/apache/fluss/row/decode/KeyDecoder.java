@@ -56,6 +56,12 @@ public interface KeyDecoder {
             short kvFormatVersion,
             @Nullable DataLakeFormat lakeFormat,
             boolean isDefaultBucketKey) {
+        // Hudi's HudiKeyEncoder is lossy (4-byte hash); primary keys are encoded by
+        // CompactedKeyEncoder, so decoding must use CompactedKeyDecoder as well.
+        if (lakeFormat == DataLakeFormat.HUDI) {
+            return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
+        }
+
         if (kvFormatVersion == 1 || (kvFormatVersion == 2 && isDefaultBucketKey)) {
             if (lakeFormat == null || lakeFormat == DataLakeFormat.LANCE) {
                 return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);

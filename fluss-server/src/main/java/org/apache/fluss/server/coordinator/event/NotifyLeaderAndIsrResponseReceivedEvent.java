@@ -17,10 +17,14 @@
 
 package org.apache.fluss.server.coordinator.event;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** An event for receive the response of {@link NotifyLeaderAndIsrRequest} from tablet server. */
 public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent {
@@ -30,11 +34,21 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     // the server id that return the response
     private final int responseServerId;
 
+    private final Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts;
+
     public NotifyLeaderAndIsrResponseReceivedEvent(
             List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
             int responseServerId) {
+        this(notifyLeaderAndIsrResultForBuckets, responseServerId, Collections.emptyMap());
+    }
+
+    public NotifyLeaderAndIsrResponseReceivedEvent(
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
+            int responseServerId,
+            Map<TableBucket, NotifyLeaderAndIsrRequestContext> requestContexts) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
+        this.requestContexts = Collections.unmodifiableMap(new HashMap<>(requestContexts));
     }
 
     public int getResponseServerId() {
@@ -43,5 +57,9 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
 
     public List<NotifyLeaderAndIsrResultForBucket> getNotifyLeaderAndIsrResultForBuckets() {
         return notifyLeaderAndIsrResultForBuckets;
+    }
+
+    public NotifyLeaderAndIsrRequestContext getRequestContext(TableBucket tableBucket) {
+        return requestContexts.get(tableBucket);
     }
 }

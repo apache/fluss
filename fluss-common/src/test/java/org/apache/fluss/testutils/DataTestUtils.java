@@ -749,11 +749,11 @@ public class DataTestUtils {
     }
 
     public static void assertLogRecordsEquals(LogRecords actual, LogRecords expected) {
-        assertLogRecordsEquals(DATA1_ROW_TYPE, actual, expected);
+        assertLogRecordsEquals(DATA1_ROW_TYPE, actual, expected, TEST_SCHEMA_GETTER);
     }
 
     public static void assertLogRecordsEquals(
-            RowType rowType, LogRecords actual, LogRecords expected) {
+            RowType rowType, LogRecords actual, LogRecords expected, SchemaGetter schemaGetter) {
         Iterator<LogRecordBatch> actualIterator = actual.batches().iterator();
         Iterator<LogRecordBatch> expectedIterator = expected.batches().iterator();
 
@@ -761,14 +761,20 @@ public class DataTestUtils {
             assertThat(expectedIterator.hasNext()).isTrue();
             LogRecordBatch actualBatch = actualIterator.next();
             LogRecordBatch expectedBatch = expectedIterator.next();
-            assertLogRecordBatchEquals(rowType, actualBatch, expectedBatch);
+            assertLogRecordBatchEquals(rowType, actualBatch, expectedBatch, schemaGetter);
         }
         assertThat(expectedIterator.hasNext()).isFalse();
     }
 
     public static void assertLogRecordBatchEquals(
-            RowType rowType, LogRecordBatch actual, LogRecordBatch expected) {
-        assertThatLogRecordBatch(actual).withSchema(rowType).isEqualTo(expected);
+            RowType rowType,
+            LogRecordBatch actual,
+            LogRecordBatch expected,
+            SchemaGetter schemaGetter) {
+        assertThatLogRecordBatch(actual)
+                .withSchema(rowType)
+                .withSchemaGetter(schemaGetter)
+                .isEqualTo(expected);
     }
 
     private static void assertLogRecordsEqualsWithRowKind(

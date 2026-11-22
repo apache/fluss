@@ -39,14 +39,14 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
      * The index of the current split in the lake snapshot splits to be read, enable to skip read
      * lake split via this lake split index.
      */
-    private int currentLakeSplitIndex;
-    /** The records to skip when reading a lake split. */
-    private long recordToSkip;
+    private final int currentLakeSplitIndex;
+    /** The records to skip when reading the lake split at {@link #currentLakeSplitIndex}. */
+    private final long recordToSkip;
 
     /** Whether the lake split has been finished. */
-    private boolean isLakeSplitFinished;
+    private final boolean isLakeSplitFinished;
 
-    private long startingOffset;
+    private final long startingOffset;
     private final long stoppingOffset;
 
     public LakeSnapshotAndFlussLogSplit(
@@ -85,24 +85,43 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         this.isLakeSplitFinished = isLakeSplitFinished;
     }
 
-    public LakeSnapshotAndFlussLogSplit updateWithRecordsToSkip(long recordsToSkip) {
-        this.recordToSkip = recordsToSkip;
-        return this;
-    }
-
-    public LakeSnapshotAndFlussLogSplit updateWithCurrentLakeSplitIndex(int currentLakeSplitIndex) {
-        this.currentLakeSplitIndex = currentLakeSplitIndex;
-        return this;
-    }
-
-    public LakeSnapshotAndFlussLogSplit updateWithStartingOffset(long startingOffset) {
-        this.startingOffset = startingOffset;
-        return this;
-    }
-
-    public LakeSnapshotAndFlussLogSplit updateWithLakeSplitFinished(boolean isLakeSplitFinished) {
-        this.isLakeSplitFinished = isLakeSplitFinished;
-        return this;
+    /**
+     * Creates a copy of this split at the given read position, keeping only the lake splits that
+     * are still to be read when the split is streaming.
+     *
+     * <p>A streaming split never goes back to a lake split it has read: once the lake phase is
+     * finished the copy holds no lake splits, otherwise it holds the lake splits from {@code
+     * currentLakeSplitIndex} on, with the index rebased to 0. {@code recordsToSkip} is relative to
+     * the current lake split, so it stays valid. A batch split merges all lake splits with the log
+     * on every read, so it keeps them all.
+     *
+     * <p>This split is not modified, as it may still be in use by the split reader.
+     */
+    public LakeSnapshotAndFlussLogSplit copyWithPosition(
+            long recordsToSkip,
+            int currentLakeSplitIndex,
+            long startingOffset,
+            boolean isLakeSplitFinished) {
+        List<LakeSplit> remainingLakeSplits = lakeSnapshotSplits;
+        if (isStreaming() && lakeSnapshotSplits != null) {
+            if (isLakeSplitFinished) {
+                remainingLakeSplits = null;
+            } else {
+                remainingLakeSplits =
+                        lakeSnapshotSplits.subList(
+                                currentLakeSplitIndex, lakeSnapshotSplits.size());
+            }
+            currentLakeSplitIndex = 0;
+        }
+        return new LakeSnapshotAndFlussLogSplit(
+                tableBucket,
+                partitionName,
+                remainingLakeSplits,
+                startingOffset,
+                stoppingOffset,
+                recordsToSkip,
+                currentLakeSplitIndex,
+                isLakeSplitFinished);
     }
 
     public long getRecordsToSkip() {

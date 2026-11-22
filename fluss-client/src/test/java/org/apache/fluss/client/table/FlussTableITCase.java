@@ -47,11 +47,14 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.testutils.TestTableNames;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -81,8 +84,6 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK;
 import static org.apache.fluss.testutils.DataTestUtils.assertRowValueEquals;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
@@ -95,11 +96,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** IT case for {@link FlussTable}. */
 class FlussTableITCase extends ClientToServerITCaseBase {
 
+    private final TestTableNames tableNames = new TestTableNames();
+    private final TablePath data1TablePath = tableNames.tablePath(TestData.DATA1_TABLE_PATH);
+    private final TablePath data1TablePathPk = tableNames.tablePath(TestData.DATA1_TABLE_PATH_PK);
+
     @Test
     void testGetDescriptor() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
+        createTable(data1TablePathPk, DATA1_TABLE_DESCRIPTOR_PK, false);
         // get table descriptor.
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        Table table = conn.getTable(data1TablePathPk);
         TableInfo tableInfo = table.getTableInfo();
 
         // the created table info will be applied with additional replica factor property
@@ -109,15 +114,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withDataLakeFormat(DataLakeFormat.PAIMON);
         Map<String, String> options = new HashMap<>(expected.getProperties());
         options.put(ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), "2");
-        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        options.put(
+                ConfigOptions.TABLE_KV_VALUE_LAYOUT_VERSION.key(),
+                String.valueOf(KvValueLayout.PLAIN.version()));
         expected = expected.withProperties(options);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 
     @Test
     void testAppendOnly() throws Exception {
-        createTable(DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR, false);
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        createTable(data1TablePath, DATA1_TABLE_DESCRIPTOR, false);
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
         }
@@ -135,7 +142,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                                 .logFormat(LogFormat.INDEXED)
                                 .build()
                         : DATA1_TABLE_DESCRIPTOR;
-        createTable(DATA1_TABLE_PATH, desc, false);
+        createTable(data1TablePath, desc, false);
         Configuration config = new Configuration(clientConf);
         // only 1kb memory size, and 64 bytes page size.
         config.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(2048));
@@ -143,7 +150,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         config.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(256));
         int expectedSize = 20;
         try (Connection conn = ConnectionFactory.createConnection(config)) {
-            Table table = conn.getTable(DATA1_TABLE_PATH);
+            Table table = conn.getTable(data1TablePath);
             AppendWriter appendWriter = table.newAppend().createWriter();
             BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
             // should exceed the buffer size, but append successfully
@@ -173,11 +180,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testPollOnce() throws Exception {
         TableDescriptor desc = DATA1_TABLE_DESCRIPTOR;
-        createTable(DATA1_TABLE_PATH, desc, false);
+        createTable(data1TablePath, desc, false);
         Configuration config = new Configuration(clientConf);
         int expectedSize = 20;
         try (Connection conn = ConnectionFactory.createConnection(config)) {
-            Table table = conn.getTable(DATA1_TABLE_PATH);
+            Table table = conn.getTable(data1TablePath);
             AppendWriter appendWriter = table.newAppend().createWriter();
             BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
             // should exceed the buffer size, but append successfully
@@ -209,7 +216,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void testUpsertWithSmallBuffer() throws Exception {
         TableDescriptor desc =
                 TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
-        createTable(DATA1_TABLE_PATH, desc, false);
+        createTable(data1TablePath, desc, false);
         Configuration config = new Configuration(clientConf);
         // only 1kb memory size, and 64 bytes page size.
         config.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(2048));
@@ -217,7 +224,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         config.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(256));
         int expectedSize = 20;
         try (Connection conn = ConnectionFactory.createConnection(config)) {
-            Table table = conn.getTable(DATA1_TABLE_PATH);
+            Table table = conn.getTable(data1TablePath);
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             BinaryString value = BinaryString.fromString(StringUtils.repeat("a", 100));
             // should exceed the buffer size, but append successfully
@@ -246,7 +253,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPutAndLookup() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_lookup_table");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_put_and_lookup_table");
         createTable(tablePath, DATA1_TABLE_DESCRIPTOR_PK, false);
 
         Table table = conn.getTable(tablePath);
@@ -266,7 +273,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                 TableDescriptor.builder().schema(schema).distributedBy(3, "b").build();
         // create the table
         TablePath data1PkTablePath2 =
-                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_2");
+                tableNames.tablePath(data1TablePathPk.getDatabaseName(), "test_pk_table_2");
         createTable(data1PkTablePath2, tableDescriptor, true);
 
         // now, check put/lookup data
@@ -299,7 +306,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPutAndPrefixLookup() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_put_and_prefix_lookup_table");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -428,7 +435,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testInvalidPrefixLookup() throws Exception {
         // First, test the bucket keys not a prefix subset of primary keys.
-        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_1");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_invalid_prefix_lookup_1");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -445,12 +452,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> table.newLookup().lookupBy("a", "c").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_1', "
+                        ("Can not perform prefix lookup on table '"
+                                + tableNames
+                                        .tablePath("test_db_1", "test_invalid_prefix_lookup_1")
+                                        .toString()
+                                + "', "
                                 + "because the bucket keys [a, c] is not a prefix subset of the "
-                                + "physical primary keys [a, b, c] (excluded partition fields if present).");
+                                + "physical primary keys [a, b, c] (excluded partition fields if present)."));
 
         // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
-        tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
+        tablePath = tableNames.tablePath("test_db_1", "test_invalid_prefix_lookup_2");
         schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -468,21 +479,33 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> table2.newLookup().lookupBy("a", "d").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
-                                + "because the lookup columns [a, d] must contain all bucket keys [a, b] in order.");
+                        ("Can not perform prefix lookup on table '"
+                                + tableNames
+                                        .tablePath("test_db_1", "test_invalid_prefix_lookup_2")
+                                        .toString()
+                                + "', "
+                                + "because the lookup columns [a, d] must contain all bucket keys [a, b] in order."));
 
         // wrong bucket key order
         assertThatThrownBy(() -> table2.newLookup().lookupBy("b", "a").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
-                                + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order.");
+                        ("Can not perform prefix lookup on table '"
+                                + tableNames
+                                        .tablePath("test_db_1", "test_invalid_prefix_lookup_2")
+                                        .toString()
+                                + "', "
+                                + "because the lookup columns [b, a] must contain all bucket keys [a, b] in order."));
 
         assertThatThrownBy(() -> table2.newLookup().lookupBy("a", "b", "c").createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_invalid_prefix_lookup_2', "
-                                + "because the lookup columns [a, b, c] equals the physical primary keys [a, b, c]. Please use primary key lookup (Lookuper without lookupBy) instead.");
+                        ("Can not perform prefix lookup on table '"
+                                + tableNames
+                                        .tablePath("test_db_1", "test_invalid_prefix_lookup_2")
+                                        .toString()
+                                + "', "
+                                + "because the lookup columns [a, b, c] equals the physical primary keys [a, b, c]. Please use primary key lookup (Lookuper without lookupBy) instead."));
     }
 
     @Test
@@ -508,7 +531,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         // create the table
         TablePath tablePath =
-                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+                tableNames.tablePath(data1TablePathPk.getDatabaseName(), "test_pk_table_auto_inc");
         createTable(tablePath, tableDescriptor, true);
         Table autoIncTable = conn.getTable(tablePath);
         Object[][] records = {
@@ -654,7 +677,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         // create the table
         TablePath tablePath =
-                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_auto_inc");
+                tableNames.tablePath(data1TablePathPk.getDatabaseName(), "test_pk_table_auto_inc");
         createTable(tablePath, tableDescriptor, true);
         Table autoIncTable = conn.getTable(tablePath);
         Object[][] records = {
@@ -681,7 +704,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLookupWithInsertIfNotExists() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_invalid_insert_lookup_table");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_invalid_insert_lookup_table");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -699,10 +722,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         () -> invalidTable.newLookup().enableInsertIfNotExists().createLookuper())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
-                        "Lookup with insertIfNotExists enabled cannot be created for table 'test_db_1.test_invalid_insert_lookup_table', "
-                                + "because it contains non-nullable columns that are not primary key columns or auto increment columns: [d].");
+                        ("Lookup with insertIfNotExists enabled cannot be created for table '"
+                                + tableNames
+                                        .tablePath("test_db_1", "test_invalid_insert_lookup_table")
+                                        .toString()
+                                + "', "
+                                + "because it contains non-nullable columns that are not primary key columns or auto increment columns: [d]."));
 
-        tablePath = TablePath.of("test_db_1", "test_insert_lookup_table");
+        tablePath = tableNames.tablePath("test_db_1", "test_insert_lookup_table");
         schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -786,7 +813,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLookupForNotReadyTable() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_lookup_unready_table_t1");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_lookup_unready_table_t1");
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(10).build();
         long tableId = createTable(tablePath, descriptor, true);
@@ -803,11 +830,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void testLimitScanPrimaryTable() throws Exception {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1).build();
-        long tableId = createTable(DATA1_TABLE_PATH_PK, descriptor, true);
+        long tableId = createTable(data1TablePathPk, descriptor, true);
         int insertSize = 10;
         int limitSize = 5;
         try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
-            Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+            Table table = conn.getTable(data1TablePathPk);
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
 
             List<Object[]> expectedRows = new ArrayList<>();
@@ -854,12 +881,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void testLimitScanLogTable() throws Exception {
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
-        long tableId = createTable(DATA1_TABLE_PATH, descriptor, true);
+        long tableId = createTable(data1TablePath, descriptor, true);
 
         int insertSize = 10;
         int limitSize = 5;
         try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
-            Table table = conn.getTable(DATA1_TABLE_PATH);
+            Table table = conn.getTable(data1TablePath);
             AppendWriter appendWriter = table.newAppend().createWriter();
 
             List<Object[]> expectedRows = new ArrayList<>();
@@ -915,10 +942,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
-        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
+        createTable(data1TablePathPk, tableDescriptor, true);
 
         // test put a full row
-        Table table = conn.getTable(DATA1_TABLE_PATH_PK);
+        Table table = conn.getTable(data1TablePathPk);
         verifyPutAndLookup(table, new Object[] {1, "a", 1, true});
 
         // partial update columns: a, b
@@ -966,9 +993,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
-        createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
+        createTable(data1TablePathPk, tableDescriptor, true);
 
-        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+        try (Table table = conn.getTable(data1TablePathPk)) {
             // the target columns doesn't contain the primary column, should
             // throw exception
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("b").createWriter())
@@ -984,11 +1011,19 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                             "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "d").createWriter())
                     .hasMessage(
-                            "Can not find target column: d for table test_db_1.test_pk_table_1.");
+                            ("Can not find target column: d for table "
+                                    + tableNames
+                                            .tablePath("test_db_1", "test_pk_table_1")
+                                            .toString()
+                                    + "."));
             assertThatThrownBy(
                             () -> table.newUpsert().partialUpdate(new int[] {0, 3}).createWriter())
                     .hasMessage(
-                            "Invalid target column index: 3 for table test_db_1.test_pk_table_1. The table only has 3 columns.");
+                            ("Invalid target column index: 3 for table "
+                                    + tableNames
+                                            .tablePath("test_db_1", "test_pk_table_1")
+                                            .toString()
+                                    + ". The table only has 3 columns."));
         }
 
         // test invalid auto increment column upsert
@@ -1002,7 +1037,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .build();
         tableDescriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
         TablePath tablePath =
-                TablePath.of("test_db_1", "test_invalid_auto_increment_column_upsert");
+                tableNames.tablePath("test_db_1", "test_invalid_auto_increment_column_upsert");
         createTable(tablePath, tableDescriptor, true);
         try (Table table = conn.getTable(tablePath)) {
             assertThatThrownBy(() -> table.newUpsert().createWriter())
@@ -1017,11 +1052,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testDelete() throws Exception {
-        createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, false);
+        createTable(data1TablePathPk, DATA1_TABLE_DESCRIPTOR_PK, false);
 
         // put key.
         InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        try (Table table = conn.getTable(DATA1_TABLE_PATH_PK)) {
+        try (Table table = conn.getTable(data1TablePathPk)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             upsertWriter.upsert(row).get();
             Lookuper lookuper = table.newLookup().createLookuper();
@@ -1046,11 +1081,11 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         int bucketNumber = 10;
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        createTable(data1TablePath, tableDescriptor, false);
 
         // append data.
         GenericRow row = row(1, "a");
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row).get();
 
@@ -1109,10 +1144,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             builder.kvFormat(KvFormat.fromString(kvFormat));
         }
         TableDescriptor tableDescriptor = builder.build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        createTable(data1TablePath, tableDescriptor, false);
 
         int expectedSize = 30;
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(data1TablePath)) {
             TableWriter tableWriter;
             if (append) {
                 tableWriter = table.newAppend().createWriter();
@@ -1135,7 +1170,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         }
 
         // fetch data.
-        try (Table table = conn.getTable(DATA1_TABLE_PATH);
+        try (Table table = conn.getTable(data1TablePath);
                 LogScanner logScanner = createLogScanner(table)) {
             subscribeFromBeginning(logScanner, table);
             int count = 0;
@@ -1180,7 +1215,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .schema(schema)
                         .logFormat(LogFormat.fromString(format))
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_append_and_project");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_append_and_project");
         createTable(tablePath, tableDescriptor, false);
 
         try (Table table = conn.getTable(tablePath)) {
@@ -1260,7 +1295,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .schema(schema)
                         .property(ConfigOptions.TABLE_LOG_FORMAT.key(), changelogFormat)
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_pk_table_1");
         createTable(tablePath, tableDescriptor, false);
 
         int batches = 3;
@@ -1364,7 +1399,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .primaryKey("a")
                         .build();
         TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_pk_table_1");
         createTable(tablePath, tableDescriptor, false);
 
         int batches = 3;
@@ -1477,8 +1512,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void testInvalidColumnProjection() throws Exception {
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).logFormat(LogFormat.INDEXED).build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
-        Table table = conn.getTable(DATA1_TABLE_PATH);
+        createTable(data1TablePath, tableDescriptor, false);
+        Table table = conn.getTable(data1TablePath);
 
         // validation on projection
         assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
@@ -1559,6 +1594,141 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     }
 
     @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testSkipUnchangedUpsertsIsOptIn(boolean skipUnchanged) throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, skipUnchanged)
+                        .build();
+        RowType rowType = DATA1_SCHEMA_PK.getRowType();
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_skip_unchanged_upserts_" + skipUnchanged);
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            // insert a row
+            upsertWriter.upsert(row(0, "v0"));
+            // value-identical upserts: should be no-ops that emit no changelog
+            upsertWriter.upsert(row(0, "v0"));
+            upsertWriter.upsert(row(0, "v0"));
+            // a field differs: should emit an update changelog
+            upsertWriter.upsert(row(0, "v1"));
+            // delete the row: should emit a delete changelog
+            upsertWriter.delete(row(0, "v1"));
+            upsertWriter.flush();
+
+            // Identical writes emit changelog only when suppression is disabled.
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0")));
+            if (!skipUnchanged) {
+                for (int i = 0; i < 2; i++) {
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+                    expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v0")));
+                }
+            }
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.DELETE, row(0, "v1")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+        }
+    }
+
+    @Test
+    void testSkipUnchangedPartialUpdatesAndDeletes() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("data", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_UPSERT_SKIP_UNCHANGED, true)
+                        .build();
+        RowType rowType = schema.getRowType();
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_skip_unchanged_partial_update");
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter fullWriter = table.newUpsert().createWriter();
+            fullWriter.upsert(row(0, "v0", "kept")).get();
+
+            UpsertWriter keyOnlyWriter = table.newUpsert().partialUpdate("id").createWriter();
+            // A primary-key-only partial upsert leaves the complete row unchanged.
+            keyOnlyWriter.upsert(row(0, null, null)).get();
+
+            UpsertWriter partialWriter =
+                    table.newUpsert().partialUpdate("id", "name").createWriter();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v0", null)).get();
+            // changed partial upsert: normal update changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // unchanged partial upsert: no changelog
+            partialWriter.upsert(row(0, "v1", null)).get();
+            // changed partial delete: clears name and emits an update changelog
+            partialWriter.delete(row(0, "v1", null)).get();
+            // unchanged partial delete: no changelog
+            partialWriter.delete(row(0, null, null)).get();
+            partialWriter.flush();
+
+            List<ScanRecord> expected = new ArrayList<>();
+            expected.add(new ScanRecord(-1, -1, ChangeType.INSERT, row(0, "v0", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v0", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, "v1", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, row(0, "v1", "kept")));
+            expected.add(new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, row(0, null, "kept")));
+
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribeFromBeginning(0);
+            List<ScanRecord> actualLogRecords = new ArrayList<>(expected.size());
+            while (actualLogRecords.size() < expected.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                scanRecords.forEach(actualLogRecords::add);
+            }
+            assertThat(logScanner.poll(Duration.ofSeconds(1))).isEmpty();
+            logScanner.close();
+
+            assertThat(actualLogRecords).hasSize(expected.size());
+            for (int i = 0; i < actualLogRecords.size(); i++) {
+                ScanRecord actual = actualLogRecords.get(i);
+                assertThat(actual.getChangeType()).isEqualTo(expected.get(i).getChangeType());
+                assertThatRow(actual.getRow())
+                        .withSchema(rowType)
+                        .isEqualTo(expected.get(i).getRow());
+            }
+
+            Lookuper lookuper = table.newLookup().createLookuper();
+            assertThatRow(lookuper.lookup(row(0)).get().getSingletonRow())
+                    .withSchema(rowType)
+                    .isEqualTo(row(0, null, "kept"));
+        }
+    }
+
+    @ParameterizedTest
     @CsvSource({"none,3", "lz4_frame,3", "zstd,3", "zstd,9"})
     void testArrowCompressionAndProject(String compression, String level) throws Exception {
         Schema schema =
@@ -1574,7 +1744,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
                         .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_" + compression + level);
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_arrow_" + compression + level);
         createTable(tablePath, tableDescriptor, false);
 
         try (Connection conn = ConnectionFactory.createConnection(clientConf);
@@ -1762,7 +1933,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .kvFormat(KvFormat.COMPACTED)
                         .logFormat(LogFormat.COMPACTED)
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_pk_compacted_upsert_poll");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_pk_compacted_upsert_poll");
         createTable(tablePath, tableDescriptor, false);
 
         int expectedSize = 30;
@@ -1841,7 +2012,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .kvFormat(KvFormat.COMPACTED)
                         .logFormat(LogFormat.COMPACTED)
                         .build();
-        TablePath tablePath = TablePath.of("test_db_1", "test_pk_compacted_update_delete");
+        TablePath tablePath = tableNames.tablePath("test_db_1", "test_pk_compacted_update_delete");
         createTable(tablePath, tableDescriptor, false);
 
         try (Table table = conn.getTable(tablePath)) {
@@ -1901,7 +2072,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .kvFormat(KvFormat.COMPACTED)
                         .logFormat(LogFormat.COMPACTED)
                         .build();
-        TablePath path = TablePath.of("test_db_1", "test_pk_compacted_latest");
+        TablePath path = tableNames.tablePath("test_db_1", "test_pk_compacted_latest");
         long tableId = createTable(path, td, false);
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
@@ -1944,7 +2115,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testUpsertAndDeleteReturnLogEndOffset() throws Exception {
         // Create a PK table with single bucket for predictable offset tracking
-        TablePath tablePath = TablePath.of("test_db_1", "test_upsert_delete_log_end_offset");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_upsert_delete_log_end_offset");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -1991,7 +2163,8 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testBatchedUpsertReturnsSameLogEndOffset() throws Exception {
         // Test that multiple records in the same batch receive the same log end offset
-        TablePath tablePath = TablePath.of("test_db_1", "test_batched_upsert_log_end_offset");
+        TablePath tablePath =
+                tableNames.tablePath("test_db_1", "test_batched_upsert_log_end_offset");
         Schema schema =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())

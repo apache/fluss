@@ -21,6 +21,9 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.KvBatchStrategy;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.testutils.MockDataUtils;
 import org.apache.fluss.flink.source.testutils.Order;
@@ -70,8 +73,8 @@ public class FlussSourceITCase extends FlinkTestBase {
     private static final Schema PK_SCHEMA = MockDataUtils.getOrdersSchemaPK();
     private static final Schema LOG_SCHEMA = MockDataUtils.getOrdersSchemaLog();
 
-    private final String pkTableName = "orders_test_pk";
-    private final String logTableName = "orders_test_log";
+    private final String pkTableName = tableNames.tableName("orders_test_pk");
+    private final String logTableName = tableNames.tableName("orders_test_log");
 
     private final TablePath ordersLogTablePath = new TablePath(DEFAULT_DB, logTableName);
     private final TablePath ordersPKTablePath = new TablePath(DEFAULT_DB, pkTableName);
@@ -110,6 +113,34 @@ public class FlussSourceITCase extends FlinkTestBase {
         List<Order> collectedElements = stream.executeAndCollect(ORDERS.size());
 
         // Assert result size and elements match
+        assertThat(collectedElements).hasSameElementsAs(ORDERS);
+    }
+
+    @Test
+    public void testBoundedKvBatchPKSource() throws Exception {
+        createTable(ordersPKTablePath, pkTableDescriptor);
+        writeRowsToTable(ordersPKTablePath);
+
+        Configuration flussConf = new Configuration();
+        flussConf.set(ConfigOptions.CLIENT_SCANNER_KV_BATCH_STRATEGY, KvBatchStrategy.SERVER_SCAN);
+
+        FlussSource<Order> flussSource =
+                FlussSource.<Order>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(pkTableName)
+                        .setStartingOffsets(OffsetsInitializer.full())
+                        .setScanPartitionDiscoveryIntervalMs(1000L)
+                        .setDeserializationSchema(new MockDataUtils.OrderDeserializationSchema())
+                        .setFlussConfig(flussConf)
+                        .setBounded()
+                        .build();
+
+        DataStreamSource<Order> stream =
+                env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
+
+        List<Order> collectedElements = stream.executeAndCollect(ORDERS.size());
+
         assertThat(collectedElements).hasSameElementsAs(ORDERS);
     }
 
@@ -280,7 +311,7 @@ public class FlussSourceITCase extends FlinkTestBase {
     @Test
     void testTimestamp() throws Exception {
         // 1. Create Fluss log table
-        String tableName = "wm_timestamp_test";
+        String tableName = tableNames.tableName("wm_timestamp_test");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Schema schema =
                 Schema.newBuilder()
@@ -334,7 +365,7 @@ public class FlussSourceITCase extends FlinkTestBase {
     @Test
     void testPerBucketWatermark() throws Exception {
         // 1. Create 2-bucket Fluss log table
-        String tableName = "wm_per_bucket_test";
+        String tableName = tableNames.tableName("wm_per_bucket_test");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
         Schema schema =
                 Schema.newBuilder()

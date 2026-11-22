@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
@@ -42,14 +43,18 @@ class ComponentClassLoaderTest {
     private static final Class<?> CLASS_RETURNED_BY_OWNER = ComponentClassLoaderTest.class;
 
     private static final String NON_EXISTENT_RESOURCE_NAME = "foo/Bar";
-    private static String resourceToLoad;
+    private static final String RESOURCE_PACKAGE_PREFIX = "org.apache.fluss.test";
+    private static final String RESOURCE_TO_LOAD =
+            RESOURCE_PACKAGE_PREFIX.replace('.', '/') + "/resource";
     private static final URL RESOURCE_RETURNED_BY_OWNER = createURL();
 
     @TempDir private static Path tmp;
 
     @BeforeAll
-    public static void setup() {
-        resourceToLoad = tmp.toString();
+    public static void setup() throws IOException {
+        Path resource = tmp.resolve(RESOURCE_TO_LOAD);
+        Files.createDirectories(resource.getParent());
+        Files.createFile(resource);
     }
 
     // ----------------------------------------------------------------------------------------------
@@ -164,17 +169,17 @@ class ComponentClassLoaderTest {
     @Test
     void testOwnerFirstResourceFoundIgnoresComponent() {
         TestUrlClassLoader owner =
-                new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
+                new TestUrlClassLoader(RESOURCE_TO_LOAD, RESOURCE_RETURNED_BY_OWNER);
 
         final ComponentClassLoader componentClassLoader =
                 new ComponentClassLoader(
                         new URL[] {},
                         owner,
-                        new String[] {resourceToLoad},
+                        new String[] {RESOURCE_PACKAGE_PREFIX},
                         new String[0],
                         Collections.emptyMap());
 
-        final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
+        final URL loadedResource = componentClassLoader.getResource(RESOURCE_TO_LOAD);
         assertThat(loadedResource).isSameAs(RESOURCE_RETURNED_BY_OWNER);
     }
 
@@ -184,31 +189,31 @@ class ComponentClassLoaderTest {
 
         final ComponentClassLoader componentClassLoader =
                 new ComponentClassLoader(
-                        new URL[] {tmp.getRoot().toUri().toURL()},
+                        new URL[] {tmp.toUri().toURL()},
                         owner,
-                        new String[] {resourceToLoad},
+                        new String[] {RESOURCE_PACKAGE_PREFIX},
                         new String[0],
                         Collections.emptyMap());
 
-        final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
-        assertThat(loadedResource.toString()).contains(resourceToLoad);
+        final URL loadedResource = componentClassLoader.getResource(RESOURCE_TO_LOAD);
+        assertThat(loadedResource.toString()).contains(RESOURCE_TO_LOAD);
     }
 
     @Test
     void testComponentFirstResourceFoundIgnoresOwner() throws Exception {
         TestUrlClassLoader owner =
-                new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
+                new TestUrlClassLoader(RESOURCE_TO_LOAD, RESOURCE_RETURNED_BY_OWNER);
 
         final ComponentClassLoader componentClassLoader =
                 new ComponentClassLoader(
-                        new URL[] {tmp.getRoot().toUri().toURL()},
+                        new URL[] {tmp.toUri().toURL()},
                         owner,
                         new String[0],
-                        new String[] {resourceToLoad},
+                        new String[] {RESOURCE_PACKAGE_PREFIX},
                         Collections.emptyMap());
 
-        final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
-        assertThat(loadedResource.toString()).contains(resourceToLoad);
+        final URL loadedResource = componentClassLoader.getResource(RESOURCE_TO_LOAD);
+        assertThat(loadedResource.toString()).contains(RESOURCE_TO_LOAD);
     }
 
     @Test

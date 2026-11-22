@@ -28,11 +28,13 @@ import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLeaseJsonSerde;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.RetryUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -47,6 +49,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class KvSnapshotLeaseMetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseMetadataManager.class);
+
+    private static final int MAX_RETRIES = 3;
+    private static final long INITIAL_BACKOFF_MS = 100;
+    private static final long MAX_BACKOFF_MS = 1000;
 
     private final ZooKeeperClient zkClient;
     private final String remoteDataDir;
@@ -201,31 +207,33 @@ public class KvSnapshotLeaseMetadataManager {
         for (Map.Entry<Long, KvSnapshotTableLease> entry :
                 lease.getTableIdToTableLease().entrySet()) {
             long tableId = entry.getKey();
-            FsPath path = generateMetadataFile(tableId, leaseId, entry.getValue());
+            // the path embeds a random UUID, so resolve it once and track it before writing:
+            // every retry then overwrites the same file, and a partial write is still cleaned up.
+            FsPath path = FlussPaths.remoteKvSnapshotLeaseFile(remoteDataDir, leaseId, tableId);
             createdFiles.add(path);
+            writeMetadataFile(path, KvSnapshotTableLeaseJsonSerde.toJson(entry.getValue()));
             tableIdToMetadataFile.put(tableId, path);
         }
         return tableIdToMetadataFile;
     }
 
-    private FsPath generateMetadataFile(
-            long tableId, String leaseId, KvSnapshotTableLease tableLease) throws Exception {
-        // get the remote file path to store the kv snapshot lease metadata of a table
-        FsPath remoteKvSnapshotLeaseFile =
-                FlussPaths.remoteKvSnapshotLeaseFile(remoteDataDir, leaseId, tableId);
-        // check whether the parent directory exists, if not, create the directory
-        FileSystem fileSystem = remoteKvSnapshotLeaseFile.getFileSystem();
-        if (!fileSystem.exists(remoteKvSnapshotLeaseFile.getParent())) {
-            fileSystem.mkdirs(remoteKvSnapshotLeaseFile.getParent());
-        }
-
-        // serialize table lease to json bytes, and write to file.
-        byte[] jsonBytes = KvSnapshotTableLeaseJsonSerde.toJson(tableLease);
-        try (FSDataOutputStream outputStream =
-                fileSystem.create(remoteKvSnapshotLeaseFile, FileSystem.WriteMode.OVERWRITE)) {
-            outputStream.write(jsonBytes);
-        }
-        return remoteKvSnapshotLeaseFile;
+    private void writeMetadataFile(FsPath path, byte[] jsonBytes) throws IOException {
+        RetryUtils.executeIOWithRetry(
+                () -> {
+                    FileSystem fileSystem = path.getFileSystem();
+                    if (!fileSystem.exists(path.getParent())) {
+                        fileSystem.mkdirs(path.getParent());
+                    }
+                    try (FSDataOutputStream outputStream =
+                            fileSystem.create(path, FileSystem.WriteMode.OVERWRITE)) {
+                        outputStream.write(jsonBytes);
+                    }
+                    return null;
+                },
+                "write kv snapshot lease metadata file " + path,
+                MAX_RETRIES,
+                INITIAL_BACKOFF_MS,
+                MAX_BACKOFF_MS);
     }
 
     private KvSnapshotLeaseHandler buildKvSnapshotLease(

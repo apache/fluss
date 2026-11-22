@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -26,14 +27,29 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
 
-/** The serializer for {@link TableBucketWriteResult}. */
+/**
+ * The serializer for {@link TableBucketWriteResult}.
+ *
+ * <h3>Version Evolution:</h3>
+ *
+ * <ul>
+ *   <li><b>Version 1:</b> Initial version. The version of the lake write result serializer was not
+ *       persisted; the write result was deserialized with this serializer's version instead.
+ *   <li><b>Version 2 (Current):</b> Persists the version of the lake write result serializer before
+ *       the write result bytes and passes it to the lake serializer on deserialization, so that
+ *       lake formats can evolve their write result format independently.
+ * </ul>
+ */
 public class TableBucketWriteResultSerializer<WriteResult>
         implements SimpleVersionedSerializer<TableBucketWriteResult<WriteResult>> {
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int VERSION_1 = 1;
+    private static final int VERSION_2 = 2;
+
+    private static final int CURRENT_VERSION = VERSION_2;
 
     private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
@@ -79,6 +95,8 @@ public class TableBucketWriteResultSerializer<WriteResult>
         } else {
             byte[] serializeBytes = writeResultSerializer.serialize(writeResult);
             out.writeInt(serializeBytes.length);
+            // since VERSION_2
+            out.writeInt(writeResultSerializer.getVersion());
             out.write(serializeBytes);
         }
 
@@ -99,7 +117,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     @Override
     public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
             throws IOException {
-        if (version != CURRENT_VERSION) {
+        if (version != VERSION_1 && version != VERSION_2) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -123,9 +141,12 @@ public class TableBucketWriteResultSerializer<WriteResult>
         int writeResultLength = in.readInt();
         WriteResult writeResult;
         if (writeResultLength >= 0) {
+            // VERSION_1 did not persist the lake serializer version and passed its own version
+            // to the lake serializer, keep that behavior for data written with VERSION_1
+            int writeResultVersion = version >= VERSION_2 ? in.readInt() : VERSION_1;
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            writeResult = writeResultSerializer.deserialize(writeResultVersion, writeResultBytes);
         } else {
             writeResult = null;
         }

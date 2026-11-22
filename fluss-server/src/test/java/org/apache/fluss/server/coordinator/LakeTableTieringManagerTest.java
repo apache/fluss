@@ -160,18 +160,31 @@ class LakeTableTieringManagerTest {
         assertThat(tableTieringManager.requestTable()).isNull();
 
         // mock lake tiering finish one-round tiering
-        tableTieringManager.finishTableTiering(tableId1, tieredEpoch, false, TieringStats.UNKNOWN);
-        // not advance time, request table should return null
-        assertThat(tableTieringManager.requestTable()).isNull();
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        tableTieringManager.finishTableTiering(
+                tableId1, tieredEpoch, false, new TieringStats(1024L, 100L));
 
-        // now, advance 1 second to trigger the table tiering
+        long firstCompletionTime = manualClock.milliseconds();
+        manualClock.advanceTime(Duration.ofMillis(50));
+        tableTieringManager.finishTableTiering(
+                tableId1, tieredEpoch, false, new TieringStats(2048L, 200L));
+
+        assertThat(tableTieringManager.getTableState(tableId1))
+                .isEqualTo(LakeTableTieringManager.TieringState.Scheduled);
+        assertThat(tableTieringManager.getTableLastSuccessTime(tableId1))
+                .isEqualTo(firstCompletionTime);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.tierDuration))
+                .isEqualTo(1000L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.fileSize))
+                .isEqualTo(1024L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.recordCount))
+                .isEqualTo(100L);
+
+        // The duplicate must not reschedule the next round from the duplicate report time.
+        assertThat(tableTieringManager.requestTable()).isNull();
         manualClock.advanceTime(Duration.ofSeconds(4));
-        // not reach data freshness, shouldn't request table
         assertThat(tableTieringManager.requestTable()).isNull();
-
-        // advance 6 seconds again, should get table now
-        manualClock.advanceTime(Duration.ofSeconds(6));
-        // the tiered epoch should be 2 now
+        manualClock.advanceTime(Duration.ofMillis(5950));
         assertRequestTable(tableId1, tablePath1, 2);
     }
 
@@ -421,6 +434,17 @@ class LakeTableTieringManagerTest {
 
         // mock lake tiering force finish (e.g., due to exceeding tiering duration)
         tableTieringManager.finishTableTiering(tableId1, 1, true, TieringStats.UNKNOWN);
+
+        // a repeated forced completion uses the old epoch and must still be fenced
+        assertThatThrownBy(
+                        () ->
+                                tableTieringManager.finishTableTiering(
+                                        tableId1, 1, true, TieringStats.UNKNOWN))
+                .isInstanceOf(FencedTieringEpochException.class)
+                .hasMessage(
+                        "The tiering epoch %d is not match current epoch %d in coordinator for table %d.",
+                        1, 2, tableId1);
+
         // should immediately be re-pending and can be requested again without waiting
         assertRequestTable(tableId1, tablePath1, 2);
 

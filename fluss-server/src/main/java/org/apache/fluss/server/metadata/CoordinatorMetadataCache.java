@@ -75,6 +75,31 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         return serverNodes;
     }
 
+    /**
+     * Returns the alive tablet servers on the given listener by server id, each carrying its {@link
+     * ServerTag} and reported software version when available, from the same metadata snapshot.
+     */
+    public Map<Integer, ServerNode> getAllAliveTabletServersWithTags(String listenerName) {
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Map<Integer, ServerNode> serverNodes = new HashMap<>();
+        for (Map.Entry<Integer, ServerInfo> entry : snapshot.aliveTabletServers.entrySet()) {
+            ServerNode node = entry.getValue().node(listenerName);
+            if (node != null) {
+                serverNodes.put(
+                        entry.getKey(),
+                        new ServerNode(
+                                node.id(),
+                                node.host(),
+                                node.port(),
+                                node.serverType(),
+                                node.rack(),
+                                snapshot.serverTags.get(entry.getKey()),
+                                node.softwareVersion()));
+            }
+        }
+        return serverNodes;
+    }
+
     @Override
     public @Nullable ServerNode getCoordinatorServer(String listenerName) {
         ServerInfo coordinatorServer = metadataSnapshot.coordinatorServer;
@@ -92,6 +117,20 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
                                 tabletServerInfos.add(
                                         new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
         return Collections.unmodifiableSet(tabletServerInfos);
+    }
+
+    public Set<ServerInfo> getLiveTabletServerInfos() {
+        NodeMetadataSnapshot snapshot = metadataSnapshot;
+        Map<Integer, ServerInfo> aliveTabletServers = snapshot.aliveTabletServers;
+        Set<ServerInfo> serverInfos = new HashSet<>();
+        aliveTabletServers.forEach(
+                (serverId, serverInfo) -> {
+                    ServerTag tag = snapshot.serverTags.get(serverId);
+                    if (tag != ServerTag.PERMANENT_OFFLINE) {
+                        serverInfos.add(serverInfo);
+                    }
+                });
+        return Collections.unmodifiableSet(serverInfos);
     }
 
     /**
