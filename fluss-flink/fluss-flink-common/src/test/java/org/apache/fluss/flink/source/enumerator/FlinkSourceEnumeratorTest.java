@@ -637,12 +637,10 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     @Test
     void testBatchPartitionFilterOnlyGeneratesMatchingPartitionSplits() throws Throwable {
-        long tableId = createTable(defaultTablePath, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
+        createTable(defaultTablePath, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
         ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         Map.Entry<Long, String> targetPartition =
                 waitUntilPartitions(zooKeeperClient, defaultTablePath).entrySet().iterator().next();
-        // Split generation queries leaders, which become ready after partition registration.
-        FLUSS_CLUSTER_EXTENSION.waitUntilTablePartitionReady(tableId, targetPartition.getKey());
         RowType partitionRowType = RowType.builder().field("name", DataTypes.STRING()).build();
         Object partitionValue =
                 PredicateBuilder.convertJavaObject(
