@@ -880,12 +880,19 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
     })
     .await
     .unwrap();
+    let east =
+        fluss::metadata::PartitionSpec::new(std::collections::HashMap::from([("name", "east")]));
+    admin.drop_partition(&path, &east, false).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(15), events.try_next())
+        .await
+        .unwrap();
+    assert!(matches!(result, Err(FlussLakeError::DataUnavailable(_))));
 }
 
 #[tokio::test]
 async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     use fluss::record::ChangeType;
-    use fluss::row::{DataGetters, GenericRow};
+    use fluss::row::DataGetters;
     use fluss_lake::UnionReadEvent::*;
 
     let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
@@ -900,21 +907,19 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     support::create_table(&admin, &path, &desc).await;
     let table = conn.get_table(&path).await.unwrap();
     let writer = table.new_upsert().unwrap().create_writer().unwrap();
-    let row = |id: i32, name: &'static str| {
-        let mut row = GenericRow::new(2);
-        row.set_field(0, id);
-        row.set_field(1, name);
-        row
-    };
-    writer.upsert(&row(1, "baseline")).unwrap().await.unwrap();
-    writer.upsert(&row(2, "tail")).unwrap().await.unwrap();
+    writer
+        .upsert(&pk_row(1, "baseline"))
+        .unwrap()
+        .await
+        .unwrap();
+    writer.upsert(&pk_row(2, "tail")).unwrap().await.unwrap();
     let ctx = lake_context(table.get_table_info(), 1, 2);
     let bucket = ctx.log_ranges()[0].table_bucket().clone();
     let source = FlussLakeTable::new(conn.clone(), &path);
     let scan = || {
         source
             .new_stream_scan()
-            .with_lake_source(Arc::new(Baseline))
+            .with_lake_source(Arc::new(Baseline(append_batch(vec![1], vec!["baseline"]))))
     };
     let limited =
         scan().with_memory_budget(Arc::new(fluss::client::LimitedReadMemoryBudget::new(0)));
@@ -926,8 +931,8 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     assert!(failed.try_next().await.unwrap().is_none());
     let source = scan();
     let mut events = source.start(&ctx).await.unwrap();
-    writer.upsert(&row(1, "updated")).unwrap().await.unwrap();
-    writer.delete(&row(2, "tail")).unwrap().await.unwrap();
+    writer.upsert(&pk_row(1, "updated")).unwrap().await.unwrap();
+    writer.delete(&pk_row(2, "tail")).unwrap().await.unwrap();
     // The target lost its uncommitted staging area. Even with newer log records,
     // bootstrapping again from the same context must emit the original view.
     assert!(matches!(
@@ -947,39 +952,58 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     ids.sort();
     assert_eq!(ids, [1, 2]);
     assert_eq!(checkpoint[&bucket], 2);
-    let mut seen_update = false;
+    // A missing-key delete advances the log without emitting a CDC row.
+    writer.delete(&pk_row(99, "")).unwrap().await.unwrap();
+    let stop = admin
+        .list_offsets(&path, &[0], OffsetSpec::Latest)
+        .await
+        .unwrap()[&0];
+    let mut changes = Vec::new();
+    let mut last_visible = None;
     tokio::time::timeout(Duration::from_secs(15), async {
-        loop {
+        while checkpoint[&bucket] < stop {
             let Changes(batch) = events.try_next().await.unwrap().unwrap() else {
                 panic!("repeated bootstrap")
             };
             for record in batch.records(&bucket) {
-                assert_eq!(checkpoint[&bucket], record.offset());
-                checkpoint.insert(bucket.clone(), record.offset() + 1);
-                match record.change_type() {
-                    ChangeType::UpdateBefore => {
-                        assert_eq!(record.row().get_string(1).unwrap(), "baseline")
-                    }
-                    ChangeType::UpdateAfter => {
-                        assert_eq!(record.row().get_int(0).unwrap(), 1);
-                        assert_eq!(record.row().get_string(1).unwrap(), "updated");
-                        seen_update = true;
-                    }
-                    ChangeType::Delete => {
-                        assert!(seen_update);
-                        assert_eq!(record.row().get_int(0).unwrap(), 2);
-                        return;
-                    }
-                    kind => panic!("unexpected change {kind:?}"),
-                }
+                last_visible = Some(record.offset());
+                changes.push((
+                    *record.change_type(),
+                    record.row().get_int(0).unwrap(),
+                    record.row().get_string(1).unwrap().to_string(),
+                ));
             }
+            checkpoint.insert(
+                bucket.clone(),
+                batch.consumed_up_to_offset(&bucket).unwrap(),
+            );
         }
     })
     .await
     .unwrap();
+    assert!(
+        checkpoint[&bucket] > last_visible.unwrap() + 1,
+        "empty CDC batch must advance the checkpoint"
+    );
+    if changes
+        .first()
+        .is_some_and(|change| change.0 == ChangeType::UpdateBefore)
+    {
+        assert_eq!(
+            changes.remove(0),
+            (ChangeType::UpdateBefore, 1, "baseline".into())
+        );
+    }
+    assert_eq!(
+        changes,
+        [
+            (ChangeType::UpdateAfter, 1, "updated".into()),
+            (ChangeType::Delete, 2, "tail".into())
+        ]
+    );
     drop(events);
     writer
-        .upsert(&row(3, "after restart"))
+        .upsert(&pk_row(3, "after restart"))
         .unwrap()
         .await
         .unwrap();

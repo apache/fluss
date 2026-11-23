@@ -143,12 +143,12 @@ while let Some(event) = events.try_next().await? {
     match event {
         Snapshot(batch) => { /* stage rows */ }
         SnapshotFinished(next) => { /* commit staged rows and offsets together */ }
-        Changes(records) => { /* apply per bucket and commit next offsets with the data */ }
+        Changes(records) => { /* apply rows; commit consumed_up_to_offset for each bucket */ }
     }
 }
 # Ok(()) }
 ```
 
-If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Keep the original context with the checkpoint. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
+If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Use the scanner's exclusive consumed offset even for a bucket that returned no rows (for example, a delete of a missing key). Keep the original context with the checkpoint. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
 
 Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Streaming reads return full rows without row-filter pushdown. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.

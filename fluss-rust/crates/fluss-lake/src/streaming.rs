@@ -37,8 +37,8 @@ pub enum UnionReadEvent {
     Snapshot(RecordBatch),
     /// All snapshot rows have been emitted. Commit them with these next offsets.
     SnapshotFinished(HashMap<TableBucket, i64>),
-    /// Ordered within each bucket. After applying the records, persist the last
-    /// applied offset + 1 for each affected bucket, including UPDATE_BEFORE rows.
+    /// Ordered within each bucket. Commit each poll's [`ScanRecords::consumed_up_to_offset`] with
+    /// its output, including progress for buckets with no visible rows.
     Changes(ScanRecords),
 }
 
@@ -153,34 +153,17 @@ impl FlussLakeStreamScan {
                 .await
         }
         .map_err(|e| execution_client_error("subscribe follow buckets", e))?;
-        Ok(
-            stream::try_unfold((scanner, offsets), |(scanner, mut next)| async move {
-                loop {
-                    let changes = scanner
-                        .poll_frozen(Duration::from_millis(500))
-                        .await
-                        .map_err(|e| execution_client_error("read live changelog", e))?;
-                    if changes.is_empty() {
-                        continue;
-                    }
-                    for (bucket, records) in changes.records_by_buckets() {
-                        let expected = next.get_mut(bucket).ok_or_else(|| {
-                            FlussLakeError::DataUnavailable(format!("unexpected bucket {bucket:?}"))
-                        })?;
-                        for record in records {
-                            if record.offset() != *expected {
-                                return Err(FlussLakeError::DataUnavailable(format!(
-                                    "bucket {bucket:?}: expected offset {expected}, got {}",
-                                    record.offset()
-                                )));
-                            }
-                            *expected += 1;
-                        }
-                    }
-                    return Ok(Some((UnionReadEvent::Changes(changes), (scanner, next))));
+        Ok(stream::try_unfold(scanner, |scanner| async move {
+            loop {
+                let changes = scanner
+                    .poll_frozen(Duration::from_millis(500))
+                    .await
+                    .map_err(|e| execution_client_error("read live changelog", e))?;
+                if !changes.is_empty() {
+                    return Ok(Some((UnionReadEvent::Changes(changes), scanner)));
                 }
-            })
-            .boxed(),
-        )
+            }
+        })
+        .boxed())
     }
 }
