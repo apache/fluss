@@ -31,6 +31,7 @@ categories = { workspace = true }
 
 [features]
 integration_tests = ["fluss/integration_tests"]
+kv-snapshot = ["fluss/kv-snapshot"]
 paimon = ["dep:opendal-core", "dep:paimon", "dep:reqwest"]
 
 [dependencies]
