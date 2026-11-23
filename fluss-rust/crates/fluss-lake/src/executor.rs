@@ -320,13 +320,13 @@ async fn fold_logical_changelog_tail(
 }
 
 /// Output columns come first so predicate-only columns can be stripped after filtering.
-struct PhysicalProjection {
-    field_indexes: Vec<usize>,
+pub(crate) struct PhysicalProjection {
+    pub(crate) field_indexes: Vec<usize>,
     key_positions: Vec<usize>,
 }
 
 impl PhysicalProjection {
-    fn resolve(
+    pub(crate) fn resolve(
         row_type: &RowType,
         output_projection: Option<&[usize]>,
         filter: &BoundPredicate,
@@ -584,7 +584,7 @@ fn resize_batches(stream: RecordBatchStream, batch_size: usize) -> RecordBatchSt
     ))
 }
 
-fn predicate_evaluation_error(error: ClientError) -> FlussLakeError {
+pub(crate) fn predicate_evaluation_error(error: ClientError) -> FlussLakeError {
     match error {
         ClientError::IllegalArgument { message } => FlussLakeError::SchemaIncompatible(message),
         error => FlussLakeError::Internal(error_message("evaluate UnionRead predicate", &error)),

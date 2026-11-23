@@ -418,7 +418,7 @@ impl FlussLakeScan {
         &self.table_path
     }
 
-    fn resolve_projection(&self, row_type: &RowType) -> Result<Option<Vec<usize>>> {
+    pub(crate) fn resolve_projection(&self, row_type: &RowType) -> Result<Option<Vec<usize>>> {
         let projection = match &self.projection {
             Some(FlussLakeProjection::Indices(projection)) => projection.clone(),
             Some(FlussLakeProjection::Names(names)) => {

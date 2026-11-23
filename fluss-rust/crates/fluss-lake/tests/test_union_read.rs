@@ -849,7 +849,14 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
     writer.flush().await.unwrap();
     let source = FlussLakeTable::new(conn.clone(), &path);
     let context = source.capture_read_context().await.unwrap();
-    let mut events = source.new_stream_scan().start(&context).await.unwrap();
+    let mut events = source
+        .new_stream_scan()
+        .with_projection_by_names(vec!["id".into()])
+        .with_filter(col("name").is_in(["east", "west"]))
+        .with_filter(col("id").gt(0_i32))
+        .start(&context)
+        .await
+        .unwrap();
     writer
         .append_arrow_batch(append_batch(vec![2, 3], vec!["east", "west"]))
         .unwrap();
@@ -877,6 +884,28 @@ async fn stream_append_reads_writes_made_during_bootstrap() {
         }
         ids.sort_unstable();
         assert_eq!(ids, [(0, 3), (1, 2)]);
+    })
+    .await
+    .unwrap();
+    // A poll with no matching rows must still advance past the filtered write.
+    writer
+        .append_arrow_batch(append_batch(vec![-1], vec!["east"]))
+        .unwrap();
+    writer.flush().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let Changes(poll) = events.try_next().await.unwrap().unwrap() else {
+                panic!("unexpected bootstrap")
+            };
+            assert_eq!(poll.count(), 0);
+            if poll
+                .records_by_buckets()
+                .keys()
+                .any(|b| poll.consumed_up_to_offset(b) == Some(3))
+            {
+                break;
+            }
+        }
     })
     .await
     .unwrap();
@@ -1021,4 +1050,99 @@ async fn stream_pk_lake_handoff_and_checkpoint_resume() {
     assert_eq!(records[0].offset(), checkpoint[&bucket]);
     assert_eq!(*records[0].change_type(), ChangeType::Insert);
     assert_eq!(records[0].row().get_int(0).unwrap(), 3);
+}
+
+#[tokio::test]
+async fn stream_filtered_pk_changes_after_restart() {
+    use fluss::record::ChangeType::*;
+    use fluss::row::DataGetters;
+    use fluss_lake::UnionReadEvent::*;
+
+    let conn = Arc::new(support::get_shared_cluster().get_fluss_connection().await);
+    let admin = conn.get_admin().unwrap();
+    for image in ["FULL", "WAL"] {
+        let path = TablePath::new("fluss", format!("stream_filtered_pk_{image}"));
+        let desc = TableDescriptor::builder()
+            .schema(pk_schema())
+            .distributed_by(Some(1), vec!["id".into()])
+            .property("table.changelog.image", image)
+            .build()
+            .unwrap();
+        support::create_table(&admin, &path, &desc).await;
+        let table = conn.get_table(&path).await.unwrap();
+        let writer = table.new_upsert().unwrap().create_writer().unwrap();
+        writer.upsert(&pk_row(1, "yes")).unwrap().await.unwrap();
+        writer.upsert(&pk_row(2, "no")).unwrap().await.unwrap();
+        let info = table.get_table_info();
+        let bucket = TableBucket::new(info.table_id, 0);
+        let stop = admin
+            .list_offsets(&path, &[0], OffsetSpec::Latest)
+            .await
+            .unwrap()[&0];
+        let ctx = FlussLakeReadContext::from_boundary(
+            info,
+            None,
+            vec![FlussLakeLogRange::new(
+                bucket.clone(),
+                FlussLakeLogPartition::Ordinary(FlussLakePartitionIdentity::Unpartitioned),
+                1,
+                None,
+                stop,
+                0,
+            )],
+        )
+        .unwrap();
+        let source = FlussLakeTable::new(conn.clone(), &path)
+            .new_stream_scan()
+            .with_projection(vec![])
+            .with_filter(col("name").eq("yes"));
+        let mut stream = source.start(&ctx).await.unwrap();
+        let mut snapshot = vec![];
+        let checkpoint = loop {
+            match stream.try_next().await.unwrap().unwrap() {
+                Snapshot(b) => {
+                    assert_eq!(b.num_columns(), 1);
+                    snapshot.extend(sorted_ids(&[b]));
+                }
+                SnapshotFinished(offsets) => break offsets,
+                Changes(_) => panic!("unexpected live rows"),
+            }
+        };
+        assert_eq!(snapshot, [1]);
+        drop(stream);
+        for (id, name) in [(1, "no"), (2, "no-again"), (2, "yes")] {
+            writer.upsert(&pk_row(id, name)).unwrap().await.unwrap();
+        }
+        writer.delete(&pk_row(2, "yes")).unwrap().await.unwrap();
+        let end = admin
+            .list_offsets(&path, &[0], OffsetSpec::Latest)
+            .await
+            .unwrap()[&0];
+        let mut stream = source.resume(&ctx, checkpoint).await.unwrap();
+        let mut actual = vec![];
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let Changes(poll) = stream.try_next().await.unwrap().unwrap() else {
+                    panic!("repeated bootstrap")
+                };
+                for r in poll.records(&bucket) {
+                    assert_eq!(r.row().get_record_batch().unwrap().num_columns(), 1);
+                    actual.push((r.row().get_int(0).unwrap(), *r.change_type()));
+                }
+                if poll.consumed_up_to_offset(&bucket) == Some(end) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        if image == "WAL" {
+            assert_eq!(
+                actual,
+                [(1, Delete), (2, Delete), (2, UpdateAfter), (2, Delete)]
+            );
+        } else {
+            assert_eq!(actual, [(1, UpdateBefore), (2, UpdateAfter), (2, Delete)]);
+        }
+    }
 }

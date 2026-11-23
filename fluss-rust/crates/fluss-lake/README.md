@@ -129,7 +129,7 @@ Without the `kv-snapshot` feature the reader rejects KV tasks before reading. An
 
 ## Snapshot followed by a live changelog
 
-For an Append table, the bootstrap emits the captured lake and log rows. For a default deduplicate PK table, it emits the reconciled current view. Once all assigned splits finish, the stream emits a single marker and follows each captured bucket from its exclusive stop offset. Writes during bootstrap are picked up from the log, in order within each bucket. PK changes retain their original change types, including deletes and update-before records when present.
+For an Append table, the bootstrap emits the captured lake and log rows. For a default deduplicate PK table, it emits the reconciled current view. Once all assigned splits finish, the stream emits a single marker and follows each captured bucket from its exclusive stop offset. Writes during bootstrap are picked up from the log, in order within each bucket. Without a filter, PK changes retain the source change types.
 
 ```rust,no_run
 # use fluss_lake::{FlussLakeTable, Result};
@@ -149,6 +149,12 @@ while let Some(event) = events.try_next().await? {
 # Ok(()) }
 ```
 
-If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Use the scanner's exclusive consumed offset even for a bucket that returned no rows (for example, a delete of a missing key). Keep the original context with the checkpoint. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
+If bootstrap fails before its marker is committed, discard staged rows and call `start` with the original context. After committing the marker, call `resume(&context, offsets)` with the **next unread offset** of every captured bucket. Use the scanner's exclusive consumed offset even for a bucket that returned no rows (for example, a delete of a missing key). Restore the original context, projection and filter with the checkpoint. Offsets do not encode the query; bootstrap again if it changes. The sink owns durable progress; the source cannot guarantee that its output was applied. Expired input is an error.
 
-Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Streaming reads return full rows without row-filter pushdown. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.
+Partition scopes are supported at capture. New partitions are not discovered, and an empty bucket assignment ends after bootstrap. Bootstrap has the same baseline restrictions as bounded execution and accepts the same PK memory budget.
+
+Use `with_projection` or `with_projection_by_names` and `with_filter` on the stream scan. Both phases return the requested columns in order, followed by any omitted primary-key columns in key order. Predicate-only columns are read internally. Append streams emit matching rows. For a PK table with `table.changelog.image=FULL`, the filter evaluates each change image: a matching old row is retracted even if the new row no longer matches.
+
+For a WAL PK table, a filter on a non-key column produces **keyed upserts and deletes**. Apply each `UpdateAfter` as an upsert and each `Delete` by primary key only; other delete fields do not describe the old row. For example, with `price > 100`, prices `130 → 90 → 70` for one key produce an upsert followed by two deletes. Deleting an absent key must be a no-op. A source delete also deletes the key. This stream maintains the filtered table without storing prior values in the SDK; it is not an exact history of membership transitions. A filter using only primary-key columns preserves matching source changes.
+
+The bounded planner uses its normal pruning during bootstrap. During follow, eligible append predicates can skip whole log batches; PK updates reach the reader before filtering so that an update leaving the result cannot be lost.

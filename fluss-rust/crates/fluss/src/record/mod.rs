@@ -196,6 +196,19 @@ impl ScanRecords {
         &self.records
     }
 
+    /// Transforms the visible records without changing consumed offsets, including
+    /// buckets for which the transformation removes every record.
+    #[doc(hidden)]
+    pub fn try_map_bucket_records<E>(
+        mut self,
+        mut map: impl FnMut(&[ScanRecord]) -> Result<Vec<ScanRecord>, E>,
+    ) -> Result<Self, E> {
+        for records in self.records.values_mut() {
+            *records = map(records)?;
+        }
+        Ok(self)
+    }
+
     pub fn into_records_by_buckets(self) -> HashMap<TableBucket, Vec<ScanRecord>> {
         self.records
     }
