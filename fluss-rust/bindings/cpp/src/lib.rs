@@ -17,9 +17,7 @@
 
 mod lookup;
 mod types;
-#[cfg(feature = "union_read")]
 mod union_read;
-#[cfg(feature = "union_read")]
 use union_read::UnionReader;
 mod write_callback;
 use lookup::{
@@ -280,14 +278,12 @@ mod ffi {
         arrow_batches: FfiArrowRecordBatches,
     }
 
-    #[cfg(feature = "union_read")]
     enum FfiUnionMode {
         Bounded,
         Streaming,
         Resume,
     }
 
-    #[cfg(feature = "union_read")]
     enum FfiUnionKind {
         Snapshot,
         SnapshotFinished,
@@ -296,7 +292,6 @@ mod ffi {
         Finished,
     }
 
-    #[cfg(feature = "union_read")]
     struct FfiUnionOptions {
         mode: FfiUnionMode,
         projection: Vec<usize>,
@@ -308,7 +303,6 @@ mod ffi {
         has_budget: bool,
     }
 
-    #[cfg(feature = "union_read")]
     struct FfiUnionEvent {
         result: FfiResult,
         kind: FfiUnionKind,
@@ -470,15 +464,10 @@ mod ffi {
         type Connection;
         type Admin;
         type Table;
-        #[cfg(feature = "union_read")]
         type UnionReader;
-        #[cfg(feature = "union_read")]
         unsafe fn delete_union_reader(reader: *mut UnionReader);
-        #[cfg(feature = "union_read")]
         fn capture_union_context(self: &Table, bytes: &mut Vec<u8>) -> FfiResult;
-        #[cfg(feature = "union_read")]
         fn open_union(self: &Table, context: &[u8], options: FfiUnionOptions) -> FfiPtrResult;
-        #[cfg(feature = "union_read")]
         fn union_next(
             self: &mut UnionReader,
             timeout_ms: u64,
@@ -2830,7 +2819,6 @@ const BATCH_AVAILABLE: i32 = 0;
 const TIMED_OUT: i32 = 1;
 const FINISHED: i32 = 2;
 
-#[cfg(feature = "union_read")]
 unsafe fn delete_union_reader(reader: *mut UnionReader) {
     unsafe { drop(Box::from_raw(reader)) };
 }

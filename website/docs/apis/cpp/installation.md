@@ -5,7 +5,7 @@ sidebar_position: 1
 
 The C++ bindings are not yet published as a package. You need to build from source.
 
-**Prerequisites:** CMake 3.22+, C++17 compiler, Rust 1.85+, Apache Arrow C++ library
+**Prerequisites:** CMake 3.22+, C++17 compiler, Rust 1.95+, Apache Arrow C++ library, OpenSSL development headers and libraries (Linux)
 
 ```bash
 git clone https://github.com/apache/fluss.git
@@ -19,7 +19,7 @@ Install dependencies:
 brew install cmake arrow
 
 # Ubuntu/Debian
-sudo apt-get install cmake libarrow-dev
+sudo apt-get install cmake libarrow-dev libssl-dev
 ```
 
 If Arrow is not available via package manager, build from source:

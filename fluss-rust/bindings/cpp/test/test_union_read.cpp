@@ -17,7 +17,6 @@
  * under the License.
  */
 
-#ifdef FLUSS_ENABLE_UNION_READ
 #include <arrow/api.h>
 
 #include "test_utils.h"
@@ -143,4 +142,3 @@ TEST(UnionReadTest, CheckpointAdvancesPastFilteredAppends) {
 }
 
 }  // namespace
-#endif

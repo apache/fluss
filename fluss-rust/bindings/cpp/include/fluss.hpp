@@ -1848,10 +1848,8 @@ class Table {
     TableUpsert NewUpsert();
     TableLookup NewLookup();
     TableScan NewScan();
-#ifdef FLUSS_ENABLE_UNION_READ
     /// Capture the bounded snapshot and per-bucket stops as a portable PbUnionReadContext.
     Result CaptureUnionReadContext(std::vector<uint8_t>& out) const;
-#endif
 
     /// Creates a prefix lookuper. `lookup_columns` must be the table's bucket-key
     /// columns (a strict prefix of the primary key); fails otherwise.
@@ -1941,7 +1939,6 @@ class TableLookup {
     ffi::Table* table_{nullptr};
 };
 
-#ifdef FLUSS_ENABLE_UNION_READ
 /// Runtime settings are not part of a persisted read boundary.
 struct UnionReadOptions {
     std::unordered_map<std::string, std::string> catalog_properties;
@@ -1971,7 +1968,6 @@ class UnionReadReader {
     };
     std::unique_ptr<ffi::UnionReader, Deleter> reader_;
 };
-#endif
 
 class TableScan {
    public:
@@ -2026,7 +2022,6 @@ class TableScan {
     Result CreateRecordBatchLogReader(Admin& admin, const std::vector<TableBucket>& buckets,
                                       const TimestampRange& range, RecordBatchLogReader& out);
 
-#ifdef FLUSS_ENABLE_UNION_READ
     /// Read the filtered snapshot as Arrow batches until Finished.
     Result CreateBoundedUnionReader(const std::vector<uint8_t>& context, UnionReadReader& out,
                                     const UnionReadOptions& options = {}) const;
@@ -2039,7 +2034,6 @@ class TableScan {
                                       const std::vector<ReaderStopOffset>& next_offsets,
                                       UnionReadReader& out,
                                       const UnionReadOptions& options = {}) const;
-#endif
 
     Result CreateBucketBatchScanner(const TableBucket& bucket, BatchScanner& out);
 
@@ -2051,11 +2045,9 @@ class TableScan {
     Result DoCreateScanner(LogScanner& out, bool is_record_batch);
     struct EncodedPredicate;
     EncodedPredicate EncodePredicate() const;
-#ifdef FLUSS_ENABLE_UNION_READ
     Result OpenUnionReader(const std::vector<uint8_t>&, bool streaming,
                            const std::vector<ReaderStopOffset>*, UnionReadReader&,
                            const UnionReadOptions&) const;
-#endif
 
     ffi::Table* table_{nullptr};
     std::vector<size_t> projection_;

@@ -371,6 +371,7 @@ jobs:
       run:
         working-directory: fluss-rust
     env:
+      RUSTUP_TOOLCHAIN: 1.95.0
       FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/fluss-rust/target/debug/fluss-test-cluster
       FLUSS_IMAGE: fluss
       FLUSS_VERSION: dev
@@ -389,6 +390,8 @@ jobs:
           sudo apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
           sudo apt-get update
           sudo apt-get install -y -V libarrow-dev libssl-dev
+      - name: Install C++ binding MSRV
+        run: rustup toolchain install 1.95.0 --profile minimal
       - name: Rust Cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
@@ -405,7 +408,6 @@ jobs:
         run: |
           cmake -B build \
             -DFLUSS_ENABLE_TESTING=ON \
-            -DFLUSS_ENABLE_UNION_READ=ON \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache

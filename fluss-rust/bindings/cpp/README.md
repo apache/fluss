@@ -4,10 +4,10 @@ C++ bindings for Fluss, built on top of the [fluss-rust](../../crates/fluss) cli
 
 ## Requirements
 
-- Rust (see [rust-toolchain.toml](../../rust-toolchain.toml) at repo root)
+- Rust 1.95+
 - C++17-capable compiler
-- CMake 3.18+ and/or Bazel
-- Apache Arrow (for Arrow-based APIs)
+- CMake 3.22+ and/or Bazel
+- Apache Arrow C++ and, on Linux, the OpenSSL development package
 
 ## Build
 
@@ -232,9 +232,7 @@ per-poll API for engines that need to check cancellation between batches.
 
 ### Bounded and streaming UnionRead
 
-Configure CMake with `-DFLUSS_ENABLE_UNION_READ=ON` (Rust 1.95+). This enables the
-Rust UnionRead reader and its Paimon backend; the default C++ build is unchanged.
-On Linux, install the OpenSSL development package (e.g. `libssl-dev`).
+Both build systems include the Rust UnionRead reader and its Paimon backend.
 To override lake catalog properties on a worker, pass `UnionReadOptions` when
 opening the reader. The optional PK memory budget applies during bootstrap.
 

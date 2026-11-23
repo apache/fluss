@@ -317,9 +317,11 @@ cc_library(
         ":fastbuild_mode": ["-g"],
         ":release_mode": [],
     }) + select({
+        "@platforms//os:linux": ["-lssl", "-lcrypto"],
         "@platforms//os:macos": [
             "-framework", "CoreFoundation",
             "-framework", "Security",
+            "-framework", "SystemConfiguration",
         ],
         "//conditions:default": [],
     }),
