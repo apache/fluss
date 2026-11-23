@@ -18,10 +18,6 @@
 package org.apache.fluss.flink.sink.undo;
 
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.utils.ByteArrayWrapper;
-
-import java.util.HashSet;
-import java.util.Set;
 
 /**
  * Encapsulates the recovery state for a single bucket.
@@ -32,7 +28,6 @@ import java.util.Set;
  *   <li>The bucket being recovered
  *   <li>The checkpoint offset (start point for reading changelog)
  *   <li>The log end offset (end point for reading changelog)
- *   <li>Processed primary keys for deduplication (streaming execution)
  *   <li>Progress tracking during changelog scanning
  * </ul>
  */
@@ -42,7 +37,7 @@ public class BucketRecoveryContext {
     private final long checkpointOffset;
     private final long logEndOffset;
 
-    private final Set<ByteArrayWrapper> processedKeys;
+    private long totalUndoOperations;
     private long scanPosition;
     private int totalRecordsProcessed;
 
@@ -50,7 +45,6 @@ public class BucketRecoveryContext {
         this.bucket = bucket;
         this.checkpointOffset = checkpointOffset;
         this.logEndOffset = logEndOffset;
-        this.processedKeys = new HashSet<>();
         this.scanPosition = checkpointOffset;
         this.totalRecordsProcessed = 0;
     }
@@ -67,8 +61,12 @@ public class BucketRecoveryContext {
         return logEndOffset;
     }
 
-    public Set<ByteArrayWrapper> getProcessedKeys() {
-        return processedKeys;
+    public void recordUndoOperation() {
+        totalUndoOperations++;
+    }
+
+    public long getTotalUndoOperations() {
+        return totalUndoOperations;
     }
 
     /**
@@ -122,8 +120,8 @@ public class BucketRecoveryContext {
                 + logEndOffset
                 + ", scanPosition="
                 + scanPosition
-                + ", processedKeys="
-                + processedKeys.size()
+                + ", undoOperations="
+                + totalUndoOperations
                 + ", complete="
                 + isComplete()
                 + '}';

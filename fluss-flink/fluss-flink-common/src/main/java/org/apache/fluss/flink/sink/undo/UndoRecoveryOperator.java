@@ -46,12 +46,14 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -405,7 +407,11 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
         // Reuse UndoRecoveryManager for actual recovery
         // UndoOffsets already contains both checkpointOffset and logEndOffset,
         // so no additional listOffset call is needed
-        UndoRecoveryManager recoveryManager = new UndoRecoveryManager(table, targetColumnIndexes);
+        UndoRecoveryManager recoveryManager =
+                new UndoRecoveryManager(
+                        table,
+                        targetColumnIndexes,
+                        Paths.get(flussConfig.get(CLIENT_SCANNER_IO_TMP_DIR)));
         Map<TableBucket, Long> recoveredOffsets =
                 recoveryManager.performUndoRecovery(undoOffsets, subtaskIndex, parallelism);
 

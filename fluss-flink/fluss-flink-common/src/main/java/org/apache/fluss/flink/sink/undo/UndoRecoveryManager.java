@@ -32,11 +32,15 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 
 /**
  * Manages undo recovery operations during Flink sink writer initialization.
@@ -75,6 +79,7 @@ public class UndoRecoveryManager {
     private static final Logger LOG = LoggerFactory.getLogger(UndoRecoveryManager.class);
 
     private final Table table;
+    private final Path temporaryRoot;
     @Nullable private final int[] targetColumnIndexes;
 
     /**
@@ -84,6 +89,19 @@ public class UndoRecoveryManager {
      * @param targetColumnIndexes optional target columns for partial update (null for full row)
      */
     public UndoRecoveryManager(Table table, @Nullable int[] targetColumnIndexes) {
+        this(table, targetColumnIndexes, Paths.get(CLIENT_SCANNER_IO_TMP_DIR.defaultValue()));
+    }
+
+    /**
+     * Creates a recovery manager with a local directory for the recovery key store.
+     *
+     * @param table the Fluss table
+     * @param targetColumnIndexes optional partial update columns
+     * @param temporaryRoot local parent directory for the recovery key store
+     */
+    public UndoRecoveryManager(
+            Table table, @Nullable int[] targetColumnIndexes, Path temporaryRoot) {
+        this.temporaryRoot = temporaryRoot;
         this.table = table;
         this.targetColumnIndexes = targetColumnIndexes;
 
@@ -142,6 +160,7 @@ public class UndoRecoveryManager {
             Schema schema = table.getTableInfo().getSchema();
             // Use CompactedKeyEncoder directly instead of the deprecated KeyEncoder.of(),
             // which requires a lake format parameter that is not applicable here.
+            // Include partition columns because the key store is shared across all buckets.
             KeyEncoder keyEncoder =
                     CompactedKeyEncoder.createKeyEncoder(
                             schema.getRowType(), schema.getPrimaryKey().get().getColumnNames());
@@ -151,13 +170,13 @@ public class UndoRecoveryManager {
             // This is a blocking operation that reads changelog and executes undo operations.
             // It may take a significant amount of time depending on the volume of records to
             // process.
-            recoveredOffsets = executor.execute(contexts);
+            recoveredOffsets = executor.execute(contexts, temporaryRoot);
         }
 
         // Calculate total undo operations for summary
-        int totalUndoOps = 0;
+        long totalUndoOps = 0;
         for (BucketRecoveryContext ctx : contexts) {
-            totalUndoOps += ctx.getProcessedKeys().size();
+            totalUndoOps += ctx.getTotalUndoOperations();
         }
 
         LOG.info(

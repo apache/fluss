@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
-import java.util.Set;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -73,13 +73,19 @@ public class UndoComputer {
 
     boolean selectRecord(
             LogRecord record,
-            Set<ByteArrayWrapper> processedKeys,
-            Set<ByteArrayWrapper> selectedKeys) {
+            UndoRecoveryDeduplicationStore deduplicationStore,
+            Map<ByteArrayWrapper, Long> selectedKeys) {
         if (record.getChangeType() == ChangeType.UPDATE_AFTER) {
             return false;
         }
-        ByteArrayWrapper key = new ByteArrayWrapper(keyEncoder.encodeKey(record.getRow()));
-        return !processedKeys.contains(key) && selectedKeys.add(key);
+        byte[] key = keyEncoder.encodeKey(record.getRow());
+        if (deduplicationStore.contains(key)) {
+            return false;
+        }
+        // A fetch can retry materializing the same record before the poll returns.
+        Long selectedOffset =
+                selectedKeys.putIfAbsent(new ByteArrayWrapper(key), record.logOffset());
+        return selectedOffset == null || selectedOffset == record.logOffset();
     }
 
     /**
@@ -88,28 +94,26 @@ public class UndoComputer {
      * <p>Only the first change for each primary key triggers an undo operation.
      *
      * @param record the changelog record
-     * @param processedKeys set of already processed primary keys for deduplication
+     * @param deduplicationStore primary keys with a submitted undo write
      * @return future containing the acknowledged log end offset, or null if skipped
      */
     @Nullable
     public CompletableFuture<Long> processRecord(
-            ScanRecord record, Set<ByteArrayWrapper> processedKeys) {
+            ScanRecord record, UndoRecoveryDeduplicationStore deduplicationStore) {
         // Skip UPDATE_AFTER before key encoding — UPDATE_BEFORE already handled the undo
         if (record.getChangeType() == ChangeType.UPDATE_AFTER) {
             return null;
         }
 
         byte[] encodedKey = keyEncoder.encodeKey(record.getRow());
-        ByteArrayWrapper keyWrapper = new ByteArrayWrapper(encodedKey);
-
         // Skip if we already processed this key
-        if (processedKeys.contains(keyWrapper)) {
+        if (deduplicationStore.contains(encodedKey)) {
             return null;
         }
 
         CompletableFuture<Long> future = computeAndExecuteUndo(record);
         if (future != null) {
-            processedKeys.add(keyWrapper);
+            deduplicationStore.add(encodedKey);
         }
         return future;
     }
