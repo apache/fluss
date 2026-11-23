@@ -177,7 +177,6 @@ class CoordinatorRequestBatchTest {
                     public void sendBucketLeaderAndIsrRequest(
                             int receiveServerId,
                             NotifyLeaderAndIsrRequest request,
-                            boolean reportUnavailable,
                             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable>
                                     responseConsumer) {
                         sentRequest.set(request);
@@ -336,7 +335,6 @@ class CoordinatorRequestBatchTest {
             public void sendBucketLeaderAndIsrRequest(
                     int receiveServerId,
                     NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
-                    boolean reportUnavailable,
                     BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
                 responseConsumer.accept(
                         null, new NetworkException("simulated send failure for test"));

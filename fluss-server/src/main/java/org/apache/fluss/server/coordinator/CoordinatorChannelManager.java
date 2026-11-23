@@ -20,20 +20,12 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.NetworkException;
-import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.TimeoutException;
-import org.apache.fluss.exception.UnknownServerException;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcClient;
-import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
-import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetResponse;
 import org.apache.fluss.rpc.messages.NotifyLakeTableOffsetRequest;
@@ -42,17 +34,14 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
-import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.channel.ControlRequestSendThread;
 import org.apache.fluss.server.coordinator.channel.QueueItem;
 import org.apache.fluss.server.coordinator.channel.TabletServerChannelState;
-import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.utils.RpcGatewayManager;
 
 import org.slf4j.Logger;
@@ -67,12 +56,10 @@ import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
 
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -90,7 +77,6 @@ public class CoordinatorChannelManager {
 
     private final IntSupplier epochSupplier;
     private final Configuration conf;
-    private final long controlRequestTimeoutMs;
     private final MetricGroup coordinatorMetricGroup;
 
     private final Object channelLock = new Object();
@@ -104,8 +90,6 @@ public class CoordinatorChannelManager {
         this.rpcGatewayManager = new RpcGatewayManager<>(rpcClient, TabletServerGateway.class);
         this.epochSupplier = epochSupplier;
         this.conf = conf;
-        this.controlRequestTimeoutMs =
-                conf.get(ConfigOptions.COORDINATOR_CONTROL_REQUEST_TIMEOUT).toMillis();
         this.coordinatorMetricGroup = coordinatorMetricGroup;
     }
 
@@ -230,17 +214,12 @@ public class CoordinatorChannelManager {
     public void sendBucketLeaderAndIsrRequest(
             int receiveServerId,
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
-            boolean reportUnavailable,
             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
-        if (!sendRequest(
-                        receiveServerId,
-                        notifyLeaderAndIsrRequest,
-                        TabletServerGateway::notifyLeaderAndIsr,
-                        responseConsumer)
-                && reportUnavailable) {
-            responseConsumer.accept(
-                    null, new NetworkException("TabletServer channel is unavailable."));
-        }
+        sendRequest(
+                receiveServerId,
+                notifyLeaderAndIsrRequest,
+                TabletServerGateway::notifyLeaderAndIsr,
+                responseConsumer);
     }
 
     /** Send StopBucketReplicaRequest to the server and handle the response. */
@@ -346,7 +325,7 @@ public class CoordinatorChannelManager {
     }
 
     @VisibleForTesting
-    protected <Request extends ApiMessage, Response extends ApiMessage> boolean sendRequest(
+    protected <Request extends ApiMessage, Response extends ApiMessage> void sendRequest(
             int targetServerId,
             Request request,
             RequestSendFunction<Request, Response> requestFunction,
@@ -358,58 +337,14 @@ public class CoordinatorChannelManager {
                     "Can't not send {} to the tablet server {} as the server is offline.",
                     request.getClass().getSimpleName(),
                     targetServerId);
-            return false;
+        } else {
+            TabletServerGateway tabletServerGateway = optionalTabletServerGateway.get();
+            requestFunction.apply(tabletServerGateway, request).whenComplete(responseConsumer);
         }
-        requestFunction
-                .apply(optionalTabletServerGateway.get(), request)
-                .whenComplete(responseConsumer);
-        return true;
     }
 
     protected Optional<TabletServerGateway> getTabletServerGateway(int targetServerId) {
         return rpcGatewayManager.getRpcGateway(targetServerId);
-    }
-
-    /** Reads the leader's WAL end offset and high watermark in one request. */
-    public ListOffsetsResultForBucket bulkLoadOffsets(int leader, TableBucket bucket)
-            throws Exception {
-        TabletServerGateway gateway =
-                getTabletServerGateway(leader)
-                        .orElseThrow(
-                                () ->
-                                        new NotLeaderOrFollowerException(
-                                                "BulkLoad bucket leader is unavailable."));
-        // A nonnegative follower_server_id requests the LEO instead of the high watermark.
-        ListOffsetsRequest request =
-                makeListOffsetsRequest(
-                        leader,
-                        ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE,
-                        bucket.getTableId(),
-                        bucket.getPartitionId(),
-                        bucket.getBucket());
-        PbListOffsetsRespForBucket response;
-        try {
-            response =
-                    gateway.listOffsets(request)
-                            .get(controlRequestTimeoutMs, TimeUnit.MILLISECONDS)
-                            .getBucketsRespAt(0);
-        } catch (java.util.concurrent.TimeoutException e) {
-            throw new TimeoutException(
-                    "Timed out reading the leader WAL end offset for " + bucket, e);
-        }
-        if (response.hasErrorCode() && response.getErrorCode() != 0) {
-            throw Errors.forCode(response.getErrorCode())
-                    .exception(response.hasErrorMessage() ? response.getErrorMessage() : null);
-        }
-        if (!response.hasOffset() || response.getBucketId() != bucket.getBucket()) {
-            throw new UnknownServerException(
-                    "Leader did not return the requested BulkLoad bucket offset.");
-        }
-        if (!response.hasHighWatermark()) {
-            throw new UnknownServerException("Leader did not return the BulkLoad high watermark.");
-        }
-        return new ListOffsetsResultForBucket(
-                bucket, response.getOffset(), response.getHighWatermark());
     }
 
     /** A functional interface to send request via TabletServerGateway. */

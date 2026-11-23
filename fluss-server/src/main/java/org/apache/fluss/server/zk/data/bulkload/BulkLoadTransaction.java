@@ -18,11 +18,11 @@
 package org.apache.fluss.server.zk.data.bulkload;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
-import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
+
+import javax.annotation.Nullable;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -35,51 +35,42 @@ public final class BulkLoadTransaction {
     private static final int ABORTED = 2;
 
     public final String bulkLoadId;
-    public final TableInfo tableInfo;
+    public final long tableId;
+    public final TablePath tablePath;
+    public final int schemaId;
+    public final @Nullable String remoteDataDir;
     public final int state;
 
-    private BulkLoadTransaction(String bulkLoadId, TableInfo tableInfo, int state) {
+    private BulkLoadTransaction(long tableId, String bulkLoadId, JsonNode record) {
+        JsonNode version = record.path("version");
+        checkArgument(
+                version.isInt() && version.intValue() == 1,
+                "Unsupported BulkLoad transaction record version: %s",
+                version);
+        JsonNode state = record.path("state");
+        checkArgument(
+                state.isInt()
+                        && (state.intValue() == RUNNING
+                                || state.intValue() == COMMITTED
+                                || state.intValue() == ABORTED),
+                "Invalid BulkLoad transaction state: %s",
+                state);
+
+        this.tableId = tableId;
         this.bulkLoadId = bulkLoadId;
-        this.tableInfo = tableInfo;
-        this.state = state;
+        this.state = state.intValue();
+        JsonNode path = record.get("table_path");
+        this.tablePath =
+                TablePath.of(path.get("database_name").asText(), path.get("table_name").asText());
+        JsonNode info = record.get("table_info");
+        this.schemaId = info.get("schema_id").asInt();
+        this.remoteDataDir =
+                info.has("remote_data_dir") ? info.get("remote_data_dir").asText() : null;
     }
 
-    /** Decodes a transaction using its physical identity from the path. */
+    /** Reads the transaction fields needed to allocate or commit a bucket. */
     public static BulkLoadTransaction fromJson(long tableId, String bulkLoadId, byte[] bytes) {
         return JsonSerdeUtils.readValue(
-                bytes,
-                node -> {
-                    JsonNode version = node.path("version");
-                    checkArgument(
-                            version.isInt() && version.intValue() == 1,
-                            "Unsupported BulkLoad transaction record version: %s",
-                            version);
-                    JsonNode state = node.path("state");
-                    checkArgument(
-                            state.isInt()
-                                    && (state.intValue() == RUNNING
-                                            || state.intValue() == COMMITTED
-                                            || state.intValue() == ABORTED),
-                            "Invalid BulkLoad transaction state: %s",
-                            state);
-                    JsonNode info = node.get("table_info");
-                    JsonNode path = node.get("table_path");
-                    TableInfo table =
-                            TableInfo.of(
-                                    TablePath.of(
-                                            path.get("database_name").asText(),
-                                            path.get("table_name").asText()),
-                                    tableId,
-                                    info.get("schema_id").asInt(),
-                                    TableDescriptorJsonSerde.INSTANCE.deserialize(
-                                            info.get("table_json")),
-                                    info.has("remote_data_dir")
-                                            ? info.get("remote_data_dir").asText()
-                                            : null,
-                                    info.get("created_time").asLong(),
-                                    info.get("modified_time").asLong(),
-                                    info.path("bucket_count_epoch").asLong());
-                    return new BulkLoadTransaction(bulkLoadId, table, state.intValue());
-                });
+                bytes, node -> new BulkLoadTransaction(tableId, bulkLoadId, node));
     }
 }

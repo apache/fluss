@@ -17,32 +17,32 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidBulkLoadSnapshotException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.ChangelogImage;
-import org.apache.fluss.metadata.KvSnapshotFileMetadata;
-import org.apache.fluss.metadata.KvSnapshotFileMetadataJsonSerde;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
+import org.apache.fluss.server.kv.snapshot.KvFileHandle;
+import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.utils.FlussPaths;
 
-import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.net.URI;
+import java.io.UncheckedIOException;
 import java.nio.file.NoSuchFileException;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Objects;
 import java.util.Set;
 
 /** Validates one uploaded ordinary snapshot without scanning another bucket's input. */
@@ -50,118 +50,94 @@ final class BulkLoadSnapshotValidator {
     private BulkLoadSnapshotValidator() {}
 
     static CompletedSnapshot validate(
-            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation) {
+            TablePath tablePath,
+            TableConfig tableConfig,
+            BulkLoadTarget target,
+            TableBucket bucket,
+            BulkLoadBucket allocation) {
         try {
-            return validateInput(table, target, bucket, allocation);
+            PhysicalTablePath physical = PhysicalTablePath.of(tablePath, target.partitionName);
+            FsPath tabletDir =
+                    FlussPaths.remoteKvTabletDir(
+                            FlussPaths.remoteKvDir(target.remoteDataDir), physical, bucket);
+            FsPath directory = FlussPaths.remoteKvSnapshotDir(tabletDir, allocation.snapshotId);
+            byte[] metadata =
+                    CompletedSnapshotHandle.readMetadataBytes(
+                            CompletedSnapshot.getMetadataFilePath(directory));
+            CompletedSnapshot snapshot;
+            try {
+                snapshot = CompletedSnapshotJsonSerde.fromJson(metadata);
+            } catch (RuntimeException e) {
+                throw new InvalidBulkLoadSnapshotException(
+                        "Invalid uploaded snapshot metadata.", e);
+            }
+            require(
+                    snapshot.getTableBucket().equals(bucket),
+                    "Snapshot physical identity differs.");
+            require(snapshot.getSnapshotID() == allocation.snapshotId, "Snapshot ID differs.");
+            require(
+                    snapshot.getLogOffset() == allocation.logOffset,
+                    "Snapshot recovery offset differs.");
+            require(snapshot.getSnapshotLocation().equals(directory), "Snapshot location differs.");
+            require(
+                    snapshot.getAutoIncIDRanges() == null
+                            || snapshot.getAutoIncIDRanges().isEmpty(),
+                    "Unexpected auto-increment state.");
+            require(
+                    (snapshot.getRowCount() != null) == tableConfig.supportsExactRowCount(),
+                    "Snapshot row count does not match the table changelog configuration.");
+            require(
+                    snapshot.getRowCount() == null || snapshot.getRowCount() >= 0,
+                    "Negative snapshot row count.");
+            KvSnapshotHandle files = snapshot.getKvSnapshotHandle();
+            require(
+                    files.getSharedKvFileHandles().isEmpty(),
+                    "BulkLoad snapshots must not reference shared files.");
+            long privateSize = validateFiles(files.getPrivateFileHandles(), directory);
+            require(
+                    files.getIncrementalSize() == privateSize,
+                    "Snapshot incremental size differs.");
+            return snapshot;
         } catch (FileNotFoundException | NoSuchFileException | EOFException e) {
             throw new InvalidBulkLoadSnapshotException(
                     "Snapshot file is missing or incomplete.", e);
-        } catch (IOException e) {
+        } catch (IOException | UncheckedIOException e) {
             throw new StorageException("Could not read the uploaded snapshot.", e);
-        } catch (IllegalArgumentException | ArithmeticException e) {
-            throw new InvalidBulkLoadSnapshotException("Invalid uploaded snapshot metadata.", e);
         }
     }
 
-    private static CompletedSnapshot validateInput(
-            TableInfo table, BulkLoadTarget target, TableBucket bucket, BulkLoadBucket allocation)
+    private static long validateFiles(List<KvFileHandleAndLocalPath> files, FsPath ownerDirectory)
             throws IOException {
-        PhysicalTablePath physical =
-                target.partitionName == null
-                        ? PhysicalTablePath.of(table.getTablePath())
-                        : PhysicalTablePath.of(table.getTablePath(), target.partitionName);
-        FsPath tabletDir =
-                FlussPaths.remoteKvTabletDir(
-                        new FsPath(target.remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME),
-                        physical,
-                        bucket);
-        FsPath directory = FlussPaths.remoteKvSnapshotDir(tabletDir, allocation.snapshotId);
-        FsPath path = CompletedSnapshot.getMetadataFilePath(directory);
-        FileSystem fileSystem = path.getFileSystem();
-        FileStatus status = fileSystem.getFileStatus(path);
-        require(
-                !status.isDir() && status.getLen() > 0 && status.getLen() <= Integer.MAX_VALUE,
-                "Invalid snapshot metadata file.");
-        byte[] bytes = new byte[(int) status.getLen()];
-        try (DataInputStream input = new DataInputStream(fileSystem.open(path))) {
-            input.readFully(bytes);
-        }
-        KvSnapshotFileMetadata metadata;
-        try {
-            metadata = KvSnapshotFileMetadataJsonSerde.fromJson(bytes);
-        } catch (RuntimeException e) {
-            throw new InvalidBulkLoadSnapshotException("Invalid uploaded snapshot metadata.", e);
-        }
-        require(metadata.getTableBucket().equals(bucket), "Snapshot physical identity differs.");
-        require(metadata.getSnapshotId() == allocation.snapshotId, "Snapshot ID differs.");
-        require(
-                metadata.getLogOffset() == allocation.logOffset,
-                "Snapshot recovery offset differs.");
-        require(
-                new FsPath(metadata.getSnapshotLocation()).equals(directory),
-                "Snapshot location differs.");
-        require(
-                metadata.getAutoIncrementRanges() == null
-                        || metadata.getAutoIncrementRanges().isEmpty(),
-                "Unexpected auto-increment state.");
-        require(
-                table.getTableConfig().getChangelogImage() != ChangelogImage.WAL
-                                && !table.getTableConfig().getKvTTL().isPresent()
-                        ? metadata.getRowCount() != null
-                        : metadata.getRowCount() == null,
-                "Snapshot row count does not match the table changelog configuration.");
-        require(
-                metadata.getRowCount() == null || metadata.getRowCount() >= 0,
-                "Negative snapshot row count.");
-        require(
-                metadata.getSharedFiles().isEmpty(),
-                "BulkLoad snapshots must not reference shared files.");
-        long privateSize = validateFiles(metadata.getPrivateFiles(), directory);
-        require(metadata.getIncrementalSize() == privateSize, "Snapshot incremental size differs.");
-        return CompletedSnapshotJsonSerde.toCompletedSnapshot(metadata);
-    }
-
-    private static long validateFiles(
-            List<KvSnapshotFileMetadata.FileHandle> files, FsPath ownerDirectory)
-            throws IOException {
+        String prefix = ownerDirectory + "/";
+        FileSystem fileSystem = ownerDirectory.getFileSystem();
         Set<String> local = new HashSet<>();
         Set<String> remote = new HashSet<>();
         long size = 0;
-        for (KvSnapshotFileMetadata.FileHandle file : files) {
-            String name = file.getLocalPath();
-            require(
-                    name != null
-                            && !name.isEmpty()
-                            && !name.startsWith("/")
-                            && !name.contains("\\"),
-                    "Unsafe snapshot local path.");
-            for (String segment : name.split("/", -1)) {
-                require(
-                        !segment.isEmpty() && !segment.equals(".") && !segment.equals(".."),
-                        "Unsafe snapshot local path.");
+        for (KvFileHandleAndLocalPath entry : files) {
+            KvFileHandle file = entry.getKvFileHandle();
+            FsPath filePath;
+            try {
+                require(entry.hasSafeLocalPath(), "Unsafe snapshot local path.");
+                filePath = new FsPath(file.getFilePath());
+                size = Math.addExact(size, file.getSize());
+            } catch (IllegalArgumentException | ArithmeticException e) {
+                throw new InvalidBulkLoadSnapshotException("Invalid snapshot file descriptor.", e);
             }
-            FsPath filePath = new FsPath(file.getPath());
-            require(file.getPath().equals(filePath.toString()), "Noncanonical snapshot file path.");
-            require(local.add(name) && remote.add(file.getPath()), "Duplicate snapshot file.");
-            requireWithin(filePath, ownerDirectory);
-            FileStatus fileStatus = filePath.getFileSystem().getFileStatus(filePath);
+            require(
+                    file.getFilePath().equals(filePath.toString()),
+                    "Noncanonical snapshot file path.");
+            require(
+                    local.add(entry.getLocalPath()) && remote.add(file.getFilePath()),
+                    "Duplicate snapshot file.");
+            require(
+                    file.getFilePath().startsWith(prefix),
+                    "Snapshot file escapes its owning directory.");
+            FileStatus fileStatus = fileSystem.getFileStatus(filePath);
             require(
                     !fileStatus.isDir() && fileStatus.getLen() == file.getSize(),
                     "Snapshot file length differs.");
-            size = Math.addExact(size, file.getSize());
         }
         return size;
-    }
-
-    private static void requireWithin(FsPath file, FsPath parent) {
-        URI child = file.toUri().normalize();
-        URI root = parent.toUri().normalize();
-        String prefix = root.getPath().endsWith("/") ? root.getPath() : root.getPath() + "/";
-        require(
-                Objects.equals(child.getScheme(), root.getScheme())
-                        && Objects.equals(child.getAuthority(), root.getAuthority())
-                        && child.getPath().startsWith(prefix),
-                "Snapshot file escapes its owning directory.");
     }
 
     private static void require(boolean condition, String message) {

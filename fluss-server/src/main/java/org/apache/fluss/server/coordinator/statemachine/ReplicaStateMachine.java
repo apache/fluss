@@ -39,8 +39,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -123,19 +123,11 @@ public class ReplicaStateMachine {
 
     public void handleStateChanges(
             Collection<TableBucketReplica> replicas, ReplicaState targetState) {
-        handleStateChanges(replicas, targetState, null);
-    }
-
-    /** Applies replica transitions, retrying transport for the published import's leader. */
-    public void handleStateChanges(
-            Collection<TableBucketReplica> replicas,
-            ReplicaState targetState,
-            @Nullable TableBucket importedBucket) {
         try {
             coordinatorRequestBatch.newBatch();
             doHandleStateChanges(replicas, targetState);
             coordinatorRequestBatch.sendRequestToTabletServers(
-                    coordinatorContext.getCoordinatorEpoch(), importedBucket);
+                    coordinatorContext.getCoordinatorEpoch());
         } catch (Throwable e) {
             LOG.error(
                     "Failed to move table bucket replicas {} to state {}.",
@@ -281,15 +273,9 @@ public class ReplicaStateMachine {
                                         coordinatorContext.getBucketLeaderEpoch(
                                                 replica.getTableBucket())));
 
-                // then, may remove the offline replica from isr
-                Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr =
-                        doRemoveReplicaFromIsr(validReplicas);
-                // notify leader and isr changes
-                for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry :
-                        adjustedLeaderAndIsr.entrySet()) {
-                    TableBucketReplica tableBucketReplica = leaderAndIsrEntry.getKey();
+                for (TableBucketReplica tableBucketReplica :
+                        doRemoveReplicaFromIsr(validReplicas)) {
                     TableBucket tableBucket = tableBucketReplica.getTableBucket();
-                    LeaderAndIsr leaderAndIsr = leaderAndIsrEntry.getValue();
                     if (!coordinatorContext.isToBeDeleted(tableBucket)) {
                         Set<Integer> recipients =
                                 coordinatorContext.getAssignment(tableBucket).stream()
@@ -317,7 +303,7 @@ public class ReplicaStateMachine {
                                         partitionName),
                                 tableBucket,
                                 coordinatorContext.getAssignment(tableBucket),
-                                leaderAndIsr);
+                                coordinatorContext.getBucketLeaderAndIsr(tableBucket).get());
                     }
                 }
 
@@ -461,69 +447,59 @@ public class ReplicaStateMachine {
         }
     }
 
-    private Map<TableBucketReplica, LeaderAndIsr> doRemoveReplicaFromIsr(
+    private Set<TableBucketReplica> doRemoveReplicaFromIsr(
             Collection<TableBucketReplica> tableBucketReplicas) {
-        Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = new HashMap<>();
-        Map<TableBucket, LeaderAndIsr> toUpdateLeaderAndIsrList = new HashMap<>();
-        for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
-            TableBucket tableBucket = tableBucketReplica.getTableBucket();
-            int replicaId = tableBucketReplica.getReplica();
-
-            LeaderAndIsr leaderAndIsr;
-            if (toUpdateLeaderAndIsrList.get(tableBucket) != null) {
-                leaderAndIsr = toUpdateLeaderAndIsrList.get(tableBucket);
-            } else {
-                Optional<LeaderAndIsr> optLeaderAndIsr =
-                        coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-                if (!optLeaderAndIsr.isPresent()) {
-                    // no leader and isr for this table bucket, skip
-                    continue;
-                }
-                leaderAndIsr = optLeaderAndIsr.get();
-            }
-
-            if (!leaderAndIsr.isr().contains(replicaId)) {
-                // isr doesn't contain the replica, skip
-                continue;
-            }
-            int newLeader =
-                    replicaId == leaderAndIsr.leader()
-                            ?
-                            // the leader become offline, set it to no leader
-                            LeaderAndIsr.NO_LEADER
-                            // otherwise, keep the origin as leader
-                            : leaderAndIsr.leader();
-            List<Integer> newIsr =
-                    leaderAndIsr.isr().size() == 1
-                            // don't remove the replica id from isr when isr size is 1,
-                            // if isr is empty, we can't elect leader anymore
-                            ? leaderAndIsr.isr()
-                            : leaderAndIsr.isr().stream()
-                                    .filter(id -> id != replicaId)
-                                    .collect(Collectors.toList());
-            LeaderAndIsr adjustLeaderAndIsr =
-                    newLeader == LeaderAndIsr.NO_LEADER
-                            ? leaderAndIsr.newLeaderAndIsr(
-                                    newLeader, newIsr, leaderAndIsr.standbyReplicas())
-                            : leaderAndIsr.newLeaderAndIsr(newIsr);
-            adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
-            toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
-        }
+        Set<TableBucketReplica> removed = new HashSet<>();
+        Function<TableBucket, LeaderAndIsr> currentRole =
+                bucket -> coordinatorContext.getBucketLeaderAndIsr(bucket).orElse(null);
         try {
-            Map<TableBucket, LeaderAndIsr> committed =
-                    zooKeeperClient.batchUpdateLeaderAndIsr(
-                            toUpdateLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
-            committed.forEach(coordinatorContext::putBucketLeaderAndIsr);
-            adjustedLeaderAndIsr
-                    .keySet()
-                    .removeIf(replica -> !committed.containsKey(replica.getTableBucket()));
-            adjustedLeaderAndIsr.replaceAll(
-                    (replica, proposal) -> committed.get(replica.getTableBucket()));
-            return adjustedLeaderAndIsr;
+            for (int attempt = 0; attempt < 2; attempt++) {
+                Map<TableBucket, LeaderAndIsr> changes = new HashMap<>();
+                Set<TableBucketReplica> affected = new HashSet<>();
+                for (TableBucketReplica replica : tableBucketReplicas) {
+                    TableBucket bucket = replica.getTableBucket();
+                    LeaderAndIsr role = changes.get(bucket);
+                    if (role == null) {
+                        role = currentRole.apply(bucket);
+                    }
+                    if (role != null && role.isr().contains(replica.getReplica())) {
+                        changes.put(bucket, removeReplicaFromIsr(role, replica.getReplica()));
+                        affected.add(replica);
+                    }
+                }
+                Map<TableBucket, LeaderAndIsr> committed =
+                        zooKeeperClient.batchUpdateLeaderAndIsr(
+                                changes, coordinatorContext.getCoordinatorZkVersion());
+                committed.forEach(coordinatorContext::putBucketLeaderAndIsr);
+                affected.removeIf(replica -> !committed.containsKey(replica.getTableBucket()));
+                removed.addAll(affected);
+                if (attempt > 0 || changes.size() == committed.size()) {
+                    break;
+                }
+                // An import can advance the epoch without removing these offline replicas.
+                changes.keySet().removeAll(committed.keySet());
+                Map<TableBucket, LeaderAndIsr> latest =
+                        zooKeeperClient.getLeaderAndIsrs(changes.keySet());
+                latest.forEach(coordinatorContext::putBucketLeaderAndIsr);
+                currentRole = latest::get;
+            }
         } catch (Exception e) {
             LOG.error("Fail to batch update bucket LeaderAndIsr.", e);
-            return Collections.emptyMap();
         }
+        return removed;
+    }
+
+    private static LeaderAndIsr removeReplicaFromIsr(LeaderAndIsr role, int replicaId) {
+        // Keep the last ISR member eligible for a future election.
+        List<Integer> isr =
+                role.isr().size() == 1
+                        ? role.isr()
+                        : role.isr().stream()
+                                .filter(id -> id != replicaId)
+                                .collect(Collectors.toList());
+        return replicaId == role.leader() || role.leader() == LeaderAndIsr.NO_LEADER
+                ? role.newLeaderAndIsr(LeaderAndIsr.NO_LEADER, isr, role.standbyReplicas())
+                : role.newLeaderAndIsr(isr);
     }
 
     @Nullable

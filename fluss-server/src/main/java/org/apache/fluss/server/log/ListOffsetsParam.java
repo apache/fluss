@@ -45,9 +45,6 @@ public class ListOffsetsParam {
     /** The offset type indicate the end offset snapshot when become leader. */
     public static final int LEADER_END_OFFSET_SNAPSHOT_TYPE = 3;
 
-    /** Returns the leader's WAL end offset and high watermark for BulkLoad commit. */
-    public static final int BULK_LOAD_OFFSETS_TYPE = 4;
-
     private final int followerServerId;
     private final Integer offsetType;
     private @Nullable final Long startTimestamp;

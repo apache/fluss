@@ -201,6 +201,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_CHANGELOG_IMAGE);
     }
 
+    /** Whether KV snapshots for this table carry an exact row count. */
+    public boolean supportsExactRowCount() {
+        return getChangelogImage() != ChangelogImage.WAL && !getKvTTL().isPresent();
+    }
+
     /** Gets the Arrow compression type and compression level of the table. */
     public ArrowCompressionInfo getArrowCompressionInfo() {
         return ArrowCompressionInfo.fromConf(config);

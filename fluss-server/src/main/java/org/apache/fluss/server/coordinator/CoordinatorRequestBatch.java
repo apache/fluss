@@ -35,7 +35,6 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -171,14 +170,8 @@ public class CoordinatorRequestBatch {
     }
 
     public void sendRequestToTabletServers(int coordinatorEpoch) {
-        sendRequestToTabletServers(coordinatorEpoch, null);
-    }
-
-    /** Sends the batch, retrying a transport failure only for the imported bucket's leader. */
-    public void sendRequestToTabletServers(
-            int coordinatorEpoch, @Nullable TableBucket importedBucket) {
         try {
-            sendNotifyLeaderAndIsrRequest(coordinatorEpoch, importedBucket);
+            sendNotifyLeaderAndIsrRequest(coordinatorEpoch);
             sendUpdateMetadataRequest();
             sendNotifyRemoteLogOffsetsRequest(coordinatorEpoch);
             sendNotifyKvSnapshotOffsetRequest(coordinatorEpoch);
@@ -218,33 +211,7 @@ public class CoordinatorRequestBatch {
         }
     }
 
-    /** Adds role notifications and publishes the bucket's location to the live tablet servers. */
     public void addNotifyLeaderRequestForTabletServers(
-            Set<Integer> tabletServers,
-            PhysicalTablePath tablePath,
-            TableBucket tableBucket,
-            List<Integer> bucketReplicas,
-            LeaderAndIsr leaderAndIsr) {
-        addRoleNotification(tabletServers, tablePath, tableBucket, bucketReplicas, leaderAndIsr);
-        // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
-        // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
-        // Location updates require the bucket's replica assignment even when its count is known.
-        Map<Integer, List<Integer>> assignment =
-                tableBucket.getPartitionId() == null
-                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
-                        : coordinatorContext.getPartitionAssignment(
-                                new TablePartition(
-                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
-        if (assignment.containsKey(tableBucket.getBucket())) {
-            addUpdateMetadataRequestForTabletServers(
-                    coordinatorContext.getLiveTabletServers().keySet(),
-                    null,
-                    null,
-                    Collections.singleton(tableBucket));
-        }
-    }
-
-    void addRoleNotification(
             Set<Integer> tabletServers,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
@@ -272,6 +239,23 @@ public class CoordinatorRequestBatch {
                                                     bucketCountEpoch));
                             notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
                         });
+
+        // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
+        // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
+        // Location updates require the bucket's replica assignment even when its count is known.
+        Map<Integer, List<Integer>> assignment =
+                tableBucket.getPartitionId() == null
+                        ? coordinatorContext.getTableAssignment(tableBucket.getTableId())
+                        : coordinatorContext.getPartitionAssignment(
+                                new TablePartition(
+                                        tableBucket.getTableId(), tableBucket.getPartitionId()));
+        if (assignment.containsKey(tableBucket.getBucket())) {
+            addUpdateMetadataRequestForTabletServers(
+                    coordinatorContext.getLiveTabletServers().keySet(),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+        }
     }
 
     /**
@@ -466,7 +450,7 @@ public class CoordinatorRequestBatch {
                         });
     }
 
-    void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch, @Nullable TableBucket importedBucket) {
+    private void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch) {
         for (Map.Entry<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
                 notifyRequestEntry : notifyLeaderAndIsrRequestMap.entrySet()) {
             // send request for each tablet server
@@ -485,9 +469,7 @@ public class CoordinatorRequestBatch {
                                 request.getLeader(),
                                 request.getLeaderEpoch(),
                                 request.getBucketEpoch(),
-                                rebalanceExecutionKeyResolver.apply(entry.getKey()),
-                                request.getLeader() == serverId
-                                        && entry.getKey().equals(importedBucket)));
+                                rebalanceExecutionKeyResolver.apply(entry.getKey())));
             }
 
             // Track exactly which buckets THIS request marked as pending leader activation. Only
@@ -502,31 +484,21 @@ public class CoordinatorRequestBatch {
                 }
             }
 
-            NotifyLeaderAndIsrRequestContext importRequest = requestContexts.get(importedBucket);
-            boolean retryImport = importRequest != null && importRequest.isImportLeaderActivation();
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
                     serverId,
                     notifyLeaderAndIsrRequest,
-                    retryImport,
                     (response, throwable) -> {
                         if (throwable != null) {
                             LOG.warn(
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
-                            if (retryImport) {
-                                Errors error = ApiError.fromThrowable(throwable).error();
-                                if (error == Errors.NETWORK_EXCEPTION
-                                        || error == Errors.REQUEST_TIME_OUT) {
-                                    eventManager.put(
-                                            NotifyLeaderAndIsrResponseReceivedEvent
-                                                    .transportFailure(
-                                                            serverId,
-                                                            Collections.singletonMap(
-                                                                    importedBucket,
-                                                                    importRequest)));
-                                }
-                            }
+                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
+                            // the request, and retry if encounter any error; It may happens that
+                            // the tablet server is offline and will always got error. But,
+                            // coordinator will remove the sender for the tablet server and mark all
+                            // replica in the tablet server as offline. so, in here, if encounter
+                            // any error, we just ignore it.
 
                             // Clear pending state so the health API does not report stale
                             // RED. The coordinator will detect actual server death via

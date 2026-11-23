@@ -22,7 +22,6 @@ import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.function.CheckedSupplier;
 
 import org.slf4j.Logger;
@@ -76,7 +75,6 @@ public class CompletedSnapshotStore {
     private final ReentrantLock lock = new ReentrantLock();
 
     @Nullable private Long recoverySnapshotId;
-    private boolean recoverySelectionKnown = true;
 
     /**
      * Local copy of the completed snapshots in snapshot store. This is restored from snapshot
@@ -133,44 +131,27 @@ public class CompletedSnapshotStore {
                 () -> registerSnapshot(snapshot, previousRecoverySnapshotId, expectedLeaderEpoch));
     }
 
-    /** Serializes an import's publication or confirmation with ordinary snapshot retention. */
-    public Optional<LeaderAndIsr> commitImportedSnapshot(
-            CompletedSnapshot snapshot, CheckedSupplier<Optional<LeaderAndIsr>> publish)
-            throws Exception {
+    /**
+     * Publishes an import with private files under the bucket lock. An empty result means a
+     * previous attempt has already committed it.
+     */
+    public <T> Optional<T> publishImportedSnapshot(
+            CompletedSnapshot snapshot, CheckedSupplier<Optional<T>> publish) throws Exception {
         return inLock(
                 lock,
                 () -> {
-                    Optional<LeaderAndIsr> role = publish.get();
-                    long snapshotId = snapshot.getSnapshotID();
-                    boolean tracked =
-                            stillInUseSnapshots.containsKey(snapshotId)
-                                    || completedSnapshots.stream()
-                                            .anyMatch(s -> s.getSnapshotID() == snapshotId);
-                    if (role.isPresent()) {
-                        if (!tracked) {
-                            completedSnapshots.addLast(snapshot);
-                        }
-                        recoverySnapshotId = snapshotId;
-                        recoverySelectionKnown = true;
-                    } else if (!tracked
-                            && completedSnapshotHandleStore
-                                    .get(snapshot.getTableBucket(), snapshotId)
-                                    .isPresent()) {
-                        // The import was superseded before it was adopted by this store.
-                        completedSnapshots.addFirst(snapshot);
+                    if (recoverySnapshotId != null
+                            && recoverySnapshotId == snapshot.getSnapshotID()) {
+                        return Optional.empty();
                     }
-                    return role;
-                });
-    }
-
-    /** Applies the ordinary retention policy after an import. */
-    public void retainSnapshotsAfterImport() throws Exception {
-        inLock(
-                lock,
-                () -> {
-                    if (recoverySelectionKnown && !completedSnapshots.isEmpty()) {
-                        subsumeOldSnapshots();
+                    Optional<T> published = publish.get();
+                    if (published.isPresent()) {
+                        // Allocation order can differ from commit order.
+                        completedSnapshots.addLast(snapshot);
+                        recoverySnapshotId = snapshot.getSnapshotID();
+                        retainSnapshots(Long.MAX_VALUE, null);
                     }
+                    return published;
                 });
     }
 
@@ -221,7 +202,6 @@ public class CompletedSnapshotStore {
                     previousRecoverySnapshotId,
                     expectedLeaderEpoch);
             recoverySnapshotId = snapshot.getSnapshotID();
-            recoverySelectionKnown = true;
         } catch (Exception updateFailure) {
             try {
                 recoverySnapshotId =
@@ -229,10 +209,7 @@ public class CompletedSnapshotStore {
                                 .getRecoverySnapshot(snapshot.getTableBucket())
                                 .map(CompletedSnapshotHandle::getSnapshotId)
                                 .orElse(null);
-                recoverySelectionKnown = true;
             } catch (Exception readFailure) {
-                // A queued retention task must not prune using the previous selection.
-                recoverySelectionKnown = false;
                 updateFailure.addSuppressed(readFailure);
                 if (previousRecoverySnapshotId != null) {
                     throw updateFailure;
@@ -248,8 +225,15 @@ public class CompletedSnapshotStore {
             LOG.warn(
                     "Recovery selection update failed after snapshot registration.", updateFailure);
         }
+        retainSnapshots(snapshot.getSnapshotID() + 1, selectionFailure);
+        if (selectionFailure != null) {
+            throw selectionFailure;
+        }
+    }
+
+    private void retainSnapshots(long cleanupBeforeId, @Nullable Exception selectionFailure) {
         try {
-            subsumeOldSnapshots();
+            subsumeOldSnapshots(cleanupBeforeId);
         } catch (Exception cleanupFailure) {
             if (selectionFailure != null) {
                 selectionFailure.addSuppressed(cleanupFailure);
@@ -257,12 +241,9 @@ public class CompletedSnapshotStore {
                 LOG.warn("Snapshot committed but retention failed.", cleanupFailure);
             }
         }
-        if (selectionFailure != null) {
-            throw selectionFailure;
-        }
     }
 
-    private void subsumeOldSnapshots() throws Exception {
+    private void subsumeOldSnapshots(long cleanupBeforeId) throws Exception {
         CompletedSnapshot latest = completedSnapshots.peekLast();
         Iterator<CompletedSnapshot> iterator = completedSnapshots.iterator();
         while (completedSnapshots.size() > maxNumberOfSnapshotsToRetain && iterator.hasNext()) {
@@ -294,7 +275,8 @@ public class CompletedSnapshotStore {
 
         // The subsumed queue contains only snapshots whose durable references were removed.
         // Shared SST files are managed separately by the registry.
-        snapshotsCleaner.cleanSubsumedSnapshots(ioExecutor);
+        snapshotsCleaner.cleanSubsumedSnapshots(
+                cleanupBeforeId, stillInUseIds, () -> {}, ioExecutor);
     }
 
     private void removeUnusedSnapshots() throws Exception {

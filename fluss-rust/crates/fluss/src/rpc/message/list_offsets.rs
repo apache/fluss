@@ -149,7 +149,6 @@ mod tests {
                 error_code: Some(FlussError::TableNotExist.code()),
                 error_message: Some("missing".to_string()),
                 offset: None,
-                high_watermark: None,
             }],
         };
 

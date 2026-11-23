@@ -1978,10 +1978,6 @@ public class ServerRpcMessageUtils {
                 respForBucket.setError(result.getErrorCode(), result.getErrorMessage());
             } else {
                 respForBucket.setOffset(result.getOffset());
-                Long highWatermark = result.getHighWatermark();
-                if (highWatermark != null) {
-                    respForBucket.setHighWatermark(highWatermark);
-                }
             }
             respForBucketList.add(respForBucket);
         }

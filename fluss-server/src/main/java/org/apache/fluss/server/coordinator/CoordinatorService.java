@@ -37,6 +37,7 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -44,6 +45,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
@@ -213,6 +215,7 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.function.FunctionWithException;
@@ -380,13 +383,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     handle.getTableId(),
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId());
-                    CoordinatorChannelManager channels =
-                            coordinatorEventProcessorSupplier.get().getCoordinatorChannelManager();
                     BulkLoadBucket allocation =
-                            manager.allocateBucketSnapshot(
-                                    handle.getBulkLoadId(),
-                                    bucket,
-                                    leader -> channels.bulkLoadOffsets(leader, bucket));
+                            manager.allocateBucketSnapshot(handle.getBulkLoadId(), bucket);
                     return new AllocateBulkLoadBucketSnapshotResponse()
                             .setSnapshotId(allocation.snapshotId)
                             .setLogOffset(allocation.logOffset)
@@ -408,17 +406,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     request.hasPartitionId() ? request.getPartitionId() : null,
                                     request.getBucketId());
                     CoordinatorEventProcessor processor = coordinatorEventProcessorSupplier.get();
-                    Optional<BulkLoadManager.PreparedCommit> prepared =
-                            manager.prepareBucketCommit(
+                    manager.commitBucketSnapshot(
                                     handle.getBulkLoadId(),
                                     bucket,
-                                    leader ->
-                                            processor
-                                                    .getCoordinatorChannelManager()
-                                                    .bulkLoadOffsets(leader, bucket));
-                    if (prepared.isPresent()) {
-                        processor.publishBulkLoadBucketSnapshot(prepared.get());
-                    }
+                                    processor.completedSnapshotStoreManager())
+                            .ifPresent(role -> processor.notifyBulkLoadBucketRole(bucket, role));
                     return new CommitBulkLoadBucketSnapshotResponse();
                 });
     }
@@ -444,8 +436,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 "BulkLoad requires the current Coordinator leader.");
                     }
                     try {
-                        return action.apply(
-                                new BulkLoadManager(zkClient, metadataManager, epochVersion));
+                        return action.apply(new BulkLoadManager(zkClient, epochVersion));
+                    } catch (KeeperException.ConnectionLossException e) {
+                        throw new NetworkException(
+                                "Connection to BulkLoad metadata store was lost.", e);
+                    } catch (KeeperException.OperationTimeoutException e) {
+                        throw new TimeoutException("BulkLoad metadata operation timed out.", e);
                     } catch (Exception e) {
                         throw new CompletionException(e);
                     }

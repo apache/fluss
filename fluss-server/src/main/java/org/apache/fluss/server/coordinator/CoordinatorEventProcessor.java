@@ -32,7 +32,6 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
-import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
@@ -65,7 +64,6 @@ import org.apache.fluss.rpc.messages.RemoveServerTagByRackResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
-import org.apache.fluss.server.coordinator.bulkload.BulkLoadManager.PreparedCommit;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagByRackEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
@@ -126,7 +124,6 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.ZooKeeperClient.BulkLoadPublicationUnknownException;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -141,7 +138,6 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -202,7 +198,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
     private final CoordinatorChannelManager coordinatorChannelManager;
-
     private final CoordinatorChangeWatcher coordinatorChangeWatcher;
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
@@ -324,92 +319,30 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         return coordinatorContext;
     }
 
-    CoordinatorChannelManager getCoordinatorChannelManager() {
-        return coordinatorChannelManager;
-    }
-
-    // Called on the RPC I/O executor after validating the files and offsets.
-    void publishBulkLoadBucketSnapshot(PreparedCommit prepared) throws Exception {
-        TableBucket bucket = prepared.snapshot().getTableBucket();
-        CompletedSnapshotStore store =
-                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                        prepared.tablePath(), bucket);
-        try {
-            Optional<LeaderAndIsr> published =
-                    store.commitImportedSnapshot(prepared.snapshot(), prepared::publish);
-            published.ifPresent(role -> applyPublishedRole(bucket, role));
-            ioExecutor.execute(() -> retainImportedSnapshots(bucket, store));
-        } catch (BulkLoadPublicationUnknownException e) {
-            reconcileBulkLoadPublication(prepared, store);
-            throw e.getCause();
-        }
-    }
-
-    private void reconcileBulkLoadPublication(
-            PreparedCommit prepared, CompletedSnapshotStore store) {
-        TableBucket bucket = prepared.snapshot().getTableBucket();
-        scheduler.scheduleOnce(
-                "reconcile-bulk-load-publication",
-                () ->
-                        ioExecutor.execute(
-                                () -> {
-                                    try {
-                                        if (prepared.confirmPublication()) {
-                                            store.commitImportedSnapshot(
-                                                            prepared.snapshot(),
-                                                            () ->
-                                                                    zooKeeperClient
-                                                                            .getPublishedRoleIfSelected(
-                                                                                    bucket,
-                                                                                    prepared.snapshot()
-                                                                                            .getSnapshotID()))
-                                                    .ifPresent(
-                                                            role ->
-                                                                    applyPublishedRole(
-                                                                            bucket, role));
-                                            retainImportedSnapshots(bucket, store);
-                                        }
-                                    } catch (KeeperException.ConnectionLossException
-                                            | KeeperException.OperationTimeoutException e) {
-                                        reconcileBulkLoadPublication(prepared, store);
-                                    } catch (Exception e) {
-                                        LOG.warn(
-                                                "Could not reconcile the BulkLoad publication for {}.",
-                                                bucket,
-                                                e);
-                                    }
-                                }),
-                1_000L);
-    }
-
-    private void retainImportedSnapshots(TableBucket bucket, CompletedSnapshotStore store) {
-        try {
-            store.retainSnapshotsAfterImport();
-        } catch (Exception e) {
-            LOG.warn("Could not retain snapshots after BulkLoad for {}.", bucket, e);
-        }
-    }
-
-    private void applyPublishedRole(TableBucket bucket, LeaderAndIsr published) {
+    void notifyBulkLoadBucketRole(TableBucket bucket, LeaderAndIsr published) {
         coordinatorEventManager.put(
                 new AccessContextEvent<Void>(
                         ctx -> {
                             LeaderAndIsr current = ctx.getBucketLeaderAndIsr(bucket).orElse(null);
                             if (current == null
-                                    || current.zkVersion() >= published.zkVersion()
-                                    || ctx.isToBeDeleted(bucket)) {
+                                    || ctx.isToBeDeleted(bucket)
+                                    || current.zkVersion() > published.zkVersion()) {
                                 return null;
                             }
                             ctx.putBucketLeaderAndIsr(bucket, published);
-                            replicaStateMachine.handleStateChanges(
-                                    ctx.getAssignment(bucket).stream()
-                                            .filter(replica -> ctx.isReplicaOnline(replica, bucket))
-                                            .map(replica -> new TableBucketReplica(bucket, replica))
-                                            .collect(Collectors.toList()),
-                                    OnlineReplica,
-                                    bucket);
+                            notifyOnlineReplicas(bucket);
                             return null;
                         }));
+    }
+
+    private void notifyOnlineReplicas(TableBucket bucket) {
+        List<TableBucketReplica> replicas = new ArrayList<>();
+        for (int replica : coordinatorContext.getAssignment(bucket)) {
+            if (coordinatorContext.isReplicaOnline(replica, bucket)) {
+                replicas.add(new TableBucketReplica(bucket, replica));
+            }
+        }
+        replicaStateMachine.handleStateChanges(replicas, OnlineReplica);
     }
 
     @VisibleForTesting
@@ -1391,14 +1324,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             NotifyLeaderAndIsrResponseReceivedEvent notifyLeaderAndIsrResponseReceivedEvent) {
         // get the server that receives the response
         int serverId = notifyLeaderAndIsrResponseReceivedEvent.getResponseServerId();
-        if (notifyLeaderAndIsrResponseReceivedEvent.isTransportFailure()) {
-            retryRoleNotifications(
-                    serverId, notifyLeaderAndIsrResponseReceivedEvent.getRequestContexts());
-            return;
-        }
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
-        List<TableBucket> succeededBuckets = new ArrayList<>();
-        Map<TableBucket, NotifyLeaderAndIsrRequestContext> pendingVisibility = new HashMap<>();
         // get all the results for each bucket
         List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
@@ -1412,16 +1338,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             if (sent != null && current != null && sent.getLeaderEpoch() < current.leaderEpoch()) {
                 continue;
             }
-            if (sent != null
-                    && notifyLeaderAndIsrResultForBucket.getErrorCode()
-                            == Errors.LEADER_NOT_AVAILABLE_EXCEPTION.code()) {
-                pendingVisibility.put(tableBucket, sent);
-                continue;
-            }
-            // Replica liveness bookkeeping must not depend on how fresh the request was: a replica
-            // that failed to apply the state is offline even when the leader has bumped the bucket
-            // epoch in the meantime.
-            // if the error code is not none, we will consider it as offline
+            // A bucket epoch change within the same leader epoch does not invalidate a failure.
             if (notifyLeaderAndIsrResultForBucket.failed()) {
                 if (coordinatorContext.isToBeDeleted(tableBucket)
                         || !coordinatorContext.getAssignment(tableBucket).contains(serverId)) {
@@ -1430,23 +1347,13 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                     continue;
                 }
                 offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
-            } else {
-                succeededBuckets.add(tableBucket);
-            }
-        }
-        for (TableBucket tb : succeededBuckets) {
-            Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
-            if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
-                coordinatorContext.clearPendingLeaderActivation(tb);
+            } else if (current != null && current.leader() == serverId) {
+                coordinatorContext.clearPendingLeaderActivation(tableBucket);
             }
         }
         if (!offlineReplicas.isEmpty()) {
             // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
-        }
-
-        if (!pendingVisibility.isEmpty()) {
-            retryRoleNotifications(serverId, pendingVisibility);
         }
 
         // Try to complete rebalance tasks for the buckets in the response.
@@ -1456,72 +1363,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         // completing a rebalance task requires an acknowledgement of the state we last sent.
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            if (pendingVisibility.containsKey(notifyLeaderAndIsrResultForBucket.getTableBucket())) {
-                continue;
-            }
             tryToCompleteRebalanceTask(
                     notifyLeaderAndIsrResultForBucket,
                     serverId,
                     notifyLeaderAndIsrResponseReceivedEvent.getRequestContext(
                             notifyLeaderAndIsrResultForBucket.getTableBucket()));
         }
-    }
-
-    private void retryRoleNotifications(
-            int serverId, Map<TableBucket, NotifyLeaderAndIsrRequestContext> requests) {
-        int coordinatorEpoch = coordinatorContext.getCoordinatorEpoch();
-        scheduler.scheduleOnce(
-                "retry-role-notification",
-                () ->
-                        coordinatorEventManager.put(
-                                new AccessContextEvent<Void>(
-                                        ctx -> {
-                                            if (ctx.getCoordinatorEpoch() != coordinatorEpoch) {
-                                                return null;
-                                            }
-                                            coordinatorRequestBatch.newBatch();
-                                            TableBucket importedBucket = null;
-                                            for (Map.Entry<
-                                                            TableBucket,
-                                                            NotifyLeaderAndIsrRequestContext>
-                                                    request : requests.entrySet()) {
-                                                TableBucket bucket = request.getKey();
-                                                List<Integer> assignment =
-                                                        ctx.getAssignment(bucket);
-                                                if (ctx.isToBeDeleted(bucket)
-                                                        || !assignment.contains(serverId)) {
-                                                    continue;
-                                                }
-                                                LeaderAndIsr role =
-                                                        ctx.getBucketLeaderAndIsr(bucket)
-                                                                .orElse(null);
-                                                NotifyLeaderAndIsrRequestContext sent =
-                                                        request.getValue();
-                                                if (role == null
-                                                        || sent.getLeaderEpoch()
-                                                                != role.leaderEpoch()
-                                                        || !ctx.isReplicaOnline(serverId, bucket)) {
-                                                    continue;
-                                                }
-                                                PhysicalTablePath path =
-                                                        roleNotificationPath(bucket);
-                                                if (path != null) {
-                                                    if (sent.isImportLeaderActivation()) {
-                                                        importedBucket = bucket;
-                                                    }
-                                                    coordinatorRequestBatch.addRoleNotification(
-                                                            Collections.singleton(serverId),
-                                                            path,
-                                                            bucket,
-                                                            assignment,
-                                                            role);
-                                                }
-                                            }
-                                            coordinatorRequestBatch.sendNotifyLeaderAndIsrRequest(
-                                                    coordinatorEpoch, importedBucket);
-                                            return null;
-                                        })),
-                1_000L);
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
@@ -2543,29 +2390,44 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             proposedChanges.put(tableBucket, newLeaderAndIsr);
         }
 
-        Map<TableBucket, LeaderAndIsr> committedChanges = new HashMap<>();
+        Map<TableBucket, LeaderAndIsr> committedChanges;
         try {
-            committedChanges.putAll(
+            committedChanges =
                     zooKeeperClient.batchUpdateLeaderAndIsr(
-                            proposedChanges, coordinatorContext.getCoordinatorZkVersion()));
+                            proposedChanges, coordinatorContext.getCoordinatorZkVersion());
+            if (committedChanges.size() < proposedChanges.size()) {
+                Set<TableBucket> conflicts = new HashSet<>(proposedChanges.keySet());
+                conflicts.removeAll(committedChanges.keySet());
+                zooKeeperClient
+                        .getLeaderAndIsrs(conflicts)
+                        .forEach(
+                                (bucket, role) -> {
+                                    coordinatorContext.putBucketLeaderAndIsr(bucket, role);
+                                    if (!coordinatorContext.isToBeDeleted(bucket)) {
+                                        notifyOnlineReplicas(bucket);
+                                    }
+                                });
+            }
+            for (TableBucket bucket : proposedChanges.keySet()) {
+                LeaderAndIsr committed = committedChanges.get(bucket);
+                result.add(
+                        committed == null
+                                ? new AdjustIsrResultForBucket(
+                                        bucket,
+                                        new ApiError(
+                                                Errors.NETWORK_EXCEPTION,
+                                                "Could not confirm the ISR update for " + bucket))
+                                : new AdjustIsrResultForBucket(bucket, committed));
+            }
+        } catch (InvalidCoordinatorException e) {
+            ApiError error = ApiError.fromThrowable(e);
             proposedChanges
                     .keySet()
-                    .forEach(
-                            bucket -> {
-                                LeaderAndIsr committed = committedChanges.get(bucket);
-                                result.add(
-                                        committed == null
-                                                ? new AdjustIsrResultForBucket(
-                                                        bucket,
-                                                        ApiError.fromThrowable(
-                                                                new NetworkException(
-                                                                        "Could not confirm the ISR update for "
-                                                                                + bucket)))
-                                                : new AdjustIsrResultForBucket(bucket, committed));
-                            });
+                    .forEach(bucket -> result.add(new AdjustIsrResultForBucket(bucket, error)));
+            return result;
         } catch (Exception batchException) {
             LOG.error("Error when batch update leader and isr. Try one by one.", batchException);
-
+            committedChanges = new HashMap<>();
             for (Map.Entry<TableBucket, LeaderAndIsr> entry : proposedChanges.entrySet()) {
                 TableBucket tableBucket = entry.getKey();
                 LeaderAndIsr newLeaderAndIsr = entry.getValue();
@@ -3158,8 +3020,7 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         LeaderAndIsr committed =
                 zooKeeperClient.updateLeaderAndIsr(
                         tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
-        coordinatorContext.putBucketLeaderAndIsr(tableBucket, committed);
-        sendLeaderAndIsrRequest(tableBucket, newReplicas, committed);
+        sendCurrentLeaderAndIsrRequest(tableBucket, newReplicas, committed);
     }
 
     private void sendCurrentLeaderAndIsrRequest(TableBucket tableBucket, List<Integer> replicas)
@@ -3179,31 +3040,26 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private void sendLeaderAndIsrRequest(
             TableBucket tableBucket, List<Integer> replicas, LeaderAndIsr leaderAndIsr) {
-        PhysicalTablePath path = roleNotificationPath(tableBucket);
-        if (path == null) {
-            return;
-        }
-        coordinatorRequestBatch.newBatch();
-        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                new HashSet<>(replicas), path, tableBucket, replicas, leaderAndIsr);
-        coordinatorRequestBatch.sendRequestToTabletServers(
-                coordinatorContext.getCoordinatorEpoch());
-    }
-
-    private @Nullable PhysicalTablePath roleNotificationPath(TableBucket tableBucket) {
         String partitionName = null;
         if (tableBucket.getPartitionId() != null) {
             partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
             if (partitionName == null) {
-                LOG.error(
-                        "Can't find partition name for partition: {}.",
-                        tableBucket.getPartitionId());
-                return null;
+                LOG.error("Can't find partition name for partition: {}.", tableBucket.getBucket());
+                return;
             }
         }
 
-        return PhysicalTablePath.of(
-                coordinatorContext.getTablePathById(tableBucket.getTableId()), partitionName);
+        coordinatorRequestBatch.newBatch();
+        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                new HashSet<>(replicas),
+                PhysicalTablePath.of(
+                        coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                        partitionName),
+                tableBucket,
+                replicas,
+                leaderAndIsr);
+        coordinatorRequestBatch.sendRequestToTabletServers(
+                coordinatorContext.getCoordinatorEpoch());
     }
 
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {

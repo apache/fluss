@@ -29,7 +29,6 @@ public final class NotifyLeaderAndIsrRequestContext {
     private final int leaderEpoch;
     private final int bucketEpoch;
     private final @Nullable RebalanceExecutionKey rebalanceExecutionKey;
-    private final boolean importLeaderActivation;
 
     public NotifyLeaderAndIsrRequestContext(
             int coordinatorEpoch, int leader, int leaderEpoch, int bucketEpoch) {
@@ -42,22 +41,11 @@ public final class NotifyLeaderAndIsrRequestContext {
             int leaderEpoch,
             int bucketEpoch,
             @Nullable RebalanceExecutionKey rebalanceExecutionKey) {
-        this(coordinatorEpoch, leader, leaderEpoch, bucketEpoch, rebalanceExecutionKey, false);
-    }
-
-    public NotifyLeaderAndIsrRequestContext(
-            int coordinatorEpoch,
-            int leader,
-            int leaderEpoch,
-            int bucketEpoch,
-            @Nullable RebalanceExecutionKey rebalanceExecutionKey,
-            boolean importLeaderActivation) {
         this.coordinatorEpoch = coordinatorEpoch;
         this.leader = leader;
         this.leaderEpoch = leaderEpoch;
         this.bucketEpoch = bucketEpoch;
         this.rebalanceExecutionKey = rebalanceExecutionKey;
-        this.importLeaderActivation = importLeaderActivation;
     }
 
     public int getCoordinatorEpoch() {
@@ -78,11 +66,6 @@ public final class NotifyLeaderAndIsrRequestContext {
 
     public @Nullable RebalanceExecutionKey getRebalanceExecutionKey() {
         return rebalanceExecutionKey;
-    }
-
-    /** Whether this notification activates the leader of a published BulkLoad snapshot. */
-    public boolean isImportLeaderActivation() {
-        return importLeaderActivation;
     }
 
     @Override

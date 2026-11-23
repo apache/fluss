@@ -22,10 +22,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 
-import javax.annotation.Nullable;
-
-import java.util.Objects;
-
 /** Result of {@link ListOffsetsRequest} for each table bucket. */
 @Internal
 public class ListOffsetsResultForBucket extends ResultForBucket {
@@ -36,34 +32,21 @@ public class ListOffsetsResultForBucket extends ResultForBucket {
      */
     private final long offset;
 
-    @Nullable private final Long highWatermark;
-
     public ListOffsetsResultForBucket(TableBucket tableBucket, long offset) {
-        this(tableBucket, offset, null, ApiError.NONE);
-    }
-
-    public ListOffsetsResultForBucket(TableBucket tableBucket, long offset, long highWatermark) {
-        this(tableBucket, offset, highWatermark, ApiError.NONE);
+        this(tableBucket, offset, ApiError.NONE);
     }
 
     public ListOffsetsResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, -1, null, error);
+        this(tableBucket, -1, error);
     }
 
-    private ListOffsetsResultForBucket(
-            TableBucket tableBucket, long offset, @Nullable Long highWatermark, ApiError error) {
+    private ListOffsetsResultForBucket(TableBucket tableBucket, long offset, ApiError error) {
         super(tableBucket, error);
         this.offset = offset;
-        this.highWatermark = highWatermark;
     }
 
     public long getOffset() {
         return offset;
-    }
-
-    @Nullable
-    public Long getHighWatermark() {
-        return highWatermark;
     }
 
     @Override
@@ -78,7 +61,7 @@ public class ListOffsetsResultForBucket extends ResultForBucket {
             return false;
         }
         ListOffsetsResultForBucket that = (ListOffsetsResultForBucket) o;
-        return offset == that.offset && Objects.equals(highWatermark, that.highWatermark);
+        return offset == that.offset;
     }
 
     @Override
@@ -86,8 +69,6 @@ public class ListOffsetsResultForBucket extends ResultForBucket {
         return "ListOffsetsResultForBucket{"
                 + "offset="
                 + offset
-                + ", highWatermark="
-                + highWatermark
                 + ", tableBucket="
                 + tableBucket
                 + ", error="

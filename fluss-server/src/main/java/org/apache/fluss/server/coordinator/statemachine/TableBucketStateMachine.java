@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator.statemachine;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -31,8 +32,6 @@ import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
-import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -268,7 +268,6 @@ public class TableBucketStateMachine {
 
     private Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsrWithFallback(
             Map<TableBucket, LeaderAndIsr> leaderAndIsrs, Set<TableBucket> conflictedBuckets) {
-        Map<TableBucket, LeaderAndIsr> updatedBuckets = new HashMap<>();
         try {
             Map<TableBucket, LeaderAndIsr> committed =
                     zooKeeperClient.batchUpdateLeaderAndIsr(
@@ -277,20 +276,19 @@ public class TableBucketStateMachine {
                     .filter(bucket -> !committed.containsKey(bucket))
                     .forEach(conflictedBuckets::add);
             return committed;
+        } catch (InvalidCoordinatorException e) {
+            LOG.error(
+                    "Aborted batch LeaderAndIsr update during controlled shutdown because the coordinator was fenced.",
+                    e);
+            return Collections.emptyMap();
         } catch (Exception e) {
-            if (ExceptionUtils.findThrowable(e, KeeperException.BadVersionException.class)
-                    .isPresent()) {
-                LOG.error(
-                        "Aborted batch LeaderAndIsr update during controlled shutdown because the coordinator was fenced.",
-                        e);
-                return updatedBuckets;
-            }
             LOG.warn(
                     "Failed to batch update LeaderAndIsr for {} buckets during controlled shutdown. Falling back to individual updates.",
                     leaderAndIsrs.size(),
                     e);
         }
 
+        Map<TableBucket, LeaderAndIsr> updatedBuckets = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrs.entrySet()) {
             try {
                 LeaderAndIsr committed =
@@ -300,8 +298,7 @@ public class TableBucketStateMachine {
                                 coordinatorContext.getCoordinatorZkVersion());
                 updatedBuckets.put(entry.getKey(), committed);
             } catch (Exception e) {
-                if (ExceptionUtils.findThrowable(e, KeeperException.BadVersionException.class)
-                        .isPresent()) {
+                if (e instanceof InvalidCoordinatorException) {
                     LOG.error(
                             "Stopped individual LeaderAndIsr updates during controlled shutdown because the coordinator was fenced.",
                             e);
@@ -481,23 +478,27 @@ public class TableBucketStateMachine {
                 doInitElectionForBucket(tableBucket, assignedServers);
         if (optionalElectionResult.isPresent()) {
             ElectionResult electionResult = optionalElectionResult.get();
-            try {
-                LeaderAndIsr registered =
-                        zooKeeperClient.registerLeaderAndIsr(
-                                tableBucket,
-                                electionResult.leaderAndIsr,
-                                coordinatorContext.getCoordinatorZkVersion());
+            LeaderAndIsr registered =
+                    tryRegisterLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+            if (registered != null) {
                 coordinatorContext.putBucketLeaderAndIsr(tableBucket, registered);
                 return Optional.of(new ElectionResult(electionResult.liveReplicas, registered));
-            } catch (Exception e) {
-                LOG.error(
-                        "Fail to create state node for table bucket {} in zookeeper.",
-                        stringifyBucket(tableBucket),
-                        e);
-                return Optional.empty();
             }
         }
         return Optional.empty();
+    }
+
+    private @Nullable LeaderAndIsr tryRegisterLeaderAndIsr(TableBucket bucket, LeaderAndIsr role) {
+        try {
+            return zooKeeperClient.registerLeaderAndIsr(
+                    bucket, role, coordinatorContext.getCoordinatorZkVersion());
+        } catch (Exception e) {
+            LOG.error(
+                    "Fail to create state node for table bucket {} in zookeeper.",
+                    stringifyBucket(bucket),
+                    e);
+            return null;
+        }
     }
 
     public void batchHandleOnlineChangeAndInitLeader(Set<TableBucket> tableBuckets) {
@@ -547,33 +548,26 @@ public class TableBucketStateMachine {
                     electionResult.liveReplicas);
         }
 
-        Map<TableBucket, LeaderAndIsr> registered = new HashMap<>();
-        List<RegisterTableBucketLeadAndIsrInfo> tableBucketLeadAndIsrInfos =
-                batchRegister.getRegisterList();
-
-        // Register the initial leader and isr.
-        if (!tableBucketLeadAndIsrInfos.isEmpty()) {
-            try {
-                zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
-                        tableBucketLeadAndIsrInfos, coordinatorContext.getCoordinatorZkVersion());
-                tableBucketLeadAndIsrInfos.forEach(
-                        info ->
-                                registered.put(
-                                        info.getTableBucket(),
-                                        info.getLeaderAndIsr().withZkVersion(0)));
-            } catch (Exception e) {
-                LOG.error(
-                        "Fail to batch create state node for table buckets in zookeeper. The first bucket info: {}",
-                        stringifyBucket(tableBucketLeadAndIsrInfos.get(0).getTableBucket()),
-                        e);
-                // Failed in batch mode, try to register one by one.
-                registered.putAll(tryRegisterLeaderAndIsrOneByOne(tableBucketLeadAndIsrInfos));
-            }
+        List<RegisterTableBucketLeadAndIsrInfo> registrations = batchRegister.getRegisterList();
+        if (registrations.isEmpty()) {
+            return;
+        }
+        boolean registeredInBatch;
+        try {
+            zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
+                    registrations, coordinatorContext.getCoordinatorZkVersion());
+            registeredInBatch = true;
+        } catch (Exception e) {
+            LOG.error("Failed to register bucket roles in batch. Trying individually.", e);
+            registeredInBatch = false;
         }
 
-        for (RegisterTableBucketLeadAndIsrInfo info : tableBucketLeadAndIsrInfos) {
+        for (RegisterTableBucketLeadAndIsrInfo info : registrations) {
             TableBucket tableBucket = info.getTableBucket();
-            LeaderAndIsr leaderAndIsr = registered.get(tableBucket);
+            LeaderAndIsr leaderAndIsr =
+                    registeredInBatch
+                            ? info.getLeaderAndIsr().withZkVersion(0)
+                            : tryRegisterLeaderAndIsr(tableBucket, info.getLeaderAndIsr());
             if (leaderAndIsr == null) {
                 continue;
             }
@@ -637,27 +631,6 @@ public class TableBucketStateMachine {
         return resultOpt;
     }
 
-    private Map<TableBucket, LeaderAndIsr> tryRegisterLeaderAndIsrOneByOne(
-            List<RegisterTableBucketLeadAndIsrInfo> registerList) {
-        Map<TableBucket, LeaderAndIsr> registered = new HashMap<>();
-        for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
-            try {
-                LeaderAndIsr role =
-                        zooKeeperClient.registerLeaderAndIsr(
-                                info.getTableBucket(),
-                                info.getLeaderAndIsr(),
-                                coordinatorContext.getCoordinatorZkVersion());
-                registered.put(info.getTableBucket(), role);
-            } catch (Exception e) {
-                LOG.error(
-                        "Fail to create state node for table bucket {} in zookeeper.",
-                        stringifyBucket(info.getTableBucket()),
-                        e);
-            }
-        }
-        return registered;
-    }
-
     private Optional<ElectionResult> electNewLeaderForTableBuckets(
             TableBucket tableBucket, ReplicaLeaderElection electionStrategy) {
         LeaderAndIsr leaderAndIsr;
@@ -713,11 +686,7 @@ public class TableBucketStateMachine {
                     stringifyBucket(tableBucket));
             return Optional.empty();
         }
-        ElectionResult election = optionalElectionResult.get();
-        return Optional.of(
-                new ElectionResult(
-                        election.liveReplicas,
-                        election.leaderAndIsr.withZkVersion(leaderAndIsr.zkVersion())));
+        return optionalElectionResult;
     }
 
     private boolean checkValidTableBucketStateChange(

@@ -28,7 +28,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -75,8 +74,10 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
             List<KvFileHandleAndLocalPath> handles = fileHandles(kvSnapshotHandle);
             List<FsPathAndFileName> fsPathAndFileNames = new ArrayList<>(handles.size());
             for (KvFileHandleAndLocalPath handle : handles) {
-                resolveSafeLocalPath(
-                        kvSnapshotDownloadSpec.getDownloadDestination(), handle.getLocalPath());
+                if (!handle.hasSafeLocalPath()) {
+                    throw new IOException(
+                            "Unsafe KV snapshot local path: " + handle.getLocalPath() + '.');
+                }
                 fsPathAndFileNames.add(
                         new FsPathAndFileName(
                                 new FsPath(handle.getKvFileHandle().getFilePath()),
@@ -108,8 +109,7 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
                     continue;
                 }
                 Path localFile =
-                        resolveSafeLocalPath(
-                                downloadSpec.getDownloadDestination(), handle.getLocalPath());
+                        downloadSpec.getDownloadDestination().resolve(handle.getLocalPath());
                 if (Files.size(localFile) != handle.getKvFileHandle().getSize()) {
                     throw new IOException(
                             "Downloaded KV snapshot file length differs: " + localFile + '.');
@@ -127,32 +127,6 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
                         handle.getSharedKvFileHandles().stream(),
                         handle.getPrivateFileHandles().stream())
                 .collect(Collectors.toList());
-    }
-
-    private static Path resolveSafeLocalPath(Path root, String localPath) throws IOException {
-        if (localPath == null
-                || localPath.isEmpty()
-                || localPath.startsWith("/")
-                || localPath.endsWith("/")
-                || localPath.indexOf('\\') >= 0
-                || localPath.contains("//")) {
-            throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
-        }
-        String[] components = localPath.split("/", -1);
-        for (String component : components) {
-            if (component.isEmpty() || ".".equals(component) || "..".equals(component)) {
-                throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
-            }
-        }
-        Path normalized = Paths.get(localPath).normalize();
-        Path normalizedRoot = root.toAbsolutePath().normalize();
-        Path resolved = normalizedRoot.resolve(normalized).normalize();
-        if (normalized.isAbsolute()
-                || !localPath.equals(normalized.toString().replace('\\', '/'))
-                || !resolved.startsWith(normalizedRoot)) {
-            throw new IOException("Unsafe KV snapshot local path: " + localPath + '.');
-        }
-        return resolved;
     }
 
     private static String sha256Hex(Path path) throws IOException {

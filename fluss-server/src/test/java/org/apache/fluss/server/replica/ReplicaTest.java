@@ -65,6 +65,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.concurrent.Executors;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -242,7 +243,7 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(replica.isLeader()).isFalse();
         assertThatThrownBy(
                         () ->
-                                replica.listOffsets(
+                                replica.getOffset(
                                         remoteLogManager,
                                         new ListOffsetsParam(
                                                 -1, ListOffsetsParam.LATEST_OFFSET_TYPE, null)))
@@ -787,9 +788,11 @@ final class ReplicaTest extends ReplicaTestBase {
         TestSnapshotContext context =
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
-                    public CompletedSnapshot getLatestCompletedSnapshot(
-                            TableBucket bucket, int leaderEpoch) throws Exception {
-                        throw new IOException("Snapshot metadata unavailable");
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return bucket -> {
+                            throw new IOException("Snapshot metadata unavailable");
+                        };
                     }
                 };
         Replica replica =
@@ -820,12 +823,16 @@ final class ReplicaTest extends ReplicaTestBase {
                     }
 
                     @Override
-                    public CompletedSnapshot getLatestCompletedSnapshot(
-                            TableBucket target, int leaderEpoch) throws Exception {
-                        if (failLookup.get()) {
-                            throw new IOException("Snapshot metadata unavailable");
-                        }
-                        return super.getLatestCompletedSnapshot(target, leaderEpoch);
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception> provider =
+                                super.getLatestCompletedSnapshotProvider();
+                        return target -> {
+                            if (failLookup.get()) {
+                                throw new IOException("Snapshot metadata unavailable");
+                            }
+                            return provider.apply(target);
+                        };
                     }
                 };
         Replica replica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, bucket, context);
@@ -879,9 +886,9 @@ final class ReplicaTest extends ReplicaTestBase {
         TestSnapshotContext context =
                 new TestSnapshotContext(snapshotDir.getPath()) {
                     @Override
-                    public CompletedSnapshot getLatestCompletedSnapshot(
-                            TableBucket ignored, int leaderEpoch) throws Exception {
-                        return external;
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        return ignored -> external;
                     }
 
                     @Override
@@ -988,14 +995,17 @@ final class ReplicaTest extends ReplicaTestBase {
         testKvSnapshotContext =
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
-                    public CompletedSnapshot getLatestCompletedSnapshot(
-                            TableBucket bucket, int leaderEpoch) throws Exception {
-                        CompletedSnapshot latestSnapshot =
-                                super.getLatestCompletedSnapshot(bucket, leaderEpoch);
-                        if (latestSnapshot != null) {
-                            attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
-                        }
-                        return latestSnapshot;
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                        return bucket -> {
+                            CompletedSnapshot latestSnapshot = snapshotProvider.apply(bucket);
+                            if (latestSnapshot != null) {
+                                attemptedSnapshotIds.add(latestSnapshot.getSnapshotID());
+                            }
+                            return latestSnapshot;
+                        };
                     }
 
                     @Override
@@ -1127,14 +1137,17 @@ final class ReplicaTest extends ReplicaTestBase {
         testKvSnapshotContext =
                 new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore) {
                     @Override
-                    public CompletedSnapshot getLatestCompletedSnapshot(
-                            TableBucket bucket, int leaderEpoch) throws Exception {
-                        CompletedSnapshot snapshot =
-                                super.getLatestCompletedSnapshot(bucket, leaderEpoch);
-                        if (snapshot != null) {
-                            attemptedSnapshotIds.add(snapshot.getSnapshotID());
-                        }
-                        return snapshot;
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                                snapshotProvider = super.getLatestCompletedSnapshotProvider();
+                        return bucket -> {
+                            CompletedSnapshot snapshot = snapshotProvider.apply(bucket);
+                            if (snapshot != null) {
+                                attemptedSnapshotIds.add(snapshot.getSnapshotID());
+                            }
+                            return snapshot;
+                        };
                     }
 
                     @Override

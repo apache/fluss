@@ -447,7 +447,7 @@ message AdjustIsrResponse {
 // list offsets request and response
 message ListOffsetsRequest {
   required int32 follower_server_id = 1;  // value -1 indicate the request from client.
-  required int32 offset_type = 2; // See ListOffsetsParam.
+  required int32 offset_type = 2; // value can be 0,1,2 (see ListOffsetsParam for more details)
   required int64 table_id = 3;
   optional int64 partition_id = 4;
   repeated int32 bucket_id = 5 [packed = true]; // it is recommended to use packed for repeated numerics to get more efficient encoding
@@ -1281,7 +1281,6 @@ message PbListOffsetsRespForBucket {
   optional int32 error_code = 2;
   optional string error_message = 3;
   optional int64 offset = 4;
-  optional int64 high_watermark = 5;
 }
 
 message PbNotifyLeaderAndIsrReqForBucket {

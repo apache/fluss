@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -577,52 +578,35 @@ class ZooKeeperClientTest {
     }
 
     @Test
-    void testBatchUpdateLeaderAndIsr() throws Exception {
-        int totalCount = 100;
+    void testRoleWritesDistinguishBucketConflictFromCoordinatorFence() throws Exception {
+        int coordinatorVersion = zkEpoch.getCoordinatorEpochZkVersion();
+        TableBucket bucket = new TableBucket(1L, 0);
+        LeaderAndIsr initial =
+                zookeeperClient.registerLeaderAndIsr(
+                        bucket, new LeaderAndIsr(0, 0), coordinatorVersion);
+        LeaderAndIsr persisted =
+                zookeeperClient.updateLeaderAndIsr(
+                        bucket,
+                        initial.newLeaderAndIsr(Collections.singletonList(0)),
+                        coordinatorVersion);
+        LeaderAndIsr obsolete = initial.newLeaderAndIsr(Collections.singletonList(1));
+        assertThatThrownBy(
+                        () ->
+                                zookeeperClient.updateLeaderAndIsr(
+                                        bucket, obsolete, coordinatorVersion))
+                .isInstanceOf(KeeperException.BadVersionException.class);
 
-        // try to register bucket leaderAndIsr
-        Map<TableBucket, LeaderAndIsr> leaderAndIsrList = new HashMap<>();
-        for (int i = 0; i < totalCount; i++) {
-            TableBucket tableBucket = new TableBucket(1, i);
-            LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(
-                            i,
-                            10,
-                            Arrays.asList(i + 1, i + 2, i + 3),
-                            Collections.emptyList(),
-                            0,
-                            1000);
-            leaderAndIsrList.put(tableBucket, leaderAndIsr);
-            zookeeperClient.registerLeaderAndIsr(
-                    tableBucket, leaderAndIsr, zkEpoch.getCoordinatorEpochZkVersion());
-        }
-
-        // try to batch update
-        Map<TableBucket, LeaderAndIsr> updateLeaderAndIsrList =
-                leaderAndIsrList.entrySet().stream()
-                        .collect(
-                                Collectors.toMap(
-                                        Map.Entry::getKey,
-                                        entry -> {
-                                            LeaderAndIsr old = entry.getValue();
-                                            return new LeaderAndIsr(
-                                                            old.leader() + 1,
-                                                            old.leaderEpoch() + 1,
-                                                            old.isr(),
-                                                            Collections.emptyList(),
-                                                            old.coordinatorEpoch(),
-                                                            old.bucketEpoch() + 1)
-                                                    .withZkVersion(0);
-                                        }));
-        zookeeperClient.batchUpdateLeaderAndIsr(
-                updateLeaderAndIsrList, zkEpoch.getCoordinatorEpochZkVersion());
-        for (Map.Entry<TableBucket, LeaderAndIsr> entry : updateLeaderAndIsrList.entrySet()) {
-            TableBucket tableBucket = entry.getKey();
-            LeaderAndIsr leaderAndIsr = entry.getValue();
-            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
-            zookeeperClient.deleteLeaderAndIsr(tableBucket);
-            assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
-        }
+        zookeeperClient.fenceBecomeCoordinatorLeader("replacement");
+        LeaderAndIsr next = persisted.newLeaderAndIsr(Collections.singletonList(1));
+        assertThatThrownBy(
+                        () -> zookeeperClient.updateLeaderAndIsr(bucket, next, coordinatorVersion))
+                .isInstanceOf(InvalidCoordinatorException.class);
+        assertThatThrownBy(
+                        () ->
+                                zookeeperClient.batchUpdateLeaderAndIsr(
+                                        Collections.singletonMap(bucket, next), coordinatorVersion))
+                .isInstanceOf(InvalidCoordinatorException.class);
+        assertThat(zookeeperClient.getLeaderAndIsr(bucket)).contains(persisted);
     }
 
     @Test
@@ -1036,7 +1020,7 @@ class ZooKeeperClientTest {
         assertThatThrownBy(() -> raced.updateRecoverySnapshot(bucket, 7L, 5L, 0))
                 .isInstanceOf(KeeperException.BadVersionException.class);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(winner);
-        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 1);
+        zookeeperClient.updateRecoverySnapshot(bucket, 7L, null, 0);
         assertThat(zookeeperClient.getRecoveryBucketSnapshot(bucket)).contains(rejected);
     }
 

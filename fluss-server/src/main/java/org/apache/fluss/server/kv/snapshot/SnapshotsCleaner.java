@@ -25,6 +25,7 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
@@ -44,7 +45,7 @@ public class SnapshotsCleaner {
 
     /**
      * Add one subsumed snapshot to SnapshotsCleaner, the subsumed snapshot would be discarded at
-     * {@link #cleanSubsumedSnapshots(Executor)}.
+     * {@link #cleanSubsumedSnapshots(long, Set, Runnable, Executor)}.
      *
      * @param completedSnapshot which is subsumed.
      */
@@ -55,30 +56,38 @@ public class SnapshotsCleaner {
     }
 
     /**
-     * Cleans snapshots whose durable references have been removed.
+     * Clean Snapshot that is not in the given {@param stillInUse}.
      *
+     * @param upTo lowest SnapshotID which is still valid.
+     * @param stillInUse the state of those Snapshots are still referenced.
+     * @param postCleanAction post action after cleaning.
      * @param executor is used to perform the cleanup logic.
      */
-    public void cleanSubsumedSnapshots(Executor executor) {
+    public void cleanSubsumedSnapshots(
+            long upTo, Set<Long> stillInUse, Runnable postCleanAction, Executor executor) {
         synchronized (lock) {
             Iterator<CompletedSnapshot> iterator = subsumedSnapshots.iterator();
             while (iterator.hasNext()) {
                 CompletedSnapshot snapshot = iterator.next();
-                try {
-                    LOG.debug("Try to discard snapshot {}.", snapshot.getSnapshotID());
-                    cleanSnapshot(snapshot, executor);
-                    iterator.remove();
-                } catch (Exception e) {
-                    LOG.warn("Fail to discard the old snapshot {}.", snapshot, e);
+                if (snapshot.getSnapshotID() < upTo
+                        && !stillInUse.contains(snapshot.getSnapshotID())) {
+                    try {
+                        LOG.debug("Try to discard snapshot {}.", snapshot.getSnapshotID());
+                        cleanSnapshot(snapshot, postCleanAction, executor);
+                        iterator.remove();
+                    } catch (Exception e) {
+                        LOG.warn("Fail to discard the old snapshot {}.", snapshot, e);
+                    }
                 }
             }
         }
     }
 
-    private void cleanSnapshot(CompletedSnapshot snapshot, Executor executor) {
+    public void cleanSnapshot(
+            CompletedSnapshot snapshot, Runnable postCleanAction, Executor executor) {
         LOG.debug("Clean snapshot {}.", snapshot.getSnapshotID());
         CompletableFuture<Void> discardFuture = snapshot.discardAsync(executor);
-        discardFuture.whenComplete(
+        discardFuture.handle(
                 (Object outerIgnored, Throwable outerThrowable) -> {
                     if (outerThrowable != null) {
                         LOG.warn(
@@ -86,6 +95,8 @@ public class SnapshotsCleaner {
                                 snapshot.getSnapshotID(),
                                 outerThrowable);
                     }
+                    postCleanAction.run();
+                    return null;
                 });
     }
 }

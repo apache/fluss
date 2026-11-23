@@ -29,14 +29,12 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -54,7 +52,6 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
-import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -493,7 +490,9 @@ public final class Replica {
 
     boolean requiresLeaderActivation(int requestLeaderEpoch) {
         return requestLeaderEpoch > leaderEpoch
-                || (requestLeaderEpoch == leaderEpoch && !isLeader());
+                || (requestLeaderEpoch == leaderEpoch
+                        && isKvTable()
+                        && leaderReplicaIdOpt.get() == null);
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
@@ -504,11 +503,11 @@ public final class Replica {
                             int requestBucketEpoch = data.getBucketEpoch();
                             validateBucketEpoch(requestBucketEpoch);
 
+                            int requestLeaderEpoch = data.getLeaderEpoch();
+                            boolean activate = requiresLeaderActivation(requestLeaderEpoch);
                             // Resolve recovery metadata before changing role state or dropping KV.
                             KvRecovery recovery =
-                                    requiresLeaderActivation(data.getLeaderEpoch()) && isKvTable()
-                                            ? prepareKvRecovery(data.getLeaderEpoch())
-                                            : null;
+                                    activate && isKvTable() ? prepareKvRecovery() : null;
 
                             coordinatorEpoch = data.getCoordinatorEpoch();
                             updateRoutingState(data);
@@ -522,11 +521,14 @@ public final class Replica {
                                     data.getIsr(),
                                     data.getStandbyReplicas());
 
-                            int requestLeaderEpoch = data.getLeaderEpoch();
-                            if (requiresLeaderActivation(requestLeaderEpoch)) {
+                            if (activate) {
                                 boolean isNewLeader = !isLeader();
+                                if (recovery != null) {
+                                    // Leave a failed KV activation retryable at the published
+                                    // epoch.
+                                    leaderReplicaIdOpt.set(null);
+                                }
                                 leaderEpoch = requestLeaderEpoch;
-                                leaderReplicaIdOpt.set(null);
                                 onBecomeNewLeader(recovery);
                                 leaderReplicaIdOpt.set(localTabletServerId);
                                 // onBecomeNewLeader may recover a KV snapshot, so start the ISR lag
@@ -800,7 +802,7 @@ public final class Replica {
         for (int i = 1; i <= INIT_KV_TABLET_MAX_RETRY_TIMES; i++) {
             try {
                 if (i > 1) {
-                    recovery = prepareKvRecovery(leaderEpoch);
+                    recovery = prepareKvRecovery();
                 }
                 snapshotUsed = initKvTablet(recovery);
                 lastError = null;
@@ -941,7 +943,9 @@ public final class Replica {
                     logManager.initializeEmptyLocalTail(tableBucket, restoreStartOffset);
                 }
                 rowCount =
-                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
+                        tableConfig.supportsExactRowCount()
+                                ? completedSnapshot.getRowCount()
+                                : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -967,11 +971,7 @@ public final class Replica {
                                 this::onKvFlushComplete);
 
                 rowCount =
-                        isHistoricalPartition()
-                                        || tableConfig.getChangelogImage() == ChangelogImage.WAL
-                                        || tableConfig.getKvTTL().isPresent()
-                                ? null
-                                : 0L;
+                        isHistoricalPartition() || !tableConfig.supportsExactRowCount() ? null : 0L;
                 // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
                 //  with changelogs, in this case, the kv tablet should also have the
                 //  autoIncIDRange, we may need to get it from the changelog in the future.
@@ -1059,11 +1059,9 @@ public final class Replica {
         return false;
     }
 
-    private KvRecovery prepareKvRecovery(int leaderEpoch) {
+    private KvRecovery prepareKvRecovery() {
         Optional<CompletedSnapshot> snapshot =
-                isHistoricalPartition()
-                        ? Optional.empty()
-                        : getLatestSnapshot(tableBucket, leaderEpoch);
+                isHistoricalPartition() ? Optional.empty() : getLatestSnapshot(tableBucket);
         boolean initializeLocalLog = false;
         if (snapshot.isPresent() && snapshot.get().getLogOffset() > logTablet.localLogEndOffset()) {
             try {
@@ -1098,13 +1096,10 @@ public final class Replica {
         }
     }
 
-    private Optional<CompletedSnapshot> getLatestSnapshot(
-            TableBucket tableBucket, int leaderEpoch) {
+    private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
         try {
             return Optional.ofNullable(
-                    snapshotContext.getLatestCompletedSnapshot(tableBucket, leaderEpoch));
-        } catch (LeaderNotAvailableException e) {
-            throw e;
+                    snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
         } catch (Exception e) {
             throw new KvStorageException(
                     "Failed to get the latest completed snapshot for " + tableBucket + '.', e);
@@ -1978,13 +1973,7 @@ public final class Replica {
                 });
     }
 
-    private static boolean supportsExactRowCount(TableConfig tableConfig) {
-        return tableConfig.getChangelogImage() != ChangelogImage.WAL
-                && !tableConfig.getKvTTL().isPresent();
-    }
-
-    public ListOffsetsResultForBucket listOffsets(
-            RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
+    public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
             throws IOException {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -1997,28 +1986,23 @@ public final class Replica {
                     }
 
                     int offsetType = listOffsetsParam.getOffsetType();
-                    if (offsetType == ListOffsetsParam.BULK_LOAD_OFFSETS_TYPE) {
-                        long highWatermark = logTablet.getHighWatermark();
-                        return new ListOffsetsResultForBucket(
-                                tableBucket, logTablet.localLogEndOffset(), highWatermark);
-                    }
-                    long offset;
                     if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
-                        offset = getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
+                        return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
                     } else if (offsetType == ListOffsetsParam.EARLIEST_OFFSET_TYPE) {
-                        offset =
-                                listOffsetsParam.getFollowerServerId() < 0
-                                        ? logTablet.logStartOffset()
-                                        : logTablet.localLogStartOffset();
+                        if (listOffsetsParam.getFollowerServerId() < 0) {
+                            // the request is come from client, return available start offset
+                            return logTablet.logStartOffset();
+                        } else {
+                            return logTablet.localLogStartOffset();
+                        }
                     } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
-                        offset = getLatestOffset(listOffsetsParam.getFollowerServerId());
+                        return getLatestOffset(listOffsetsParam.getFollowerServerId());
                     } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
-                        offset = logTablet.getLeaderEndOffsetSnapshot();
+                        return logTablet.getLeaderEndOffsetSnapshot();
                     } else {
                         throw new IllegalArgumentException(
                                 "Invalid list offset type: " + offsetType);
                     }
-                    return new ListOffsetsResultForBucket(tableBucket, offset);
                 });
     }
 

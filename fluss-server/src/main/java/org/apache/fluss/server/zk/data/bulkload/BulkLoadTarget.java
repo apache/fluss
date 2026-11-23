@@ -34,48 +34,27 @@ public final class BulkLoadTarget {
     public final String remoteDataDir;
     public final boolean withdrawn;
 
-    private BulkLoadTarget(
-            @Nullable Long partitionId,
-            @Nullable String partitionName,
-            int bucketCount,
-            String remoteDataDir,
-            boolean withdrawn) {
+    private BulkLoadTarget(@Nullable Long partitionId, JsonNode record) {
+        JsonNode version = record.path("version");
+        checkArgument(
+                version.isInt() && version.intValue() == 1, "Unsupported BulkLoad target version.");
         this.partitionId = partitionId;
-        this.partitionName = partitionName;
-        this.bucketCount = bucketCount;
-        this.remoteDataDir = remoteDataDir;
-        this.withdrawn = withdrawn;
+        this.partitionName = record.path("partition_name").textValue();
+        checkArgument(
+                partitionId == null ? !record.has("partition_name") : partitionName != null,
+                "BulkLoad target partition ID and name must be specified together.");
+        JsonNode count = record.path("bucket_count");
+        checkArgument(count.isInt(), "Invalid BulkLoad target bucket count.");
+        this.bucketCount = count.intValue();
+        this.remoteDataDir = record.path("remote_data_dir").textValue();
+        checkArgument(remoteDataDir != null, "Invalid BulkLoad target directory.");
+        JsonNode withdrawn = record.path("withdrawn");
+        checkArgument(withdrawn.isBoolean(), "Invalid BulkLoad target withdrawal state.");
+        this.withdrawn = withdrawn.booleanValue();
     }
 
     /** Decodes a record using the partition ID from its path. */
     public static BulkLoadTarget fromJson(@Nullable Long partitionId, byte[] bytes) {
-        return JsonSerdeUtils.readValue(
-                bytes,
-                node -> {
-                    JsonNode version = node.path("version");
-                    checkArgument(
-                            version.isInt() && version.intValue() == 1,
-                            "Unsupported BulkLoad target record version: %s",
-                            version);
-                    JsonNode partitionName = node.path("partition_name");
-                    checkArgument(
-                            partitionId == null
-                                    ? partitionName.isMissingNode()
-                                    : partitionName.isTextual(),
-                            "BulkLoad target partition ID and name must be specified together.");
-                    JsonNode bucketCount = node.path("bucket_count");
-                    JsonNode remoteDataDir = node.path("remote_data_dir");
-                    JsonNode withdrawn = node.path("withdrawn");
-                    checkArgument(bucketCount.isInt(), "Invalid BulkLoad target bucket count.");
-                    checkArgument(remoteDataDir.isTextual(), "Invalid BulkLoad target directory.");
-                    checkArgument(
-                            withdrawn.isBoolean(), "Invalid BulkLoad target withdrawal state.");
-                    return new BulkLoadTarget(
-                            partitionId,
-                            partitionName.textValue(),
-                            bucketCount.intValue(),
-                            remoteDataDir.textValue(),
-                            withdrawn.booleanValue());
-                });
+        return JsonSerdeUtils.readValue(bytes, node -> new BulkLoadTarget(partitionId, node));
     }
 }

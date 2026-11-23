@@ -17,18 +17,14 @@
 
 package org.apache.fluss.server.coordinator.bulkload;
 
-import org.apache.fluss.exception.BulkLoadConflictException;
 import org.apache.fluss.exception.BulkLoadNotFoundException;
 import org.apache.fluss.exception.BulkLoadStateException;
 import org.apache.fluss.exception.BulkLoadTargetWithdrawnException;
 import org.apache.fluss.exception.InvalidRequestException;
-import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.rpc.entity.ListOffsetsResultForBucket;
-import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.CompletedSnapshotStoreManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperClient.VersionedData;
@@ -40,8 +36,6 @@ import org.apache.fluss.server.zk.data.bulkload.BulkLoadBucket;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTarget;
 import org.apache.fluss.server.zk.data.bulkload.BulkLoadTransaction;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
-import org.apache.fluss.utils.function.CheckedSupplier;
-import org.apache.fluss.utils.function.FunctionWithException;
 
 import javax.annotation.Nullable;
 
@@ -51,12 +45,10 @@ import java.util.Optional;
 /** Allocates and commits snapshots for individual BulkLoad buckets. */
 public final class BulkLoadManager {
     private final ZooKeeperClient client;
-    private final MetadataManager metadata;
     private final int epochVersion;
 
-    public BulkLoadManager(ZooKeeperClient client, MetadataManager metadata, int epochVersion) {
+    public BulkLoadManager(ZooKeeperClient client, int epochVersion) {
         this.client = client;
-        this.metadata = metadata;
         this.epochVersion = epochVersion;
     }
 
@@ -71,38 +63,40 @@ public final class BulkLoadManager {
 
     private VersionedData<TableRegistration> getOriginalTable(BulkLoadTransaction transaction)
             throws Exception {
-        TableInfo original = transaction.tableInfo;
         Optional<VersionedData<TableRegistration>> table =
-                client.getTableWithVersion(original.getTablePath());
-        if (!table.isPresent() || table.get().data().tableId != original.getTableId()) {
+                client.getTableWithVersion(transaction.tablePath);
+        if (!table.isPresent() || table.get().data().tableId != transaction.tableId) {
             throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
         }
         return table.get();
     }
 
-    /** Allocates a snapshot ID and WAL offset, or returns the previously allocated coordinates. */
-    public BulkLoadBucket allocateBucketSnapshot(
-            String bulkLoadId,
-            TableBucket bucket,
-            FunctionWithException<Integer, ListOffsetsResultForBucket, Exception>
-                    fetchLeaderOffsets)
+    /**
+     * Allocates a snapshot at the bucket's current recovery offset, or returns its existing
+     * allocation.
+     */
+    public BulkLoadBucket allocateBucketSnapshot(String bulkLoadId, TableBucket bucket)
             throws Exception {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction original = transaction.data();
         VersionedData<TableRegistration> table = getOriginalTable(original);
-        VersionedData<BulkLoadTarget> target = resolveTarget(original, bucket);
-        BulkLoadBucket existing =
-                client.getBulkLoadBucket(original, bucket).map(VersionedData::data).orElse(null);
-        if (existing != null) {
-            return reuseBucketAllocation(original, target.data(), existing, table);
+        BulkLoadBucket existing = client.getBulkLoadBucket(original, bucket).orElse(null);
+        if (existing != null && existing.state == BulkLoadBucket.COMMITTED) {
+            return existing;
         }
 
+        VersionedData<BulkLoadTarget> target = resolveTarget(original, bucket);
         requireRunning(original);
-        TableAndPartitionZkVersions registrationVersions =
-                validateBuildContext(original, target.data(), table);
+        Integer partitionVersion = validateBuildContext(original, target.data(), table.data());
+        if (existing != null) {
+            return existing;
+        }
         long snapshotId = client.allocateBucketSnapshotId(bucket);
-        long logOffset = fetchLeaderOffsets.apply(getBucketLeader(bucket).leader()).getOffset();
+        long logOffset =
+                client.getTableBucketLatestSnapshot(bucket)
+                        .map(BucketSnapshot::getLogOffset)
+                        .orElse(0L);
         BulkLoadBucket allocation =
                 new BulkLoadBucket(snapshotId, logOffset, BulkLoadBucket.ALLOCATED);
         try {
@@ -111,38 +105,23 @@ public final class BulkLoadManager {
                     target,
                     bucket,
                     allocation,
-                    registrationVersions.tableZkVersion,
-                    registrationVersions.partitionZkVersion,
+                    table.zkVersion(),
+                    partitionVersion,
                     epochVersion);
             return allocation;
         } catch (KeeperException.NodeExistsException e) {
-            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
-            VersionedData<TableRegistration> currentTable = getOriginalTable(current);
-            BulkLoadTarget currentTarget = resolveTarget(current, bucket).data();
-            BulkLoadBucket winner =
-                    client.getBulkLoadBucket(current, bucket)
-                            .map(VersionedData::data)
-                            .orElseThrow(() -> e);
-            return reuseBucketAllocation(current, currentTarget, winner, currentTable);
-        } catch (KeeperException.BadVersionException e) {
-            BulkLoadTransaction current = getTransaction(bucket.getTableId(), bulkLoadId).data();
-            getOriginalTable(current);
-            requireRunning(current);
+            // The preceding checks succeeded; only creating the bucket record can report
+            // NodeExists.
+            Optional<BulkLoadBucket> winner = client.getBulkLoadBucket(original, bucket);
+            if (winner.isPresent()) {
+                return winner.get();
+            }
+            checkMutationTarget(original, target.data());
+            throw e;
+        } catch (KeeperException.NoNodeException | KeeperException.BadVersionException e) {
+            checkMutationTarget(original, target.data());
             throw e;
         }
-    }
-
-    private BulkLoadBucket reuseBucketAllocation(
-            BulkLoadTransaction transaction,
-            BulkLoadTarget target,
-            BulkLoadBucket allocation,
-            VersionedData<TableRegistration> table)
-            throws Exception {
-        if (allocation.state != BulkLoadBucket.COMMITTED) {
-            requireRunning(transaction);
-            validateBuildContext(transaction, target, table);
-        }
-        return allocation;
     }
 
     private LeaderAndIsr getBucketLeader(TableBucket bucket) throws Exception {
@@ -168,51 +147,41 @@ public final class BulkLoadManager {
         return target;
     }
 
-    // Schema is compared at read time. Callers coordinate DDL through publication.
-    private TableAndPartitionZkVersions validateBuildContext(
-            BulkLoadTransaction transaction,
-            BulkLoadTarget target,
-            VersionedData<TableRegistration> current)
+    // Schema is compared at read time. The partition registration version fences publication.
+    private @Nullable Integer validateBuildContext(
+            BulkLoadTransaction transaction, BulkLoadTarget target, TableRegistration table)
             throws Exception {
         if (target.withdrawn) {
             throw new BulkLoadTargetWithdrawnException("The original physical target was deleted.");
         }
-        TableInfo original = transaction.tableInfo;
-        TableInfo table =
-                current.data()
-                        .toTableInfo(
-                                original.getTablePath(),
-                                metadata.getLatestSchema(original.getTablePath()));
         // KV encoding, row TTL, and changelog image are immutable through ALTER TABLE.
-        if (!table.getSchema().equals(original.getSchema())
-                || !table.getPartitionKeys().equals(original.getPartitionKeys())
-                || !table.getBucketKeys().equals(original.getBucketKeys())
-                || !Objects.equals(table.getRemoteDataDir(), original.getRemoteDataDir())) {
+        if (client.getCurrentSchemaId(transaction.tablePath) != transaction.schemaId
+                || !Objects.equals(table.remoteDataDir, transaction.remoteDataDir)) {
             throw new InvalidRequestException("BulkLoad build context changed.");
         }
         if (target.partitionId == null) {
-            if (table.getNumBuckets() != target.bucketCount) {
+            if (table.bucketCount != target.bucketCount) {
                 throw new InvalidRequestException("BulkLoad target bucket count changed.");
             }
-            return new TableAndPartitionZkVersions(current.zkVersion(), null);
+            return null;
         }
 
-        VersionedData<PartitionRegistration> partition = getOriginalPartition(table, target);
+        VersionedData<PartitionRegistration> partition =
+                getOriginalPartition(transaction.tablePath, target);
         PartitionRegistration registration = partition.data();
         int bucketCount =
-                registration.getBucketCountOrDefault(
-                        table.getNumBuckets(), table.getBucketCountEpoch());
+                registration.getBucketCountOrDefault(table.bucketCount, table.bucketCountEpoch);
         if (bucketCount != target.bucketCount
                 || !Objects.equals(registration.getRemoteDataDir(), target.remoteDataDir)) {
             throw new InvalidRequestException("BulkLoad target build context changed.");
         }
-        return new TableAndPartitionZkVersions(current.zkVersion(), partition.zkVersion());
+        return partition.zkVersion();
     }
 
     private VersionedData<PartitionRegistration> getOriginalPartition(
-            TableInfo table, BulkLoadTarget target) throws Exception {
+            TablePath tablePath, BulkLoadTarget target) throws Exception {
         VersionedData<PartitionRegistration> partition =
-                client.getPartitionWithVersion(table.getTablePath(), target.partitionName)
+                client.getPartitionWithVersion(tablePath, target.partitionName)
                         .orElseThrow(
                                 () ->
                                         new BulkLoadTargetWithdrawnException(
@@ -224,183 +193,72 @@ public final class BulkLoadManager {
         return partition;
     }
 
-    /** Prepares an allocated bucket snapshot for publication, or returns empty on replay. */
-    public Optional<PreparedCommit> prepareBucketCommit(
-            String bulkLoadId,
-            TableBucket bucket,
-            FunctionWithException<Integer, ListOffsetsResultForBucket, Exception>
-                    fetchLeaderOffsets)
+    /** Publishes an allocated snapshot, or acknowledges an already committed bucket. */
+    public Optional<LeaderAndIsr> commitBucketSnapshot(
+            String bulkLoadId, TableBucket bucket, CompletedSnapshotStoreManager snapshotStores)
             throws Exception {
         VersionedData<BulkLoadTransaction> transaction =
                 getTransaction(bucket.getTableId(), bulkLoadId);
         BulkLoadTransaction bulkLoadTransaction = transaction.data();
         VersionedData<TableRegistration> currentTable = getOriginalTable(bulkLoadTransaction);
-        VersionedData<BulkLoadTarget> target = resolveTarget(bulkLoadTransaction, bucket);
-        VersionedData<BulkLoadBucket> allocation =
-                client.getBulkLoadBucket(bulkLoadTransaction, bucket)
-                        .orElseThrow(
-                                () ->
-                                        new InvalidRequestException(
-                                                "Bucket has not been allocated."));
-        if (allocation.data().state == BulkLoadBucket.COMMITTED) {
+        Optional<BulkLoadBucket> record = client.getBulkLoadBucket(bulkLoadTransaction, bucket);
+        if (record.isPresent() && record.get().state == BulkLoadBucket.COMMITTED) {
             return Optional.empty();
         }
-
+        VersionedData<BulkLoadTarget> target = resolveTarget(bulkLoadTransaction, bucket);
+        BulkLoadBucket allocation =
+                record.orElseThrow(
+                        () -> new InvalidRequestException("Bucket has not been allocated."));
+        TablePath tablePath = bulkLoadTransaction.tablePath;
         requireRunning(bulkLoadTransaction);
-        TableAndPartitionZkVersions registrationVersions =
-                validateBuildContext(bulkLoadTransaction, target.data(), currentTable);
-        TableInfo table = bulkLoadTransaction.tableInfo;
+        Integer partitionVersion =
+                validateBuildContext(bulkLoadTransaction, target.data(), currentTable.data());
         CompletedSnapshot snapshot =
-                BulkLoadSnapshotValidator.validate(table, target.data(), bucket, allocation.data());
+                BulkLoadSnapshotValidator.validate(
+                        tablePath,
+                        currentTable.data().getTableConfig(),
+                        target.data(),
+                        bucket,
+                        allocation);
         LeaderAndIsr role = getBucketLeader(bucket);
-        validateCommitOffsets(
-                bucket, allocation.data().logOffset, fetchLeaderOffsets.apply(role.leader()));
-
         BucketSnapshot reference =
                 new BucketSnapshot(
                         snapshot.getSnapshotID(),
                         snapshot.getLogOffset(),
                         snapshot.getMetadataFilePath().toString());
-        return Optional.of(
-                new PreparedCommit(
-                        table.getTablePath(),
-                        snapshot,
-                        () ->
-                                publishValidatedSnapshot(
-                                        transaction,
-                                        target,
-                                        bucket,
-                                        allocation,
-                                        reference,
-                                        role,
-                                        registrationVersions),
-                        () ->
-                                client.confirmBulkLoadBucketCommit(
-                                        bulkLoadTransaction,
-                                        bucket,
-                                        snapshot.getSnapshotID(),
-                                        epochVersion)));
-    }
-
-    private Optional<LeaderAndIsr> publishValidatedSnapshot(
-            VersionedData<BulkLoadTransaction> transaction,
-            VersionedData<BulkLoadTarget> target,
-            TableBucket bucket,
-            VersionedData<BulkLoadBucket> allocation,
-            BucketSnapshot reference,
-            LeaderAndIsr role,
-            TableAndPartitionZkVersions registrationVersions)
-            throws Exception {
         try {
-            return client.commitBulkLoadBucket(
-                    transaction,
-                    target,
-                    bucket,
-                    allocation,
-                    reference,
-                    role,
-                    registrationVersions.tableZkVersion,
-                    registrationVersions.partitionZkVersion,
-                    epochVersion);
-        } catch (KeeperException.NodeExistsException
-                | KeeperException.BadVersionException
-                | KeeperException.NoNodeException e) {
-            BulkLoadTransaction current =
-                    getTransaction(bucket.getTableId(), transaction.data().bulkLoadId).data();
-            getOriginalTable(current);
-            requireRunning(current);
-            if (e instanceof KeeperException.NoNodeException && bucket.getPartitionId() != null) {
-                BulkLoadTarget originalTarget = target.data();
-                if (client.getBulkLoadTarget(current, bucket.getPartitionId())
-                        .map(currentTarget -> currentTarget.data().withdrawn)
-                        .orElse(false)) {
-                    throw new BulkLoadTargetWithdrawnException(
-                            "The original physical target was deleted.");
-                }
-                getOriginalPartition(current.tableInfo, originalTarget);
-            }
-            if (e instanceof KeeperException.BadVersionException
-                    && !client.getLeaderAndIsr(bucket)
-                            .filter(latest -> latest.zkVersion() == role.zkVersion())
-                            .isPresent()) {
-                throw new NotLeaderOrFollowerException(
-                        "BulkLoad bucket role changed during commit: " + bucket);
-            }
+            return snapshotStores
+                    .getOrCreateCompletedSnapshotStore(tablePath, bucket)
+                    .publishImportedSnapshot(
+                            snapshot,
+                            () ->
+                                    client.commitBulkLoadBucket(
+                                            transaction,
+                                            target,
+                                            bucket,
+                                            reference,
+                                            role,
+                                            currentTable.zkVersion(),
+                                            partitionVersion,
+                                            epochVersion));
+        } catch (KeeperException.NoNodeException | KeeperException.BadVersionException e) {
+            checkMutationTarget(bulkLoadTransaction, target.data());
             throw e;
         }
     }
 
-    /** A validated snapshot and its versioned publication operation. */
-    public static final class PreparedCommit {
-        private final TablePath tablePath;
-        private final CompletedSnapshot snapshot;
-        private final CheckedSupplier<Optional<LeaderAndIsr>> publication;
-        private final CheckedSupplier<Boolean> publicationConfirmed;
-
-        private PreparedCommit(
-                TablePath tablePath,
-                CompletedSnapshot snapshot,
-                CheckedSupplier<Optional<LeaderAndIsr>> publication,
-                CheckedSupplier<Boolean> publicationConfirmed) {
-            this.tablePath = tablePath;
-            this.snapshot = snapshot;
-            this.publication = publication;
-            this.publicationConfirmed = publicationConfirmed;
-        }
-
-        public TablePath tablePath() {
-            return tablePath;
-        }
-
-        public CompletedSnapshot snapshot() {
-            return snapshot;
-        }
-
-        public Optional<LeaderAndIsr> publish() throws Exception {
-            return publication.get();
-        }
-
-        public boolean confirmPublication() throws Exception {
-            return publicationConfirmed.get();
-        }
-    }
-
-    private static void validateCommitOffsets(
-            TableBucket bucket, long allocatedOffset, ListOffsetsResultForBucket offsets) {
-        long currentLogEndOffset = offsets.getOffset();
-        // The caller pauses writes through publication. The offset check detects earlier appends.
-        if (currentLogEndOffset != allocatedOffset) {
-            throw new BulkLoadConflictException(
-                    String.format(
-                            "Cannot commit BulkLoad for %s: the leader WAL end offset changed "
-                                    + "from %d at allocation to %d. Resolve concurrent writes "
-                                    + "and allocate the bucket in a new BulkLoad transaction.",
-                            bucket, allocatedOffset, currentLogEndOffset));
-        }
-        long highWatermark = offsets.getHighWatermark();
-        if (highWatermark < allocatedOffset) {
-            throw new NotEnoughReplicasException(
-                    String.format(
-                            "Cannot commit BulkLoad for %s: the leader WAL high watermark %d "
-                                    + "has not reached %d. Retry with the same allocation.",
-                            bucket, highWatermark, allocatedOffset));
+    private void checkMutationTarget(BulkLoadTransaction original, BulkLoadTarget target)
+            throws Exception {
+        getOriginalTable(original);
+        requireRunning(getTransaction(original.tableId, original.bulkLoadId).data());
+        if (target.partitionId != null) {
+            getOriginalPartition(original.tablePath, target);
         }
     }
 
     private static void requireRunning(BulkLoadTransaction transaction) {
         if (transaction.state != BulkLoadTransaction.RUNNING) {
             throw new BulkLoadStateException("BulkLoad transaction has ended.");
-        }
-    }
-
-    private static final class TableAndPartitionZkVersions {
-        private final int tableZkVersion;
-        private final @Nullable Integer partitionZkVersion;
-
-        private TableAndPartitionZkVersions(
-                int tableZkVersion, @Nullable Integer partitionZkVersion) {
-            this.tableZkVersion = tableZkVersion;
-            this.partitionZkVersion = partitionZkVersion;
         }
     }
 }

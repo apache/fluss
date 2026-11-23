@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
-import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.IOUtils;
@@ -52,14 +51,14 @@ public class CompletedSnapshotHandle {
     }
 
     public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
-        FSDataInputStream in = openInputStream();
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        IOUtils.copyBytes(in, outputStream);
-        return CompletedSnapshotJsonSerde.fromJson(outputStream.toByteArray());
+        return CompletedSnapshotJsonSerde.fromJson(readMetadataBytes(metadataFilePath));
     }
 
-    public FSDataInputStream openInputStream() throws IOException {
-        return metadataFilePath.getFileSystem().open(metadataFilePath);
+    /** Reads the snapshot metadata file without decoding it. */
+    public static byte[] readMetadataBytes(FsPath metadataFilePath) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        IOUtils.copyBytes(metadataFilePath.getFileSystem().open(metadataFilePath), bytes);
+        return bytes.toByteArray();
     }
 
     /**

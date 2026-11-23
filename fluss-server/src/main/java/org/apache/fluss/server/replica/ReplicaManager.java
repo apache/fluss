@@ -31,6 +31,7 @@ import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -1258,7 +1259,9 @@ public class ReplicaManager implements ServerReconfigurable {
         for (TableBucket tb : tableBuckets) {
             try {
                 Replica replica = getReplicaOrException(tb);
-                result.add(replica.listOffsets(remoteLogManager, listOffsetsParam));
+                result.add(
+                        new ListOffsetsResultForBucket(
+                                tb, replica.getOffset(remoteLogManager, listOffsetsParam)));
             } catch (Exception e) {
                 LOG.error("Error processing list offsets operation on replica {}", tb, e);
                 result.add(new ListOffsetsResultForBucket(tb, ApiError.fromThrowable(e)));
@@ -1491,6 +1494,20 @@ public class ReplicaManager implements ServerReconfigurable {
                 // replicas.
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
+                }
+                // Observe the published role before reading its recovery snapshot on this ZK
+                // session.
+                if (replica.isKvTable()
+                        && !replica.isHistoricalPartition()
+                        && replica.requiresLeaderActivation(data.getLeaderEpoch())
+                        && !zkClient.getLeaderAndIsr(tb)
+                                .filter(role -> role.leaderEpoch() >= data.getLeaderEpoch())
+                                .isPresent()) {
+                    throw new LeaderNotAvailableException(
+                            "Leader epoch "
+                                    + data.getLeaderEpoch()
+                                    + " is not yet visible for "
+                                    + tb);
                 }
                 replica.makeLeader(data);
 
