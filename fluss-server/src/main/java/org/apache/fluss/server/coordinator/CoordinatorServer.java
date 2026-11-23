@@ -296,6 +296,9 @@ public class CoordinatorServer extends ServerBase {
                             coordinatorLeaderElection,
                             replicaCapacityController);
 
+            coordinatorService.configureSnapshotBindings(
+                    () -> coordinatorChannelManager, scheduler, clock);
+
             this.rpcServer =
                     RpcServer.create(
                             conf,

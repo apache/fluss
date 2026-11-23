@@ -35,9 +35,9 @@ import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.MvccReadBounds;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -146,6 +146,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -1392,6 +1393,53 @@ public final class Replica {
                 });
     }
 
+    /** Returns the local clock used to evaluate snapshot binding expiry. */
+    public long currentSnapshotBindingTime() {
+        return clock.milliseconds();
+    }
+
+    /** Writes a binding on the current system-bucket leader using the ordinary KV WAL. */
+    public @Nullable Long writeSnapshotBinding(
+            int expectedEpoch,
+            byte[] key,
+            FunctionWithException<byte[], KvRecordBatch, Exception> decide)
+            throws Exception {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    localLogOrThrow(true);
+                    if (leaderEpoch != expectedEpoch) {
+                        throw new NotLeaderOrFollowerException(
+                                "System table bucket changed leaders.");
+                    }
+                    validateInSyncReplicaSize(-1);
+                    Long offset =
+                            requireKvForPositionedLookup()
+                                    .compareAndWriteSnapshotBinding(key, decide);
+                    if (offset != null && offset >= 0) {
+                        maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                    }
+                    return offset;
+                });
+    }
+
+    /** Verifies that the original leader has committed and applied an acknowledged binding. */
+    public boolean isSnapshotBindingVisible(int expectedEpoch, long exclusiveOffset)
+            throws IOException {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    localLogOrThrow(true);
+                    if (leaderEpoch != expectedEpoch) {
+                        throw new NotLeaderOrFollowerException(
+                                "System table bucket changed leaders.");
+                    }
+                    return logTablet.getHighWatermark() >= exclusiveOffset
+                            && requireKvForPositionedLookup().getFlushedLogOffset()
+                                    >= exclusiveOffset;
+                });
+    }
+
     /**
      * Looks up previous values without holding replica or KV locks during lake I/O, then writes the
      * records to the local historical KV state.
@@ -1827,12 +1875,12 @@ public final class Replica {
     }
 
     /** Observes the served history interval under the current local leadership. */
-    public BucketReadRange getBucketReadRange() throws IOException {
+    public MvccReadBounds getMvccReadBounds() throws IOException {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
                     localLogOrThrow(true);
-                    return requireKvForPositionedLookup().getBucketReadRange();
+                    return requireKvForPositionedLookup().getMvccReadBounds();
                 });
     }
 
@@ -1845,6 +1893,17 @@ public final class Replica {
             throw new NotLeaderOrFollowerException("The KV tablet is still recovering.");
         }
         return kvTablet;
+    }
+
+    /** Visits bindings while the system bucket is served by the current leader. */
+    public void forEachSnapshotBinding(byte[] prefix, Consumer<ByteArraySlice> consumer)
+            throws IOException {
+        inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    localLogOrThrow(true);
+                    requireKvForPositionedLookup().forEachSnapshotBinding(prefix, consumer);
+                });
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) {

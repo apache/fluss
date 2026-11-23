@@ -22,7 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -211,13 +211,12 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     @Override
-    public CompletableFuture<LookupResult> lookup(
-            InternalRow prefixKey, BucketReadPosition position) {
+    public CompletableFuture<LookupResult> lookup(InternalRow prefixKey, BucketLogOffset position) {
         return lookupAndFilter(prefixKey, Objects.requireNonNull(position));
     }
 
     private CompletableFuture<LookupResult> lookupAndFilter(
-            InternalRow prefixKey, @Nullable BucketReadPosition position) {
+            InternalRow prefixKey, @Nullable BucketLogOffset position) {
         CompletableFuture<LookupResult> result = lookupPrefix(prefixKey, position);
         if (clientFilterKeyGetters.length == 0) {
             return result;
@@ -250,7 +249,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     private CompletableFuture<LookupResult> lookupPrefix(
-            InternalRow prefixKey, @Nullable BucketReadPosition position) {
+            InternalRow prefixKey, @Nullable BucketLogOffset position) {
         byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(prefixKey);
         byte[] bucketKeyBytes =
                 prefixKeyEncoder == bucketKeyEncoder
@@ -295,7 +294,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                         tableBucket,
                         prefixKeyBytes,
                         bucketCount,
-                        position == null ? null : position.getNextOffset())
+                        position == null ? null : position.getOffset())
                 .whenComplete(
                         (result, error) -> {
                             if (error != null && position != null) {

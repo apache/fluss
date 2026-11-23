@@ -31,6 +31,10 @@ public final class SystemTables {
     public static final TablePath CONSUMER_OFFSETS =
             TablePath.of(SYSTEM_DATABASE, "consumer_offsets");
 
+    /** Table storing named MVCC snapshot bindings. */
+    public static final TablePath MVCC_SNAPSHOT_BINDINGS =
+            TablePath.of(SYSTEM_DATABASE, "mvcc_snapshot_bindings");
+
     private SystemTables() {}
 
     /** Returns whether the table belongs to the internal system database. */

@@ -18,7 +18,7 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -43,13 +43,13 @@ public interface TypedLookuper<T> {
      * Looks up a typed primary key or prefix in a versioned table at the supplied bucket position.
      *
      * <p>Uses the historical read and error semantics of {@link
-     * Lookuper#lookup(org.apache.fluss.row.InternalRow, BucketReadPosition)}.
+     * Lookuper#lookup(org.apache.fluss.row.InternalRow, BucketLogOffset)}.
      *
      * @param lookupKey the typed primary key or prefix used by this lookuper
      * @param position the exclusive log position in the bucket to which the key routes
      * @return the future containing the lookup result in the lookuper's target schema
      */
-    default CompletableFuture<LookupResult> lookup(T lookupKey, BucketReadPosition position) {
+    default CompletableFuture<LookupResult> lookup(T lookupKey, BucketLogOffset position) {
         CompletableFuture<LookupResult> failed = new CompletableFuture<>();
         failed.completeExceptionally(
                 new UnsupportedOperationException("Positioned lookup is unavailable."));

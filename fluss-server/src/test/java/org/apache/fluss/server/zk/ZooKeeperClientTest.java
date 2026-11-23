@@ -38,10 +38,10 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketInfo;
@@ -1483,8 +1483,8 @@ class ZooKeeperClientTest {
             }
 
             @Override
-            public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-                    GetBucketReadRangeRequest request) {
+            public CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+                    ListMvccReadBoundsRequest request) {
                 throw new UnsupportedOperationException();
             }
 

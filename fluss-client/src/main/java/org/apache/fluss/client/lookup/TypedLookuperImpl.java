@@ -18,7 +18,7 @@ package org.apache.fluss.client.lookup;
  */
 
 import org.apache.fluss.client.converter.PojoToRowConverter;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
@@ -67,7 +67,7 @@ final class TypedLookuperImpl<K> implements TypedLookuper<K> {
     }
 
     @Override
-    public CompletableFuture<LookupResult> lookup(K key, BucketReadPosition position) {
+    public CompletableFuture<LookupResult> lookup(K key, BucketLogOffset position) {
         if (key == null) {
             throw new IllegalArgumentException("key must not be null");
         }

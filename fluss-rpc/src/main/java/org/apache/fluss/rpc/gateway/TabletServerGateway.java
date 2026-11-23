@@ -24,6 +24,8 @@ import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingRequest;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
@@ -252,4 +254,11 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.SCAN_KV)
     CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request);
+
+    /** Executes a named binding operation on the internal system table leader. */
+    @RPC(api = ApiKeys.EXECUTE_MVCC_SNAPSHOT_BINDING)
+    default CompletableFuture<ExecuteMvccSnapshotBindingResponse> executeMvccSnapshotBinding(
+            ExecuteMvccSnapshotBindingRequest request) {
+        throw new UnsupportedOperationException("Requires a TabletServer");
+    }
 }

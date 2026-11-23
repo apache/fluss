@@ -343,14 +343,90 @@ message PrefixLookupResponse {
 
 
 // A Coordinator resolves the current leader. A TabletServer returns the served interval.
-message GetBucketReadRangeRequest {
-  required PbTableBucket bucket = 1;
+message ListMvccReadBoundsRequest {
+  repeated PbTableBucket buckets = 1;
 }
 
-message GetBucketReadRangeResponse {
-  optional int32 leader_id = 1;
-  optional int64 earliest_next_offset = 2;
-  optional int64 latest_next_offset = 3;
+message PbMvccReadBoundsResult {
+  required PbTableBucket bucket = 1;
+  optional int32 leader_id = 2;
+  optional int64 earliest_offset = 3;
+  optional int64 latest_offset = 4;
+  optional ErrorResponse error = 5;
+}
+
+message ListMvccReadBoundsResponse {
+  repeated PbMvccReadBoundsResult results = 1;
+}
+
+message PbMvccSnapshotRef {
+  required int64 table_id = 1;
+  optional string namespace = 2;
+  required string name = 3;
+}
+
+message PbBucketLogOffset {
+  required PbTableBucket bucket = 1;
+  required int64 next_offset = 2;
+}
+
+message RegisterMvccSnapshotOffsetsRequest {
+  required PbMvccSnapshotRef snapshot = 1;
+  repeated PbBucketLogOffset offsets = 2;
+  optional int64 binding_expires_at_millis = 3;
+}
+
+message PbMvccRegistrationResult {
+  required PbTableBucket bucket = 1;
+  optional ErrorResponse error = 2;
+}
+
+message RegisterMvccSnapshotOffsetsResponse {
+  repeated PbMvccRegistrationResult results = 1;
+}
+
+message GetMvccSnapshotOffsetsRequest {
+  required PbMvccSnapshotRef snapshot = 1;
+  repeated PbTableBucket buckets = 2;
+}
+
+message PbMvccResolutionResult {
+  required PbTableBucket bucket = 1;
+  optional int64 next_offset = 2;
+  optional ErrorResponse error = 3;
+}
+
+message GetMvccSnapshotOffsetsResponse {
+  repeated PbMvccResolutionResult results = 1;
+}
+
+message ListMvccSnapshotBindingsRequest {
+  required PbTableBucket bucket = 1;
+  optional string namespace = 2;
+}
+
+message PbMvccNamedOffset {
+  required string name = 1;
+  required int64 next_offset = 2;
+}
+
+message ListMvccSnapshotBindingsResponse {
+  repeated PbMvccNamedOffset bindings = 1;
+}
+
+// Internal execution of one binding operation on an authoritative system table bucket.
+message ExecuteMvccSnapshotBindingRequest {
+  required PbTableBucket system_bucket = 1;
+  required PbTableBucket data_bucket = 2;
+  optional string namespace = 3;
+  optional string name = 4;
+  optional int64 next_offset = 5;
+  optional int64 expires_at_millis = 6;
+}
+
+message ExecuteMvccSnapshotBindingResponse {
+  optional int64 next_offset = 1;
+  optional ListMvccSnapshotBindingsResponse listing = 2;
 }
 
 // limit scan request and response

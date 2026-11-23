@@ -33,18 +33,23 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.InvalidServerTypeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.BucketInfo;
-import org.apache.fluss.metadata.BucketReadRange;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.MvccReadBounds;
+import org.apache.fluss.metadata.MvccSnapshotBinding;
+import org.apache.fluss.metadata.MvccSnapshotRef;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -83,12 +88,12 @@ import org.apache.fluss.rpc.messages.DescribeClusterRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -98,6 +103,9 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -107,8 +115,14 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucketLogOffset;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
+import org.apache.fluss.rpc.messages.PbMvccNamedOffset;
+import org.apache.fluss.rpc.messages.PbMvccReadBoundsResult;
+import org.apache.fluss.rpc.messages.PbMvccRegistrationResult;
+import org.apache.fluss.rpc.messages.PbMvccResolutionResult;
+import org.apache.fluss.rpc.messages.PbMvccSnapshotRef;
 import org.apache.fluss.rpc.messages.PbPartitionInfo;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableInfo;
@@ -116,11 +130,13 @@ import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagByRackRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -133,9 +149,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -399,48 +418,321 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<BucketReadRange> getBucketReadRange(TableBucket bucket) {
-        GetBucketReadRangeRequest request = new GetBucketReadRangeRequest();
-        PbTableBucket target = request.setBucket();
+    public ListMvccReadBoundsResult listMvccReadBounds(Collection<TableBucket> buckets) {
+        Map<TableBucket, CompletableFuture<MvccReadBounds>> futures = new HashMap<>();
+        for (TableBucket bucket : buckets) {
+            futures.put(Objects.requireNonNull(bucket), new CompletableFuture<>());
+        }
+        if (!futures.isEmpty()) {
+            requestMvccReadBounds(futures, true);
+        }
+        return new ListMvccReadBoundsResult(futures);
+    }
+
+    private void requestMvccReadBounds(
+            Map<TableBucket, CompletableFuture<MvccReadBounds>> futures, boolean retryRouting) {
+        retryableCoordinatorGateway
+                .listMvccReadBounds(boundsRequest(futures.keySet()))
+                .thenAcceptAsync(
+                        response -> {
+                            Map<Integer, Map<TableBucket, CompletableFuture<MvccReadBounds>>>
+                                    destinations = new HashMap<>();
+                            validateBoundsResponse(response, futures.keySet(), true);
+                            for (PbMvccReadBoundsResult result : response.getResultsList()) {
+                                TableBucket bucket = boundsBucket(result.getBucket());
+                                if (result.hasError()) {
+                                    futures.get(bucket)
+                                            .completeExceptionally(
+                                                    ApiError.fromErrorMessage(result.getError())
+                                                            .exception());
+                                } else {
+                                    destinations
+                                            .computeIfAbsent(
+                                                    result.getLeaderId(),
+                                                    ignored -> new HashMap<>())
+                                            .put(bucket, futures.get(bucket));
+                                }
+                            }
+                            destinations.forEach(
+                                    (leader, subset) ->
+                                            requestTabletBounds(leader, subset, retryRouting));
+                        },
+                        refreshExecutor)
+                .exceptionally(
+                        error -> {
+                            futures.values().forEach(future -> future.completeExceptionally(error));
+                            return null;
+                        });
+    }
+
+    private void requestTabletBounds(
+            int leaderId,
+            Map<TableBucket, CompletableFuture<MvccReadBounds>> subset,
+            boolean retryRouting) {
+        CompletableFuture<ListMvccReadBoundsResponse> response;
+        try {
+            TabletServerGateway leader = metadataUpdater.newTabletServerClientForNode(leaderId);
+            if (leader == null) {
+                metadataUpdater.updateMetadata(null, null, null);
+                leader = metadataUpdater.newTabletServerClientForNode(leaderId);
+            }
+            if (leader == null) {
+                throw new LeaderNotAvailableException("Unknown TabletServer " + leaderId);
+            }
+            response = leader.listMvccReadBounds(boundsRequest(subset.keySet()));
+        } catch (RuntimeException e) {
+            response = FutureUtils.completedExceptionally(e);
+        }
+        response.thenAccept(
+                        reply -> {
+                            validateBoundsResponse(reply, subset.keySet(), false);
+                            Map<TableBucket, CompletableFuture<MvccReadBounds>> reroute =
+                                    new HashMap<>();
+                            for (PbMvccReadBoundsResult entry : reply.getResultsList()) {
+                                TableBucket bucket = boundsBucket(entry.getBucket());
+                                CompletableFuture<MvccReadBounds> future = subset.get(bucket);
+                                if (entry.hasError()) {
+                                    ApiException error =
+                                            ApiError.fromErrorMessage(entry.getError()).exception();
+                                    if (retryRouting && error instanceof InvalidMetadataException) {
+                                        reroute.put(bucket, future);
+                                    } else {
+                                        future.completeExceptionally(error);
+                                    }
+                                } else {
+                                    future.complete(
+                                            MvccReadBounds.of(
+                                                    entry.getEarliestOffset(),
+                                                    entry.getLatestOffset()));
+                                }
+                            }
+                            if (!reroute.isEmpty()) {
+                                requestMvccReadBounds(reroute, false);
+                            }
+                        })
+                .exceptionally(
+                        failure -> {
+                            if (retryRouting
+                                    && ExceptionUtils.stripCompletionException(failure)
+                                            instanceof InvalidMetadataException) {
+                                requestMvccReadBounds(subset, false);
+                            } else {
+                                subset.values()
+                                        .forEach(future -> future.completeExceptionally(failure));
+                            }
+                            return null;
+                        });
+    }
+
+    private static ListMvccReadBoundsRequest boundsRequest(Set<TableBucket> buckets) {
+        ListMvccReadBoundsRequest request = new ListMvccReadBoundsRequest();
+        for (TableBucket bucket : buckets) {
+            PbTableBucket target = request.addBucket();
+            target.setTableId(bucket.getTableId()).setBucketId(bucket.getBucket());
+            if (bucket.getPartitionId() != null) {
+                target.setPartitionId(bucket.getPartitionId());
+            }
+        }
+        return request;
+    }
+
+    private static TableBucket boundsBucket(PbTableBucket bucket) {
+        return new TableBucket(
+                bucket.getTableId(),
+                bucket.hasPartitionId() ? bucket.getPartitionId() : null,
+                bucket.getBucketId());
+    }
+
+    private static void validateBoundsResponse(
+            ListMvccReadBoundsResponse response, Set<TableBucket> requested, boolean coordinator) {
+        Set<TableBucket> remaining = new HashSet<>(requested);
+        for (PbMvccReadBoundsResult entry : response.getResultsList()) {
+            boolean hasBounds = entry.hasEarliestOffset() || entry.hasLatestOffset();
+            boolean valid;
+            if (entry.hasError()) {
+                valid =
+                        !entry.hasLeaderId()
+                                && !hasBounds
+                                && ApiError.fromErrorMessage(entry.getError()).isFailure();
+            } else if (coordinator) {
+                valid = entry.hasLeaderId() && entry.getLeaderId() >= 0 && !hasBounds;
+            } else {
+                valid =
+                        !entry.hasLeaderId()
+                                && entry.hasEarliestOffset()
+                                && entry.hasLatestOffset()
+                                && entry.getEarliestOffset() >= 0
+                                && entry.getEarliestOffset() <= entry.getLatestOffset();
+            }
+            if (!remaining.remove(boundsBucket(entry.getBucket())) || !valid) {
+                throw new FlussRuntimeException("Invalid MVCC read bounds response");
+            }
+        }
+        if (!remaining.isEmpty()) {
+            throw new FlussRuntimeException(
+                    "Missing buckets in MVCC read bounds response: " + remaining);
+        }
+    }
+
+    @Override
+    public CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<BucketLogOffset> offsets) {
+        return registerSnapshotOffsets(snapshot, offsets, null);
+    }
+
+    @Override
+    public CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot,
+            Collection<BucketLogOffset> offsets,
+            long bindingExpiresAtMillis) {
+        return registerSnapshotOffsets(snapshot, offsets, bindingExpiresAtMillis);
+    }
+
+    private CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerSnapshotOffsets(
+            MvccSnapshotRef snapshot,
+            Collection<BucketLogOffset> offsets,
+            @Nullable Long deadline) {
+        RegisterMvccSnapshotOffsetsRequest request =
+                new RegisterMvccSnapshotOffsetsRequest().setSnapshot(snapshotRef(snapshot));
+        Set<TableBucket> requested = new HashSet<>();
+        for (BucketLogOffset offset : offsets) {
+            PbBucketLogOffset item = request.addOffset().setNextOffset(offset.getOffset());
+            encodeBucket(item.setBucket(), offset.getTableBucket());
+            requested.add(offset.getTableBucket());
+        }
+        if (deadline != null) {
+            request.setBindingExpiresAtMillis(deadline);
+        }
+        return gateway.registerMvccSnapshotOffsets(request)
+                .thenApply(
+                        reply -> {
+                            Set<TableBucket> remaining = new HashSet<>(requested);
+                            Set<TableBucket> registered = new HashSet<>();
+                            Set<TableBucket> conflicting = new HashSet<>();
+                            Map<TableBucket, ApiException> failures = new HashMap<>();
+                            for (PbMvccRegistrationResult item : reply.getResultsList()) {
+                                TableBucket bucket =
+                                        takeSnapshotResult(remaining, item.getBucket());
+                                if (!item.hasError()) {
+                                    registered.add(bucket);
+                                } else {
+                                    ApiError error = ApiError.fromErrorMessage(item.getError());
+                                    if (error.error() == Errors.MVCC_SNAPSHOT_BINDING_CONFLICT) {
+                                        conflicting.add(bucket);
+                                    } else {
+                                        failures.put(bucket, requireSnapshotFailure(error));
+                                    }
+                                }
+                            }
+                            requireCompleteSnapshotResults(remaining);
+                            return new RegisterMvccSnapshotOffsetsResult(
+                                    registered, conflicting, failures);
+                        });
+    }
+
+    @Override
+    public CompletableFuture<GetMvccSnapshotOffsetsResult> getMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<TableBucket> buckets) {
+        GetMvccSnapshotOffsetsRequest request =
+                new GetMvccSnapshotOffsetsRequest().setSnapshot(snapshotRef(snapshot));
+        Set<TableBucket> requested = new HashSet<>(buckets);
+        requested.forEach(bucket -> encodeBucket(request.addBucket(), bucket));
+        return retryableCoordinatorGateway
+                .getMvccSnapshotOffsets(request)
+                .thenApply(
+                        reply -> {
+                            Set<TableBucket> remaining = new HashSet<>(requested);
+                            Map<TableBucket, BucketLogOffset> offsets = new HashMap<>();
+                            Set<TableBucket> missing = new HashSet<>();
+                            Map<TableBucket, ApiException> failures = new HashMap<>();
+                            for (PbMvccResolutionResult item : reply.getResultsList()) {
+                                TableBucket bucket =
+                                        takeSnapshotResult(remaining, item.getBucket());
+                                if (item.hasError()) {
+                                    if (item.hasNextOffset()) {
+                                        throw new FlussRuntimeException(
+                                                "Snapshot resolution has both offset and error");
+                                    }
+                                    failures.put(
+                                            bucket,
+                                            requireSnapshotFailure(
+                                                    ApiError.fromErrorMessage(item.getError())));
+                                } else if (item.hasNextOffset()) {
+                                    offsets.put(
+                                            bucket,
+                                            BucketLogOffset.of(bucket, item.getNextOffset()));
+                                } else {
+                                    missing.add(bucket);
+                                }
+                            }
+                            requireCompleteSnapshotResults(remaining);
+                            return new GetMvccSnapshotOffsetsResult(offsets, missing, failures);
+                        });
+    }
+
+    @Override
+    public CompletableFuture<List<MvccSnapshotBinding>> listMvccSnapshotBindings(
+            TableBucket bucket, String namespace) {
+        ListMvccSnapshotBindingsRequest request =
+                new ListMvccSnapshotBindingsRequest().setNamespace(namespace);
+        encodeBucket(request.setBucket(), bucket);
+        return retryableCoordinatorGateway
+                .listMvccSnapshotBindings(request)
+                .thenApply(
+                        reply -> {
+                            List<MvccSnapshotBinding> bindings = new ArrayList<>();
+                            Set<String> names = new HashSet<>();
+                            for (PbMvccNamedOffset item : reply.getBindingsList()) {
+                                if (!names.add(item.getName())) {
+                                    throw new FlussRuntimeException(
+                                            "Duplicate snapshot binding " + item.getName());
+                                }
+                                bindings.add(
+                                        MvccSnapshotBinding.of(
+                                                MvccSnapshotRef.of(
+                                                        bucket.getTableId(),
+                                                        namespace,
+                                                        item.getName()),
+                                                BucketLogOffset.of(bucket, item.getNextOffset())));
+                            }
+                            return Collections.unmodifiableList(bindings);
+                        });
+    }
+
+    private static PbMvccSnapshotRef snapshotRef(MvccSnapshotRef snapshot) {
+        return new PbMvccSnapshotRef()
+                .setTableId(snapshot.getTableId())
+                .setNamespace(snapshot.getNamespace())
+                .setName(snapshot.getName());
+    }
+
+    private static void encodeBucket(PbTableBucket target, TableBucket bucket) {
         target.setTableId(bucket.getTableId()).setBucketId(bucket.getBucket());
         if (bucket.getPartitionId() != null) {
             target.setPartitionId(bucket.getPartitionId());
         }
-        return gateway.getBucketReadRange(request)
-                .thenComposeAsync(
-                        location -> {
-                            if (!location.hasLeaderId()) {
-                                throw new LeaderNotAvailableException(
-                                        "The coordinator did not return a leader for " + bucket);
-                            }
-                            int leaderId = location.getLeaderId();
-                            TabletServerGateway leader =
-                                    metadataUpdater.newTabletServerClientForNode(leaderId);
-                            if (leader == null) {
-                                metadataUpdater.updateMetadata(null, null, null);
-                                leader = metadataUpdater.newTabletServerClientForNode(leaderId);
-                            }
-                            if (leader == null) {
-                                throw new LeaderNotAvailableException(
-                                        "The leader of "
-                                                + bucket
-                                                + " is not in the cluster metadata.");
-                            }
-                            return leader.getBucketReadRange(request);
-                        },
-                        refreshExecutor)
-                .thenApply(
-                        response -> {
-                            if (!response.hasEarliestNextOffset()
-                                    || !response.hasLatestNextOffset()) {
-                                throw new FlussRuntimeException(
-                                        "The leader did not return a bucket read range.");
-                            }
-                            return new BucketReadRange(
-                                    bucket,
-                                    response.getEarliestNextOffset(),
-                                    response.getLatestNextOffset());
-                        });
+    }
+
+    private static TableBucket takeSnapshotResult(Set<TableBucket> remaining, PbTableBucket item) {
+        TableBucket bucket = boundsBucket(item);
+        if (!remaining.remove(bucket)) {
+            throw new FlussRuntimeException(
+                    "Unexpected or duplicate snapshot result for " + bucket);
+        }
+        return bucket;
+    }
+
+    private static ApiException requireSnapshotFailure(ApiError error) {
+        if (error.isSuccess()) {
+            throw new FlussRuntimeException("Invalid success code in snapshot error");
+        }
+        return error.exception();
+    }
+
+    private static void requireCompleteSnapshotResults(Set<TableBucket> remaining) {
+        if (!remaining.isEmpty()) {
+            throw new FlussRuntimeException("Missing snapshot results for " + remaining);
+        }
     }
 
     @Override

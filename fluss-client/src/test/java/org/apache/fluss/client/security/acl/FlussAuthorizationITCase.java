@@ -24,6 +24,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.admin.KvSnapshotLease;
 import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.admin.RegisterMvccSnapshotOffsetsResult;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -39,8 +40,10 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.MvccSnapshotRef;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
@@ -92,6 +95,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -758,6 +762,70 @@ public class FlussAuthorizationITCase {
                                             + " Resource{type=TABLE, name='%s'} ",
                                     noWriteAclTable));
         }
+    }
+
+    @Test
+    void testNamedBindingsUseTheBusinessTableAcl() throws Exception {
+        TablePath path = TablePath.of(DATA1_TABLE_PATH.getDatabaseName(), "mvcc_binding_acl");
+        rootAdmin
+                .createTable(
+                        path,
+                        TableDescriptor.builder()
+                                .schema(DATA1_SCHEMA_PK)
+                                .distributedBy(1)
+                                .property(ConfigOptions.TABLE_KV_MVCC_ENABLED, true)
+                                .build(),
+                        false)
+                .get();
+        long tableId = rootAdmin.getTableInfo(path).get().getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        MvccSnapshotRef snapshot = MvccSnapshotRef.of(tableId, "authorized");
+        List<AclBinding> read =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(path),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(read).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(read, true);
+        assertThat(
+                        guestAdmin
+                                .getMvccSnapshotOffsets(snapshot, Collections.singleton(bucket))
+                                .get(15, TimeUnit.SECONDS)
+                                .getMissingBuckets())
+                .containsExactly(bucket);
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .registerMvccSnapshotOffsets(
+                                                snapshot,
+                                                Collections.singleton(
+                                                        BucketLogOffset.of(bucket, 0)))
+                                        .get(15, TimeUnit.SECONDS))
+                .hasRootCauseInstanceOf(AuthorizationException.class);
+
+        List<AclBinding> write =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(path),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(write).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(write, true);
+        BucketLogOffset offset = BucketLogOffset.of(bucket, 0);
+        MvccSnapshotRef concurrent = MvccSnapshotRef.of(tableId, "concurrent-creator");
+        CompletableFuture<RegisterMvccSnapshotOffsetsResult> guest =
+                guestAdmin.registerMvccSnapshotOffsets(snapshot, Collections.singleton(offset));
+        CompletableFuture<RegisterMvccSnapshotOffsetsResult> root =
+                rootAdmin.registerMvccSnapshotOffsets(concurrent, Collections.singleton(offset));
+        assertThat(guest.get(15, TimeUnit.SECONDS).getRegisteredBuckets()).containsExactly(bucket);
+        assertThat(root.get(15, TimeUnit.SECONDS).getRegisteredBuckets()).containsExactly(bucket);
+        assertThat(guestAdmin.listMvccSnapshotBindings(bucket).get(15, TimeUnit.SECONDS))
+                .hasSize(2);
     }
 
     @Test

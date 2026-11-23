@@ -24,8 +24,6 @@ import org.apache.fluss.rpc.messages.DescribeBucketsRequest;
 import org.apache.fluss.rpc.messages.DescribeBucketsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -38,6 +36,8 @@ import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -46,16 +46,23 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsRequest;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsRequest;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.RPC;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -63,9 +70,9 @@ import java.util.concurrent.CompletableFuture;
 public interface AdminReadOnlyGateway extends RpcGateway {
 
     /** Locates a history bucket on the Coordinator or reads its interval on the leader. */
-    @RPC(api = ApiKeys.GET_BUCKET_READ_RANGE)
-    CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-            GetBucketReadRangeRequest request);
+    @RPC(api = ApiKeys.LIST_MVCC_READ_BOUNDS)
+    CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+            ListMvccReadBoundsRequest request);
 
     // ------ databases ------
 
@@ -220,4 +227,28 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
     CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
+
+    /** Executes the named MVCC snapshot request at the Coordinator. */
+    @RPC(api = ApiKeys.REGISTER_MVCC_SNAPSHOT_OFFSETS)
+    default CompletableFuture<RegisterMvccSnapshotOffsetsResponse> registerMvccSnapshotOffsets(
+            RegisterMvccSnapshotOffsetsRequest request) {
+        return FutureUtils.completedExceptionally(
+                new UnsupportedOperationException("Requires a Coordinator"));
+    }
+
+    /** Executes the named MVCC snapshot request at the Coordinator. */
+    @RPC(api = ApiKeys.GET_MVCC_SNAPSHOT_OFFSETS)
+    default CompletableFuture<GetMvccSnapshotOffsetsResponse> getMvccSnapshotOffsets(
+            GetMvccSnapshotOffsetsRequest request) {
+        return FutureUtils.completedExceptionally(
+                new UnsupportedOperationException("Requires a Coordinator"));
+    }
+
+    /** Executes the named MVCC snapshot request at the Coordinator. */
+    @RPC(api = ApiKeys.LIST_MVCC_SNAPSHOT_BINDINGS)
+    default CompletableFuture<ListMvccSnapshotBindingsResponse> listMvccSnapshotBindings(
+            ListMvccSnapshotBindingsRequest request) {
+        return FutureUtils.completedExceptionally(
+                new UnsupportedOperationException("Requires a Coordinator"));
+    }
 }

@@ -18,10 +18,10 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
 import org.apache.fluss.exception.TableNotVersionedException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.concurrent.NotThreadSafe;
@@ -66,8 +66,8 @@ public interface Lookuper {
      * position's next offset. A key or prefix with no match returns an empty result.
      *
      * <p>The future fails with {@link TableNotVersionedException} for a table created without
-     * version history, {@link LookupPositionExpiredException} below the retained floor, or {@link
-     * LookupPositionNotYetReadableException} above the committed and applied end. The client
+     * version history, {@link MvccReadOffsetExpiredException} below the retained floor, or {@link
+     * MvccReadOffsetNotYetReadableException} above the committed and applied end. The client
      * propagates position errors without automatically retrying. This overload is unavailable when
      * the lookuper is configured to insert missing rows.
      *
@@ -76,7 +76,7 @@ public interface Lookuper {
      * @return the future containing the lookup result at the supplied position
      */
     default CompletableFuture<LookupResult> lookup(
-            InternalRow lookupKey, BucketReadPosition position) {
+            InternalRow lookupKey, BucketLogOffset position) {
         CompletableFuture<LookupResult> failed = new CompletableFuture<>();
         failed.completeExceptionally(
                 new UnsupportedOperationException("Positioned lookup is unavailable."));

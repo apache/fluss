@@ -23,21 +23,26 @@ import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidRequestException;
 import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.MvccSnapshotBindingConflictException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FileSystem;
-import org.apache.fluss.metadata.BucketReadRange;
 import org.apache.fluss.metadata.GroupId;
+import org.apache.fluss.metadata.MvccReadBounds;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
@@ -53,12 +58,12 @@ import org.apache.fluss.rpc.messages.DeleteConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DeleteConsumerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingRequest;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -71,6 +76,9 @@ import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
 import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -86,6 +94,8 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbMvccNamedOffset;
+import org.apache.fluss.rpc.messages.PbMvccReadBoundsResult;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -105,6 +115,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.rpc.protocol.MessageCodec;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.DynamicConfigManager;
@@ -131,6 +142,8 @@ import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.MetadataView;
 import org.apache.fluss.server.metadata.MetadataViewProvider;
+import org.apache.fluss.server.metadata.MvccSnapshotBindingSchema;
+import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -140,9 +153,11 @@ import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetAndMetadata;
 import org.apache.fluss.server.tablet.consumer.group.ConsumerOffsetTableConfig;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.ByteArraySlice;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -152,8 +167,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -172,6 +189,7 @@ import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_M
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeCommitConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeDeleteConsumerOffsetsRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.decodeGetConsumerOffsetsRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTableBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
@@ -200,6 +218,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toProduceLogDataForBuckets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPutKvDataForBuckets;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
 /** An RPC Gateway service for tablet server. */
 public final class TabletService extends RpcServiceBase
@@ -212,6 +231,9 @@ public final class TabletService extends RpcServiceBase
     private final ScannerManager scannerManager;
     private final CoordinatorGateway coordinatorGateway;
     private final String interListenerName;
+    private static final int MAX_SNAPSHOT_LIST_FRAME_OVERHEAD =
+            Integer.BYTES + MessageCodec.RESPONSE_HEADER_LENGTH;
+    private final MvccSnapshotBindingSchema snapshotBindingSchema = new MvccSnapshotBindingSchema();
     private final ExecutorService replicaStateChangeExecutor;
     private final ConsumerGroupManager groupManager;
 
@@ -434,6 +456,7 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
+        requirePublicDataTable(request.getTableId());
         authorizeTable(WRITE, request.getTableId());
         long tableId = request.getTableId();
         Map<TableBucket, PutKvResultForBucket> routingErrors = new HashMap<>();
@@ -493,6 +516,7 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
+        requirePublicDataTable(request.getTableId());
         if (request.hasNextOffset()) {
             validatePositionedLookup(request.getNextOffset());
             if ((request.hasInsertIfNotExists() && request.isInsertIfNotExists())
@@ -574,6 +598,7 @@ public final class TabletService extends RpcServiceBase
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
+        requirePublicDataTable(request.getTableId());
         if (request.hasNextOffset()) {
             validatePositionedLookup(request.getNextOffset());
         }
@@ -608,26 +633,199 @@ public final class TabletService extends RpcServiceBase
     }
 
     @Override
-    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-            GetBucketReadRangeRequest request) {
-        PbTableBucket pb = request.getBucket();
-        authorizeTable(READ, pb.getTableId());
-        TableBucket bucket =
-                new TableBucket(
-                        pb.getTableId(),
-                        pb.hasPartitionId() ? pb.getPartitionId() : null,
-                        pb.getBucketId());
-        try {
-            BucketReadRange range =
-                    replicaManager.getReplicaOrException(bucket).getBucketReadRange();
-            return CompletableFuture.completedFuture(
-                    new GetBucketReadRangeResponse()
-                            .setEarliestNextOffset(range.getEarliestPosition().getNextOffset())
-                            .setLatestNextOffset(range.getLatestPosition().getNextOffset()));
-        } catch (java.io.IOException e) {
-            throw new org.apache.fluss.exception.KvStorageException(
-                    "Unable to read history bounds.", e);
+    public CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+            ListMvccReadBoundsRequest request) {
+        ListMvccReadBoundsResponse response = new ListMvccReadBoundsResponse();
+        Set<TableBucket> seen = new HashSet<>();
+        for (PbTableBucket pb : request.getBucketsList()) {
+            TableBucket bucket = toTableBucket(pb);
+            if (!seen.add(bucket)) {
+                continue;
+            }
+            PbMvccReadBoundsResult result = response.addResult();
+            result.setBucket(fromTableBucket(bucket));
+            try {
+                authorizeTable(READ, bucket.getTableId());
+                MvccReadBounds bounds =
+                        replicaManager.getReplicaOrException(bucket).getMvccReadBounds();
+                result.setEarliestOffset(bounds.getEarliestOffset());
+                result.setLatestOffset(bounds.getLatestOffset());
+            } catch (ApiException e) {
+                result.setError(ApiError.fromThrowable(e).toErrorResponse());
+            } catch (java.io.IOException e) {
+                result.setError(
+                        ApiError.fromThrowable(
+                                        new org.apache.fluss.exception.KvStorageException(
+                                                "Unable to read history bounds.", e))
+                                .toErrorResponse());
+            }
         }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    private void requirePublicDataTable(long tableId) {
+        if (metadataCache
+                .getTablePath(tableId)
+                .filter(SystemTables.MVCC_SNAPSHOT_BINDINGS::equals)
+                .isPresent()) {
+            throw new AuthorizationException("Use the MVCC snapshot binding management APIs.");
+        }
+    }
+
+    @Override
+    public CompletableFuture<ExecuteMvccSnapshotBindingResponse> executeMvccSnapshotBinding(
+            ExecuteMvccSnapshotBindingRequest request) {
+        if (!currentSession().isInternal()) {
+            throw new AuthorizationException(
+                    "Snapshot binding storage requires an internal session.");
+        }
+        Replica replica =
+                replicaManager.getReplicaOrException(toTableBucket(request.getSystemBucket()));
+        if (!SystemTables.MVCC_SNAPSHOT_BINDINGS.equals(replica.getTablePath())) {
+            throw new InvalidRequestException("Invalid snapshot binding system bucket.");
+        }
+        TableBucket dataBucket = toTableBucket(request.getDataBucket());
+        String namespace = request.hasNamespace() ? request.getNamespace() : "default";
+        long now = replica.currentSnapshotBindingTime();
+        ValueDecoder decoder = snapshotBindingSchema.decoder(replica);
+        ExecuteMvccSnapshotBindingResponse response = new ExecuteMvccSnapshotBindingResponse();
+        if (!request.hasName()) {
+            ListMvccSnapshotBindingsResponse listing = response.setListing();
+            int[] encodedBytes = {MAX_SNAPSHOT_LIST_FRAME_OVERHEAD};
+            try {
+                replica.forEachSnapshotBinding(
+                        snapshotBindingSchema.prefix(dataBucket, namespace),
+                        value -> {
+                            InternalRow row = decoder.decodeValue(value.toByteArray()).row;
+                            if (MvccSnapshotBindingSchema.expiresAt(row) > now) {
+                                PbMvccNamedOffset entry =
+                                        new PbMvccNamedOffset()
+                                                .setName(MvccSnapshotBindingSchema.name(row))
+                                                .setNextOffset(
+                                                        MvccSnapshotBindingSchema.offset(row));
+                                int size = entry.totalSize();
+                                int fieldSize = 1 + unsignedVarintSize(size) + size;
+                                if (fieldSize
+                                        > MvccSnapshotBindingSchema.LIST_RESPONSE_BYTES
+                                                - encodedBytes[0]) {
+                                    throw new InvalidRequestException(
+                                            "MVCC snapshot binding response exceeds the frame budget.");
+                                }
+                                encodedBytes[0] += fieldSize;
+                                listing.addAllBindings(Collections.singletonList(entry));
+                            }
+                        });
+            } catch (IOException e) {
+                throw new KvStorageException("Unable to list snapshot bindings", e);
+            }
+            return CompletableFuture.completedFuture(response);
+        }
+        String name = request.getName();
+        byte[] key = snapshotBindingSchema.key(dataBucket, namespace, name);
+        if (!request.hasNextOffset()) {
+            ByteArraySlice value = replica.lookups(Collections.singletonList(key)).get(0);
+            if (value != null) {
+                InternalRow row = decoder.decodeValue(value.toByteArray()).row;
+                if (MvccSnapshotBindingSchema.expiresAt(row) > now) {
+                    response.setNextOffset(MvccSnapshotBindingSchema.offset(row));
+                }
+            }
+            return CompletableFuture.completedFuture(response);
+        }
+        long offset = request.getNextOffset();
+        Long explicitExpiry = request.hasExpiresAtMillis() ? request.getExpiresAtMillis() : null;
+        CompletableFuture<ExecuteMvccSnapshotBindingResponse> result = new CompletableFuture<>();
+        int epoch = replica.getLeaderEpoch();
+        long timeoutNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        SnapshotBindingRegistration registration = new SnapshotBindingRegistration();
+        Callable<Long> write =
+                () ->
+                        replica.writeSnapshotBinding(
+                                epoch,
+                                key,
+                                value -> {
+                                    long evaluationTime = replica.currentSnapshotBindingTime();
+                                    if (explicitExpiry != null
+                                            && explicitExpiry <= evaluationTime) {
+                                        throw new InvalidRequestException(
+                                                "MVCC snapshot binding deadline has elapsed.");
+                                    }
+                                    if (value != null) {
+                                        InternalRow row = decoder.decodeValue(value).row;
+                                        long storedExpiry =
+                                                MvccSnapshotBindingSchema.expiresAt(row);
+                                        if (storedExpiry > evaluationTime) {
+                                            if (MvccSnapshotBindingSchema.offset(row) == offset
+                                                    && (explicitExpiry == null
+                                                            || explicitExpiry == storedExpiry)) {
+                                                registration.expiresAt = storedExpiry;
+                                                return null;
+                                            }
+                                            throw new MvccSnapshotBindingConflictException(
+                                                    "A different live binding already exists.");
+                                        }
+                                    }
+                                    registration.expiresAt =
+                                            explicitExpiry != null
+                                                    ? explicitExpiry
+                                                    : evaluationTime
+                                                            + MvccSnapshotBindingSchema
+                                                                    .DEFAULT_LIFETIME_MILLIS;
+                                    return snapshotBindingSchema.record(
+                                            replica,
+                                            dataBucket,
+                                            namespace,
+                                            name,
+                                            offset,
+                                            registration.expiresAt);
+                                });
+        registerSnapshotBinding(replica, epoch, timeoutNanos, write, registration, result);
+        return result;
+    }
+
+    private void registerSnapshotBinding(
+            Replica replica,
+            int epoch,
+            long timeoutNanos,
+            Callable<Long> write,
+            SnapshotBindingRegistration registration,
+            CompletableFuture<ExecuteMvccSnapshotBindingResponse> result) {
+        try {
+            if (!replica.isSnapshotBindingVisible(epoch, 0)) {
+                throw new NotLeaderOrFollowerException("System table bucket is still recovering.");
+            }
+            if (registration.endOffset == null) {
+                registration.endOffset = write.call();
+            }
+            if (registration.endOffset != null
+                    && replica.isSnapshotBindingVisible(
+                            epoch, Math.max(0, registration.endOffset))) {
+                if (registration.expiresAt <= replica.currentSnapshotBindingTime()) {
+                    throw new InvalidRequestException(
+                            "MVCC snapshot binding expired before acknowledgement.");
+                }
+                result.complete(new ExecuteMvccSnapshotBindingResponse());
+            } else if (System.nanoTime() - timeoutNanos >= 0) {
+                result.completeExceptionally(
+                        new TimeoutException("Snapshot binding visibility is unknown."));
+            } else {
+                replicaManager.scheduleSnapshotBindingCheck(
+                        () ->
+                                registerSnapshotBinding(
+                                        replica, epoch, timeoutNanos, write, registration, result));
+            }
+        } catch (Exception e) {
+            result.completeExceptionally(e);
+        }
+    }
+
+    private static final class SnapshotBindingRegistration {
+        private @Nullable Long endOffset;
+        private long expiresAt;
+    }
+
+    private static int unsignedVarintSize(int value) {
+        return (32 - Integer.numberOfLeadingZeros(value | 1) + 6) / 7;
     }
 
     private void validatePositionedLookup(long nextOffset) {

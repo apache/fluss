@@ -18,8 +18,8 @@
 package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.exception.ApiException;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
@@ -41,8 +41,8 @@ class ErrorsTest {
 
     @Test
     void testStructuredPositionErrorWithoutPayloadDecodesAsGenericError() {
-        LookupPositionExpiredException failure =
-                new LookupPositionExpiredException(BucketReadPosition.of(new TableBucket(1, 0), 2));
+        MvccReadOffsetExpiredException failure =
+                new MvccReadOffsetExpiredException(BucketLogOffset.of(new TableBucket(1, 0), 2));
         ApiError encoded = ApiError.fromThrowable(failure);
 
         assertThat(encoded.error()).isEqualTo(Errors.LOOKUP_POSITION_EXPIRED);

@@ -56,6 +56,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /** A wrapper for the operation of {@link io.github.fluss_contrib.rocksdb.RocksDB}. */
 public class RocksDBKv implements AutoCloseable {
@@ -610,14 +611,20 @@ public class RocksDBKv implements AutoCloseable {
 
         /** Seeks and collects values from the view fixed when this lookup was opened. */
         public List<byte[]> readAll() throws IOException {
+            List<byte[]> values = new ArrayList<>();
+            forEach(values::add);
+            return values;
+        }
+
+        /** Visits values in the fixed view without accumulating the entire prefix. */
+        public void forEach(Consumer<byte[]> consumer) throws IOException {
             if (closed) {
                 throw new IOException("Prefix lookup is closed.");
             }
-            List<byte[]> values = new ArrayList<>();
             try {
                 iterator.seek(prefixKey);
                 while (iterator.isValid()) {
-                    values.add(iterator.value());
+                    consumer.accept(iterator.value());
                     iterator.next();
                 }
             } catch (RuntimeException e) {
@@ -626,7 +633,6 @@ public class RocksDBKv implements AutoCloseable {
                 }
                 throw e;
             }
-            return values;
         }
 
         @Override

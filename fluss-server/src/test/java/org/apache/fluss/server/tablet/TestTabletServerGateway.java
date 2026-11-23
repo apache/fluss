@@ -40,8 +40,6 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerRequest;
 import org.apache.fluss.rpc.messages.FindConsumerGroupOwnerResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetConsumerOffsetsRequest;
@@ -72,6 +70,8 @@ import org.apache.fluss.rpc.messages.ListConsumerGroupsRequest;
 import org.apache.fluss.rpc.messages.ListConsumerGroupsResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
@@ -255,8 +255,8 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-            GetBucketReadRangeRequest request) {
+    public CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+            ListMvccReadBoundsRequest request) {
         throw new UnsupportedOperationException();
     }
 

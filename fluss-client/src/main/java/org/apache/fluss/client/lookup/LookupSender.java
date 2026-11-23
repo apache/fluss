@@ -27,11 +27,11 @@ import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -636,10 +636,9 @@ class LookupSender implements Runnable {
         if (bound == null || bound < 0) {
             failure = new FlussRuntimeException("A positioned lookup response omitted its bound.");
         } else if (code == Errors.LOOKUP_POSITION_EXPIRED) {
-            failure = new LookupPositionExpiredException(BucketReadPosition.of(bucket, bound));
+            failure = new MvccReadOffsetExpiredException(BucketLogOffset.of(bucket, bound));
         } else {
-            failure =
-                    new LookupPositionNotYetReadableException(BucketReadPosition.of(bucket, bound));
+            failure = new MvccReadOffsetNotYetReadableException(BucketLogOffset.of(bucket, bound));
         }
         lookups.forEach(query -> query.future().completeExceptionally(failure));
         return true;

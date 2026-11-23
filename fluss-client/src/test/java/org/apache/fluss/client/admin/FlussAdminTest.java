@@ -25,10 +25,22 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnsupportedVersionException;
+import org.apache.fluss.metadata.BucketLogOffset;
+import org.apache.fluss.metadata.MvccSnapshotRef;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.DescribeClusterResponse;
+import org.apache.fluss.rpc.messages.ErrorResponse;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 
@@ -38,9 +50,11 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -173,6 +187,167 @@ class FlussAdminTest {
                     .containsExactly(
                             new ServerNode(0, "coordinator", 9123, ServerType.COORDINATOR),
                             new ServerNode(1, "tablet", 9124, ServerType.TABLET_SERVER));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testMalformedBoundsResponseIsIsolatedToItsDestination(boolean omitEntry) throws Exception {
+        TableBucket good = new TableBucket(1L, 0);
+        TableBucket bad = new TableBucket(1L, 1);
+        ServerNode first = new ServerNode(1, "first", 9124, ServerType.TABLET_SERVER);
+        ServerNode second = new ServerNode(2, "second", 9125, ServerType.TABLET_SERVER);
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(api).isEqualTo(ApiKeys.LIST_MVCC_READ_BOUNDS);
+                            ListMvccReadBoundsResponse reply = new ListMvccReadBoundsResponse();
+                            if (node.equals(OLD_COORDINATOR)) {
+                                reply.addResult()
+                                        .setLeaderId(first.id())
+                                        .setBucket()
+                                        .setTableId(1L)
+                                        .setBucketId(0);
+                                reply.addResult()
+                                        .setLeaderId(second.id())
+                                        .setBucket()
+                                        .setTableId(1L)
+                                        .setBucketId(1);
+                            } else if (node.equals(first)) {
+                                reply.addResult()
+                                        .setEarliestOffset(0)
+                                        .setLatestOffset(0)
+                                        .setBucket()
+                                        .setTableId(1L)
+                                        .setBucketId(0);
+                            } else {
+                                assertThat(node).isEqualTo(second);
+                                if (!omitEntry) {
+                                    reply.addResult()
+                                            .setEarliestOffset(0)
+                                            .setBucket()
+                                            .setTableId(1L)
+                                            .setBucketId(1);
+                                }
+                            }
+                            return CompletableFuture.completedFuture(reply);
+                        });
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public ServerNode getCoordinatorServer() {
+                        return OLD_COORDINATOR;
+                    }
+
+                    @Override
+                    public TabletServerGateway newTabletServerClientForNode(int id) {
+                        ServerNode node = id == first.id() ? first : second;
+                        return GatewayClientProxy.createGatewayProxy(
+                                () -> node, client, TabletServerGateway.class);
+                    }
+                };
+        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+            ListMvccReadBoundsResult result = admin.listMvccReadBounds(Arrays.asList(good, bad));
+            assertThat(result.bucketResult(good).get(10, TimeUnit.SECONDS).getLatestOffset())
+                    .isZero();
+            assertThatThrownBy(() -> result.bucketResult(bad).get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(FlussRuntimeException.class);
+        }
+    }
+
+    @Test
+    void testSnapshotRegistrationPreservesAttributedTimeoutButLosesWholeReply() throws Exception {
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+        AtomicBoolean loseReply = new AtomicBoolean();
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(api).isEqualTo(ApiKeys.REGISTER_MVCC_SNAPSHOT_OFFSETS);
+                            if (loseReply.get()) {
+                                return failed(
+                                        Errors.NETWORK_EXCEPTION.exception("whole reply lost"));
+                            }
+                            RegisterMvccSnapshotOffsetsResponse reply =
+                                    new RegisterMvccSnapshotOffsetsResponse();
+                            reply.addResult().setBucket().setTableId(1L).setBucketId(0);
+                            reply.addResult()
+                                    .setError(
+                                            new ErrorResponse()
+                                                    .setErrorCode(Errors.REQUEST_TIME_OUT.code()))
+                                    .setBucket()
+                                    .setTableId(1L)
+                                    .setBucketId(1);
+                            return CompletableFuture.completedFuture(reply);
+                        });
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public ServerNode getCoordinatorServer() {
+                        return OLD_COORDINATOR;
+                    }
+
+                    @Override
+                    public void refreshClusterUntilAvailable() {}
+                };
+        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+            MvccSnapshotRef snapshot = MvccSnapshotRef.of(1L, "baseline");
+            List<BucketLogOffset> offsets =
+                    Arrays.asList(BucketLogOffset.of(first, 0), BucketLogOffset.of(second, 1));
+            RegisterMvccSnapshotOffsetsResult result =
+                    admin.registerMvccSnapshotOffsets(snapshot, offsets).get(10, TimeUnit.SECONDS);
+            assertThat(result.getRegisteredBuckets()).containsExactly(first);
+            assertThat(result.getErrors().get(second)).isInstanceOf(TimeoutException.class);
+            loseReply.set(true);
+            assertThatThrownBy(
+                            () ->
+                                    admin.registerMvccSnapshotOffsets(snapshot, offsets)
+                                            .get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(NetworkException.class);
+        }
+    }
+
+    @Test
+    void testSnapshotResolutionDistinguishesZeroMissingAndOmittedResult() throws Exception {
+        TableBucket first = new TableBucket(1L, 0);
+        TableBucket second = new TableBucket(1L, 1);
+        AtomicBoolean omit = new AtomicBoolean();
+        TestingRpcClient client =
+                new TestingRpcClient(
+                        (node, api) -> {
+                            assertThat(api).isEqualTo(ApiKeys.GET_MVCC_SNAPSHOT_OFFSETS);
+                            GetMvccSnapshotOffsetsResponse reply =
+                                    new GetMvccSnapshotOffsetsResponse();
+                            reply.addResult()
+                                    .setNextOffset(0)
+                                    .setBucket()
+                                    .setTableId(1L)
+                                    .setBucketId(0);
+                            if (!omit.get()) {
+                                reply.addResult().setBucket().setTableId(1L).setBucketId(1);
+                            }
+                            return CompletableFuture.completedFuture(reply);
+                        });
+        MetadataUpdater updater =
+                new MetadataUpdater(client, new Configuration(), Cluster.empty()) {
+                    @Override
+                    public ServerNode getCoordinatorServer() {
+                        return OLD_COORDINATOR;
+                    }
+                };
+        try (FlussAdmin admin = new FlussAdmin(client, updater)) {
+            MvccSnapshotRef snapshot = MvccSnapshotRef.of(1L, "baseline");
+            List<TableBucket> buckets = Arrays.asList(first, second);
+            GetMvccSnapshotOffsetsResult result =
+                    admin.getMvccSnapshotOffsets(snapshot, buckets).get(10, TimeUnit.SECONDS);
+            assertThat(result.getOffsets()).containsEntry(first, BucketLogOffset.of(first, 0));
+            assertThat(result.getMissingBuckets()).containsExactly(second);
+            omit.set(true);
+            assertThatThrownBy(
+                            () ->
+                                    admin.getMvccSnapshotOffsets(snapshot, buckets)
+                                            .get(10, TimeUnit.SECONDS))
+                    .hasRootCauseInstanceOf(FlussRuntimeException.class);
         }
     }
 

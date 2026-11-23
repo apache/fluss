@@ -431,19 +431,128 @@ pub struct PrefixLookupResponse {
     pub buckets_resp: ::prost::alloc::vec::Vec<PbPrefixLookupRespForBucket>,
 }
 /// A Coordinator resolves the current leader. A TabletServer returns the served interval.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetBucketReadRangeRequest {
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListMvccReadBoundsRequest {
+    #[prost(message, repeated, tag = "1")]
+    pub buckets: ::prost::alloc::vec::Vec<PbTableBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbMvccReadBoundsResult {
     #[prost(message, required, tag = "1")]
     pub bucket: PbTableBucket,
+    #[prost(int32, optional, tag = "2")]
+    pub leader_id: ::core::option::Option<i32>,
+    #[prost(int64, optional, tag = "3")]
+    pub earliest_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "4")]
+    pub latest_offset: ::core::option::Option<i64>,
+    #[prost(message, optional, tag = "5")]
+    pub error: ::core::option::Option<ErrorResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListMvccReadBoundsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub results: ::prost::alloc::vec::Vec<PbMvccReadBoundsResult>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbMvccSnapshotRef {
+    #[prost(int64, required, tag = "1")]
+    pub table_id: i64,
+    #[prost(string, optional, tag = "2")]
+    pub namespace: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, required, tag = "3")]
+    pub name: ::prost::alloc::string::String,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct GetBucketReadRangeResponse {
-    #[prost(int32, optional, tag = "1")]
-    pub leader_id: ::core::option::Option<i32>,
-    #[prost(int64, optional, tag = "2")]
-    pub earliest_next_offset: ::core::option::Option<i64>,
+pub struct PbBucketLogOffset {
+    #[prost(message, required, tag = "1")]
+    pub bucket: PbTableBucket,
+    #[prost(int64, required, tag = "2")]
+    pub next_offset: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterMvccSnapshotOffsetsRequest {
+    #[prost(message, required, tag = "1")]
+    pub snapshot: PbMvccSnapshotRef,
+    #[prost(message, repeated, tag = "2")]
+    pub offsets: ::prost::alloc::vec::Vec<PbBucketLogOffset>,
     #[prost(int64, optional, tag = "3")]
-    pub latest_next_offset: ::core::option::Option<i64>,
+    pub binding_expires_at_millis: ::core::option::Option<i64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbMvccRegistrationResult {
+    #[prost(message, required, tag = "1")]
+    pub bucket: PbTableBucket,
+    #[prost(message, optional, tag = "2")]
+    pub error: ::core::option::Option<ErrorResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegisterMvccSnapshotOffsetsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub results: ::prost::alloc::vec::Vec<PbMvccRegistrationResult>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetMvccSnapshotOffsetsRequest {
+    #[prost(message, required, tag = "1")]
+    pub snapshot: PbMvccSnapshotRef,
+    #[prost(message, repeated, tag = "2")]
+    pub buckets: ::prost::alloc::vec::Vec<PbTableBucket>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbMvccResolutionResult {
+    #[prost(message, required, tag = "1")]
+    pub bucket: PbTableBucket,
+    #[prost(int64, optional, tag = "2")]
+    pub next_offset: ::core::option::Option<i64>,
+    #[prost(message, optional, tag = "3")]
+    pub error: ::core::option::Option<ErrorResponse>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetMvccSnapshotOffsetsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub results: ::prost::alloc::vec::Vec<PbMvccResolutionResult>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListMvccSnapshotBindingsRequest {
+    #[prost(message, required, tag = "1")]
+    pub bucket: PbTableBucket,
+    #[prost(string, optional, tag = "2")]
+    pub namespace: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PbMvccNamedOffset {
+    #[prost(string, required, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(int64, required, tag = "2")]
+    pub next_offset: i64,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListMvccSnapshotBindingsResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub bindings: ::prost::alloc::vec::Vec<PbMvccNamedOffset>,
+}
+/// Internal execution of one binding operation on an authoritative system table bucket.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExecuteMvccSnapshotBindingRequest {
+    #[prost(message, required, tag = "1")]
+    pub system_bucket: PbTableBucket,
+    #[prost(message, required, tag = "2")]
+    pub data_bucket: PbTableBucket,
+    #[prost(string, optional, tag = "3")]
+    pub namespace: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int64, optional, tag = "5")]
+    pub next_offset: ::core::option::Option<i64>,
+    #[prost(int64, optional, tag = "6")]
+    pub expires_at_millis: ::core::option::Option<i64>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExecuteMvccSnapshotBindingResponse {
+    #[prost(int64, optional, tag = "1")]
+    pub next_offset: ::core::option::Option<i64>,
+    #[prost(message, optional, tag = "2")]
+    pub listing: ::core::option::Option<ListMvccSnapshotBindingsResponse>,
 }
 /// limit scan request and response
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]

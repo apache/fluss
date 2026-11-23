@@ -18,28 +18,28 @@
 package org.apache.fluss.exception;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 
 import java.util.Objects;
 
-/** The requested position is below the retained history. */
+/** The requested position is ahead of committed and applied KV progress. */
 @PublicEvolving
-public class LookupPositionExpiredException extends ApiException {
+public class MvccReadOffsetNotYetReadableException extends ApiException {
     private static final long serialVersionUID = 1L;
 
-    private final BucketReadPosition earliestPosition;
+    private final BucketLogOffset latestPosition;
 
-    /** Creates an error with the earliest position observed at the serving bucket. */
-    public LookupPositionExpiredException(BucketReadPosition earliestPosition) {
+    /** Creates an error with the latest position observed at the serving bucket. */
+    public MvccReadOffsetNotYetReadableException(BucketLogOffset latestPosition) {
         super(
-                "The requested position is below the retained history. Earliest readable position: "
-                        + Objects.requireNonNull(earliestPosition)
+                "The requested position is above the readable history. Latest readable position: "
+                        + Objects.requireNonNull(latestPosition)
                         + ".");
-        this.earliestPosition = earliestPosition;
+        this.latestPosition = latestPosition;
     }
 
-    /** Returns the earliest readable position observed when validating the request. */
-    public BucketReadPosition getEarliestPosition() {
-        return earliestPosition;
+    /** Returns the latest readable position observed when validating the request. */
+    public BucketLogOffset getLatestReadableOffset() {
+        return latestPosition;
     }
 }

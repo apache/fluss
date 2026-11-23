@@ -2514,6 +2514,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The retention period for committed consumer offsets after they become inactive.");
 
+    public static final ConfigOption<Integer> MVCC_SNAPSHOT_BINDINGS_BUCKET_COUNT =
+            key("server.mvcc-snapshot-bindings.table.bucket-count")
+                    .intType()
+                    .defaultValue(16)
+                    .withDescription(
+                            "Physical bucket count at creation of the MVCC snapshot bindings table.");
+
     public static final ConfigOption<Integer> OFFSETS_TABLE_NUM_BUCKETS =
             key("server.consumer-offsets.table.bucket-count")
                     .intType()

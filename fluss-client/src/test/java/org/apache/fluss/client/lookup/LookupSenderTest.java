@@ -26,12 +26,12 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -1125,8 +1125,8 @@ public class LookupSenderTest {
                     assertThat(request.getNextOffset()).isEqualTo(12L);
                     return createFailedResponse(
                                     request,
-                                    new LookupPositionNotYetReadableException(
-                                            BucketReadPosition.of(TABLE_BUCKET, 11L)))
+                                    new MvccReadOffsetNotYetReadableException(
+                                            BucketLogOffset.of(TABLE_BUCKET, 11L)))
                             .thenApply(
                                     response -> {
                                         response.getBucketsRespAt(0).setPositionBound(11L);
@@ -1144,10 +1144,10 @@ public class LookupSenderTest {
         assertThatThrownBy(() -> future.future().get(5, TimeUnit.SECONDS))
                 .cause()
                 .isInstanceOfSatisfying(
-                        LookupPositionNotYetReadableException.class,
+                        MvccReadOffsetNotYetReadableException.class,
                         error ->
-                                assertThat(error.getLatestPosition())
-                                        .isEqualTo(BucketReadPosition.of(TABLE_BUCKET, 11L)));
+                                assertThat(error.getLatestReadableOffset())
+                                        .isEqualTo(BucketLogOffset.of(TABLE_BUCKET, 11L)));
         assertThat(requests).hasValue(2);
         assertThat(future.retries()).isZero();
     }

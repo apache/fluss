@@ -33,8 +33,8 @@ import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.StorageBackpressureException;
@@ -800,6 +800,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 params, bucketFetchInfo, logReadResults, userContext, responseCallback);
     }
 
+    /** Runs a retry or visibility check on the tablet scheduler. */
+    public void scheduleSnapshotBindingCheck(Runnable check) {
+        scheduler.scheduleOnce("mvcc-snapshot-binding", check, 10);
+    }
+
     /**
      * Put kv records to leader replicas of the buckets, the kv data will write to kv tablet and the
      * response callback need to wait for the cdc log to be replicated to other replicas if needed.
@@ -1300,13 +1305,13 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private static @Nullable Long positionBound(Exception error) {
-        if (error instanceof LookupPositionExpiredException) {
-            return ((LookupPositionExpiredException) error).getEarliestPosition().getNextOffset();
+        if (error instanceof MvccReadOffsetExpiredException) {
+            return ((MvccReadOffsetExpiredException) error).getEarliestReadableOffset().getOffset();
         }
-        if (error instanceof LookupPositionNotYetReadableException) {
-            return ((LookupPositionNotYetReadableException) error)
-                    .getLatestPosition()
-                    .getNextOffset();
+        if (error instanceof MvccReadOffsetNotYetReadableException) {
+            return ((MvccReadOffsetNotYetReadableException) error)
+                    .getLatestReadableOffset()
+                    .getOffset();
         }
         return null;
     }
@@ -2112,8 +2117,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private boolean isUnexpectedLookupException(Exception e) {
         return isUnexpectedException(e)
                 && !(e instanceof TableNotVersionedException
-                        || e instanceof LookupPositionExpiredException
-                        || e instanceof LookupPositionNotYetReadableException);
+                        || e instanceof MvccReadOffsetExpiredException
+                        || e instanceof MvccReadOffsetNotYetReadableException);
     }
 
     private boolean isUnexpectedHistoricalException(Exception e) {

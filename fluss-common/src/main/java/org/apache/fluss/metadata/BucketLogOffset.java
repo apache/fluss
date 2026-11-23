@@ -29,21 +29,21 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * and includes the partition ID for a partitioned table.
  */
 @PublicEvolving
-public final class BucketReadPosition implements Serializable {
+public final class BucketLogOffset implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final TableBucket tableBucket;
-    private final long nextOffset;
+    private final long offset;
 
-    private BucketReadPosition(TableBucket tableBucket, long nextOffset) {
+    private BucketLogOffset(TableBucket tableBucket, long offset) {
         this.tableBucket = Objects.requireNonNull(tableBucket);
-        checkArgument(nextOffset >= 0, "The next offset must be non-negative.");
-        this.nextOffset = nextOffset;
+        checkArgument(offset >= 0, "The next offset must be non-negative.");
+        this.offset = offset;
     }
 
     /** Creates an exclusive read position for a specific bucket. */
-    public static BucketReadPosition of(TableBucket tableBucket, long nextOffset) {
-        return new BucketReadPosition(tableBucket, nextOffset);
+    public static BucketLogOffset of(TableBucket tableBucket, long offset) {
+        return new BucketLogOffset(tableBucket, offset);
     }
 
     /** Returns the full bucket identity in which the offset has meaning. */
@@ -52,26 +52,26 @@ public final class BucketReadPosition implements Serializable {
     }
 
     /** Returns the first offset excluded by this read. */
-    public long getNextOffset() {
-        return nextOffset;
+    public long getOffset() {
+        return offset;
     }
 
     @Override
     public boolean equals(Object other) {
-        if (!(other instanceof BucketReadPosition)) {
+        if (!(other instanceof BucketLogOffset)) {
             return false;
         }
-        BucketReadPosition position = (BucketReadPosition) other;
-        return nextOffset == position.nextOffset && tableBucket.equals(position.tableBucket);
+        BucketLogOffset position = (BucketLogOffset) other;
+        return offset == position.offset && tableBucket.equals(position.tableBucket);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, nextOffset);
+        return Objects.hash(tableBucket, offset);
     }
 
     @Override
     public String toString() {
-        return tableBucket + " at next offset " + nextOffset;
+        return tableBucket + " at next offset " + offset;
     }
 }

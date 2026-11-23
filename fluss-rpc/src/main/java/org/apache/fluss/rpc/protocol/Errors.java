@@ -64,8 +64,9 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
+import org.apache.fluss.exception.MvccSnapshotBindingConflictException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -329,13 +330,17 @@ public enum Errors {
             "The request contains an invalid combination or value of parameters.",
             InvalidRequestException::new),
     LOOKUP_POSITION_EXPIRED(
-            82, "The lookup position has expired.", LookupPositionExpiredException.class),
+            82, "The lookup position has expired.", MvccReadOffsetExpiredException.class),
     LOOKUP_POSITION_NOT_YET_READABLE(
             83,
             "The lookup position is not yet readable.",
-            LookupPositionNotYetReadableException.class),
+            MvccReadOffsetNotYetReadableException.class),
     TABLE_NOT_VERSIONED(
-            84, "The table was created without version history.", TableNotVersionedException::new);
+            84, "The table was created without version history.", TableNotVersionedException::new),
+    MVCC_SNAPSHOT_BINDING_CONFLICT(
+            85,
+            "A different live MVCC snapshot binding already exists.",
+            MvccSnapshotBindingConflictException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

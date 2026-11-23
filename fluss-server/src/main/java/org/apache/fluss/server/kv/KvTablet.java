@@ -25,15 +25,15 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.exception.LookupPositionExpiredException;
-import org.apache.fluss.exception.LookupPositionNotYetReadableException;
+import org.apache.fluss.exception.MvccReadOffsetExpiredException;
+import org.apache.fluss.exception.MvccReadOffsetNotYetReadableException;
 import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.TableNotVersionedException;
 import org.apache.fluss.memory.MemorySegmentPool;
-import org.apache.fluss.metadata.BucketReadPosition;
-import org.apache.fluss.metadata.BucketReadRange;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.MvccReadBounds;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -78,6 +78,7 @@ import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.function.FunctionWithException;
 
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
@@ -111,6 +112,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -980,6 +982,30 @@ public final class KvTablet {
                 });
     }
 
+    /**
+     * Compares a binding with flushed state and writes a replacement under the same KV lock.
+     * Returns null when a pending mutation to the same key must become visible first.
+     */
+    public @Nullable Long compareAndWriteSnapshotBinding(
+            byte[] key, FunctionWithException<byte[], KvRecordBatch, Exception> decide)
+            throws Exception {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    if (kvPreWriteBuffer.get(kvStateAccessor.encodeKey(key, null)) != null) {
+                        return null;
+                    }
+                    ByteArraySlice value = kvValueLayout.toValueBodySlice(rocksDBKv.get(key));
+                    KvRecordBatch replacement =
+                            decide.apply(value == null ? null : value.toByteArray());
+                    if (replacement == null) {
+                        return -1L;
+                    }
+                    return putAsLeader(replacement, null, MergeMode.DEFAULT).lastOffset() + 1;
+                });
+    }
+
     @VisibleForTesting
     void setBeforeNativeWrite(@Nullable Runnable beforeNativeWrite) {
         this.beforeNativeWrite = beforeNativeWrite;
@@ -1496,22 +1522,22 @@ public final class KvTablet {
         }
         long readableEnd = requireReadableEnd();
         if (nextOffset < publishedHistoryFloor) {
-            throw new LookupPositionExpiredException(
-                    BucketReadPosition.of(tableBucket, publishedHistoryFloor));
+            throw new MvccReadOffsetExpiredException(
+                    BucketLogOffset.of(tableBucket, publishedHistoryFloor));
         }
         if (nextOffset > readableEnd) {
-            throw new LookupPositionNotYetReadableException(
-                    BucketReadPosition.of(tableBucket, readableEnd));
+            throw new MvccReadOffsetNotYetReadableException(
+                    BucketLogOffset.of(tableBucket, readableEnd));
         }
     }
 
     /** Observes the current history interval without pinning retained versions. */
-    public BucketReadRange getBucketReadRange() throws IOException {
+    public MvccReadBounds getMvccReadBounds() throws IOException {
         return inReadLock(
                 kvLock,
                 () -> {
                     long readableEnd = requireReadableEnd();
-                    return new BucketReadRange(tableBucket, publishedHistoryFloor, readableEnd);
+                    return MvccReadBounds.of(publishedHistoryFloor, readableEnd);
                 });
     }
 
@@ -1530,6 +1556,20 @@ public final class KvTablet {
                     "The KV tablet is still recovering its retained history.");
         }
         return readableEnd;
+    }
+
+    /** Visits the selected prefix in one RocksDB read view. */
+    public void forEachSnapshotBinding(byte[] prefix, Consumer<ByteArraySlice> consumer)
+            throws IOException {
+        try (RocksDBKv.PrefixLookup lookup =
+                inReadLock(
+                        kvLock,
+                        () -> {
+                            rocksDBKv.checkIfRocksDBClosed();
+                            return rocksDBKv.openPrefixLookup(prefix);
+                        })) {
+            lookup.forEach(value -> consumer.accept(kvValueLayout.toValueBodySlice(value)));
+        }
     }
 
     public List<ByteArraySlice> prefixLookup(byte[] prefixKey) throws IOException {

@@ -78,8 +78,6 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -106,6 +104,8 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -516,8 +516,8 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-            GetBucketReadRangeRequest request) {
+    public CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+            ListMvccReadBoundsRequest request) {
         throw new UnsupportedOperationException();
     }
 

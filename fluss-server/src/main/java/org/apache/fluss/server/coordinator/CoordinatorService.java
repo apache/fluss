@@ -39,6 +39,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -114,16 +115,22 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeRequest;
-import org.apache.fluss.rpc.messages.GetBucketReadRangeResponse;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingRequest;
+import org.apache.fluss.rpc.messages.ExecuteMvccSnapshotBindingResponse;
 import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsRequest;
+import org.apache.fluss.rpc.messages.GetMvccSnapshotOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsRequest;
+import org.apache.fluss.rpc.messages.ListMvccReadBoundsResponse;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsRequest;
+import org.apache.fluss.rpc.messages.ListMvccSnapshotBindingsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
@@ -131,11 +138,16 @@ import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbBucketLogOffset;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
+import org.apache.fluss.rpc.messages.PbMvccReadBoundsResult;
+import org.apache.fluss.rpc.messages.PbMvccRegistrationResult;
+import org.apache.fluss.rpc.messages.PbMvccResolutionResult;
+import org.apache.fluss.rpc.messages.PbMvccSnapshotRef;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbTableBucket;
@@ -146,6 +158,8 @@ import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsRequest;
+import org.apache.fluss.rpc.messages.RegisterMvccSnapshotOffsetsResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
@@ -194,6 +208,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metadata.MvccSnapshotBindingSchema;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.SystemTables;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
@@ -208,8 +223,11 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.json.TableBucketOffsets;
 
 import org.slf4j.Logger;
@@ -224,6 +242,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -232,6 +251,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -242,6 +262,7 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildDescribeClusterResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTableBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAcquireKvSnapshotLeaseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
@@ -258,6 +279,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableCo
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableDistributionChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -293,6 +315,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    private final MvccSnapshotBindingSchema snapshotBindingSchema = new MvccSnapshotBindingSchema();
+    private final int snapshotBindingBuckets;
+    private Supplier<CoordinatorChannelManager> snapshotBindingChannels;
+    private Scheduler snapshotBindingScheduler;
+    private Clock snapshotBindingClock;
+    private final Object snapshotBindingTableLock = new Object();
+
     private final ExecutorService ioExecutor;
     private final LakeTableHelper lakeTableHelper;
     private final ProducerOffsetsManager producerOffsetsManager;
@@ -341,6 +370,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.ioExecutor = ioExecutor;
+        this.snapshotBindingBuckets =
+                conf.getInt(ConfigOptions.MVCC_SNAPSHOT_BINDINGS_BUCKET_COUNT);
         this.lakeTableHelper = new LakeTableHelper(zkClient);
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
 
@@ -1987,23 +2018,413 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<GetBucketReadRangeResponse> getBucketReadRange(
-            GetBucketReadRangeRequest request) {
-        PbTableBucket pb = request.getBucket();
-        authorizeTable(OperationType.READ, pb.getTableId());
-        TableBucket bucket =
-                new TableBucket(
-                        pb.getTableId(),
-                        pb.hasPartitionId() ? pb.getPartitionId() : null,
-                        pb.getBucketId());
-        AccessContextEvent<GetBucketReadRangeResponse> event =
-                new AccessContextEvent<>(ctx -> getBucketReadRangeLeader(ctx, bucket));
+    public CompletableFuture<ListMvccReadBoundsResponse> listMvccReadBounds(
+            ListMvccReadBoundsRequest request) {
+        Session session = authorizer != null ? currentSession() : null;
+        AccessContextEvent<ListMvccReadBoundsResponse> event =
+                new AccessContextEvent<>(ctx -> resolveMvccReadBounds(ctx, request, session));
         eventManagerSupplier.get().put(event);
         return event.getResultFuture();
     }
 
-    private static GetBucketReadRangeResponse getBucketReadRangeLeader(
-            CoordinatorContext ctx, TableBucket bucket) {
+    private ListMvccReadBoundsResponse resolveMvccReadBounds(
+            CoordinatorContext ctx, ListMvccReadBoundsRequest request, Session session) {
+        ListMvccReadBoundsResponse response = new ListMvccReadBoundsResponse();
+        Set<TableBucket> seen = new HashSet<>();
+        for (PbTableBucket pb : request.getBucketsList()) {
+            TableBucket bucket = toTableBucket(pb);
+            if (!seen.add(bucket)) {
+                continue;
+            }
+            PbMvccReadBoundsResult result = response.addResult();
+            result.setBucket(fromTableBucket(bucket));
+            try {
+                if (authorizer != null) {
+                    TablePath path = ctx.getTablePathById(bucket.getTableId());
+                    if (path == null) {
+                        throw new TableNotExistException(
+                                "Table " + bucket.getTableId() + " is unavailable.");
+                    }
+                    authorizer.authorize(session, OperationType.READ, Resource.table(path));
+                }
+                result.setLeaderId(findMvccBoundsLeader(ctx, bucket));
+            } catch (ApiException e) {
+                result.setError(ApiError.fromThrowable(e).toErrorResponse());
+            }
+        }
+        return response;
+    }
+
+    void configureSnapshotBindings(
+            Supplier<CoordinatorChannelManager> channels, Scheduler scheduler, Clock clock) {
+        snapshotBindingChannels = channels;
+        snapshotBindingScheduler = scheduler;
+        snapshotBindingClock = clock;
+    }
+
+    @Override
+    public CompletableFuture<RegisterMvccSnapshotOffsetsResponse> registerMvccSnapshotOffsets(
+            RegisterMvccSnapshotOffsetsRequest request) {
+        PbMvccSnapshotRef snapshot = request.getSnapshot();
+        long tableId = snapshot.getTableId();
+        String namespace = snapshot.hasNamespace() ? snapshot.getNamespace() : "default";
+        String name = snapshot.getName();
+        Long expiry =
+                request.hasBindingExpiresAtMillis() ? request.getBindingExpiresAtMillis() : null;
+        long now = snapshotBindingClock.milliseconds();
+        if (expiry != null
+                && (expiry <= now
+                        || expiry - now > MvccSnapshotBindingSchema.MAX_LIFETIME_MILLIS)) {
+            throw new InvalidRequestException("Invalid snapshot binding expiry.");
+        }
+        Map<TableBucket, Long> offsets = new LinkedHashMap<>();
+        for (PbBucketLogOffset item : request.getOffsetsList()) {
+            TableBucket bucket = checkedSnapshotBucket(tableId, item.getBucket());
+            long offset = item.getNextOffset();
+            Long previous = offsets.putIfAbsent(bucket, offset);
+            if (offset < 0 || (previous != null && previous != offset)) {
+                throw new InvalidRequestException("Conflicting or invalid offsets for " + bucket);
+            }
+        }
+        if (offsets.isEmpty()) {
+            return CompletableFuture.completedFuture(new RegisterMvccSnapshotOffsetsResponse());
+        }
+        authorizeTable(OperationType.READ, tableId);
+        authorizeTable(OperationType.WRITE, tableId);
+        return validateSnapshotBuckets(offsets.keySet())
+                .thenCompose(
+                        errors -> {
+                            boolean needsTable = offsets.size() > errors.size();
+                            CompletableFuture<TableInfo> table =
+                                    needsTable
+                                            ? CompletableFuture.supplyAsync(
+                                                    this::ensureSnapshotBindingTable, ioExecutor)
+                                            : CompletableFuture.completedFuture(null);
+                            return table.thenCompose(
+                                    info -> {
+                                        List<CompletableFuture<PbMvccRegistrationResult>> results =
+                                                new ArrayList<>();
+                                        offsets.forEach(
+                                                (bucket, offset) -> {
+                                                    PbMvccRegistrationResult item =
+                                                            new PbMvccRegistrationResult()
+                                                                    .setBucket(
+                                                                            fromTableBucket(
+                                                                                    bucket));
+                                                    ApiException invalid = errors.get(bucket);
+                                                    if (invalid != null) {
+                                                        item.setError(
+                                                                ApiError.fromThrowable(invalid)
+                                                                        .toErrorResponse());
+                                                        results.add(
+                                                                CompletableFuture.completedFuture(
+                                                                        item));
+                                                    } else {
+                                                        ExecuteMvccSnapshotBindingRequest
+                                                                operation =
+                                                                        bindingOperation(
+                                                                                        info,
+                                                                                        bucket,
+                                                                                        namespace)
+                                                                                .setName(name)
+                                                                                .setNextOffset(
+                                                                                        offset);
+                                                        if (expiry != null) {
+                                                            operation.setExpiresAtMillis(expiry);
+                                                        }
+                                                        results.add(
+                                                                dispatchSnapshotBinding(
+                                                                                operation, true)
+                                                                        .handle(
+                                                                                (reply, error) -> {
+                                                                                    if (error
+                                                                                            != null) {
+                                                                                        item
+                                                                                                .setError(
+                                                                                                        ApiError
+                                                                                                                .fromThrowable(
+                                                                                                                        error)
+                                                                                                                .toErrorResponse());
+                                                                                    }
+                                                                                    return item;
+                                                                                }));
+                                                    }
+                                                });
+                                        return FutureUtils.completeAll(results)
+                                                .thenApply(
+                                                        ignored ->
+                                                                new RegisterMvccSnapshotOffsetsResponse()
+                                                                        .addAllResults(
+                                                                                results.stream()
+                                                                                        .map(
+                                                                                                CompletableFuture
+                                                                                                        ::join)
+                                                                                        .collect(
+                                                                                                Collectors
+                                                                                                        .toList())));
+                                    });
+                        });
+    }
+
+    @Override
+    public CompletableFuture<GetMvccSnapshotOffsetsResponse> getMvccSnapshotOffsets(
+            GetMvccSnapshotOffsetsRequest request) {
+        long tableId = request.getSnapshot().getTableId();
+        String name = request.getSnapshot().getName();
+        String namespace =
+                request.getSnapshot().hasNamespace()
+                        ? request.getSnapshot().getNamespace()
+                        : "default";
+        Set<TableBucket> buckets = new LinkedHashSet<>();
+        for (PbTableBucket bucket : request.getBucketsList()) {
+            buckets.add(checkedSnapshotBucket(tableId, bucket));
+        }
+        if (buckets.isEmpty()) {
+            return CompletableFuture.completedFuture(new GetMvccSnapshotOffsetsResponse());
+        }
+        authorizeTable(OperationType.READ, tableId);
+        return validateSnapshotBuckets(buckets)
+                .thenCompose(
+                        errors ->
+                                CompletableFuture.supplyAsync(
+                                                this::findSnapshotBindingTable, ioExecutor)
+                                        .thenCompose(
+                                                info -> {
+                                                    List<CompletableFuture<PbMvccResolutionResult>>
+                                                            results = new ArrayList<>();
+                                                    for (TableBucket bucket : buckets) {
+                                                        PbMvccResolutionResult item =
+                                                                new PbMvccResolutionResult()
+                                                                        .setBucket(
+                                                                                fromTableBucket(
+                                                                                        bucket));
+                                                        ApiException invalid = errors.get(bucket);
+                                                        if (invalid != null || info == null) {
+                                                            if (invalid != null) {
+                                                                item.setError(
+                                                                        ApiError.fromThrowable(
+                                                                                        invalid)
+                                                                                .toErrorResponse());
+                                                            }
+                                                            results.add(
+                                                                    CompletableFuture
+                                                                            .completedFuture(item));
+                                                        } else {
+                                                            results.add(
+                                                                    dispatchSnapshotBinding(
+                                                                                    bindingOperation(
+                                                                                                    info,
+                                                                                                    bucket,
+                                                                                                    namespace)
+                                                                                            .setName(
+                                                                                                    name),
+                                                                                    false)
+                                                                            .handle(
+                                                                                    (reply,
+                                                                                            error) -> {
+                                                                                        if (error
+                                                                                                != null) {
+                                                                                            item
+                                                                                                    .setError(
+                                                                                                            ApiError
+                                                                                                                    .fromThrowable(
+                                                                                                                            error)
+                                                                                                                    .toErrorResponse());
+                                                                                        } else if (reply
+                                                                                                .hasNextOffset()) {
+                                                                                            item
+                                                                                                    .setNextOffset(
+                                                                                                            reply
+                                                                                                                    .getNextOffset());
+                                                                                        }
+                                                                                        return item;
+                                                                                    }));
+                                                        }
+                                                    }
+                                                    return FutureUtils.completeAll(results)
+                                                            .thenApply(
+                                                                    ignored ->
+                                                                            new GetMvccSnapshotOffsetsResponse()
+                                                                                    .addAllResults(
+                                                                                            results
+                                                                                                    .stream()
+                                                                                                    .map(
+                                                                                                            CompletableFuture
+                                                                                                                    ::join)
+                                                                                                    .collect(
+                                                                                                            Collectors
+                                                                                                                    .toList())));
+                                                }));
+    }
+
+    @Override
+    public CompletableFuture<ListMvccSnapshotBindingsResponse> listMvccSnapshotBindings(
+            ListMvccSnapshotBindingsRequest request) {
+        TableBucket bucket = toTableBucket(request.getBucket());
+        String namespace = request.hasNamespace() ? request.getNamespace() : "default";
+        authorizeTable(OperationType.READ, bucket.getTableId());
+        return validateSnapshotBuckets(Collections.singleton(bucket))
+                .thenCompose(
+                        errors -> {
+                            if (errors.containsKey(bucket)) {
+                                throw errors.get(bucket);
+                            }
+                            return CompletableFuture.supplyAsync(
+                                            this::findSnapshotBindingTable, ioExecutor)
+                                    .thenCompose(
+                                            info ->
+                                                    info == null
+                                                            ? CompletableFuture.completedFuture(
+                                                                    new ListMvccSnapshotBindingsResponse())
+                                                            : dispatchSnapshotBinding(
+                                                                            bindingOperation(
+                                                                                    info, bucket,
+                                                                                    namespace),
+                                                                            false)
+                                                                    .thenApply(
+                                                                            ExecuteMvccSnapshotBindingResponse
+                                                                                    ::getListing));
+                        });
+    }
+
+    private static TableBucket checkedSnapshotBucket(long tableId, PbTableBucket serialized) {
+        TableBucket bucket = toTableBucket(serialized);
+        if (tableId != bucket.getTableId()) {
+            throw new InvalidRequestException("Snapshot and bucket must belong to the same table.");
+        }
+        return bucket;
+    }
+
+    private CompletableFuture<Map<TableBucket, ApiException>> validateSnapshotBuckets(
+            Set<TableBucket> buckets) {
+        AccessContextEvent<Map<TableBucket, ApiException>> event =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            Map<TableBucket, ApiException> errors = new HashMap<>();
+                            for (TableBucket bucket : buckets) {
+                                try {
+                                    validateSnapshotDataBucket(ctx, bucket);
+                                } catch (ApiException error) {
+                                    errors.put(bucket, error);
+                                }
+                            }
+                            return errors;
+                        });
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture();
+    }
+
+    private TableInfo ensureSnapshotBindingTable() {
+        synchronized (snapshotBindingTableLock) {
+            TableInfo existing = findSnapshotBindingTable();
+            if (existing != null) {
+                return existing;
+            }
+            metadataManager.createDatabase(
+                    SystemTables.SYSTEM_DATABASE, DatabaseDescriptor.builder().build(), true);
+            createTableInternal(
+                    SystemTables.MVCC_SNAPSHOT_BINDINGS,
+                    MvccSnapshotBindingSchema.descriptor(snapshotBindingBuckets),
+                    true,
+                    false,
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer());
+            return metadataManager.getTable(SystemTables.MVCC_SNAPSHOT_BINDINGS);
+        }
+    }
+
+    private @Nullable TableInfo findSnapshotBindingTable() {
+        try {
+            return metadataManager.getTable(SystemTables.MVCC_SNAPSHOT_BINDINGS);
+        } catch (TableNotExistException absent) {
+            return null;
+        }
+    }
+
+    private ExecuteMvccSnapshotBindingRequest bindingOperation(
+            TableInfo systemTable, TableBucket bucket, String namespace) {
+        TableBucket shard =
+                new TableBucket(
+                        systemTable.getTableId(),
+                        snapshotBindingSchema.shard(
+                                bucket, namespace, systemTable.getNumBuckets()));
+        return new ExecuteMvccSnapshotBindingRequest()
+                .setSystemBucket(fromTableBucket(shard))
+                .setDataBucket(fromTableBucket(bucket))
+                .setNamespace(namespace);
+    }
+
+    private CompletableFuture<ExecuteMvccSnapshotBindingResponse> dispatchSnapshotBinding(
+            ExecuteMvccSnapshotBindingRequest operation, boolean waitForCreation) {
+        CompletableFuture<ExecuteMvccSnapshotBindingResponse> result = new CompletableFuture<>();
+        routeSnapshotBinding(
+                operation,
+                waitForCreation,
+                System.nanoTime() + TimeUnit.SECONDS.toNanos(10),
+                result);
+        return result;
+    }
+
+    private void routeSnapshotBinding(
+            ExecuteMvccSnapshotBindingRequest operation,
+            boolean waitForCreation,
+            long deadline,
+            CompletableFuture<ExecuteMvccSnapshotBindingResponse> result) {
+        TableBucket shard = toTableBucket(operation.getSystemBucket());
+        AccessContextEvent<Integer> route =
+                new AccessContextEvent<>(ctx -> findMvccBoundsLeader(ctx, shard));
+        eventManagerSupplier.get().put(route);
+        route.getResultFuture()
+                .thenCompose(
+                        leader ->
+                                snapshotBindingChannels
+                                        .get()
+                                        .getTabletServerGateway(leader)
+                                        .orElseThrow(
+                                                () ->
+                                                        new LeaderNotAvailableException(
+                                                                "No system-table leader endpoint."))
+                                        .executeMvccSnapshotBinding(operation))
+                .whenComplete(
+                        (reply, error) -> {
+                            if (error == null) {
+                                result.complete(reply);
+                                return;
+                            }
+                            Throwable cause = ExceptionUtils.stripCompletionException(error);
+                            if (waitForCreation
+                                    && System.nanoTime() - deadline < 0
+                                    && (cause instanceof LeaderNotAvailableException
+                                            || cause instanceof UnknownTableOrBucketException
+                                            || cause instanceof TableNotExistException
+                                            || cause instanceof NotLeaderOrFollowerException)) {
+                                try {
+                                    snapshotBindingScheduler.scheduleOnce(
+                                            "mvcc-binding-route",
+                                            () ->
+                                                    routeSnapshotBinding(
+                                                            operation, true, deadline, result),
+                                            50);
+                                } catch (RuntimeException e) {
+                                    result.completeExceptionally(e);
+                                }
+                            } else {
+                                result.completeExceptionally(cause);
+                            }
+                        });
+    }
+
+    private static int findMvccBoundsLeader(CoordinatorContext ctx, TableBucket bucket) {
+        validateSnapshotDataBucket(ctx, bucket);
+        return ctx.getBucketLeaderAndIsr(bucket)
+                .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
+                .map(LeaderAndIsr::leader)
+                .orElseThrow(
+                        () ->
+                                new LeaderNotAvailableException(
+                                        "No active leader for " + bucket + '.'));
+    }
+
+    private static void validateSnapshotDataBucket(CoordinatorContext ctx, TableBucket bucket) {
         long tableId = bucket.getTableId();
         TableInfo table = ctx.getTableInfoById(tableId);
         if (table == null || ctx.isTableQueuedForDeletion(tableId)) {
@@ -2028,14 +2449,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (bucketId < 0 || bucketId >= bucketCount) {
             throw new InvalidRequestException("Invalid bucket number for " + bucket + '.');
         }
-
-        return ctx.getBucketLeaderAndIsr(bucket)
-                .filter(current -> current.leader() != LeaderAndIsr.NO_LEADER)
-                .map(current -> new GetBucketReadRangeResponse().setLeaderId(current.leader()))
-                .orElseThrow(
-                        () ->
-                                new LeaderNotAvailableException(
-                                        "No active leader for " + bucket + '.'));
     }
 
     @Override

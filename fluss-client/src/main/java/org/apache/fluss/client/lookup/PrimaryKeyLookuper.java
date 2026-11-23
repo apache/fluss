@@ -22,7 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.InvalidBucketRoutingException;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.metadata.BucketReadPosition;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -122,8 +122,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     @Override
-    public CompletableFuture<LookupResult> lookup(
-            InternalRow lookupKey, BucketReadPosition position) {
+    public CompletableFuture<LookupResult> lookup(InternalRow lookupKey, BucketLogOffset position) {
         if (insertIfNotExists) {
             return completedExceptionally(
                     new IllegalArgumentException("Positioned lookups cannot insert missing keys."));
@@ -132,7 +131,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     private CompletableFuture<LookupResult> lookupKey(
-            InternalRow lookupKey, @Nullable BucketReadPosition position) {
+            InternalRow lookupKey, @Nullable BucketLogOffset position) {
         // encoding the key row using a compacted way consisted with how the key is encoded when put
         // a row
         byte[] pkBytes = primaryKeyEncoder.encodeKey(lookupKey);
@@ -178,7 +177,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                             false,
                             null,
                             bucketCount,
-                            position.getNextOffset())
+                            position.getOffset())
                     .whenComplete(
                             (value, error) -> {
                                 if (error != null) {

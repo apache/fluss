@@ -22,10 +22,13 @@ import org.apache.fluss.client.admin.ClusterDescription;
 import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.CreateAclsResult;
 import org.apache.fluss.client.admin.DropAclsResult;
+import org.apache.fluss.client.admin.GetMvccSnapshotOffsetsResult;
 import org.apache.fluss.client.admin.KvSnapshotLease;
+import org.apache.fluss.client.admin.ListMvccReadBoundsResult;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
+import org.apache.fluss.client.admin.RegisterMvccSnapshotOffsetsResult;
 import org.apache.fluss.client.admin.RegisterResult;
 import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
@@ -39,10 +42,13 @@ import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.metadata.BucketInfo;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.MvccSnapshotBinding;
+import org.apache.fluss.metadata.MvccSnapshotRef;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -375,6 +381,35 @@ public class TestAdminAdapter implements Admin {
     @Override
     public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
             long tableId, @Nullable Long partitionId) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public ListMvccReadBoundsResult listMvccReadBounds(Collection<TableBucket> buckets) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<BucketLogOffset> offsets) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<BucketLogOffset> offsets, long deadline) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<GetMvccSnapshotOffsetsResult> getMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<TableBucket> buckets) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<MvccSnapshotBinding>> listMvccSnapshotBindings(
+            TableBucket bucket, String namespace) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 }

@@ -55,4 +55,9 @@ public class KvTabletTestUtils {
             throw new AssertionError("KV flush failed for " + tablet.getTableBucket(), cause);
         }
     }
+
+    /** Installs a test barrier before the next native KV flush. */
+    public static void setBeforeNativeWrite(KvTablet tablet, Runnable barrier) {
+        tablet.setBeforeNativeWrite(barrier);
+    }
 }

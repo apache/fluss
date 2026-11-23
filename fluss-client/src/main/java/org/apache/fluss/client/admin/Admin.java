@@ -53,16 +53,17 @@ import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
-import org.apache.fluss.exception.TableNotVersionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metadata.BucketInfo;
-import org.apache.fluss.metadata.BucketReadRange;
+import org.apache.fluss.metadata.BucketLogOffset;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.MvccSnapshotBinding;
+import org.apache.fluss.metadata.MvccSnapshotRef;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -987,28 +988,30 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
 
-    /**
-     * Observes the earliest and latest readable positions for a physical bucket of a versioned
-     * table.
-     *
-     * <p>Both endpoints are included. The latest readable position is bounded by both log
-     * commitment and the application of committed changes to the KV state. The retained floor can
-     * advance after the range is returned. Each positioned lookup validates the supplied position
-     * when it executes.
-     *
-     * <p>The future fails with {@link TableNotVersionedException} when the serving bucket has no
-     * version history. After read authorization, a table or partition identity absent from the
-     * coordinator's serving metadata fails with {@link TableNotExistException} or {@link
-     * PartitionNotExistException}, respectively. Wait for a newly created bucket to appear in the
-     * serving metadata before querying its range.
-     *
-     * @param bucket the physical bucket to query, including its partition ID when applicable
-     * @return the future containing the observed range
-     */
-    default CompletableFuture<BucketReadRange> getBucketReadRange(TableBucket bucket) {
-        CompletableFuture<BucketReadRange> failed = new CompletableFuture<>();
-        failed.completeExceptionally(
-                new UnsupportedOperationException("Bucket history is unavailable."));
-        return failed;
+    /** Lists the inclusive MVCC read bounds for the requested physical buckets. */
+    ListMvccReadBoundsResult listMvccReadBounds(Collection<TableBucket> buckets);
+
+    /** Registers offsets using the default binding lifetime. */
+    CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<BucketLogOffset> offsets);
+
+    /** Registers offsets with an absolute Unix time deadline in milliseconds. */
+    CompletableFuture<RegisterMvccSnapshotOffsetsResult> registerMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot,
+            Collection<BucketLogOffset> offsets,
+            long bindingExpiresAtMillis);
+
+    /** Resolves the named snapshot for the requested buckets. */
+    CompletableFuture<GetMvccSnapshotOffsetsResult> getMvccSnapshotOffsets(
+            MvccSnapshotRef snapshot, Collection<TableBucket> buckets);
+
+    /** Lists live bindings in the default namespace. */
+    default CompletableFuture<List<MvccSnapshotBinding>> listMvccSnapshotBindings(
+            TableBucket bucket) {
+        return listMvccSnapshotBindings(bucket, "default");
     }
+
+    /** Lists live bindings in the given bucket and namespace. */
+    CompletableFuture<List<MvccSnapshotBinding>> listMvccSnapshotBindings(
+            TableBucket bucket, String namespace);
 }
