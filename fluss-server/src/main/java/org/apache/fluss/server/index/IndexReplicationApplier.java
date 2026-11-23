@@ -49,7 +49,6 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -90,10 +89,7 @@ public final class IndexReplicationApplier {
                 schema.getColumnNames().indexOf(IndexTableUtils.RECORD_KIND_SYSTEM_COLUMN);
         this.sourceProgressPosition =
                 schema.getColumnNames().indexOf(IndexTableUtils.SOURCE_PROGRESS_SYSTEM_COLUMN);
-        List<String> primaryKeys =
-                schema.getPrimaryKey()
-                        .map(Schema.PrimaryKey::getColumnNames)
-                        .orElse(Collections.emptyList());
+        List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
         this.partitionIdKeyPosition =
                 primaryKeys.indexOf(IndexTableUtils.PARTITION_ID_SYSTEM_COLUMN);
         this.keyDecoder =
@@ -116,25 +112,7 @@ public final class IndexReplicationApplier {
      */
     @Nullable
     public LogAppendInfo apply(KvTablet kvTablet, PutIndexDataForBucket data) throws Exception {
-        AtomicReference<LogAppendInfo> result = new AtomicReference<>();
-        AtomicReference<Throwable> failure = new AtomicReference<>();
-        kvTablet.getGuardedExecutor()
-                .execute(
-                        () -> {
-                            try {
-                                result.set(applyLocked(kvTablet, data));
-                            } catch (Throwable t) {
-                                failure.set(t);
-                            }
-                        });
-        Throwable error = failure.get();
-        if (error instanceof Exception) {
-            throw (Exception) error;
-        }
-        if (error instanceof Error) {
-            throw (Error) error;
-        }
-        return result.get();
+        return kvTablet.withWriteLock(() -> applyLocked(kvTablet, data));
     }
 
     @Nullable
@@ -153,14 +131,12 @@ public final class IndexReplicationApplier {
         // Only progress materialized in RocksDB can confirm a completed duplicate. Progress
         // still in the pre-write buffer must remain retriable until the committed batch is
         // materialized; acknowledging it early could lose the window after recovery.
-        long durableProgress =
-                readProgress(kvTablet.multiGet(Collections.singletonList(progressKey)));
+        List<byte[]> progressKeys = Collections.singletonList(progressKey);
+        long durableProgress = readProgress(kvTablet.multiGet(progressKeys));
         if (durableProgress >= sourceEndOffset) {
             return null;
         }
-        long visibleProgress =
-                readProgress(
-                        kvTablet.multiGetFromBufferOrKv(Collections.singletonList(progressKey)));
+        long visibleProgress = readProgress(kvTablet.multiGetFromBufferOrKv(progressKeys));
         if (visibleProgress >= sourceEndOffset) {
             throw new KvStorageException(
                     "Index progress "

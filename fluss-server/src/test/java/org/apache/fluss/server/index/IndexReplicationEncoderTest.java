@@ -28,7 +28,6 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -47,8 +46,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class IndexReplicationEncoderTest {
 
     private static final TablePath MAIN_PATH = TablePath.of("db", "main");
-    private static final TablePath INDEX_PATH =
-            TablePath.of("db", IndexTableUtils.indexTableName("main", "idx_name"));
+    private static final TablePath INDEX_PATH = TablePath.of("db", "__idx__main__idx_name");
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 3})

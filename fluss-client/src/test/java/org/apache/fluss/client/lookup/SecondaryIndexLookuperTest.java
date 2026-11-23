@@ -17,9 +17,9 @@
 
 package org.apache.fluss.client.lookup;
 
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -29,6 +29,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,7 +49,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class SecondaryIndexLookuperTest {
 
-    private static final DataType[] IDX_COLUMN_TYPES = {DataTypes.STRING(), DataTypes.INT()};
+    private static final Schema MAIN_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("city", DataTypes.STRING())
+                    .column("age", DataTypes.INT())
+                    .primaryKey("id")
+                    .build();
 
     /** Main rows keyed by base primary key, standing in for the main table's point-get. */
     private final Map<Integer, InternalRow> mainRowsByPk = new LinkedHashMap<>();
@@ -56,59 +63,16 @@ class SecondaryIndexLookuperTest {
     private final List<Integer> mainLookupKeys = new ArrayList<>();
 
     @Test
-    void testStaleIndexPointerIsDroppedWhileMatchingCandidateSurvives() throws Exception {
-        mainRowsByPk.put(7, row(7, "Beijing", 30));
-        mainRowsByPk.put(8, row(8, "Shanghai", 30));
+    void returnsEachCurrentMatchOnceAfterLookingUpDistinctCandidates() throws Exception {
+        mainRowsByPk.put(1, row(1, "Beijing", 30));
+        mainRowsByPk.put(2, row(2, "Shanghai", 31));
+        mainRowsByPk.put(3, row(3, null, 30));
+        mainRowsByPk.put(4, row(4, "Shanghai", 30));
 
-        LookupResult result = lookup(indexRowsFor(7, 8), row("Shanghai", 30));
-
-        // Both candidates were fetched, but only the one whose current row still carries the
-        // looked-up index values is returned.
-        assertThat(mainLookupKeys).containsExactly(7, 8);
-        assertThat(basePksOf(result)).containsExactly(8);
-    }
-
-    @Test
-    void testRecheckComparesEveryIndexColumn() throws Exception {
-        mainRowsByPk.put(7, row(7, "Shanghai", 31));
-
-        LookupResult result = lookup(indexRowsFor(7), row("Shanghai", 30));
-
-        // The first index column still matches, so a recheck that only compared column 0 would
-        // wrongly keep this row.
-        assertThat(mainLookupKeys).containsExactly(7);
-        assertThat(result.getRowList()).isEmpty();
-    }
-
-    @Test
-    void testNullIndexColumnInMainRowIsDropped() throws Exception {
-        mainRowsByPk.put(7, row(7, null, 30));
-
-        LookupResult result = lookup(indexRowsFor(7), row("Shanghai", 30));
-
-        assertThat(result.getRowList()).isEmpty();
-    }
-
-    @Test
-    void testDuplicateCandidatesYieldOneMainLookupAndOneRow() throws Exception {
-        mainRowsByPk.put(7, row(7, "Shanghai", 30));
-
-        // Two physical index rows pointing at the same base primary key, as a recreated partition
-        // leaves behind.
-        LookupResult result = lookup(indexRowsFor(7, 7), row("Shanghai", 30));
-
-        assertThat(mainLookupKeys).containsExactly(7);
-        assertThat(basePksOf(result)).containsExactly(7);
-    }
-
-    @Test
-    void testDeletedMainRowIsSkipped() throws Exception {
-        // No entry for pk 7: the main point-get comes back empty, i.e. the row was deleted while
-        // the index pointer still existed.
-        LookupResult result = lookup(indexRowsFor(7), row("Shanghai", 30));
-
-        assertThat(mainLookupKeys).containsExactly(7);
-        assertThat(result.getRowList()).isEmpty();
+        // Key 4 has two physical index entries. Key 5 was deleted from the main table.
+        LookupResult result = lookup(indexRowsFor(1, 2, 3, 4, 4, 5), row("Shanghai", 30));
+        assertThat(mainLookupKeys).containsExactly(1, 2, 3, 4, 5);
+        assertThat(result.getRowList()).extracting(r -> r.getInt(0)).containsExactly(4);
     }
 
     @Test
@@ -123,25 +87,20 @@ class SecondaryIndexLookuperTest {
     @ValueSource(ints = {1, 2})
     void testNullLookupDoesNotInvokeEitherHop(int fieldCount) throws Exception {
         DataType[] types = new DataType[fieldCount];
-        InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[fieldCount];
-        for (int i = 0; i < fieldCount; i++) {
-            types[i] = DataTypes.INT().copy(false);
-            getters[i] = InternalRow.createFieldGetter(types[i], i);
-        }
-        CompactedKeyEncoder encoder = new CompactedKeyEncoder(RowType.of(types));
+        Arrays.fill(types, DataTypes.INT().copy(false));
+        RowType keyType = RowType.of(types);
+        Schema schema = Schema.newBuilder().fromRowType(keyType).primaryKey("f0").build();
         Lookuper unexpectedLookup =
                 key -> {
                     throw new AssertionError("NULL index keys must not issue lookups");
                 };
         SecondaryIndexLookuper lookuper =
                 new SecondaryIndexLookuper(
+                        schema,
+                        keyType.getFieldNames(),
+                        keyType,
                         unexpectedLookup,
                         unexpectedLookup,
-                        key -> GenericRow.of(encoder.encodeKey(key)),
-                        getters,
-                        getters,
-                        types,
-                        key -> new GenericRow(1),
                         Runnable::run);
         for (int nullField = 0; nullField < fieldCount; nullField++) {
             GenericRow key = new GenericRow(fieldCount);
@@ -169,19 +128,11 @@ class SecondaryIndexLookuperTest {
                 };
         SecondaryIndexLookuper lookuper =
                 new SecondaryIndexLookuper(
+                        MAIN_SCHEMA,
+                        Arrays.asList("city", "age"),
+                        MAIN_SCHEMA.getRowType().project(Collections.singletonList("id")),
                         indexTablePrefixLookuper,
                         mainTablePointLookuper,
-                        key -> key,
-                        new InternalRow.FieldGetter[] {
-                            InternalRow.createFieldGetter(DataTypes.STRING(), 0),
-                            InternalRow.createFieldGetter(DataTypes.INT(), 1)
-                        },
-                        new InternalRow.FieldGetter[] {
-                            InternalRow.createFieldGetter(DataTypes.STRING(), 1),
-                            InternalRow.createFieldGetter(DataTypes.INT(), 2)
-                        },
-                        IDX_COLUMN_TYPES,
-                        SecondaryIndexLookuperTest::basePkOfIndexRow,
                         Runnable::run);
         return lookuper.lookup(lookupKey).get();
     }
@@ -193,19 +144,5 @@ class SecondaryIndexLookuperTest {
             indexRows.add(row(basePk));
         }
         return indexRows;
-    }
-
-    private static GenericRow basePkOfIndexRow(InternalRow indexRow) {
-        GenericRow basePk = new GenericRow(1);
-        basePk.setField(0, indexRow.getInt(0));
-        return basePk;
-    }
-
-    private static List<Integer> basePksOf(LookupResult result) {
-        List<Integer> basePks = new ArrayList<>();
-        for (InternalRow mainRow : result.getRowList()) {
-            basePks.add(mainRow.getInt(0));
-        }
-        return basePks;
     }
 }

@@ -54,7 +54,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
     private static final String DB = "test_db_admin_idx";
 
     @Test
-    void testCreateTableWithGlobalSecondaryIndex() throws Exception {
+    void testCreateAndDropTableWithGlobalSecondaryIndexes() throws Exception {
         TablePath tablePath = TablePath.of(DB, "test_table_with_index");
 
         Schema schema =
@@ -86,7 +86,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .distributedBy(3, "id")
                         .build();
 
-        long mainTableId = createTable(tablePath, descriptor, true);
+        createTable(tablePath, descriptor, true);
 
         // Verify main table
         TableInfo mainTableInfo = admin.getTableInfo(tablePath).get();
@@ -95,8 +95,8 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                 .hasValue(ConfigOptions.KV_FORMAT_VERSION_2);
         assertThat(mainTableInfo.toTableDescriptor().getSchema().getIndexes()).hasSize(2);
 
-        TablePath nameIndexTablePath = indexTablePath(tablePath, "name_idx");
-        TablePath ageCityIndexTablePath = indexTablePath(tablePath, "age_city_idx");
+        TablePath nameIndexTablePath = IndexTableUtils.indexTablePath(tablePath, "name_idx");
+        TablePath ageCityIndexTablePath = IndexTableUtils.indexTablePath(tablePath, "age_city_idx");
 
         assertThat(admin.tableExists(nameIndexTablePath).get()).isTrue();
         TableInfo nameIndexInfo = admin.getTableInfo(nameIndexTablePath).get();
@@ -136,6 +136,11 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         IndexTableUtils.RECORD_KIND_SYSTEM_COLUMN,
                         IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN,
                         IndexTableUtils.ROW_KEY_SYSTEM_COLUMN);
+
+        admin.dropTable(tablePath, false).get();
+        assertThat(admin.tableExists(tablePath).get()).isFalse();
+        assertThat(admin.tableExists(nameIndexTablePath).get()).isFalse();
+        assertThat(admin.tableExists(ageCityIndexTablePath).get()).isFalse();
     }
 
     @Test
@@ -171,7 +176,8 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                 .hasRootCauseInstanceOf(InvalidTableException.class)
                 .hasStackTraceContaining(column);
         assertThat(admin.tableExists(indexed).get()).isFalse();
-        assertThat(admin.tableExists(indexTablePath(indexed, indexName)).get()).isFalse();
+        assertThat(admin.tableExists(IndexTableUtils.indexTablePath(indexed, indexName)).get())
+                .isFalse();
     }
 
     @Test
@@ -231,7 +237,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                                 AutoPartitionTimeUnit.DAY)
                         .build();
 
-        long mainTableId = createTable(tablePath, descriptor, true);
+        createTable(tablePath, descriptor, true);
 
         // Verify main table is partitioned
         TableInfo mainTableInfo = admin.getTableInfo(tablePath).get();
@@ -240,7 +246,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
         assertThat(mainTableInfo.toTableDescriptor().getSchema().getIndexes()).hasSize(1);
 
         // Verify index table exists and is NOT partitioned
-        TablePath nameIndexTablePath = indexTablePath(tablePath, "name_idx");
+        TablePath nameIndexTablePath = IndexTableUtils.indexTablePath(tablePath, "name_idx");
         assertThat(admin.tableExists(nameIndexTablePath).get()).isTrue();
         TableInfo indexInfo = admin.getTableInfo(nameIndexTablePath).get();
         assertThat(indexInfo.getTableConfig().getKvFormatVersion())
@@ -304,48 +310,12 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDropTableWithGlobalSecondaryIndexAutoDeletesIndexTables() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_table_to_drop_with_index");
-
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .column("age", DataTypes.INT())
-                        .primaryKey("id")
-                        .index("name_idx", "name")
-                        .index("age_idx", "age")
-                        .build();
-
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "id").build();
-
-        long mainTableId = createTable(tablePath, descriptor, true);
-
-        assertThat(admin.tableExists(tablePath).get()).isTrue();
-
-        TablePath nameIndexPath = indexTablePath(tablePath, "name_idx");
-        TablePath ageIndexPath = indexTablePath(tablePath, "age_idx");
-
-        assertThat(admin.tableExists(nameIndexPath).get()).isTrue();
-        assertThat(admin.tableExists(ageIndexPath).get()).isTrue();
-
-        // Drop main table
-        admin.dropTable(tablePath, false).get();
-
-        // Verify cascade delete
-        assertThat(admin.tableExists(tablePath).get()).isFalse();
-        assertThat(admin.tableExists(nameIndexPath).get()).isFalse();
-        assertThat(admin.tableExists(ageIndexPath).get()).isFalse();
-    }
-
-    @Test
     void testUserCannotDropLiveInternalSecondaryIndexTableDirectly() throws Exception {
         for (String tableName :
                 Arrays.asList("test_direct_drop_live_index_rejected", "tenant__orders_live")) {
             TablePath mainPath = TablePath.of(DB, tableName);
             createTable(mainPath, singleIndexTableDescriptor(), true);
-            TablePath indexPath = indexTablePath(mainPath, "idx_name");
+            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
 
             assertThatThrownBy(() -> admin.dropTable(indexPath, false).get())
                     .cause()
@@ -363,7 +333,7 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                 Arrays.asList("test_direct_drop_orphan_index_allowed", "tenant__orders_orphan")) {
             TablePath mainPath = TablePath.of(DB, tableName);
             createTable(mainPath, singleIndexTableDescriptor(), true);
-            TablePath indexPath = indexTablePath(mainPath, "idx_name");
+            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
 
             FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(mainPath);
             FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
@@ -391,15 +361,6 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
     @Test
     void testCascadeDropIgnoresNonOwnedTableAtIndexPath() throws Exception {
         TablePath mainPath = TablePath.of(DB, "test_drop_index_identity");
-        Schema mainSchema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .primaryKey("id")
-                        .index("idx_name", "name")
-                        .build();
-        TableDescriptor mainDescriptor =
-                TableDescriptor.builder().schema(mainSchema).distributedBy(1, "id").build();
         TableDescriptor unrelatedDescriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -410,8 +371,8 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .distributedBy(1, "id")
                         .build();
 
-        long mainTableId = createTable(mainPath, mainDescriptor, true);
-        TablePath indexPath = indexTablePath(mainPath, "idx_name");
+        createTable(mainPath, singleIndexTableDescriptor(), true);
+        TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
         long unrelatedTableId =
                 FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getTableIdAndIncrement();
         FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().deleteTable(indexPath);
@@ -432,11 +393,6 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
         assertThat(admin.getTableInfo(indexPath).get().isIndexTable()).isFalse();
 
         try {
-            // Cascade drop discovers index tables by ownership (see
-            // CoordinatorService.ownedIndexTableIds): only tables whose index metadata
-            // points at the main table id are dropped together with the main table. The
-            // unrelated table occupying the derived index path carries no index metadata,
-            // so it is silently ignored instead of aborting the drop.
             admin.dropTable(mainPath, false).get();
             assertThat(admin.tableExists(mainPath).get()).isFalse();
             assertThat(admin.tableExists(indexPath).get()).isTrue();
@@ -459,10 +415,5 @@ class FlussAdminSecondaryIndexITCase extends ClientToServerITCaseBase {
                         .index("idx_name", "name")
                         .build();
         return TableDescriptor.builder().schema(schema).distributedBy(1, "id").build();
-    }
-
-    private static TablePath indexTablePath(TablePath mainTablePath, String indexName) {
-        return TablePath.of(
-                DB, IndexTableUtils.indexTableName(mainTablePath.getTableName(), indexName));
     }
 }

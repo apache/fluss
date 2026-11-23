@@ -20,7 +20,6 @@ package org.apache.fluss.server.index;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -42,7 +41,6 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ByteArraySlice;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -56,6 +54,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.apache.fluss.row.BinaryString.fromString;
+import static org.apache.fluss.server.index.TestingIndexTable.INDEX_NAME;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -66,7 +65,6 @@ class IndexTargetRecoveryITCase {
 
     private static final String DB = "test_db";
     private static final String MAIN_TABLE = "index_target_recovery";
-    private static final String INDEX_NAME = "idx_b";
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -78,18 +76,7 @@ class IndexTargetRecoveryITCase {
     @Test
     void testLiveFollowerReplaysCommittedSnapshotToLogEndBeforePromotion() throws Exception {
         TablePath mainPath = TablePath.of(DB, MAIN_TABLE);
-        Schema mainSchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .primaryKey("a")
-                        .index(
-                                INDEX_NAME,
-                                IndexType.SECONDARY,
-                                Collections.singletonList("b"),
-                                IndexVisibility.SYNC,
-                                1)
-                        .build();
+        Schema mainSchema = TestingIndexTable.indexedSchema(IndexVisibility.SYNC, 1);
         TableDescriptor mainDescriptor =
                 TableDescriptor.builder().schema(mainSchema).distributedBy(1, "a").build();
         TestingIndexTable table =

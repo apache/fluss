@@ -159,10 +159,7 @@ class TableMinInSyncReplicasITCase {
                         .property(ConfigOptions.TABLE_MIN_IN_SYNC_REPLICAS, 1)
                         .build();
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, path, descriptor);
-        TablePath indexPath =
-                TablePath.of(
-                        path.getDatabaseName(),
-                        IndexTableUtils.indexTableName(path.getTableName(), indexName));
+        TablePath indexPath = IndexTableUtils.indexTablePath(path, indexName);
         long indexTableId =
                 FLUSS_CLUSTER_EXTENSION
                         .newCoordinatorClient()

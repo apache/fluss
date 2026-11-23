@@ -105,10 +105,6 @@ final class IndexBatch {
         attempts++;
     }
 
-    boolean ownerActive() {
-        return window.isActive() && !window.isOwnerClosed();
-    }
-
     boolean markReleased() {
         return released.compareAndSet(false, true);
     }

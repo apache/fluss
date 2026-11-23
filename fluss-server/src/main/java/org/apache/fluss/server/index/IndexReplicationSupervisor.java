@@ -42,22 +42,9 @@ import java.util.List;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Per-{@code Replica} supervisor for source-table index replication.
- *
- * <p>This supervisor does not drive replication itself. It registers the leader-side {@link
- * IndexReplicator} with the server-global {@link IndexReplicationManager}. Its workers use {@link
- * IndexReplicationScheduler} to drive replication, staging encoded batches into the shared {@link
- * IndexSendBuffer} for {@link IndexSender} to dispatch. HW advances signal the owning worker to
- * poll.
- *
- * <h3>State machine</h3>
- *
- * <pre>
- *   NOT_STARTED --&gt; DEFERRED   (metadata not yet available)
- *   NOT_STARTED --&gt; RUNNING    (metadata available, replicator started)
- *   DEFERRED   --&gt; RUNNING    (metadata arrived, retry succeeded)
- *   RUNNING    --&gt; NOT_STARTED (become follower / close)
- * </pre>
+ * Owns the replication registration for one source replica. A leader that lacks index metadata
+ * retries on the next metadata update. Stopping the replica unregisters its workers' source and
+ * releases the replication resources.
  */
 @Internal
 public final class IndexReplicationSupervisor {
@@ -69,13 +56,6 @@ public final class IndexReplicationSupervisor {
         void onProgress(long syncIndexPushedOffset, long allIndexPushedOffset);
     }
 
-    /** Lifecycle state of the index replicator for this replica. */
-    enum State {
-        NOT_STARTED,
-        DEFERRED,
-        RUNNING
-    }
-
     private static final Logger LOG = LoggerFactory.getLogger(IndexReplicationSupervisor.class);
 
     private final TableInfo tableInfo;
@@ -84,7 +64,7 @@ public final class IndexReplicationSupervisor {
     @Nullable private final MetadataProvider metadataProvider;
     private final IndexReplicationManager manager;
     private final Counter retries;
-    private volatile State state = State.NOT_STARTED;
+    private volatile boolean awaitingMetadata;
     private final Object lifecycleLock = new Object();
 
     @Nullable private volatile IndexReplicator indexReplicator;
@@ -104,19 +84,10 @@ public final class IndexReplicationSupervisor {
         this.retries = retries;
     }
 
-    // ------------------------------------------------------------------------------------
-    // Lifecycle
-    // ------------------------------------------------------------------------------------
-
-    /** Stops any previous source replicator before leader storage is rebuilt. */
-    public void prepareForLeader() {
-        stopIndexReplicator();
-    }
-
     /**
      * Called when the replica becomes leader. If the table has secondary indexes and the metadata
-     * is available, starts the {@link IndexReplicator} immediately; otherwise transitions to {@link
-     * State#DEFERRED}.
+     * is available, starts the {@link IndexReplicator} immediately; otherwise waits for a metadata
+     * update.
      *
      * @param logTablet the log tablet of the leader replica
      * @param schemaGetter the schema getter for the table
@@ -130,20 +101,13 @@ public final class IndexReplicationSupervisor {
             SchemaGetter schemaGetter,
             IndexProgressListener onProgress,
             long replayStartOffset) {
-        prepareForLeader();
-
-        // Start IndexReplicator for main tables with secondary indexes
+        stop();
         List<Schema.Index> indexes = tableInfo.getSchema().getIndexes();
         if (indexes.isEmpty()) {
             return;
         }
 
         maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
-    }
-
-    /** Called when the replica becomes follower. Stops the index replicator if running. */
-    public void onBecomeFollower() {
-        stopIndexReplicator();
     }
 
     /**
@@ -155,7 +119,7 @@ public final class IndexReplicationSupervisor {
             SchemaGetter schemaGetter,
             IndexProgressListener onProgress,
             long replayStartOffset) {
-        if (state != State.DEFERRED) {
+        if (!awaitingMetadata) {
             return;
         }
         List<Schema.Index> indexes = tableInfo.getSchema().getIndexes();
@@ -164,15 +128,6 @@ public final class IndexReplicationSupervisor {
         }
         maybeStartIndexReplicator(logTablet, schemaGetter, indexes, onProgress, replayStartOffset);
     }
-
-    /** Called when the replica is being deleted. */
-    public void close() {
-        stopIndexReplicator();
-    }
-
-    // ------------------------------------------------------------------------------------
-    // High-watermark callback
-    // ------------------------------------------------------------------------------------
 
     /**
      * Called after the leader HW advances. Signals the read-pool worker owning this replicator so
@@ -185,26 +140,12 @@ public final class IndexReplicationSupervisor {
         }
     }
 
-    // ------------------------------------------------------------------------------------
-    // Internal
-    // ------------------------------------------------------------------------------------
-
     private void maybeStartIndexReplicator(
             LogTablet logTablet,
             SchemaGetter schemaGetter,
             List<Schema.Index> indexes,
             IndexProgressListener onProgress,
             long replayStartOffset) {
-        List<TablePath> indexTablePaths = new ArrayList<>(indexes.size());
-        for (Schema.Index index : indexes) {
-            indexTablePaths.add(
-                    TablePath.of(
-                            tableInfo.getTablePath().getDatabaseName(),
-                            IndexTableUtils.indexTableName(
-                                    tableInfo.getTablePath().getTableName(),
-                                    index.getIndexName())));
-        }
-
         List<IndexReplicationEncoder> indexEncoders;
         try {
             indexEncoders =
@@ -215,6 +156,12 @@ public final class IndexReplicationSupervisor {
                 return;
             }
             try {
+                List<TablePath> indexTablePaths = new ArrayList<>(indexes.size());
+                for (Schema.Index index : indexes) {
+                    indexTablePaths.add(
+                            IndexTableUtils.indexTablePath(
+                                    tableInfo.getTablePath(), index.getIndexName()));
+                }
                 metadataProvider.getTablesMetadataFromZK(indexTablePaths);
                 indexEncoders =
                         IndexReplicationEncoder.createAll(tableInfo, tableBucket, metadataCache);
@@ -236,7 +183,7 @@ public final class IndexReplicationSupervisor {
     }
 
     private void deferIndexReplication(RuntimeException metadataFailure) {
-        state = State.DEFERRED;
+        awaitingMetadata = true;
         retries.inc();
         LOG.info(
                 "Index table metadata is unavailable or inconsistent for {}; deferring "
@@ -245,52 +192,45 @@ public final class IndexReplicationSupervisor {
                 metadataFailure);
     }
 
-    void installIndexReplicator(IndexReplicator replicator) {
-        RuntimeException registrationFailure = null;
-        Error registrationError = null;
-        synchronized (lifecycleLock) {
-            State previousState = state;
-            IndexReplicator previousReplicator = indexReplicator;
-            indexReplicator = replicator;
-            state = State.RUNNING;
-            try {
-                manager.register(replicator);
-            } catch (RuntimeException e) {
-                indexReplicator = previousReplicator;
-                state = previousState;
-                registrationFailure = e;
-            } catch (Error e) {
-                indexReplicator = previousReplicator;
-                state = previousState;
-                registrationError = e;
+    private void installIndexReplicator(IndexReplicator replicator) {
+        try {
+            synchronized (lifecycleLock) {
+                IndexReplicator previous = indexReplicator;
+                boolean wasAwaitingMetadata = awaitingMetadata;
+                indexReplicator = replicator;
+                awaitingMetadata = false;
+                try {
+                    manager.register(replicator);
+                } catch (RuntimeException | Error failure) {
+                    indexReplicator = previous;
+                    awaitingMetadata = wasAwaitingMetadata;
+                    throw failure;
+                }
             }
-        }
-        if (registrationFailure != null || registrationError != null) {
-            try {
-                replicator.close();
-            } catch (Exception e) {
-                LOG.warn("Error closing unregistered IndexReplicator for {}", tableBucket, e);
-            }
-            if (registrationFailure != null) {
-                throw registrationFailure;
-            }
-            throw registrationError;
+        } catch (RuntimeException | Error failure) {
+            closeReplicator(replicator);
+            throw failure;
         }
     }
 
-    private void stopIndexReplicator() {
+    /** Detaches the source before changing its role, rebuilding its KV state or shutting down. */
+    public void stop() {
         IndexReplicator r;
         synchronized (lifecycleLock) {
             r = indexReplicator;
             indexReplicator = null;
-            state = State.NOT_STARTED;
+            awaitingMetadata = false;
         }
         if (r == null) {
             return;
         }
         manager.unregister(r);
+        closeReplicator(r);
+    }
+
+    private void closeReplicator(IndexReplicator replicator) {
         try {
-            r.close();
+            replicator.close();
         } catch (Exception e) {
             LOG.warn("Error closing IndexReplicator for {}", tableBucket, e);
         }

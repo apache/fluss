@@ -17,6 +17,9 @@
 
 package org.apache.fluss.server.index;
 
+import org.apache.fluss.metadata.IndexType;
+import org.apache.fluss.metadata.IndexVisibility;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -24,15 +27,33 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import java.time.Duration;
+import java.util.Collections;
 
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 
 /** Main-table and derived-index metadata for server integration tests. */
 final class TestingIndexTable {
+    static final String INDEX_NAME = "idx_b";
+
+    static Schema indexedSchema(IndexVisibility visibility, int buckets) {
+        return Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .primaryKey("a")
+                .index(
+                        INDEX_NAME,
+                        IndexType.SECONDARY,
+                        Collections.singletonList("b"),
+                        visibility,
+                        buckets)
+                .build();
+    }
+
     final long mainTableId;
     final long indexTableId;
     final TablePath indexPath;
@@ -50,10 +71,7 @@ final class TestingIndexTable {
         this.cluster = cluster;
         this.indexName = indexName;
         this.mainTableId = createTable(cluster, mainPath, descriptor);
-        this.indexPath =
-                TablePath.of(
-                        mainPath.getDatabaseName(),
-                        IndexTableUtils.indexTableName(mainPath.getTableName(), indexName));
+        this.indexPath = IndexTableUtils.indexTablePath(mainPath, indexName);
         TableRegistration index =
                 cluster.getZooKeeperClient()
                         .getTable(indexPath)

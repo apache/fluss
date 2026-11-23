@@ -32,14 +32,11 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
-import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
-import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IndexTableUtils;
 
@@ -48,11 +45,8 @@ import javax.annotation.concurrent.NotThreadSafe;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import static org.apache.fluss.utils.IndexTableUtils.DATA_RECORD_KIND;
 import static org.apache.fluss.utils.IndexTableUtils.PROGRESS_RECORD_KIND;
@@ -145,16 +139,9 @@ final class IndexReplicationEncoder {
             return Collections.emptyList();
         }
 
-        int[] basePkColumnIndices = schema.getPrimaryKeyIndexes();
         List<IndexReplicationEncoder> encoders = new ArrayList<>(indexes.size());
         for (Schema.Index index : indexes) {
-            encoders.add(
-                    createEncoder(
-                            index,
-                            mainTableInfo,
-                            mainTableBucket,
-                            basePkColumnIndices,
-                            metadataCache));
+            encoders.add(createEncoder(index, mainTableInfo, mainTableBucket, metadataCache));
         }
         return Collections.unmodifiableList(encoders);
     }
@@ -218,7 +205,6 @@ final class IndexReplicationEncoder {
             Schema.Index index,
             TableInfo mainTableInfo,
             TableBucket sourceBucket,
-            int[] basePkColumnIndices,
             TabletServerMetadataCache metadataCache) {
         Schema schema = mainTableInfo.getSchema();
         RowType mainRowType = mainTableInfo.getRowType();
@@ -229,8 +215,6 @@ final class IndexReplicationEncoder {
                 "Source bucket partition identity must match the main table");
 
         int[] idxColumnIndices = schema.getColumnIndexes(index.getColumnNames());
-        int[] indexValueColumnIndices =
-                composeIndexValueColumnIndices(idxColumnIndices, basePkColumnIndices);
 
         TableInfo indexTable = resolveIndexTable(mainTableInfo, index, metadataCache);
         long indexTableId = indexTable.getTableId();
@@ -241,91 +225,55 @@ final class IndexReplicationEncoder {
                 new CompactedKeyEncoder(mainRowType, idxColumnIndices);
         FlussBucketingFunction bucketingFunction = new FlussBucketingFunction();
 
-        int storedColCount = indexValueColumnIndices.length;
-        int totalColCount = storedColCount + (partitioned ? 1 : 0);
-        DataType[] identityFieldTypes = new DataType[totalColCount];
+        Schema physicalSchema = indexTable.getSchema();
+        RowType physicalRowType = physicalSchema.getRowType();
+        int recordKindPosition =
+                physicalRowType.getFieldIndex(IndexTableUtils.RECORD_KIND_SYSTEM_COLUMN);
+        int routingKeyPosition =
+                physicalRowType.getFieldIndex(IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN);
+        int rowKeyPosition = physicalRowType.getFieldIndex(IndexTableUtils.ROW_KEY_SYSTEM_COLUMN);
+        int sourceProgressPosition =
+                physicalRowType.getFieldIndex(IndexTableUtils.SOURCE_PROGRESS_SYSTEM_COLUMN);
+        // The derived schema stores source columns first, followed by partition identity and system
+        // fields.
+        int storedColCount = partitioned ? recordKindPosition - 1 : recordKindPosition;
+        List<String> storedColumns = physicalSchema.getColumnNames().subList(0, storedColCount);
         InternalRow.FieldGetter[] valueFieldGetters = new InternalRow.FieldGetter[storedColCount];
         for (int i = 0; i < storedColCount; i++) {
-            int idxInMain = indexValueColumnIndices[i];
-            DataType type = mainRowType.getTypeAt(idxInMain);
-            identityFieldTypes[i] = type;
-            valueFieldGetters[i] = InternalRow.createFieldGetter(type, idxInMain);
+            int pos = mainRowType.getFieldIndex(storedColumns.get(i));
+            valueFieldGetters[i] = InternalRow.createFieldGetter(mainRowType.getTypeAt(pos), pos);
         }
-        if (partitioned) {
-            identityFieldTypes[storedColCount] = DataTypes.BIGINT().copy(false);
-        }
-
-        KvFormat indexKvFormat = KvFormat.COMPACTED;
-        // The outer key already contains the index columns and partition identity.
         CompactedKeyEncoder primaryKeySuffixEncoder =
-                new CompactedKeyEncoder(
+                CompactedKeyEncoder.createKeyEncoder(
                         mainRowType,
-                        Arrays.copyOfRange(
-                                indexValueColumnIndices,
-                                idxColumnIndices.length,
-                                indexValueColumnIndices.length));
-        GenericRow identity = new GenericRow(totalColCount);
-
-        int recordKindPosition = totalColCount;
-        int routingKeyPosition = totalColCount + 1;
-        int rowKeyPosition = totalColCount + 2;
-        int sourceProgressPosition = totalColCount + 3;
-        DataType[] physicalFieldTypes = new DataType[totalColCount + 4];
-        for (int i = 0; i < storedColCount; i++) {
-            physicalFieldTypes[i] = identityFieldTypes[i].copy(true);
-        }
-        if (partitioned) {
-            physicalFieldTypes[storedColCount] = identityFieldTypes[storedColCount];
-        }
-        physicalFieldTypes[recordKindPosition] = DataTypes.TINYINT().copy(false);
-        physicalFieldTypes[routingKeyPosition] = DataTypes.BYTES().copy(false);
-        physicalFieldTypes[rowKeyPosition] = DataTypes.BYTES().copy(false);
-        physicalFieldTypes[sourceProgressPosition] = DataTypes.BIGINT();
-        RowType physicalRowType = RowType.of(physicalFieldTypes);
-        RowEncoder physicalRowEncoder = RowEncoder.create(indexKvFormat, physicalFieldTypes);
-        int[] physicalKeyIndices =
-                partitioned
-                        ? new int[] {
-                            recordKindPosition, routingKeyPosition, storedColCount, rowKeyPosition
-                        }
-                        : new int[] {recordKindPosition, routingKeyPosition, rowKeyPosition};
+                        storedColumns.subList(idxColumnIndices.length, storedColCount));
+        KvFormat indexKvFormat = indexTable.getTableConfig().getKvFormat();
+        RowEncoder physicalRowEncoder = RowEncoder.create(indexKvFormat, physicalRowType);
         CompactedKeyEncoder physicalKeyEncoder =
-                new CompactedKeyEncoder(physicalRowType, physicalKeyIndices);
+                new CompactedKeyEncoder(physicalRowType, physicalSchema.getPrimaryKeyIndexes());
         CompactedKeyEncoder physicalBucketKeyEncoder =
-                new CompactedKeyEncoder(
-                        physicalRowType, new int[] {recordKindPosition, routingKeyPosition});
+                CompactedKeyEncoder.createKeyEncoder(physicalRowType, indexTable.getBucketKeys());
         DataEntryEncoder dataEncoder =
                 row -> {
-                    try {
-                        for (int i = 0; i < valueFieldGetters.length; i++) {
-                            identity.setField(i, valueFieldGetters[i].getFieldOrNull(row));
-                        }
-                        if (partitioned) {
-                            identity.setField(storedColCount, partitionId);
-                        }
-                        byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
-                        byte[] rowKey = primaryKeySuffixEncoder.encodeKey(row);
-                        physicalRowEncoder.startNewRow();
-                        for (int i = 0; i < totalColCount; i++) {
-                            physicalRowEncoder.encodeField(i, identity.getField(i));
-                        }
-                        physicalRowEncoder.encodeField(recordKindPosition, DATA_RECORD_KIND);
-                        physicalRowEncoder.encodeField(routingKeyPosition, routingKey);
-                        physicalRowEncoder.encodeField(rowKeyPosition, rowKey);
-                        physicalRowEncoder.encodeField(sourceProgressPosition, null);
-                        BinaryRow value = physicalRowEncoder.finishRow();
-                        int targetBucket =
-                                bucketingFunction.bucketing(
-                                        physicalBucketKeyEncoder.encodeKey(value),
-                                        indexBucketCount);
-                        return new IndexReplicationEncoder.IndexEntry(
-                                physicalKeyEncoder.encodeKey(value), value, targetBucket);
-                    } finally {
-                        // Source fields may reference WAL pages; do not retain them between calls.
-                        for (int i = 0; i < totalColCount; i++) {
-                            identity.setField(i, null);
-                        }
+                    byte[] routingKey = logicalIndexKeyEncoder.encodeKey(row);
+                    byte[] rowKey = primaryKeySuffixEncoder.encodeKey(row);
+                    physicalRowEncoder.startNewRow();
+                    for (int i = 0; i < valueFieldGetters.length; i++) {
+                        physicalRowEncoder.encodeField(i, valueFieldGetters[i].getFieldOrNull(row));
                     }
+                    if (partitioned) {
+                        physicalRowEncoder.encodeField(storedColCount, partitionId);
+                    }
+                    physicalRowEncoder.encodeField(recordKindPosition, DATA_RECORD_KIND);
+                    physicalRowEncoder.encodeField(routingKeyPosition, routingKey);
+                    physicalRowEncoder.encodeField(rowKeyPosition, rowKey);
+                    physicalRowEncoder.encodeField(sourceProgressPosition, null);
+                    BinaryRow value = physicalRowEncoder.finishRow();
+                    int targetBucket =
+                            bucketingFunction.bucketing(
+                                    physicalBucketKeyEncoder.encodeKey(value), indexBucketCount);
+                    return new IndexReplicationEncoder.IndexEntry(
+                            physicalKeyEncoder.encodeKey(value), value, targetBucket);
                 };
 
         byte[] sourceBucketKey =
@@ -365,39 +313,10 @@ final class IndexReplicationEncoder {
                 progressEncoder);
     }
 
-    /**
-     * Compose index-value column indices: idx columns followed by base-PK columns, deduplicated.
-     */
-    private static int[] composeIndexValueColumnIndices(
-            int[] idxColumnIndices, int[] basePkColumnIndices) {
-        Set<Integer> seen = new HashSet<>();
-        int[] tmp = new int[idxColumnIndices.length + basePkColumnIndices.length];
-        int len = 0;
-        for (int i : idxColumnIndices) {
-            if (seen.add(i)) {
-                tmp[len++] = i;
-            }
-        }
-        for (int i : basePkColumnIndices) {
-            if (seen.add(i)) {
-                tmp[len++] = i;
-            }
-        }
-        int[] out = new int[len];
-        System.arraycopy(tmp, 0, out, 0, len);
-        return out;
-    }
-
-    private static TablePath indexTablePathFor(TableInfo mainTableInfo, String indexName) {
-        return TablePath.of(
-                mainTableInfo.getTablePath().getDatabaseName(),
-                IndexTableUtils.indexTableName(
-                        mainTableInfo.getTablePath().getTableName(), indexName));
-    }
-
     private static TableInfo resolveIndexTable(
             TableInfo mainTableInfo, Schema.Index index, TabletServerMetadataCache metadataCache) {
-        TablePath path = indexTablePathFor(mainTableInfo, index.getIndexName());
+        TablePath path =
+                IndexTableUtils.indexTablePath(mainTableInfo.getTablePath(), index.getIndexName());
         long cachedTableId =
                 metadataCache
                         .getTableId(path)

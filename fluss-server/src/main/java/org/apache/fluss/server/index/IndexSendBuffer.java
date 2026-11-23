@@ -118,48 +118,46 @@ final class IndexSendBuffer {
      * publication is staged behind the window's admission flag. A rejected or failed publication
      * leaves no queue or accounting residue.
      */
-    boolean tryAppendWindow(List<IndexBatch> windowBatches) {
-        return tryAppendWindow(windowBatches, null);
-    }
-
-    boolean tryAppendWindow(List<IndexBatch> windowBatches, @Nullable Reservation reservation) {
+    boolean tryAppendWindow(List<IndexBatch> windowBatches, Reservation reservation) {
         checkNotNull(windowBatches, "windowBatches");
         checkArgument(!windowBatches.isEmpty(), "windowBatches must not be empty");
         IndexBatch first = checkNotNull(windowBatches.get(0), "window batch");
         IndexReplicationWindow window = first.window();
 
         synchronized (window) {
-            Set<TableBucket> targets = validateWindowBatches(windowBatches, window);
-            if (!window.isActive() || window.isOwnerClosed()) {
+            checkArgument(!window.isAdmitted(), "window is already admitted");
+            Set<TableBucket> targets = new HashSet<>();
+            long retainedBytes = 0L;
+            long payloadBytes = 0L;
+            for (IndexBatch batch : windowBatches) {
+                checkArgument(
+                        batch.window() == window, "all batches must reference the same window");
+                checkArgument(
+                        targets.add(batch.targetBucket()),
+                        "window contains a duplicate target bucket");
+                checkArgument(!batch.isReleased(), "window contains a released batch");
+                retainedBytes = Math.addExact(retainedBytes, batch.retainedBytes());
+                payloadBytes += batch.encoded().getBytesLength();
+            }
+            if (!window.acceptsBatches()) {
                 return false;
             }
-
-            long windowBytes = retainedBytes(windowBatches);
-            if (windowBytes > maxTotalPendingBytes) {
-                throw new RecordTooLargeException(
-                        "Index replication window retains "
-                                + windowBytes
-                                + " bytes, exceeding max total pending bytes="
-                                + maxTotalPendingBytes);
-            }
-            if (!reserve(window, windowBytes, reservation)) {
-                return false;
-            }
+            reservation.transferToWindow(retainedBytes);
 
             try {
-                if (!window.isActive() || window.isOwnerClosed()) {
+                if (!window.acceptsBatches()) {
                     rollbackWindow(windowBatches);
                     return false;
                 }
 
                 for (IndexBatch batch : windowBatches) {
                     publishStaged(batch);
-                    if (!window.isActive() || window.isOwnerClosed()) {
+                    if (!window.acceptsBatches()) {
                         rollbackWindow(windowBatches);
                         return false;
                     }
                 }
-                window.markAdmitted(payloadBytes(windowBatches), targets);
+                window.markAdmitted(payloadBytes, targets);
             } catch (RuntimeException | Error failure) {
                 rollbackWindow(windowBatches);
                 throw failure;
@@ -170,75 +168,6 @@ final class IndexSendBuffer {
             notifyReadyBucket(batch.targetBucket());
         }
         return true;
-    }
-
-    private Set<TableBucket> validateWindowBatches(
-            List<IndexBatch> windowBatches, IndexReplicationWindow window) {
-        checkArgument(!window.isAdmitted(), "window is already admitted");
-        checkArgument(
-                windowBatches.size() == window.expectedBatchCount(),
-                "window batch list does not match its expected batch count");
-        Set<TableBucket> targetBuckets = new HashSet<>();
-        for (IndexBatch batch : windowBatches) {
-            checkNotNull(batch, "window batch");
-            checkArgument(batch.window() == window, "all batches must reference the same window");
-            checkArgument(
-                    targetBuckets.add(batch.targetBucket()),
-                    "window contains a duplicate target bucket");
-            checkArgument(!batch.isReleased(), "window contains a released batch");
-        }
-        return targetBuckets;
-    }
-
-    private long retainedBytes(List<IndexBatch> windowBatches) {
-        long bytes = 0L;
-        for (IndexBatch batch : windowBatches) {
-            try {
-                bytes = Math.addExact(bytes, batch.retainedBytes());
-            } catch (ArithmeticException overflow) {
-                throw new RecordTooLargeException(
-                        "Index replication window retained-byte total overflowed", overflow);
-            }
-        }
-        return bytes;
-    }
-
-    private long payloadBytes(List<IndexBatch> windowBatches) {
-        long bytes = 0L;
-        for (IndexBatch batch : windowBatches) {
-            bytes = Math.addExact(bytes, batch.encoded().getBytesLength());
-        }
-        return bytes;
-    }
-
-    private boolean reserve(
-            IndexReplicationWindow window, long windowBytes, @Nullable Reservation reservation) {
-        synchronized (admissionLock) {
-            if (!window.isActive() || window.isOwnerClosed()) {
-                return false;
-            }
-
-            if (reservation != null) {
-                checkArgument(!reservation.closed, "reservation is closed");
-                checkArgument(
-                        reservation.bytes == windowBytes, "reservation must cover the window");
-                reservation.closed = true;
-                reservation.bytes = 0;
-            } else {
-                while (true) {
-                    long current = pendingBytes.get();
-                    if (current > maxTotalPendingBytes - windowBytes) {
-                        waitingForCapacity.set(true);
-                        return false;
-                    }
-                    if (pendingBytes.compareAndSet(current, current + windowBytes)) {
-                        break;
-                    }
-                }
-            }
-
-            return true;
-        }
     }
 
     private void publishStaged(IndexBatch batch) {
@@ -386,7 +315,7 @@ final class IndexSendBuffer {
                             }
                             queue.claimed = null;
                             if (queue.batches.peekFirst() == batch
-                                    && batch.ownerActive()
+                                    && batch.window().acceptsBatches()
                                     && !batch.isReleased()) {
                                 batch.reEnqueued();
                                 retried[0] = true;
@@ -503,6 +432,15 @@ final class IndexSendBuffer {
                 }
                 notifyCapacityAvailable();
                 throw failure;
+            }
+        }
+
+        private void transferToWindow(long retainedBytes) {
+            synchronized (admissionLock) {
+                checkArgument(!closed, "reservation is closed");
+                checkArgument(bytes == retainedBytes, "reservation must cover the window");
+                closed = true;
+                bytes = 0;
             }
         }
 

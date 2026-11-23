@@ -905,10 +905,7 @@ public class FlussAuthorizationITCase {
                 .get();
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
                 rootAdmin.getTableInfo(mainTable).get().getTableId());
-        TablePath indexTable =
-                TablePath.of(
-                        mainTable.getDatabaseName(),
-                        IndexTableUtils.indexTableName(mainTable.getTableName(), "idx_name"));
+        TablePath indexTable = IndexTableUtils.indexTablePath(mainTable, "idx_name");
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(
                 rootAdmin.getTableInfo(indexTable).get().getTableId());
         try (Table table = rootConn.getTable(mainTable)) {

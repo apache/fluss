@@ -18,6 +18,7 @@
 package org.apache.fluss.utils;
 
 import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.metadata.TablePath;
 
 import static org.apache.fluss.config.ConfigBuilder.key;
 
@@ -59,14 +60,13 @@ public final class IndexTableUtils {
     /** Reserved, operationally distinct prefix for internal Index Tables. */
     public static final String INDEX_TABLE_NAME_PREFIX = "__idx__";
 
-    /** Separator between the owning main-table name and index name. */
-    public static final String INDEX_TABLE_NAME_SEPARATOR = "__";
-
     private IndexTableUtils() {}
 
-    /** Builds the internal Index Table name from its owning main-table name and index name. */
-    public static String indexTableName(String mainTableName, String indexName) {
-        return INDEX_TABLE_NAME_PREFIX + mainTableName + INDEX_TABLE_NAME_SEPARATOR + indexName;
+    /** Returns the internal Index Table path in the owning table's database. */
+    public static TablePath indexTablePath(TablePath mainTable, String indexName) {
+        return TablePath.of(
+                mainTable.getDatabaseName(),
+                INDEX_TABLE_NAME_PREFIX + mainTable.getTableName() + "__" + indexName);
     }
 
     /** Returns whether a table name is reserved for a system-managed Index Table. */

@@ -408,12 +408,14 @@ final class IndexReplicationScheduler {
                 return false;
             }
         }
+        // A read group contains distinct members of this source.
+        int syncCount = 0;
         for (IndexReplicationState index : source.indexStates()) {
-            if (index.encoder().isSync() && !group.states().contains(index)) {
-                return false;
+            if (index.encoder().isSync()) {
+                syncCount++;
             }
         }
-        return true;
+        return syncCount == group.states().size();
     }
 
     private static boolean reusableRange(

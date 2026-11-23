@@ -2891,7 +2891,7 @@ public class ReplicaManager implements ServerReconfigurable {
                 replicaStateChangeLock,
                 () -> {
                     for (Replica replica : getOnlineReplicaList()) {
-                        replica.getIndexReplicationSupervisor().close();
+                        replica.getIndexReplicationSupervisor().stop();
                     }
                 });
         indexReplicationManager.close();

@@ -46,7 +46,6 @@ final class IndexReplicationWindow {
 
     private final IndexReplicationState index;
     private final long windowEndOffset;
-    private final int expectedBatchCount;
     private int remaining;
     private final IndexReplicator owner;
     private final IndexReplicationRetryState retry;
@@ -57,17 +56,11 @@ final class IndexReplicationWindow {
     private volatile boolean failed;
 
     IndexReplicationWindow(
-            IndexReplicationState index,
-            long windowEndOffset,
-            int batchCount,
-            IndexReplicator owner) {
+            IndexReplicationState index, long windowEndOffset, IndexReplicator owner) {
         this.index = index;
         this.windowEndOffset = windowEndOffset;
-        this.expectedBatchCount = batchCount;
-        this.remaining = batchCount;
         this.owner = owner;
         this.retry = index.retryState();
-        this.admitted = false;
     }
 
     IndexReplicationState index() {
@@ -83,9 +76,8 @@ final class IndexReplicationWindow {
         return owner.sourceBucket();
     }
 
-    /** Whether the producing replicator has been closed. */
-    boolean isOwnerClosed() {
-        return owner.isClosed();
+    boolean acceptsBatches() {
+        return !terminal && !owner.isClosed();
     }
 
     /**
@@ -103,7 +95,7 @@ final class IndexReplicationWindow {
     }
 
     synchronized void onFailure() {
-        if (!terminal && !owner.isClosed()) {
+        if (acceptsBatches()) {
             failed = true;
             retry.onFailure();
         }
@@ -131,16 +123,13 @@ final class IndexReplicationWindow {
 
     synchronized void markAdmitted(long payloadBytes, Set<TableBucket> targetBuckets) {
         this.targetBuckets = targetBuckets;
+        remaining = targetBuckets.size();
         admittedPayloadBytes = payloadBytes;
         admitted = true;
     }
 
     Iterable<TableBucket> targetBuckets() {
         return targetBuckets;
-    }
-
-    int expectedBatchCount() {
-        return expectedBatchCount;
     }
 
     /**

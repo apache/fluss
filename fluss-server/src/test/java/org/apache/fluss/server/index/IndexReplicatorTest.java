@@ -36,9 +36,8 @@ import org.apache.fluss.rpc.TestingTabletGatewayService;
 import org.apache.fluss.rpc.messages.PutIndexRequest;
 import org.apache.fluss.rpc.messages.PutIndexResponse;
 import org.apache.fluss.rpc.protocol.Errors;
-import org.apache.fluss.server.log.FetchDataInfo;
-import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.testutils.ListLogRecords;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -69,6 +68,7 @@ import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESS
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.server.index.TestingIndexSourceLog.sourceRecords;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -116,17 +116,8 @@ class IndexReplicatorTest {
         AtomicLong highWatermark = new AtomicLong(2);
         AtomicReference<CompletableFuture<Void>> completion = new AtomicReference<>();
         IndexSendBuffer buffer = new IndexSendBuffer(8192);
-        IndexReplicationEncoder delegate = indexEncoder("async", 3L, new AtomicInteger());
         IndexReplicationEncoder async =
-                new IndexReplicationEncoder(
-                        "async",
-                        IndexVisibility.ASYNC,
-                        3L,
-                        1,
-                        KvFormat.COMPACTED,
-                        new int[] {0},
-                        delegate::encodeDataEntry,
-                        delegate::encodeProgress);
+                indexEncoder("async", 3L, IndexVisibility.ASYNC, new AtomicInteger());
         IndexSourceReader.SourceLog log =
                 sourceLog(
                         new TableBucket(1L, 0),
@@ -181,17 +172,8 @@ class IndexReplicatorTest {
         MemoryLogRecords records = sourceRecords(RowType.of(DataTypes.INT()), 0);
         AtomicInteger reads = new AtomicInteger();
         AtomicInteger asyncEncodes = new AtomicInteger();
-        IndexReplicationEncoder delegate = indexEncoder("async", 3L, asyncEncodes);
         IndexReplicationEncoder async =
-                new IndexReplicationEncoder(
-                        "async",
-                        IndexVisibility.ASYNC,
-                        3L,
-                        1,
-                        KvFormat.COMPACTED,
-                        new int[] {0},
-                        delegate::encodeDataEntry,
-                        delegate::encodeProgress);
+                indexEncoder("async", 3L, IndexVisibility.ASYNC, asyncEncodes);
         IndexSendBuffer buffer = new IndexSendBuffer(payloadBudget);
         try (IndexReplicator replicator =
                 replicator(
@@ -225,20 +207,7 @@ class IndexReplicatorTest {
     void oversizedOutputRetriesACompleteSourceBatchPrefix(boolean payloadLimited) throws Exception {
         MemoryLogRecords first = sourceRecords(RowType.of(DataTypes.INT()), 0);
         MemoryLogRecords second = sourceRecords(RowType.of(DataTypes.INT()), 2);
-        LogRecords records =
-                new LogRecords() {
-                    @Override
-                    public int sizeInBytes() {
-                        return first.sizeInBytes() + second.sizeInBytes();
-                    }
-
-                    @Override
-                    public Iterable<LogRecordBatch> batches() {
-                        return Arrays.asList(
-                                first.batches().iterator().next(),
-                                second.batches().iterator().next());
-                    }
-                };
+        LogRecords records = new ListLogRecords(Arrays.asList(first, second));
         CompactedRow value = binaryValue(1000);
         IndexReplicationEncoder index =
                 new IndexReplicationEncoder(
@@ -422,20 +391,7 @@ class IndexReplicatorTest {
                         Collections.singletonList(new Object[] {3}),
                         LogFormat.INDEXED,
                         DEFAULT_COMPRESSION);
-        LogRecords records =
-                new LogRecords() {
-                    @Override
-                    public int sizeInBytes() {
-                        return first.sizeInBytes() + second.sizeInBytes();
-                    }
-
-                    @Override
-                    public Iterable<LogRecordBatch> batches() {
-                        return Arrays.asList(
-                                first.batches().iterator().next(),
-                                second.batches().iterator().next());
-                    }
-                };
+        LogRecords records = new ListLogRecords(Arrays.asList(first, second));
         AtomicLong highWatermark = new AtomicLong(2);
         AtomicBoolean encodingFailed = new AtomicBoolean(true);
         CompactedRow largeValue = binaryValue(5000);
@@ -699,36 +655,18 @@ class IndexReplicatorTest {
         AtomicInteger reads = new AtomicInteger();
         boolean remote = !failure.equals("local gap");
         IndexSourceReader.SourceLog log =
-                new IndexSourceReader.SourceLog() {
-                    @Override
-                    public TableBucket tableBucket() {
-                        return new TableBucket(1L, 0);
-                    }
-
-                    @Override
-                    public long highWatermark() {
-                        return 2L;
-                    }
-
-                    @Override
-                    public long logStartOffset() {
-                        return remote ? 2L : 0L;
-                    }
-
-                    @Override
-                    public FetchDataInfo read(
-                            long offset,
-                            int maxBytes,
-                            FetchIsolation isolation,
-                            boolean minOneMessage) {
-                        assertThat(remote)
-                                .as("a remote-only range must never be read locally")
-                                .isFalse();
-                        assertThat(offset).isZero();
-                        reads.incrementAndGet();
-                        return new FetchDataInfo(repaired.get() ? valid : gapped);
-                    }
-                };
+                new TestingIndexSourceLog(
+                        new TableBucket(1L, 0),
+                        () -> 2L,
+                        remote ? 2L : 0L,
+                        offset -> {
+                            assertThat(remote)
+                                    .as("a remote-only range must never be read locally")
+                                    .isFalse();
+                            assertThat(offset).isZero();
+                            return repaired.get() ? valid : gapped;
+                        },
+                        reads);
         Supplier<IndexSourceReader.RemoteFetcher> fetcher =
                 () ->
                         new IndexSourceReader.RemoteFetcher() {
@@ -953,21 +891,6 @@ class IndexReplicatorTest {
                 delegate::encodeProgress);
     }
 
-    private static MemoryLogRecords sourceRecords(RowType rowType, long offset) throws Exception {
-        return createBasicMemoryLogRecords(
-                rowType,
-                1,
-                offset,
-                0L,
-                CURRENT_LOG_MAGIC_VALUE,
-                NO_WRITER_ID,
-                NO_BATCH_SEQUENCE,
-                Arrays.asList(ChangeType.INSERT, ChangeType.INSERT),
-                Arrays.asList(new Object[] {1}, new Object[] {2}),
-                LogFormat.INDEXED,
-                DEFAULT_COMPRESSION);
-    }
-
     private static IndexSourceReader.SourceLog sourceLog(
             Supplier<LogRecords> records, AtomicInteger reads) {
         return sourceLog(new TableBucket(1L, 0), records, reads);
@@ -1132,13 +1055,18 @@ class IndexReplicatorTest {
 
     private static IndexReplicationEncoder indexEncoder(
             String name, long tableId, AtomicInteger encodes) {
+        return indexEncoder(name, tableId, IndexVisibility.SYNC, encodes);
+    }
+
+    private static IndexReplicationEncoder indexEncoder(
+            String name, long tableId, IndexVisibility visibility, AtomicInteger encodes) {
         CompactedRowWriter writer = new CompactedRowWriter(1);
         writer.writeByte((byte) 1);
         CompactedRow value = new CompactedRow(new DataType[] {DataTypes.TINYINT()});
         value.pointTo(writer.segment(), 0, writer.position());
         return new IndexReplicationEncoder(
                 name,
-                IndexVisibility.SYNC,
+                visibility,
                 tableId,
                 1,
                 KvFormat.COMPACTED,

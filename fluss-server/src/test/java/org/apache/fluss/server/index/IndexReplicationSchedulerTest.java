@@ -20,15 +20,14 @@ package org.apache.fluss.server.index;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.compacted.CompactedRowWriter;
+import org.apache.fluss.testutils.ListLogRecords;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -47,11 +46,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
-import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
-import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
+import static org.apache.fluss.server.index.TestingIndexSourceLog.sourceRecords;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class IndexReplicationSchedulerTest {
@@ -529,37 +524,11 @@ class IndexReplicationSchedulerTest {
                 throws Exception {
             this.scheduler = IndexReplicationSchedulerTest.this.scheduler;
             this.worker = worker;
-            List<LogRecordBatch> batches = new ArrayList<>();
-            AtomicInteger totalBytes = new AtomicInteger();
+            List<MemoryLogRecords> batches = new ArrayList<>();
             for (int offset = 0; offset < 16; offset += 2) {
-                MemoryLogRecords records =
-                        createBasicMemoryLogRecords(
-                                RowType.of(DataTypes.INT()),
-                                1,
-                                offset,
-                                0L,
-                                CURRENT_LOG_MAGIC_VALUE,
-                                NO_WRITER_ID,
-                                NO_BATCH_SEQUENCE,
-                                Arrays.asList(ChangeType.INSERT, ChangeType.INSERT),
-                                Arrays.asList(new Object[] {1}, new Object[] {2}),
-                                LogFormat.INDEXED,
-                                DEFAULT_COMPRESSION);
-                batches.add(records.batches().iterator().next());
-                totalBytes.addAndGet(records.sizeInBytes());
+                batches.add(sourceRecords(RowType.of(DataTypes.INT()), offset));
             }
-            LogRecords records =
-                    new LogRecords() {
-                        @Override
-                        public int sizeInBytes() {
-                            return totalBytes.get();
-                        }
-
-                        @Override
-                        public Iterable<LogRecordBatch> batches() {
-                            return batches;
-                        }
-                    };
+            LogRecords records = new ListLogRecords(batches);
             IndexSourceReader.SourceLog log =
                     new TestingIndexSourceLog(
                             bucket,
@@ -576,7 +545,7 @@ class IndexReplicationSchedulerTest {
                                         public Iterable<LogRecordBatch> fetch(
                                                 long start, long localStart) {
                                             reads.incrementAndGet();
-                                            return batches;
+                                            return records.batches();
                                         }
 
                                         @Override

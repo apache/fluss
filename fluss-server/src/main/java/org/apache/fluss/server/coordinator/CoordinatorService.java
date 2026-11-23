@@ -903,10 +903,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             TableDescriptor indexDescriptor =
                     IndexTableDescriptorFactory.derive(mainDescriptor, mainTableId, index);
             TablePath indexTablePath =
-                    TablePath.of(
-                            mainTablePath.getDatabaseName(),
-                            IndexTableUtils.indexTableName(
-                                    mainTablePath.getTableName(), index.getIndexName()));
+                    IndexTableUtils.indexTablePath(mainTablePath, index.getIndexName());
             metadataManager.validateTableDescriptor(indexTablePath, indexDescriptor);
             if (metadataManager.tableExists(indexTablePath)) {
                 throw new TableAlreadyExistException(
@@ -1306,10 +1303,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         TablePath mainTablePath = mainTableInfo.getTablePath();
         for (Schema.Index index : mainTableInfo.getSchema().getIndexes()) {
             TablePath indexTablePath =
-                    TablePath.of(
-                            mainTablePath.getDatabaseName(),
-                            IndexTableUtils.indexTableName(
-                                    mainTablePath.getTableName(), index.getIndexName()));
+                    IndexTableUtils.indexTablePath(mainTablePath, index.getIndexName());
             try {
                 TableInfo indexTableInfo = metadataManager.getTable(indexTablePath);
                 if (indexTableInfo.isIndexTable()

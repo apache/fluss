@@ -52,23 +52,14 @@ public final class IndexTableDescriptorFactory {
                 mainPk.isPresent(), "Indexed main table %s must have a primary key", mainTableId);
         List<String> basePk = mainPk.get().getColumnNames();
 
-        Set<String> seen = new LinkedHashSet<>();
+        Set<String> storedColumns = new LinkedHashSet<>(index.getColumnNames());
+        storedColumns.addAll(basePk);
         List<Schema.Column> columns = new ArrayList<>();
-        for (String c : index.getColumnNames()) {
-            if (seen.add(c)) {
-                columns.add(
-                        new Schema.Column(
-                                c,
-                                mainDescriptor.getSchema().getColumn(c).getDataType().copy(true)));
-            }
-        }
-        for (String c : basePk) {
-            if (seen.add(c)) {
-                columns.add(
-                        new Schema.Column(
-                                c,
-                                mainDescriptor.getSchema().getColumn(c).getDataType().copy(true)));
-            }
+        for (String name : storedColumns) {
+            columns.add(
+                    new Schema.Column(
+                            name,
+                            mainDescriptor.getSchema().getColumn(name).getDataType().copy(true)));
         }
         if (partitioned) {
             columns.add(

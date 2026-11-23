@@ -125,10 +125,7 @@ public class FlussTable implements Table {
     public Lookuper getSecondaryIndexLookuper(String indexName) {
         Schema mainSchema = tableInfo.getSchema();
         Schema.Index index = findIndexOrThrow(mainSchema, tablePath, indexName);
-        TablePath indexTablePath =
-                TablePath.of(
-                        tablePath.getDatabaseName(),
-                        IndexTableUtils.indexTableName(tablePath.getTableName(), indexName));
+        TablePath indexTablePath = IndexTableUtils.indexTablePath(tablePath, indexName);
         return SecondaryIndexLookuper.create(
                 mainSchema,
                 index.getColumnNames(),

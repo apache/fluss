@@ -373,7 +373,7 @@ final class IndexSender implements AutoCloseable {
 
             claimed.removeIf(
                     batch -> {
-                        if (!batch.ownerActive()) {
+                        if (!batch.window().acceptsBatches()) {
                             discardClaimedBatch(batch);
                             return true;
                         }
@@ -387,13 +387,13 @@ final class IndexSender implements AutoCloseable {
                             retryOversizedBatch(batch, singleton);
                             return true;
                         }
-                        return !batch.ownerActive();
+                        return !batch.window().acceptsBatches();
                     });
 
             // Group claimed batches by target leader server.
             Map<Integer, List<IndexBatch>> byServer = new HashMap<>();
             for (IndexBatch batch : claimed) {
-                if (!batch.ownerActive()) {
+                if (!batch.window().acceptsBatches()) {
                     discardClaimedBatch(batch);
                     continue;
                 }
@@ -569,7 +569,7 @@ final class IndexSender implements AutoCloseable {
         private boolean removeInactiveBatches(List<IndexBatch> batches) {
             return batches.removeIf(
                     batch -> {
-                        if (batch.ownerActive()) {
+                        if (batch.window().acceptsBatches()) {
                             return false;
                         }
                         discardClaimedBatch(batch);
@@ -644,7 +644,7 @@ final class IndexSender implements AutoCloseable {
 
     private boolean batchesActiveAndClaimed(List<IndexBatch> batches) {
         for (IndexBatch batch : batches) {
-            if (!batch.ownerActive() || !sendBuffer.ownsClaim(batch)) {
+            if (!batch.window().acceptsBatches() || !sendBuffer.ownsClaim(batch)) {
                 return false;
             }
         }
@@ -695,14 +695,6 @@ final class IndexSender implements AutoCloseable {
         }
     }
 
-    private static long saturatedAdd(long left, long right) {
-        try {
-            return Math.addExact(left, right);
-        } catch (ArithmeticException ignored) {
-            return Long.MAX_VALUE;
-        }
-    }
-
     /**
      * Consolidates whole target batches up to the preferred payload bound and exact hard transport
      * bound. A singleton above the transport bound remains intact and is retried after backoff.
@@ -717,8 +709,7 @@ final class IndexSender implements AutoCloseable {
             long batchBytes = batch.encoded().getBytesLength();
             SizeAccumulator candidate = currentSize.copy();
             candidate.addBucket(batch);
-            long candidatePayloadBytes = saturatedAdd(currentPayloadBytes, batchBytes);
-            boolean exceedsPreferred = candidatePayloadBytes > maxRequestBytes;
+            boolean exceedsPreferred = currentPayloadBytes + batchBytes > maxRequestBytes;
             if (!current.isEmpty()
                     && (exceedsPreferred || candidate.exceedsLimit(maxTransportRequestBytes))) {
                 chunks.add(new RequestChunk(current, currentSize));
@@ -730,7 +721,7 @@ final class IndexSender implements AutoCloseable {
                 currentSize = candidate;
             }
             current.add(batch);
-            currentPayloadBytes = saturatedAdd(currentPayloadBytes, batchBytes);
+            currentPayloadBytes += batchBytes;
         }
         if (!current.isEmpty()) {
             chunks.add(new RequestChunk(current, currentSize));
@@ -843,7 +834,7 @@ final class IndexSender implements AutoCloseable {
     }
 
     private boolean isOpenAndActive(IndexBatch batch) {
-        return lifecyclePhase == LifecyclePhase.OPEN && batch.ownerActive();
+        return lifecyclePhase == LifecyclePhase.OPEN && batch.window().acceptsBatches();
     }
 
     private void enqueuePendingBuckets(List<IndexBatch> batches) {

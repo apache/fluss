@@ -38,6 +38,8 @@ import org.apache.fluss.server.exception.IndexSourceWalCorruptionException;
 import org.apache.fluss.server.index.IndexReplicationSupervisor.IndexProgressListener;
 import org.apache.fluss.server.index.IndexRequestFactory.SizeAccumulator;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 import org.apache.fluss.shaded.netty4.io.netty.util.collection.IntObjectHashMap;
 import org.apache.fluss.shaded.netty4.io.netty.util.collection.IntObjectMap;
 import org.apache.fluss.utils.CloseableIterator;
@@ -56,9 +58,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -93,8 +93,7 @@ final class IndexReplicator implements AutoCloseable {
     private static final long RETAINED_WINDOW_FAILURE_TIMEOUT_NS = TimeUnit.SECONDS.toNanos(10);
 
     private final IndexSourceReader sourceReader;
-    private final List<IndexReplicationState> indexStates;
-    private final Map<String, IndexReplicationState> indexStatesByName;
+    private final ImmutableMap<String, IndexReplicationState> indexStatesByName;
     private final IndexSendBuffer sendBuffer;
     private final LogRecordReadContext readContext;
     private final IndexProgressListener onProgress;
@@ -165,18 +164,14 @@ final class IndexReplicator implements AutoCloseable {
         this.wakeupSignal = checkNotNull(wakeupSignal, "wakeupSignal");
         this.sourceReader = sourceReader;
         this.sourceRetry = new IndexReplicationRetryState(retryBackoff, clock);
-        List<IndexReplicationState> states = new ArrayList<>(indexEncoders.size());
-        this.indexStatesByName = new LinkedHashMap<>();
-        for (IndexReplicationEncoder indexEncoder : indexEncoders) {
-            IndexReplicationState state =
-                    new IndexReplicationState(indexEncoder, replayStartOffset, retryBackoff, clock);
-            if (indexStatesByName.put(indexEncoder.getIndexName(), state) != null) {
-                throw new IllegalArgumentException(
-                        "Duplicate secondary index name: " + indexEncoder.getIndexName());
-            }
-            states.add(state);
+        ImmutableMap.Builder<String, IndexReplicationState> states =
+                ImmutableMap.builderWithExpectedSize(indexEncoders.size());
+        for (IndexReplicationEncoder encoder : indexEncoders) {
+            states.put(
+                    encoder.getIndexName(),
+                    new IndexReplicationState(encoder, replayStartOffset, retryBackoff, clock));
         }
-        this.indexStates = Collections.unmodifiableList(states);
+        this.indexStatesByName = states.buildOrThrow();
         this.sendBuffer = sendBuffer;
         this.readContext = readContext;
         this.sourceReadTargetBytes = sourceReadTargetBytes;
@@ -416,8 +411,7 @@ final class IndexReplicator implements AutoCloseable {
         }
 
         // Encode and validate the entire window before publishing any target batch.
-        IndexReplicationWindow window =
-                new IndexReplicationWindow(state, endOffset, build.builders.size(), this);
+        IndexReplicationWindow window = new IndexReplicationWindow(state, endOffset, this);
         List<IndexBatch> batches = new ArrayList<>(build.builders.size());
         try {
             for (IntObjectMap.PrimitiveEntry<BucketBatchBuilder> entry : build.builders.entries()) {
@@ -562,7 +556,7 @@ final class IndexReplicator implements AutoCloseable {
         if (sourceRetry.hasFailure()) {
             return true;
         }
-        for (IndexReplicationState state : indexStates) {
+        for (IndexReplicationState state : indexStates()) {
             if (state.retry.hasFailure()) {
                 return true;
             }
@@ -581,7 +575,7 @@ final class IndexReplicator implements AutoCloseable {
      */
     private boolean releaseStalledWindows() {
         boolean released = false;
-        for (IndexReplicationState state : indexStates) {
+        for (IndexReplicationState state : indexStates()) {
             IndexReplicationWindow window =
                     state.retireStalledWindow(RETAINED_WINDOW_FAILURE_TIMEOUT_NS);
             if (window != null) {
@@ -601,7 +595,7 @@ final class IndexReplicator implements AutoCloseable {
 
     private void retireOwnedBatchesLocked() {
         Set<IndexReplicationWindow> windows = new HashSet<>();
-        for (IndexReplicationState state : indexStates) {
+        for (IndexReplicationState state : indexStates()) {
             IndexReplicationWindow window = state.retireWindow();
             if (window != null) {
                 windows.add(window);
@@ -727,7 +721,7 @@ final class IndexReplicator implements AutoCloseable {
     long getSyncIndexPushedOffset() {
         long min = Long.MAX_VALUE;
         boolean hasSyncIndex = false;
-        for (IndexReplicationState state : indexStates) {
+        for (IndexReplicationState state : indexStates()) {
             if (state.encoder.isSync()) {
                 hasSyncIndex = true;
                 min = Math.min(min, state.pushedOffset);
@@ -741,7 +735,7 @@ final class IndexReplicator implements AutoCloseable {
 
     long getAllIndexPushedOffset() {
         long min = Long.MAX_VALUE;
-        for (IndexReplicationState state : indexStates) {
+        for (IndexReplicationState state : indexStates()) {
             min = Math.min(min, state.pushedOffset);
         }
         return min;
@@ -832,7 +826,7 @@ final class IndexReplicator implements AutoCloseable {
     }
 
     List<IndexReplicationState> indexStates() {
-        return indexStates;
+        return indexStatesByName.values().asList();
     }
 
     boolean hasSourceFailure() {
@@ -1022,10 +1016,9 @@ final class IndexReplicator implements AutoCloseable {
 
         ReadGroup(long startOffset, long endOffset, List<IndexReplicationState> states) {
             checkArgument(!states.isEmpty(), "read group must contain an index");
-            checkArgument(new HashSet<>(states).size() == states.size(), "duplicate index");
             this.startOffset = startOffset;
             this.endOffset = endOffset;
-            this.states = Collections.unmodifiableList(new ArrayList<>(states));
+            this.states = ImmutableList.copyOf(states);
         }
 
         long startOffset() {

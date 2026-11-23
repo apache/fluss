@@ -1309,10 +1309,7 @@ class TableManagerITCase {
 
             AdminGateway gateway = limitedCluster.newCoordinatorClient();
             TablePath mainPath = TablePath.of("fluss", "index_capacity");
-            TablePath indexPath =
-                    TablePath.of(
-                            "fluss",
-                            IndexTableUtils.indexTableName(mainPath.getTableName(), "idx_b"));
+            TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_b");
             Schema schema =
                     Schema.newBuilder()
                             .column("a", DataTypes.INT())

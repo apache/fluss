@@ -124,8 +124,7 @@ class IndexSendBufferTest {
         AtomicInteger wakeups = new AtomicInteger();
         buffer.setCapacityListener(wakeups::incrementAndGet);
         try (IndexReplicator owner = owner(buffer, 0)) {
-            IndexBatch batch = batch(owner, new TableBucket(2L, 0));
-            assertThat(buffer.tryAppendWindow(Collections.singletonList(batch))).isTrue();
+            IndexBatch batch = publishBatch(buffer, owner, new TableBucket(2L, 0));
             assertThat(buffer.requestCapacityWakeupIfFull()).isTrue();
             assertThat(buffer.claimFirstReady(batch.targetBucket())).isSameAs(batch);
             assertThat(buffer.completeClaim(batch)).isTrue();
@@ -204,7 +203,7 @@ class IndexSendBufferTest {
                     }
                 };
         try (IndexReplicator owner = owner(buffer, 0)) {
-            buffer.tryAppendWindow(Collections.singletonList(batch(owner, new TableBucket(2L, 0))));
+            publishBatch(buffer, owner, new TableBucket(2L, 0));
             try (IndexSender sender =
                     new IndexSender(
                             buffer,
@@ -272,7 +271,7 @@ class IndexSendBufferTest {
                 };
         try (IndexReplicator owner = owner(buffer, 0)) {
             TableBucket target = new TableBucket(2L, 0);
-            buffer.tryAppendWindow(Collections.singletonList(batch(owner, target)));
+            publishBatch(buffer, owner, target);
             try (IndexSender sender =
                     new IndexSender(
                             buffer,
@@ -331,12 +330,11 @@ class IndexSendBufferTest {
         TableBucket target = new TableBucket(2L, 0);
         try (IndexReplicator first = owner(buffer, 0);
                 IndexReplicator second = owner(buffer, 1)) {
-            IndexBatch firstBatch = batch(first, target);
-            IndexBatch secondBatch = batch(second, target);
-            assertThat(buffer.tryAppendWindow(Collections.singletonList(firstBatch))).isTrue();
+            IndexBatch firstBatch = publishBatch(buffer, first, target);
+            IndexBatch secondBatch = null;
             assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(firstBatch);
             if (successorQueued) {
-                assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
+                secondBatch = publishBatch(buffer, second, target);
                 assertThat(buffer.hasClaim(ready.remove())).isTrue();
             }
             assertThat(ready).isEmpty();
@@ -348,7 +346,7 @@ class IndexSendBufferTest {
                 assertThat(buffer.buckets()).isEmpty();
                 assertThat(buffer.pendingBytes()).isZero();
                 ready.clear();
-                assertThat(buffer.tryAppendWindow(Collections.singletonList(secondBatch))).isTrue();
+                secondBatch = publishBatch(buffer, second, target);
             }
             assertThat(buffer.pendingBytes()).isEqualTo(1L);
             assertThat(buffer.claimFirstReady(ready.remove())).isSameAs(secondBatch);
@@ -371,7 +369,7 @@ class IndexSendBufferTest {
         try (IndexReplicator source = owner(buffer, 0)) {
             long timeoutMs = 128L;
             IndexReplicationWindow window =
-                    new IndexReplicationWindow(source.indexStates().get(0), 128L, 2, source);
+                    new IndexReplicationWindow(source.indexStates().get(0), 128L, source);
             List<IndexBatch> batches = new ArrayList<>();
             IndexRequestFactory.SizeAccumulator size =
                     new IndexRequestFactory.SizeAccumulator(2L, 1L, timeoutMs);
@@ -407,18 +405,25 @@ class IndexSendBufferTest {
         }
     }
 
-    private static IndexBatch batch(IndexReplicator owner, TableBucket target) {
-        return new IndexBatch(
-                target,
-                new byte[0],
-                new MemorySegmentBytesView(MemorySegment.wrap(new byte[1]), 0, 1),
-                1L,
-                window(owner));
+    private static IndexBatch publishBatch(
+            IndexSendBuffer buffer, IndexReplicator owner, TableBucket target) {
+        try (IndexSendBuffer.Reservation reservation = buffer.newReservation()) {
+            IndexBatch batch =
+                    new IndexBatch(
+                            target,
+                            new byte[0],
+                            new MemorySegmentBytesView(reservation.allocatePage(1), 0, 1),
+                            1L,
+                            window(owner));
+            assertThat(buffer.tryAppendWindow(Collections.singletonList(batch), reservation))
+                    .isTrue();
+            return batch;
+        }
     }
 
     private static IndexReplicationWindow window(IndexReplicator owner) {
         IndexReplicator.IndexReplicationState index = owner.indexStates().get(0);
-        IndexReplicationWindow window = new IndexReplicationWindow(index, 1L, 1, owner);
+        IndexReplicationWindow window = new IndexReplicationWindow(index, 1L, owner);
         index.installWindow(window);
         return window;
     }

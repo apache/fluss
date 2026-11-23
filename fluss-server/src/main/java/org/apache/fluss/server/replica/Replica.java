@@ -675,7 +675,7 @@ public final class Replica {
     /** Delete the replica including drop the kv and log. */
     public void delete() {
         indexReplicationLag = null;
-        indexReplicationSupervisor.close();
+        indexReplicationSupervisor.stop();
         indexPartitionTombstoneFilter = null;
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
@@ -726,7 +726,7 @@ public final class Replica {
         if (isKvTable()) {
             // Prepare index-table tombstone state before opening RocksDB. Compaction filters are
             // attached during KvTablet creation and cannot be installed afterward.
-            indexReplicationSupervisor.prepareForLeader();
+            indexReplicationSupervisor.stop();
             indexPartitionTombstoneFilter =
                     IndexPartitionTombstoneFilter.forIndexTable(tableInfo, metadataCache);
             indexReplicationLag = null;
@@ -784,7 +784,7 @@ public final class Replica {
 
     private void onBecomeNewFollower(int standbyReplica) {
         indexReplicationLag = null;
-        indexReplicationSupervisor.onBecomeFollower();
+        indexReplicationSupervisor.stop();
         indexPartitionTombstoneFilter = null;
 
         if (isKvTable()) {

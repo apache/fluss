@@ -23,7 +23,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -85,7 +84,6 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
     private static final long INDEXED_TABLE_ID = 710001L;
     private static final long PLAIN_TABLE_ID = 710002L;
     private static final long INDEX_TABLE_ID = 710003L;
-    private static final String INDEX_NAME = "idx_b";
     private static final TablePath INDEXED_TABLE_PATH =
             TablePath.of("test_db_1", "fail_stop_index_main_pk");
     private static final TablePath PLAIN_TABLE_PATH =
@@ -244,10 +242,7 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
         TableInfo mainTableInfo = mainReplica.getTableInfo();
         Schema.Index index = mainTableInfo.getSchema().getIndexes().get(0);
         TablePath indexTablePath =
-                TablePath.of(
-                        INDEXED_TABLE_PATH.getDatabaseName(),
-                        IndexTableUtils.indexTableName(
-                                INDEXED_TABLE_PATH.getTableName(), index.getIndexName()));
+                IndexTableUtils.indexTablePath(INDEXED_TABLE_PATH, index.getIndexName());
         TableDescriptor indexDescriptor =
                 IndexTableDescriptorFactory.derive(
                         mainTableInfo.toTableDescriptor(), mainTableInfo.getTableId(), index);
@@ -414,17 +409,7 @@ class IndexLeaderRecoveryTest extends ReplicaTestBase {
     }
 
     private static Schema indexedSchema() {
-        return Schema.newBuilder()
-                .column("a", DataTypes.INT())
-                .column("b", DataTypes.STRING())
-                .primaryKey("a")
-                .index(
-                        INDEX_NAME,
-                        IndexType.SECONDARY,
-                        Collections.singletonList("b"),
-                        IndexVisibility.ASYNC,
-                        3)
-                .build();
+        return TestingIndexTable.indexedSchema(IndexVisibility.ASYNC, 3);
     }
 
     private static Schema plainSchema() {

@@ -72,6 +72,7 @@ import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilter;
 import io.github.fluss_contrib.rocksdb.AbstractCompactionFilterFactory;
@@ -1318,6 +1319,11 @@ public final class KvTablet {
      */
     public Executor getGuardedExecutor() {
         return runnable -> inWriteLock(kvLock, runnable::run);
+    }
+
+    /** Runs a read-modify-write operation under the same lock as ordinary tablet writes. */
+    public <T, E extends Exception> T withWriteLock(SupplierWithException<T, E> action) throws E {
+        return inWriteLock(kvLock, action);
     }
 
     public List<ByteArraySlice> multiGet(List<byte[]> keys) throws IOException {

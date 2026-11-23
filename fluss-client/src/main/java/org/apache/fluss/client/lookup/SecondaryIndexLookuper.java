@@ -25,7 +25,6 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IndexTableUtils;
 
@@ -39,34 +38,15 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.function.Function;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * Two-hop {@link Lookuper} for a Global Secondary Index.
+ * Looks up candidate primary keys by index prefix, then rechecks current main rows to discard stale
+ * entries. Partition recreation can produce multiple candidates for the same primary key.
  *
- * <p>Hop 1: prefix-scan the Index Table by the provided {@code lookupKey} to obtain candidate Index
- * Table rows, each carrying the base table's complete logical primary key.
- *
- * <p>Hop 2: extract the logical basePK via {@code basePkExtractorFromIndexRow}, deduplicate
- * physical candidates by that key, and point-get the main table once per key. The deduplication
- * prevents old and new physical Index Table rows for a recreated partition from emitting the same
- * current main row twice. A main lookup returning an empty result list means the row was deleted
- * (stale Index Table pointer) and is skipped from the aggregated output.
- *
- * <p>Recheck: after Hop 2 returns, every surviving main row is re-validated against the user's
- * original {@code lookupKey}. Index columns are extracted from both sides using positional {@link
- * InternalRow.FieldGetter}s and compared according to their Fluss data types. Any row whose current
- * {@code idxCols} disagree with the lookup key is discarded as a stale index pointer (covers both
- * the async-visibility window and the natural lag during partition-tombstone cleanup).
- *
- * <p>Threading: Hop 2 is dispatched on {@code continuationExecutor} instead of the thread that
- * completes the Hop 1 future (a Netty I/O thread in production). Hop 2 submits point lookups
- * against the main table, which may synchronously block on a metadata refresh when partition
- * metadata is not cached yet; running that on an I/O thread would stall every RPC response served
- * by that thread and can even deadlock the metadata fetch itself.
+ * <p>Point lookups may block on partition metadata. Schedule them off the I/O thread that completes
+ * the index lookup so that metadata responses can still be processed.
  */
 @Internal
 @ThreadSafe
@@ -74,20 +54,13 @@ public final class SecondaryIndexLookuper implements Lookuper {
 
     private final Lookuper indexTablePrefixLookuper;
     private final Lookuper mainTablePointLookuper;
-    private final Function<InternalRow, InternalRow> indexLookupKeyEncoder;
+    private final CompactedKeyEncoder indexKeyEncoder;
     private final InternalRow.FieldGetter[] idxColumnGettersInLookupKey;
     private final InternalRow.FieldGetter[] idxColumnGettersInMainRow;
-    private final DataType[] idxColumnTypes;
-    private final Function<InternalRow, GenericRow> basePkExtractorFromIndexRow;
+    private final RowType lookupType;
+    private final InternalRow.FieldGetter[] primaryKeyGetters;
     private final Executor continuationExecutor;
 
-    /**
-     * Assembles a lookuper for one secondary index of {@code mainSchema}.
-     *
-     * <p>The wiring establishes the invariants this class depends on: the two getter arrays are
-     * parallel to {@code idxCols}, and the base-PK extractor yields a row shaped like the main
-     * table's primary key so {@code mainTablePointLookuper} can consume it directly.
-     */
     public static SecondaryIndexLookuper create(
             Schema mainSchema,
             List<String> idxCols,
@@ -102,88 +75,48 @@ public final class SecondaryIndexLookuper implements Lookuper {
                                         IndexTableUtils.RECORD_KIND_SYSTEM_COLUMN,
                                         IndexTableUtils.ROUTING_KEY_SYSTEM_COLUMN))
                         .createLookuper();
-        CompactedKeyEncoder logicalIndexKeyEncoder =
-                new CompactedKeyEncoder(mainSchema.getRowType().project(idxCols));
-        Function<InternalRow, InternalRow> indexLookupKeyEncoder =
-                lookupKey ->
-                        GenericRow.of(
-                                IndexTableUtils.DATA_RECORD_KIND,
-                                logicalIndexKeyEncoder.encodeKey(lookupKey));
-
-        RowType mainRowType = mainSchema.getRowType();
-        int idxColCount = idxCols.size();
-        InternalRow.FieldGetter[] idxColumnGettersInLookupKey =
-                new InternalRow.FieldGetter[idxColCount];
-        InternalRow.FieldGetter[] idxColumnGettersInMainRow =
-                new InternalRow.FieldGetter[idxColCount];
-        DataType[] idxColumnTypes = new DataType[idxColCount];
-        for (int i = 0; i < idxColCount; i++) {
-            int posInMain = mainRowType.getFieldIndex(idxCols.get(i));
-            DataType idxColumnType = mainRowType.getTypeAt(posInMain);
-            idxColumnTypes[i] = idxColumnType;
-            // The lookup-key row carries idx columns in declaration order at positions 0..n-1.
-            idxColumnGettersInLookupKey[i] = InternalRow.createFieldGetter(idxColumnType, i);
-            // The main row carries each idx column at its position in the main schema.
-            idxColumnGettersInMainRow[i] = InternalRow.createFieldGetter(idxColumnType, posInMain);
-        }
-
-        // Index Table column ordering can dedup overlap between idx columns and PK columns, so each
-        // base-PK position is resolved by name rather than assumed to be a trailing suffix.
-        RowType indexRowType = indexTable.getTableInfo().getSchema().getRowType();
-        List<String> basePk = mainSchema.getPrimaryKeyColumnNames();
-        int pkSize = basePk.size();
-        InternalRow.FieldGetter[] basePkGettersInIndexRow = new InternalRow.FieldGetter[pkSize];
-        for (int i = 0; i < pkSize; i++) {
-            int posInIndex = indexRowType.getFieldIndex(basePk.get(i));
-            basePkGettersInIndexRow[i] =
-                    InternalRow.createFieldGetter(indexRowType.getTypeAt(posInIndex), posInIndex);
-        }
-        Function<InternalRow, GenericRow> basePkExtractor =
-                indexRow -> {
-                    GenericRow pk = new GenericRow(pkSize);
-                    for (int i = 0; i < pkSize; i++) {
-                        pk.setField(i, basePkGettersInIndexRow[i].getFieldOrNull(indexRow));
-                    }
-                    return pk;
-                };
-
         return new SecondaryIndexLookuper(
+                mainSchema,
+                idxCols,
+                indexTable.getTableInfo().getRowType(),
                 indexTablePrefixLookuper,
                 mainTablePointLookuper,
-                indexLookupKeyEncoder,
-                idxColumnGettersInLookupKey,
-                idxColumnGettersInMainRow,
-                idxColumnTypes,
-                basePkExtractor,
                 continuationExecutor);
     }
 
     SecondaryIndexLookuper(
+            Schema mainSchema,
+            List<String> indexColumns,
+            RowType indexRowType,
             Lookuper indexTablePrefixLookuper,
             Lookuper mainTablePointLookuper,
-            Function<InternalRow, InternalRow> indexLookupKeyEncoder,
-            InternalRow.FieldGetter[] idxColumnGettersInLookupKey,
-            InternalRow.FieldGetter[] idxColumnGettersInMainRow,
-            DataType[] idxColumnTypes,
-            Function<InternalRow, GenericRow> basePkExtractorFromIndexRow,
             Executor continuationExecutor) {
-        this.indexTablePrefixLookuper =
-                checkNotNull(indexTablePrefixLookuper, "indexTablePrefixLookuper");
-        this.mainTablePointLookuper =
-                checkNotNull(mainTablePointLookuper, "mainTablePointLookuper");
-        this.indexLookupKeyEncoder = checkNotNull(indexLookupKeyEncoder, "indexLookupKeyEncoder");
-        this.idxColumnGettersInLookupKey =
-                checkNotNull(idxColumnGettersInLookupKey, "idxColumnGettersInLookupKey").clone();
-        this.idxColumnGettersInMainRow =
-                checkNotNull(idxColumnGettersInMainRow, "idxColumnGettersInMainRow").clone();
-        this.idxColumnTypes = checkNotNull(idxColumnTypes, "idxColumnTypes").clone();
-        checkArgument(
-                this.idxColumnGettersInLookupKey.length == this.idxColumnGettersInMainRow.length
-                        && this.idxColumnGettersInLookupKey.length == this.idxColumnTypes.length,
-                "Index column getters and types must have the same length");
-        this.basePkExtractorFromIndexRow =
-                checkNotNull(basePkExtractorFromIndexRow, "basePkExtractorFromIndexRow");
-        this.continuationExecutor = checkNotNull(continuationExecutor, "continuationExecutor");
+        this.indexTablePrefixLookuper = checkNotNull(indexTablePrefixLookuper);
+        this.mainTablePointLookuper = checkNotNull(mainTablePointLookuper);
+        this.continuationExecutor = checkNotNull(continuationExecutor);
+        RowType mainRowType = mainSchema.getRowType();
+        lookupType = mainRowType.project(indexColumns);
+        indexKeyEncoder = new CompactedKeyEncoder(lookupType);
+        idxColumnGettersInLookupKey = InternalRow.createFieldGetters(lookupType);
+        idxColumnGettersInMainRow = gettersFor(mainRowType, indexColumns);
+        primaryKeyGetters = gettersFor(indexRowType, mainSchema.getPrimaryKeyColumnNames());
+    }
+
+    private static InternalRow.FieldGetter[] gettersFor(RowType type, List<String> names) {
+        InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[names.size()];
+        for (int i = 0; i < getters.length; i++) {
+            int position = type.getFieldIndex(names.get(i));
+            getters[i] = InternalRow.createFieldGetter(type.getTypeAt(position), position);
+        }
+        return getters;
+    }
+
+    private GenericRow primaryKey(InternalRow indexRow) {
+        GenericRow key = new GenericRow(primaryKeyGetters.length);
+        for (int i = 0; i < primaryKeyGetters.length; i++) {
+            key.setField(i, primaryKeyGetters[i].getFieldOrNull(indexRow));
+        }
+        return key;
     }
 
     @Override
@@ -195,7 +128,10 @@ public final class SecondaryIndexLookuper implements Lookuper {
         }
         Object[] expectedIdxValues = snapshotLookupKey(lookupKey);
         return indexTablePrefixLookuper
-                .lookup(indexLookupKeyEncoder.apply(lookupKey))
+                .lookup(
+                        GenericRow.of(
+                                IndexTableUtils.DATA_RECORD_KIND,
+                                indexKeyEncoder.encodeKey(lookupKey)))
                 .thenComposeAsync(
                         hop1Result -> doHop2(hop1Result, expectedIdxValues), continuationExecutor);
     }
@@ -211,7 +147,7 @@ public final class SecondaryIndexLookuper implements Lookuper {
                 new ArrayList<>(candidateIndexRows.size());
         Set<GenericRow> seenBasePrimaryKeys = new HashSet<>();
         for (InternalRow indexRow : candidateIndexRows) {
-            GenericRow basePk = basePkExtractorFromIndexRow.apply(indexRow);
+            GenericRow basePk = primaryKey(indexRow);
             if (seenBasePrimaryKeys.add(basePk)) {
                 mainFutures.add(mainTablePointLookuper.lookup(basePk));
             }
@@ -247,7 +183,7 @@ public final class SecondaryIndexLookuper implements Lookuper {
             Object actual = idxColumnGettersInMainRow[i].getFieldOrNull(mainRow);
             if (expected == null
                     || actual == null
-                    || !Equal.INSTANCE.test(idxColumnTypes[i], actual, expected)) {
+                    || !Equal.INSTANCE.test(lookupType.getTypeAt(i), actual, expected)) {
                 return false;
             }
         }

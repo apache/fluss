@@ -52,11 +52,7 @@ final class IndexSourceReader implements AutoCloseable {
 
         long highWatermark();
 
-        long logStartOffset();
-
-        default long localLogStartOffset() {
-            return logStartOffset();
-        }
+        long localLogStartOffset();
 
         FetchDataInfo read(
                 long offset, int maxBytes, FetchIsolation isolation, boolean minOneMessage)
@@ -129,7 +125,9 @@ final class IndexSourceReader implements AutoCloseable {
         if (nextOffset >= localLogStartOffset) {
             try {
                 return CompletableFuture.completedFuture(
-                        readLocal(nextOffset, endOffsetLimit, maxBytes, null));
+                        new BatchCollector(nextOffset, endOffsetLimit, maxBytes)
+                                .readLocal()
+                                .finish(null));
             } catch (Throwable failure) {
                 return FutureUtils.completedExceptionally(failure);
             }
@@ -169,10 +167,6 @@ final class IndexSourceReader implements AutoCloseable {
         return sourceLog.highWatermark();
     }
 
-    long logStartOffset() {
-        return sourceLog.logStartOffset();
-    }
-
     private void readRemote(
             CompletableFuture<ReadResult> future,
             long nextOffset,
@@ -191,30 +185,27 @@ final class IndexSourceReader implements AutoCloseable {
             long remoteEnd = Math.min(localLogStartOffset, endOffsetLimit);
             BatchCollector collector = new BatchCollector(nextOffset, endOffsetLimit, maxBytes);
             collector.collect(remoteFetcher.fetch(nextOffset, localLogStartOffset), remoteEnd);
-            if (!collector.limitReached() && collector.nextOffset() < remoteEnd) {
+            if (!collector.byteLimitReached && collector.nextOffset < remoteEnd) {
                 throw corruption(
                         "remote WAL ended at expected offset "
-                                + collector.nextOffset()
+                                + collector.nextOffset
                                 + " before local handoff "
                                 + remoteEnd);
             }
 
-            collector.attachResource(
-                    remoteSessionResource(remoteFetcher, collector.nextOffset() == remoteEnd));
-
-            ReadResult result;
-            if (!collector.limitReached()
-                    && collector.nextOffset() == localLogStartOffset
-                    && collector.nextOffset() < endOffsetLimit) {
-                result =
-                        readLocal(
-                                collector.nextOffset(),
-                                endOffsetLimit,
-                                collector.remainingBytes(),
-                                collector);
-            } else {
-                result = collector.finish();
+            boolean reachedHandoff = collector.nextOffset == localLogStartOffset;
+            if (reachedHandoff
+                    && !collector.byteLimitReached
+                    && collector.nextOffset < endOffsetLimit) {
+                collector.readLocal();
             }
+            // Remote batch views remain valid until their consumer closes the result.
+            RemoteFetcher session = remoteFetcher;
+            ReadResult result =
+                    collector.finish(
+                            collector.nextOffset >= remoteEnd
+                                    ? () -> discardRemoteFetcher(session)
+                                    : null);
             if (closed.get() || future.isCancelled()) {
                 result.close();
                 future.cancel(true);
@@ -250,43 +241,6 @@ final class IndexSourceReader implements AutoCloseable {
         }
     }
 
-    private AutoCloseable remoteSessionResource(
-            RemoteFetcher remoteFetcher, boolean retireSession) {
-        return () -> {
-            if (retireSession) {
-                // Retire the session after the result's batch views have been consumed.
-                discardRemoteFetcher(remoteFetcher);
-            }
-        };
-    }
-
-    private ReadResult readLocal(
-            long nextOffset,
-            long endOffsetLimit,
-            int maxBytes,
-            @Nullable BatchCollector existingCollector)
-            throws IOException {
-        BatchCollector collector =
-                existingCollector == null
-                        ? new BatchCollector(nextOffset, endOffsetLimit, maxBytes)
-                        : existingCollector;
-        long beforeReadOffset = collector.nextOffset();
-        FetchDataInfo fetch =
-                sourceLog.read(
-                        beforeReadOffset,
-                        Math.max(1, collector.remainingBytes()),
-                        FetchIsolation.HIGH_WATERMARK,
-                        true);
-        collector.collect(fetch.getRecords().batches(), endOffsetLimit);
-        if (collector.nextOffset() == beforeReadOffset && beforeReadOffset < endOffsetLimit) {
-            if (collector.limitReached()) {
-                return collector.finish();
-            }
-            throw corruption("local WAL has no record at expected offset " + beforeReadOffset);
-        }
-        return collector.finish();
-    }
-
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
@@ -314,21 +268,20 @@ final class IndexSourceReader implements AutoCloseable {
         private final long nextOffset;
         private final boolean byteLimited;
         private final long bytes;
-        @Nullable private final AutoCloseable resource;
-        private final AtomicBoolean closed = new AtomicBoolean();
+        @Nullable private final Runnable releaseRemoteSession;
 
         private ReadResult(
                 List<LogRecordBatch> batches,
                 long nextOffset,
                 boolean byteLimited,
                 long bytes,
-                @Nullable AutoCloseable resource) {
+                @Nullable Runnable releaseRemoteSession) {
             // The collector no longer appends after handing this list to the result.
             this.batches = Collections.unmodifiableList(batches);
             this.bytes = bytes;
             this.nextOffset = nextOffset;
             this.byteLimited = byteLimited;
-            this.resource = resource;
+            this.releaseRemoteSession = releaseRemoteSession;
         }
 
         private static ReadResult empty(long nextOffset) {
@@ -365,15 +318,8 @@ final class IndexSourceReader implements AutoCloseable {
 
         @Override
         public void close() {
-            if (!closed.compareAndSet(false, true)) {
-                return;
-            }
-            if (resource != null) {
-                try {
-                    resource.close();
-                } catch (Exception e) {
-                    throw new RuntimeException("Failed to close index source read", e);
-                }
+            if (releaseRemoteSession != null) {
+                releaseRemoteSession.run();
             }
         }
     }
@@ -385,7 +331,6 @@ final class IndexSourceReader implements AutoCloseable {
         private long bytes;
         private long nextOffset;
         private boolean byteLimitReached;
-        @Nullable private AutoCloseable resource;
 
         private BatchCollector(long nextOffset, long endOffsetLimit, int maxBytes) {
             this.nextOffset = nextOffset;
@@ -463,24 +408,24 @@ final class IndexSourceReader implements AutoCloseable {
             }
         }
 
-        private ReadResult finish() {
-            return new ReadResult(batches, nextOffset, byteLimitReached, bytes, resource);
+        private BatchCollector readLocal() throws IOException {
+            long start = nextOffset;
+            FetchDataInfo fetch =
+                    sourceLog.read(
+                            start,
+                            (int) Math.max(1L, maxBytes - bytes),
+                            FetchIsolation.HIGH_WATERMARK,
+                            true);
+            collect(fetch.getRecords().batches(), endOffsetLimit);
+            if (nextOffset == start && start < endOffsetLimit && !byteLimitReached) {
+                throw corruption("local WAL has no record at expected offset " + start);
+            }
+            return this;
         }
 
-        private void attachResource(AutoCloseable resource) {
-            this.resource = resource;
-        }
-
-        private long nextOffset() {
-            return nextOffset;
-        }
-
-        private int remainingBytes() {
-            return (int) Math.max(1L, maxBytes - bytes);
-        }
-
-        private boolean limitReached() {
-            return byteLimitReached;
+        private ReadResult finish(@Nullable Runnable releaseRemoteSession) {
+            return new ReadResult(
+                    batches, nextOffset, byteLimitReached, bytes, releaseRemoteSession);
         }
     }
 
@@ -550,11 +495,6 @@ final class IndexSourceReader implements AutoCloseable {
         @Override
         public long highWatermark() {
             return logTablet.getHighWatermark();
-        }
-
-        @Override
-        public long logStartOffset() {
-            return logTablet.logStartOffset();
         }
 
         @Override

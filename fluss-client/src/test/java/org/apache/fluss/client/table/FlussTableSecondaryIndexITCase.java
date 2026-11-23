@@ -22,7 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
-import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
@@ -42,7 +42,6 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IndexTableUtils;
 
 import org.junit.jupiter.api.Test;
@@ -89,37 +88,27 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         TableDescriptor.builder().schema(schema).distributedBy(2, "id").build(),
                         true);
 
-        TablePath indexPath = indexTablePath(mainPath, "idx_name");
+        TablePath indexPath = IndexTableUtils.indexTablePath(mainPath, "idx_name");
         waitAllReplicasReady(admin.getTableInfo(indexPath).get().getTableId(), 2);
         try (Table mainTable = conn.getTable(mainPath);
                 Table indexTable = conn.getTable(indexPath)) {
             assertThat(indexTable.getTableInfo().isIndexTable()).isTrue();
-            assertThat(countRows(indexTable)).isZero();
+            assertThat(
+                            BatchScanUtils.collectRows(
+                                    indexTable.newScan().limit(1).createBatchScanner()))
+                    .isEmpty();
 
             assertThatThrownBy(indexTable::newUpsert)
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining(indexPath.toString())
                     .hasMessageContaining("internal secondary index table");
 
-            assertThat(countRows(indexTable)).isZero();
+            assertThat(
+                            BatchScanUtils.collectRows(
+                                    indexTable.newScan().limit(1).createBatchScanner()))
+                    .isEmpty();
             assertThat(mainTable.newUpsert()).isNotNull();
         }
-    }
-
-    private static int countRows(Table table) throws Exception {
-        int rowCount = 0;
-        try (BatchScanner scanner = table.newScan().limit(1).createBatchScanner()) {
-            CloseableIterator<InternalRow> nextBatch;
-            while ((nextBatch = scanner.pollBatch(Duration.ofSeconds(30))) != null) {
-                try (CloseableIterator<InternalRow> batch = nextBatch) {
-                    while (batch.hasNext()) {
-                        batch.next();
-                        rowCount++;
-                    }
-                }
-            }
-        }
-        return rowCount;
     }
 
     private static InternalRow lookupSingleRow(Table table, String indexName, Object key)
@@ -270,8 +259,8 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
         long mainTableId = createTable(tablePath, descriptor, true);
 
         // Wait for non-partitioned index tables to have their replicas ready.
-        TablePath nameIdxPath = indexTablePath(tablePath, "idx_name");
-        TablePath emailIdxPath = indexTablePath(tablePath, "idx_email");
+        TablePath nameIdxPath = IndexTableUtils.indexTablePath(tablePath, "idx_name");
+        TablePath emailIdxPath = IndexTableUtils.indexTablePath(tablePath, "idx_email");
         long nameIdxTableId = admin.getTableInfo(nameIdxPath).get().getTableId();
         long emailIdxTableId = admin.getTableInfo(emailIdxPath).get().getTableId();
         waitAllReplicasReady(nameIdxTableId, 3);
@@ -335,7 +324,7 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                 .partitionedBy("year")
                                 .build(),
                         false);
-        TablePath indexPath = indexTablePath(tablePath, "idx_name");
+        TablePath indexPath = IndexTableUtils.indexTablePath(tablePath, "idx_name");
         TableInfo indexInfo = admin.getTableInfo(indexPath).get();
         assertThat(indexInfo.getNumBuckets()).isEqualTo(2);
         waitAllReplicasReady(indexInfo.getTableId(), 2);
@@ -397,67 +386,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testPartitionedIndexContinuesAfterDroppingAnotherPartition() throws Exception {
-        TablePath tablePath = TablePath.of(DB, "test_partitioned_index_after_drop");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .column("year", DataTypes.STRING())
-                        .primaryKey("id", "year")
-                        .index("idx_name", "name")
-                        .build();
-        long mainTableId =
-                createTable(
-                        tablePath,
-                        TableDescriptor.builder()
-                                .schema(schema)
-                                .distributedBy(1, "id")
-                                .partitionedBy("year")
-                                .build(),
-                        true);
-        TablePath indexTablePath = indexTablePath(tablePath, "idx_name");
-        waitAllReplicasReady(admin.getTableInfo(indexTablePath).get().getTableId(), 1);
-
-        admin.createPartition(tablePath, newPartitionSpec("year", "2023"), false).get();
-        admin.createPartition(tablePath, newPartitionSpec("year", "2024"), false).get();
-        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 2);
-
-        try (Table table = conn.getTable(tablePath)) {
-            UpsertWriter writer = table.newUpsert().createWriter();
-            Lookuper lookuper = table.getSecondaryIndexLookuper("idx_name");
-
-            writer.upsert(row(1, "Alice", "2023"));
-            writer.upsert(row(2, "Bob", "2024"));
-            writer.flush();
-            assertSinglePartitionedRow(lookuper, "Alice", 1, "2023");
-            assertSinglePartitionedRow(lookuper, "Bob", 2, "2024");
-
-            admin.dropPartition(tablePath, newPartitionSpec("year", "2023"), false).get();
-            waitUntil(
-                    () ->
-                            admin.listPartitionInfos(tablePath, newPartitionSpec("year", "2023"))
-                                    .get()
-                                    .isEmpty(),
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "wait for partition 2023 to be removed");
-
-            // Reuse the existing writer and lookuper to prove an active client can continue after
-            // an unrelated partition is dropped.
-            writer.upsert(row(3, "Charlie", "2024"));
-            writer.flush();
-
-            waitUntil(
-                    () -> lookuper.lookup(row("Alice")).get().getRowList().isEmpty(),
-                    INDEX_VISIBILITY_TIMEOUT,
-                    "wait for the dropped partition row to become invisible");
-            assertThat(lookuper.lookup(row("Alice")).get().getRowList()).isEmpty();
-            assertSinglePartitionedRow(lookuper, "Bob", 2, "2024");
-            assertSinglePartitionedRow(lookuper, "Charlie", 3, "2024");
-        }
-    }
-
-    @Test
     void testSecondaryIndexSurvivesRepeatedPartitionRecreation() throws Exception {
         TablePath tablePath = TablePath.of(DB, "test_partition_recreation_churn");
         Schema schema =
@@ -478,7 +406,10 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                                 .build(),
                         true);
         waitAllReplicasReady(
-                admin.getTableInfo(indexTablePath(tablePath, "idx_name")).get().getTableId(), 3);
+                admin.getTableInfo(IndexTableUtils.indexTablePath(tablePath, "idx_name"))
+                        .get()
+                        .getTableId(),
+                3);
 
         PartitionSpec stablePartition = newPartitionSpec("year", "stable");
         PartitionSpec churnPartition = newPartitionSpec("year", "churn");
@@ -536,6 +467,12 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                         "retired churn generation " + generation + " is invisible");
                 assertSinglePartitionedRow(lookuper, "stable-anchor", 1, "stable");
 
+                if (generation == 0) {
+                    writer.upsert(row(2, "after-drop", "stable"));
+                    writer.flush();
+                    assertSinglePartitionedRow(lookuper, "after-drop", 2, "stable");
+                    assertThat(lookuper.lookup(row(indexValue)).get().getRowList()).isEmpty();
+                }
                 previousPartitionId = partitionId;
             }
 
@@ -873,11 +810,6 @@ class FlussTableSecondaryIndexITCase extends ClientToServerITCaseBase {
                     .extracting(r -> r.getInt(0))
                     .containsExactly(4);
         }
-    }
-
-    private static TablePath indexTablePath(TablePath mainTablePath, String indexName) {
-        return TablePath.of(
-                DB, IndexTableUtils.indexTableName(mainTablePath.getTableName(), indexName));
     }
 
     private static void assertSinglePartitionedRow(

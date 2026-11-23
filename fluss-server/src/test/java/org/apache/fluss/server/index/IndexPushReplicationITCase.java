@@ -64,6 +64,7 @@ import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.row.BinaryString.fromString;
+import static org.apache.fluss.server.index.TestingIndexTable.INDEX_NAME;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
@@ -77,7 +78,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class IndexPushReplicationITCase {
 
     private static final String DB = "test_db";
-    private static final String INDEX_NAME = "idx_b";
     private static final String PARTITION_NAME = "p1";
     private static final int PRIMARY_KEY = 7;
     private static final String INDEXED_VALUE = "collision";
@@ -398,7 +398,12 @@ class IndexPushReplicationITCase {
         return new TestingIndexTable(
                 FLUSS_CLUSTER_EXTENSION,
                 TablePath.of(DB, mainName),
-                TableDescriptor.builder().schema(buildMainSchema()).distributedBy(3, "a").build(),
+                TableDescriptor.builder()
+                        .schema(
+                                TestingIndexTable.indexedSchema(
+                                        IndexVisibility.SYNC, INDEX_BUCKET_COUNT))
+                        .distributedBy(3, "a")
+                        .build(),
                 INDEX_NAME);
     }
 
@@ -472,20 +477,6 @@ class IndexPushReplicationITCase {
                 FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(
                         new TableBucket(indexTableId, indexBucket));
         return replica.lookups(Collections.singletonList(key)).get(0) != null;
-    }
-
-    private static Schema buildMainSchema() {
-        return Schema.newBuilder()
-                .column("a", DataTypes.INT())
-                .column("b", DataTypes.STRING())
-                .primaryKey("a")
-                .index(
-                        INDEX_NAME,
-                        IndexType.SECONDARY,
-                        Collections.singletonList("b"),
-                        IndexVisibility.SYNC,
-                        3)
-                .build();
     }
 
     private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {

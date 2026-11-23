@@ -19,7 +19,6 @@ package org.apache.fluss.server.index;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.metadata.IndexType;
 import org.apache.fluss.metadata.IndexVisibility;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -30,7 +29,6 @@ import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -44,6 +42,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.row.BinaryString.fromString;
+import static org.apache.fluss.server.index.TestingIndexTable.INDEX_NAME;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -64,7 +63,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 class IndexPushFailoverITCase {
 
     private static final String DB = "test_failover_db";
-    private static final String INDEX_NAME = "idx_b";
     private static final Duration TIMEOUT = Duration.ofSeconds(60);
     private static final int TABLET_SERVER_COUNT = 4;
     private static final int INDEX_BUCKET_COUNT = 3;
@@ -93,17 +91,8 @@ class IndexPushFailoverITCase {
         TablePath mainPath = TablePath.of(DB, "main_idx_failover");
 
         Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .primaryKey("a")
-                        .index(
-                                INDEX_NAME,
-                                IndexType.SECONDARY,
-                                Collections.singletonList("b"),
-                                IndexVisibility.SYNC,
-                                TARGET_FAILOVER_INDEX_BUCKET_COUNT)
-                        .build();
+                TestingIndexTable.indexedSchema(
+                        IndexVisibility.SYNC, TARGET_FAILOVER_INDEX_BUCKET_COUNT);
         TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
 
@@ -198,99 +187,72 @@ class IndexPushFailoverITCase {
                         .getReplicaManager()
                         .getIndexReplicationManager()
                         .sendBuffer();
-        boolean coordinatorStopped = false;
-        boolean targetLeaderStopped = false;
-        Throwable primaryFailure = null;
-        try {
-            // Keep the old target assignment frozen so the source sender must observe the stopped
-            // target before a replacement can become available.
-            FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
-            coordinatorStopped = true;
-            FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedTargetLeader);
-            targetLeaderStopped = true;
+        // Keep the old target assignment frozen so the source sender must observe the stopped
+        // target before a replacement can become available.
+        FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedTargetLeader);
 
-            // Submit the source write while the exact physical target is unavailable. Do not wait
-            // for replacement leadership before the push enters the retry path.
-            CompletableFuture<PutKvResponse> sourceWrite =
-                    FLUSS_CLUSTER_EXTENSION
-                            .newTabletServerClientForNode(mainLeader)
-                            .putKv(
-                                    newPutKvRequest(
-                                            mainTableId,
-                                            0,
-                                            1,
-                                            genKvRecordBatch(new Object[] {1, selectedValue})));
+        // Submit the source write while the exact physical target is unavailable. Do not wait
+        // for replacement leadership before the push enters the retry path.
+        CompletableFuture<PutKvResponse> sourceWrite =
+                FLUSS_CLUSTER_EXTENSION
+                        .newTabletServerClientForNode(mainLeader)
+                        .putKv(
+                                newPutKvRequest(
+                                        mainTableId,
+                                        0,
+                                        1,
+                                        genKvRecordBatch(new Object[] {1, selectedValue})));
 
-            // IndexBatch.attempts() increments only when a failed batch is put back into this
-            // exact target bucket's deque. With the coordinator stopped, a replacement cannot
-            // race this observation; the source SYNC future and pushed offset must remain pending.
-            waitUntil(
-                    () -> hasRetriedTargetBatch(sourceSendBuffer, idxTb),
-                    TIMEOUT,
-                    "wait for the selected target index batch to fail and requeue");
-            assertThat(sourceWrite.isDone())
-                    .as("source SYNC write must remain unresolved while the target is unavailable")
-                    .isFalse();
-            assertThat(mainReplica.getSyncIndexPushedOffset())
-                    .as("sync progress must remain at the pre-write baseline during retry")
-                    .isZero();
-            assertThat(mainReplica.getAllIndexPushedOffset()).isZero();
+        // IndexBatch.attempts() increments only when a failed batch is put back into this
+        // exact target bucket's deque. With the coordinator stopped, a replacement cannot
+        // race this observation; the source SYNC future and pushed offset must remain pending.
+        waitUntil(
+                () -> sourceSendBuffer.hasRetriedBatchForTesting(idxTb),
+                TIMEOUT,
+                "wait for the selected target index batch to fail and requeue");
+        assertThat(sourceWrite.isDone())
+                .as("source SYNC write must remain unresolved while the target is unavailable")
+                .isFalse();
+        assertThat(mainReplica.getSyncIndexPushedOffset())
+                .as("sync progress must remain at the pre-write baseline during retry")
+                .isZero();
+        assertThat(mainReplica.getAllIndexPushedOffset()).isZero();
 
-            FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
-            coordinatorStopped = false;
-            waitUntil(
-                    () -> FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(idxTb) != stoppedTargetLeader,
-                    TIMEOUT,
-                    "wait for the selected target index bucket to fail over");
-            sourceWrite.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
+        waitUntil(
+                () -> FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(idxTb) != stoppedTargetLeader,
+                TIMEOUT,
+                "wait for the selected target index bucket to fail over");
+        sourceWrite.get(TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
 
-            // Verify the exact physical key on the replacement leader for the exact bucket that
-            // was unavailable during the source write.
-            waitUntil(
-                    () -> {
-                        try {
-                            Replica idxReplica =
-                                    FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(idxTb);
-                            List<org.apache.fluss.utils.ByteArraySlice> result =
-                                    idxReplica.lookups(Collections.singletonList(indexKey));
-                            return result.get(0) != null;
-                        } catch (Exception e) {
-                            return false;
-                        }
-                    },
-                    TIMEOUT,
-                    "wait for index entry after selected target leader failover");
-            Replica replacementTargetLeader =
-                    FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(idxTb);
-            assertThat(replacementTargetLeader.lookups(Collections.singletonList(indexKey)).get(0))
-                    .as("exact physical index key must be present on the replacement target leader")
-                    .isNotNull();
+        // Verify the exact physical key on the replacement leader for the exact bucket that
+        // was unavailable during the source write.
+        waitUntil(
+                () -> {
+                    try {
+                        Replica idxReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(idxTb);
+                        List<org.apache.fluss.utils.ByteArraySlice> result =
+                                idxReplica.lookups(Collections.singletonList(indexKey));
+                        return result.get(0) != null;
+                    } catch (Exception e) {
+                        return false;
+                    }
+                },
+                TIMEOUT,
+                "wait for index entry after selected target leader failover");
+        Replica replacementTargetLeader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(idxTb);
+        assertThat(replacementTargetLeader.lookups(Collections.singletonList(indexKey)).get(0))
+                .as("exact physical index key must be present on the replacement target leader")
+                .isNotNull();
 
-            // One source row at offset 0 advances the exact completed prefix to 1. An exact check
-            // catches both a retry that never completed and an accidental skip past source WAL.
-            waitUntil(
-                    () -> mainReplica.getSyncIndexPushedOffset() == 1L,
-                    TIMEOUT,
-                    "pushed offset must equal the one-row source WAL end after retry");
-            assertThat(mainReplica.getSyncIndexPushedOffset()).isEqualTo(1L);
-        } catch (Throwable failure) {
-            primaryFailure = failure;
-            throw failure;
-        } finally {
-            List<Throwable> cleanupFailures = new ArrayList<>();
-            if (coordinatorStopped) {
-                cleanup(cleanupFailures, FLUSS_CLUSTER_EXTENSION::startCoordinatorServer);
-            }
-            if (targetLeaderStopped) {
-                cleanup(
-                        cleanupFailures,
-                        () -> FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedTargetLeader));
-            }
-            cleanup(
-                    cleanupFailures,
-                    () -> FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(TABLET_SERVER_COUNT));
-            reportCleanupFailures(primaryFailure, cleanupFailures);
-        }
+        // One source row at offset 0 advances the exact completed prefix to 1. An exact check
+        // catches both a retry that never completed and an accidental skip past source WAL.
+        waitUntil(
+                () -> mainReplica.getSyncIndexPushedOffset() == 1L,
+                TIMEOUT,
+                "pushed offset must equal the one-row source WAL end after retry");
+        assertThat(mainReplica.getSyncIndexPushedOffset()).isEqualTo(1L);
     }
 
     private static byte[] encodeIndexKey(IndexReplicationEncoder encoder, String b, int a) {
@@ -313,38 +275,4 @@ class IndexPushFailoverITCase {
     }
 
     /** Read-only test observation of the retry state for one physical target. */
-    private static boolean hasRetriedTargetBatch(IndexSendBuffer sendBuffer, TableBucket target) {
-        return sendBuffer.hasRetriedBatchForTesting(target);
-    }
-
-    private static void cleanup(List<Throwable> failures, CleanupAction action) {
-        try {
-            action.run();
-        } catch (Throwable failure) {
-            if (failure instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            failures.add(failure);
-        }
-    }
-
-    private static void reportCleanupFailures(
-            Throwable primaryFailure, List<Throwable> cleanupFailures) throws Throwable {
-        if (cleanupFailures.isEmpty()) {
-            return;
-        }
-        AssertionError cleanupFailure =
-                new AssertionError("index target failover IT cleanup failed");
-        cleanupFailures.forEach(cleanupFailure::addSuppressed);
-        if (primaryFailure != null) {
-            primaryFailure.addSuppressed(cleanupFailure);
-        } else {
-            throw cleanupFailure;
-        }
-    }
-
-    @FunctionalInterface
-    private interface CleanupAction {
-        void run() throws Throwable;
-    }
 }
