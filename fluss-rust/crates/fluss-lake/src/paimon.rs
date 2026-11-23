@@ -924,19 +924,32 @@ fn to_paimon_scalar(datum: &Datum<'_>) -> Option<PaimonDatum> {
 }
 
 fn decode_paimon_split(payload: &[u8]) -> Result<DataSplit> {
-    // QueryAuthSplit is an outer wrapper, even for an empty policy. Check it
-    // before decoding: a replacement reader does not go through TableRead.
-    let header = b"SPLIT_V1\0\0\0\x01"; // SplitSerializer magic and big-endian version
-    match payload.strip_prefix(header) {
-        Some([0, 0, 0, 1 | 3, ..]) => DataSplit::deserialize_split_v1(payload).map_err(|error| {
+    // SplitSerializer magic followed by the big-endian format version.
+    const V1_HEADER: &[u8] = b"SPLIT_V1\0\0\0\x01";
+    const DATA_SPLIT: i32 = 1;
+    const INDEXED_SPLIT: i32 = 3;
+    const QUERY_AUTH_SPLIT: i32 = 5;
+
+    let frame = payload.strip_prefix(V1_HEADER).ok_or_else(|| {
+        FlussLakeError::IncompatibleSplitVersion(
+            "expected a Paimon SplitSerializer V1 frame".into(),
+        )
+    })?;
+    let type_bytes = frame
+        .first_chunk::<4>()
+        .ok_or_else(|| FlussLakeError::PlanningFailed("missing Paimon split type ID".into()))?;
+
+    match i32::from_be_bytes(*type_bytes) {
+        DATA_SPLIT | INDEXED_SPLIT => DataSplit::deserialize_split_v1(payload).map_err(|error| {
             FlussLakeError::PlanningFailed(format!("failed to decode Paimon split: {error}"))
         }),
-        Some([0, 0, 0, 5, ..]) => Err(FlussLakeError::NotLakeReadable(
+        // A replacement reader bypasses TableRead, even when the policy has no rules.
+        QUERY_AUTH_SPLIT => Err(FlussLakeError::NotLakeReadable(
             "UnionRead does not support Paimon splits requiring query authorization".into(),
         )),
-        _ => Err(FlussLakeError::IncompatibleSplitVersion(
-            "expected a Paimon SplitSerializer V1 DataSplit or IndexedSplit".into(),
-        )),
+        other => Err(FlussLakeError::NotLakeReadable(format!(
+            "unsupported Paimon split type ID: {other}"
+        ))),
     }
 }
 
