@@ -242,22 +242,21 @@ public class TableBucketStateMachine {
                 (tableBucket, electionResult) ->
                         leaderAndIsrsToUpdate.put(tableBucket, electionResult.leaderAndIsr));
         Map<TableBucket, LeaderAndIsr> updatedBuckets =
-                batchUpdateLeaderAndIsrWithFallback(
-                        leaderAndIsrsToUpdate, bucketsToRetryIndividually);
+                batchUpdateLeaderAndIsrWithFallback(leaderAndIsrsToUpdate);
 
         for (Map.Entry<TableBucket, LeaderAndIsr> update : updatedBuckets.entrySet()) {
             TableBucket tableBucket = update.getKey();
-            ElectionResult electionResult = electionResults.get(tableBucket);
-            coordinatorContext.putBucketLeaderAndIsr(tableBucket, update.getValue());
+            LeaderAndIsr committed = update.getValue();
+            coordinatorContext.putBucketLeaderAndIsr(tableBucket, committed);
             doStateChange(tableBucket, BucketState.OnlineBucket);
             coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                    new HashSet<>(electionResult.liveReplicas),
+                    new HashSet<>(electionResults.get(tableBucket).liveReplicas),
                     PhysicalTablePath.of(
                             coordinatorContext.getTablePathById(tableBucket.getTableId()),
                             partitionNames.get(tableBucket)),
                     tableBucket,
                     coordinatorContext.getAssignment(tableBucket),
-                    electionResult.leaderAndIsr);
+                    committed);
         }
 
         for (TableBucket tableBucket : bucketsToRetryIndividually) {
@@ -267,15 +266,10 @@ public class TableBucketStateMachine {
     }
 
     private Map<TableBucket, LeaderAndIsr> batchUpdateLeaderAndIsrWithFallback(
-            Map<TableBucket, LeaderAndIsr> leaderAndIsrs, Set<TableBucket> conflictedBuckets) {
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrs) {
         try {
-            Map<TableBucket, LeaderAndIsr> committed =
-                    zooKeeperClient.batchUpdateLeaderAndIsr(
-                            leaderAndIsrs, coordinatorContext.getCoordinatorZkVersion());
-            leaderAndIsrs.keySet().stream()
-                    .filter(bucket -> !committed.containsKey(bucket))
-                    .forEach(conflictedBuckets::add);
-            return committed;
+            return zooKeeperClient.batchUpdateLeaderAndIsr(
+                    leaderAndIsrs, coordinatorContext.getCoordinatorZkVersion());
         } catch (InvalidCoordinatorException e) {
             LOG.error(
                     "Aborted batch LeaderAndIsr update during controlled shutdown because the coordinator was fenced.",
@@ -549,16 +543,16 @@ public class TableBucketStateMachine {
         }
 
         List<RegisterTableBucketLeadAndIsrInfo> registrations = batchRegister.getRegisterList();
-        if (registrations.isEmpty()) {
-            return;
-        }
         boolean registeredInBatch;
         try {
             zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
                     registrations, coordinatorContext.getCoordinatorZkVersion());
             registeredInBatch = true;
         } catch (Exception e) {
-            LOG.error("Failed to register bucket roles in batch. Trying individually.", e);
+            LOG.error(
+                    "Failed to register bucket roles in batch, starting with {}. Trying individually.",
+                    stringifyBucket(registrations.get(0).getTableBucket()),
+                    e);
             registeredInBatch = false;
         }
 

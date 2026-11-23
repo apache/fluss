@@ -272,39 +272,7 @@ public class ReplicaStateMachine {
                                         coordinatorContext.getBucketLeaderEpoch(
                                                 replica.getTableBucket())));
 
-                for (TableBucketReplica tableBucketReplica :
-                        doRemoveReplicaFromIsr(validReplicas)) {
-                    TableBucket tableBucket = tableBucketReplica.getTableBucket();
-                    if (!coordinatorContext.isToBeDeleted(tableBucket)) {
-                        Set<Integer> recipients =
-                                coordinatorContext.getAssignment(tableBucket).stream()
-                                        .filter(
-                                                replica ->
-                                                        replica != tableBucketReplica.getReplica())
-                                        .collect(Collectors.toSet());
-                        String partitionName;
-                        try {
-                            partitionName = getPartitionName(tableBucket);
-                        } catch (PartitionNotExistException e) {
-                            logFailedSateChange(
-                                    tableBucketReplica,
-                                    coordinatorContext.getReplicaState(tableBucketReplica),
-                                    targetState,
-                                    e.getMessage());
-                            continue;
-                        }
-                        // send leader request to the replica server
-                        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
-                                recipients,
-                                PhysicalTablePath.of(
-                                        coordinatorContext.getTablePathById(
-                                                tableBucket.getTableId()),
-                                        partitionName),
-                                tableBucket,
-                                coordinatorContext.getAssignment(tableBucket),
-                                coordinatorContext.getBucketLeaderAndIsr(tableBucket).get());
-                    }
-                }
+                doRemoveReplicaFromIsr(validReplicas).forEach(this::notifyReplicasAfterIsrChange);
 
                 // finally, set to offline
                 validReplicas.forEach(
@@ -446,14 +414,49 @@ public class ReplicaStateMachine {
         }
     }
 
-    private Set<TableBucketReplica> doRemoveReplicaFromIsr(
+    private void notifyReplicasAfterIsrChange(
+            TableBucket bucket, Set<TableBucketReplica> offlineReplicas) {
+        if (coordinatorContext.isToBeDeleted(bucket)) {
+            return;
+        }
+        String partitionName;
+        try {
+            partitionName = getPartitionName(bucket);
+        } catch (PartitionNotExistException e) {
+            for (TableBucketReplica replica : offlineReplicas) {
+                logFailedSateChange(
+                        replica,
+                        coordinatorContext.getReplicaState(replica),
+                        ReplicaState.OfflineReplica,
+                        e.getMessage());
+            }
+            return;
+        }
+
+        List<Integer> assignment = coordinatorContext.getAssignment(bucket);
+        Set<Integer> recipients = new HashSet<>(assignment);
+        // Each offline replica notifies its peers. With multiple removals their peers cover the
+        // assignment.
+        if (offlineReplicas.size() == 1) {
+            recipients.remove(offlineReplicas.iterator().next().getReplica());
+        }
+        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                recipients,
+                PhysicalTablePath.of(
+                        coordinatorContext.getTablePathById(bucket.getTableId()), partitionName),
+                bucket,
+                assignment,
+                coordinatorContext.getBucketLeaderAndIsr(bucket).get());
+    }
+
+    private Map<TableBucket, Set<TableBucketReplica>> doRemoveReplicaFromIsr(
             Collection<TableBucketReplica> tableBucketReplicas) {
-        Set<TableBucketReplica> removed = new HashSet<>();
+        Map<TableBucket, Set<TableBucketReplica>> removed = new HashMap<>();
         Map<TableBucket, LeaderAndIsr> currentRoles = coordinatorContext.bucketLeaderAndIsr();
         try {
             for (int attempt = 0; attempt < 2; attempt++) {
                 Map<TableBucket, LeaderAndIsr> changes = new HashMap<>();
-                Set<TableBucketReplica> affected = new HashSet<>();
+                Map<TableBucket, Set<TableBucketReplica>> affected = new HashMap<>();
                 for (TableBucketReplica replica : tableBucketReplicas) {
                     TableBucket bucket = replica.getTableBucket();
                     LeaderAndIsr role = changes.get(bucket);
@@ -462,15 +465,17 @@ public class ReplicaStateMachine {
                     }
                     if (role != null && role.isr().contains(replica.getReplica())) {
                         changes.put(bucket, removeReplicaFromIsr(role, replica.getReplica()));
-                        affected.add(replica);
+                        affected.computeIfAbsent(bucket, ignored -> new HashSet<>()).add(replica);
                     }
                 }
                 Map<TableBucket, LeaderAndIsr> committed =
                         zooKeeperClient.batchUpdateLeaderAndIsr(
                                 changes, coordinatorContext.getCoordinatorZkVersion());
-                committed.forEach(coordinatorContext::putBucketLeaderAndIsr);
-                affected.removeIf(replica -> !committed.containsKey(replica.getTableBucket()));
-                removed.addAll(affected);
+                committed.forEach(
+                        (bucket, role) -> {
+                            coordinatorContext.putBucketLeaderAndIsr(bucket, role);
+                            removed.put(bucket, affected.get(bucket));
+                        });
                 if (attempt > 0 || changes.size() == committed.size()) {
                     break;
                 }
