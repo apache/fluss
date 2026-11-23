@@ -131,12 +131,18 @@ public class LeaderAndIsr {
      * @return the new LeaderAndIsr
      */
     public LeaderAndIsr newLeaderAndIsr(List<Integer> newIsr) {
+        return withUpdatedIsr(newIsr, standbyReplicas, coordinatorEpoch);
+    }
+
+    /** Updates ISR membership without changing the leader or the source znode version. */
+    public LeaderAndIsr withUpdatedIsr(
+            List<Integer> newIsr, List<Integer> newStandbyReplicas, int newCoordinatorEpoch) {
         return new LeaderAndIsr(
                 leader,
                 leaderEpoch,
                 newIsr,
-                standbyReplicas,
-                coordinatorEpoch,
+                newStandbyReplicas,
+                newCoordinatorEpoch,
                 bucketEpoch + 1,
                 zkVersion);
     }

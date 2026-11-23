@@ -54,6 +54,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -106,7 +107,6 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.metadata.TableBucketSnapshot.NO_SNAPSHOT_ID;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
-import static org.apache.fluss.server.testutils.KvTestUtils.registerRecoverySnapshot;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
@@ -169,7 +169,8 @@ class BulkLoadBucketCommitTest {
         bucket = new TableBucket(tableId, 0);
         TableInfo table = metadata.getTable(TABLE);
         remoteDataDir = table.getRemoteDataDir();
-        seedRunningTarget(client, table, null, null, remoteDataDir);
+        physical = PhysicalTablePath.of(TABLE);
+        seedRunningTarget(table);
         int epoch =
                 client.fenceBecomeCoordinatorLeader("bucket-commit").getCoordinatorEpochZkVersion();
         client.registerLeaderAndIsr(bucket, new LeaderAndIsr(0, 0), epoch);
@@ -196,8 +197,9 @@ class BulkLoadBucketCommitTest {
         long previousId = client.allocateBucketSnapshotId(bucket);
         FsPath previous = uploadSnapshot(previousId, offset);
         FsPath uploaded = uploadSnapshot(snapshotId, offset);
-        registerRecoverySnapshot(
-                client, bucket, new BucketSnapshot(previousId, offset, previous.toString()));
+        // A legacy reference may predate the recovery selection znode.
+        client.registerTableBucketSnapshot(
+                bucket, new BucketSnapshot(previousId, offset, previous.toString()));
         leasedSnapshotId = previousId;
         commitAllocatedSnapshot();
 
@@ -277,8 +279,7 @@ class BulkLoadBucketCommitTest {
     @ValueSource(booleans = {false, true})
     void testCommitRequiresPrivateFilesInTheAllocatedSnapshot(boolean shared) throws Exception {
         prepareAllocatedBucket();
-        FsPath dir =
-                snapshotDirectory(remoteDataDir, PhysicalTablePath.of(TABLE), bucket, snapshotId);
+        FsPath dir = snapshotDirectory(snapshotId);
         Path parent = shared ? Files.createDirectories(Paths.get(dir.toUri())) : remote;
         Path file = Files.write(parent.resolve("data.sst"), new byte[] {1});
         List<KvSnapshotFileMetadata.FileHandle> files =
@@ -326,19 +327,12 @@ class BulkLoadBucketCommitTest {
                                 false);
         bucket = new TableBucket(tableId, partitionId, 0);
         physical = PhysicalTablePath.of(TABLE, partitionName);
-        cluster.waitUntilAllReplicaReady(bucket);
         client = cluster.getZooKeeperClient();
-        TableInfo info =
-                new MetadataManager(client, conf, new LakeCatalogDynamicLoader(conf, null, true))
-                        .getTable(TABLE);
-        remoteDataDir =
-                partitionName == null
-                        ? info.getRemoteDataDir()
-                        : client.getPartition(TABLE, partitionName).get().getRemoteDataDir();
-        seedRunningTarget(client, info, partitionId, partitionName, remoteDataDir);
-        LeaderAndIsr role = client.getLeaderAndIsr(bucket).get();
-        expectedLeaderEpoch = role.leaderEpoch() + 1;
-        leader = cluster.newTabletServerClientForNode(role.leader());
+        Replica replica = cluster.waitAndGetLeaderReplica(bucket);
+        remoteDataDir = replica.getRemoteDataDir();
+        seedRunningTarget(replica.getTableInfo());
+        expectedLeaderEpoch = replica.getLeaderEpoch() + 1;
+        leader = cluster.newTabletServerClientForNode(replica.getLeaderId());
         coordinator = cluster.newCoordinatorClient();
         manager =
                 new BulkLoadManager(
@@ -378,7 +372,7 @@ class BulkLoadBucketCommitTest {
 
     private Tuple2<byte[], byte[]> uploadCheckpoint(List<KvRecord> rows) throws Exception {
         List<Tuple2<byte[], byte[]>> values = getKeyValuePairs(rows);
-        FsPath dir = snapshotDirectory(remoteDataDir, physical, bucket, snapshotId);
+        FsPath dir = snapshotDirectory(snapshotId);
         Path directory = Paths.get(dir.toUri());
         Files.createDirectories(directory.getParent());
         try (Options options = new Options().setCreateIfMissing(true);
@@ -443,9 +437,7 @@ class BulkLoadBucketCommitTest {
         Tuple2<byte[], byte[]> imported =
                 uploadCheckpoint(genKvRecords(new Object[] {1, "imported"}));
         // Keep the declared size so the invalid CURRENT reaches RocksDB recovery.
-        Path current =
-                Paths.get(snapshotDirectory(remoteDataDir, physical, bucket, snapshotId).toUri())
-                        .resolve("CURRENT");
+        Path current = Paths.get(snapshotDirectory(snapshotId).toUri()).resolve("CURRENT");
         byte[] original = Files.readAllBytes(current);
         Files.write(current, new byte[original.length]);
         LeaderAndIsr published = manager.commitBucketSnapshot(LOAD_ID, bucket, snapshots).get();
@@ -638,14 +630,11 @@ class BulkLoadBucketCommitTest {
         assertLookupResponse(leader.lookup(request).get(5, TimeUnit.SECONDS), row.f1);
     }
 
-    private BulkLoadBucket getBucketAllocation() throws Exception {
+    private void assertBucketNotCommitted() throws Exception {
         BulkLoadTransaction transaction =
                 client.getBulkLoadTransaction(bucket.getTableId(), LOAD_ID).get().data();
-        return client.getBulkLoadBucket(transaction, bucket).get();
-    }
-
-    private void assertBucketNotCommitted() throws Exception {
-        assertThat(getBucketAllocation().state).isEqualTo(BulkLoadBucket.ALLOCATED);
+        assertThat(client.getBulkLoadBucket(transaction, bucket).get().state)
+                .isEqualTo(BulkLoadBucket.ALLOCATED);
         assertThat(client.getSelectedRecoverySnapshotId(bucket)).isEmpty();
         assertThat(client.getTableBucketSnapshot(bucket, snapshotId)).isEmpty();
     }
@@ -679,15 +668,15 @@ class BulkLoadBucketCommitTest {
     }
 
     private FsPath uploadSnapshot(long id, long logOffset) throws Exception {
-        FsPath dir = snapshotDirectory(remoteDataDir, PhysicalTablePath.of(TABLE), bucket, id);
+        FsPath dir = snapshotDirectory(id);
         return writeManifest(
                 dir, id, logOffset, 0L, Collections.emptyList(), Collections.emptyList());
     }
 
-    private static FsPath snapshotDirectory(
-            String remoteDir, PhysicalTablePath physical, TableBucket bucket, long id) {
+    private FsPath snapshotDirectory(long id) {
         FsPath tabletDir =
-                FlussPaths.remoteKvTabletDir(FlussPaths.remoteKvDir(remoteDir), physical, bucket);
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physical, bucket);
         return FlussPaths.remoteKvSnapshotDir(tabletDir, id);
     }
 
@@ -719,13 +708,8 @@ class BulkLoadBucketCommitTest {
         return metadata;
     }
 
-    private static void seedRunningTarget(
-            ZooKeeperClient client,
-            TableInfo table,
-            Long partitionId,
-            String partitionName,
-            String remoteDir)
-            throws Exception {
+    private void seedRunningTarget(TableInfo table) throws Exception {
+        Long partitionId = bucket.getPartitionId();
         String path = BulkLoadTransactionZNode.path(table.getTableId(), LOAD_ID);
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode transaction = mapper.createObjectNode();
@@ -740,18 +724,21 @@ class BulkLoadBucketCommitTest {
         transaction
                 .put("schema_id", table.getSchemaId())
                 .put("remote_data_dir", table.getRemoteDataDir());
-        createNode(client, path, mapper.writeValueAsBytes(transaction));
+        createNode(path, mapper.writeValueAsBytes(transaction));
 
         String targetPath = BulkLoadTargetZNode.path(table.getTableId(), LOAD_ID, partitionId);
         BulkLoadTarget target =
                 new BulkLoadTarget(
-                        partitionId, partitionName, table.getNumBuckets(), remoteDir, false);
-        createNode(client, targetPath, BulkLoadTargetZNode.encode(target));
-        createNode(client, targetPath + "/buckets", new byte[0]);
+                        partitionId,
+                        physical.getPartitionName(),
+                        table.getNumBuckets(),
+                        remoteDataDir,
+                        false);
+        createNode(targetPath, BulkLoadTargetZNode.encode(target));
+        createNode(targetPath + "/buckets", new byte[0]);
     }
 
-    private static void createNode(ZooKeeperClient client, String path, byte[] data)
-            throws Exception {
+    private void createNode(String path, byte[] data) throws Exception {
         client.getCuratorClient().create().creatingParentsIfNeeded().forPath(path, data);
     }
 }

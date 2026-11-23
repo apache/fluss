@@ -63,12 +63,12 @@ public final class BulkLoadManager {
 
     private VersionedData<TableRegistration> getOriginalTable(BulkLoadTransaction transaction)
             throws Exception {
-        Optional<VersionedData<TableRegistration>> table =
-                client.getTableWithVersion(transaction.tablePath);
-        if (!table.isPresent() || table.get().data().tableId != transaction.tableId) {
-            throw new BulkLoadNotFoundException("The original BulkLoad table no longer exists.");
-        }
-        return table.get();
+        return client.getTableWithVersion(transaction.tablePath)
+                .filter(table -> table.data().tableId == transaction.tableId)
+                .orElseThrow(
+                        () ->
+                                new BulkLoadNotFoundException(
+                                        "The original BulkLoad table no longer exists."));
     }
 
     /**
@@ -180,17 +180,12 @@ public final class BulkLoadManager {
 
     private VersionedData<PartitionRegistration> getOriginalPartition(
             TablePath tablePath, BulkLoadTarget target) throws Exception {
-        VersionedData<PartitionRegistration> partition =
-                client.getPartitionWithVersion(tablePath, target.partitionName)
-                        .orElseThrow(
-                                () ->
-                                        new BulkLoadTargetWithdrawnException(
-                                                "The original partition was deleted."));
-        PartitionRegistration registration = partition.data();
-        if (registration.getPartitionId() != target.partitionId) {
-            throw new BulkLoadTargetWithdrawnException("The original partition was deleted.");
-        }
-        return partition;
+        return client.getPartitionWithVersion(tablePath, target.partitionName)
+                .filter(partition -> partition.data().getPartitionId() == target.partitionId)
+                .orElseThrow(
+                        () ->
+                                new BulkLoadTargetWithdrawnException(
+                                        "The original partition was deleted."));
     }
 
     /** Publishes an allocated snapshot, or acknowledges an already committed bucket. */

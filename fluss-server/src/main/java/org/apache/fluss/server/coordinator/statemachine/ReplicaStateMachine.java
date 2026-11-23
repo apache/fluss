@@ -40,7 +40,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -450,8 +449,7 @@ public class ReplicaStateMachine {
     private Set<TableBucketReplica> doRemoveReplicaFromIsr(
             Collection<TableBucketReplica> tableBucketReplicas) {
         Set<TableBucketReplica> removed = new HashSet<>();
-        Function<TableBucket, LeaderAndIsr> currentRole =
-                bucket -> coordinatorContext.getBucketLeaderAndIsr(bucket).orElse(null);
+        Map<TableBucket, LeaderAndIsr> currentRoles = coordinatorContext.bucketLeaderAndIsr();
         try {
             for (int attempt = 0; attempt < 2; attempt++) {
                 Map<TableBucket, LeaderAndIsr> changes = new HashMap<>();
@@ -460,7 +458,7 @@ public class ReplicaStateMachine {
                     TableBucket bucket = replica.getTableBucket();
                     LeaderAndIsr role = changes.get(bucket);
                     if (role == null) {
-                        role = currentRole.apply(bucket);
+                        role = currentRoles.get(bucket);
                     }
                     if (role != null && role.isr().contains(replica.getReplica())) {
                         changes.put(bucket, removeReplicaFromIsr(role, replica.getReplica()));
@@ -478,10 +476,8 @@ public class ReplicaStateMachine {
                 }
                 // An import can advance the epoch without removing these offline replicas.
                 changes.keySet().removeAll(committed.keySet());
-                Map<TableBucket, LeaderAndIsr> latest =
-                        zooKeeperClient.getLeaderAndIsrs(changes.keySet());
-                latest.forEach(coordinatorContext::putBucketLeaderAndIsr);
-                currentRole = latest::get;
+                currentRoles = zooKeeperClient.getLeaderAndIsrs(changes.keySet());
+                currentRoles.forEach(coordinatorContext::putBucketLeaderAndIsr);
             }
         } catch (Exception e) {
             LOG.error("Fail to batch update bucket LeaderAndIsr.", e);

@@ -59,7 +59,6 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.FlussPaths;
@@ -678,28 +677,46 @@ public class ReplicaFetcherThreadTest {
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
-    private void makeLeaderAndFollower() throws Exception {
+    private void makeLeaderAndFollower() {
         makeLeaderAndFollower(PhysicalTablePath.of(DATA1_TABLE_PATH), tb);
     }
 
-    private void makeLeaderAndFollower(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
-            throws Exception {
-        List<Integer> replicas = Arrays.asList(leaderServerId, followerServerId);
-        LeaderAndIsr role =
-                new LeaderAndIsr(
-                        leaderServerId,
-                        INITIAL_LEADER_EPOCH,
-                        replicas,
-                        Collections.emptyList(),
-                        INITIAL_COORDINATOR_EPOCH,
-                        INITIAL_BUCKET_EPOCH);
-        zkClient.registerLeaderAndIsr(tableBucket, role, ZkVersion.MATCH_ANY_VERSION.getVersion());
-        List<NotifyLeaderAndIsrData> notification =
+    private void makeLeaderAndFollower(
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+        leaderRM.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
                         new NotifyLeaderAndIsrData(
-                                physicalTablePath, tableBucket, replicas, role, 3, 0L));
-        leaderRM.becomeLeaderOrFollower(INITIAL_COORDINATOR_EPOCH, notification, result -> {});
-        followerRM.becomeLeaderOrFollower(INITIAL_COORDINATOR_EPOCH, notification, result -> {});
+                                physicalTablePath,
+                                tableBucket,
+                                Arrays.asList(leaderServerId, followerServerId),
+                                new LeaderAndIsr(
+                                        leaderServerId,
+                                        INITIAL_LEADER_EPOCH,
+                                        Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
+                result -> {});
+        followerRM.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                physicalTablePath,
+                                tableBucket,
+                                Arrays.asList(leaderServerId, followerServerId),
+                                new LeaderAndIsr(
+                                        leaderServerId,
+                                        INITIAL_LEADER_EPOCH,
+                                        Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH),
+                                3,
+                                0L)),
+                result -> {});
     }
 
     private LocalDiskManager createLocalDiskManager(int serverId) throws Exception {

@@ -79,10 +79,7 @@ final class BulkLoadSnapshotValidator {
                     snapshot.getLogOffset() == allocation.logOffset,
                     "Snapshot recovery offset differs.");
             require(snapshot.getSnapshotLocation().equals(directory), "Snapshot location differs.");
-            require(
-                    snapshot.getAutoIncIDRanges() == null
-                            || snapshot.getAutoIncIDRanges().isEmpty(),
-                    "Unexpected auto-increment state.");
+            require(snapshot.getFirstAutoIncIDRange() == null, "Unexpected auto-increment state.");
             require(
                     (snapshot.getRowCount() != null) == tableConfig.supportsExactRowCount(),
                     "Snapshot row count does not match the table changelog configuration.");

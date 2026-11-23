@@ -1495,10 +1495,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
-                // Observe the published role before reading its recovery snapshot on this ZK
-                // session.
+                // An import always advances the leader epoch. Observe that publication before
+                // reading its recovery snapshot on this ZooKeeper session.
                 if (replica.isKvTable()
                         && !replica.isHistoricalPartition()
+                        && data.getLeaderEpoch() > LeaderAndIsr.INITIAL_LEADER_EPOCH
                         && replica.requiresLeaderActivation(data.getLeaderEpoch())
                         && !zkClient.getLeaderAndIsr(tb)
                                 .filter(role -> role.leaderEpoch() >= data.getLeaderEpoch())

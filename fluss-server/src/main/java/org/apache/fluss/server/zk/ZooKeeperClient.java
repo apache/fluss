@@ -1567,7 +1567,9 @@ public class ZooKeeperClient implements AutoCloseable {
                 currentRole.newLeaderAndIsr(
                         currentRole.leader(), currentRole.isr(), currentRole.standbyReplicas());
         Optional<VersionedData<Long>> previous = getRecoverySnapshotSelection(bucket);
-        if (!previous.isPresent()) {
+        Optional<BucketSnapshot> recovery =
+                getTableBucketLatestSnapshot(bucket, previous.map(VersionedData::data));
+        if (!recovery.isPresent()) {
             // Create only the snapshot directory, never a deleted physical bucket or its parents.
             try {
                 zkClient.create().forPath(BucketSnapshotsZNode.path(bucket));
@@ -1597,8 +1599,6 @@ public class ZooKeeperClient implements AutoCloseable {
         operations.add(recoverySnapshotUpdate(bucket, snapshot.getSnapshotId(), previous));
         operations.add(updateLeaderAndIsrOp(bucket, nextRole));
         List<CuratorOp> fencedOperations = wrapRequestsWithEpochCheck(operations, epochVersion);
-        Optional<BucketSnapshot> recovery =
-                getTableBucketLatestSnapshot(bucket, previous.map(VersionedData::data));
         try {
             // WAL retention can already have advanced to the selected snapshot's offset.
             if (recovery.isPresent() && recovery.get().getLogOffset() > snapshot.getLogOffset()) {

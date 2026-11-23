@@ -2346,8 +2346,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
 
     private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
             Map<TableBucket, LeaderAndIsr> leaderAndIsrList) {
-        // TODO verify leader epoch.
-
         List<AdjustIsrResultForBucket> result = new ArrayList<>();
         Map<TableBucket, LeaderAndIsr> proposedChanges = new HashMap<>();
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : leaderAndIsrList.entrySet()) {
@@ -2355,39 +2353,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
             LeaderAndIsr tryAdjustLeaderAndIsr = entry.getValue();
 
             try {
-                validateLeaderAndIsr(tableBucket, tryAdjustLeaderAndIsr);
+                proposedChanges.put(
+                        tableBucket, prepareIsrUpdate(tableBucket, tryAdjustLeaderAndIsr));
             } catch (Exception e) {
                 result.add(new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
-                continue;
             }
-
-            // Do the updates in ZK.
-            LeaderAndIsr currentLeaderAndIsr =
-                    coordinatorContext
-                            .getBucketLeaderAndIsr(tableBucket)
-                            .orElseThrow(
-                                    () ->
-                                            new FlussRuntimeException(
-                                                    "Leader not found for table bucket "
-                                                            + tableBucket));
-            LeaderAndIsr newLeaderAndIsr =
-                    new LeaderAndIsr(
-                                    // the leaderEpoch in request has been validated to be equal to
-                                    // current
-                                    // leaderEpoch, which means the leader is still the same, so we
-                                    // use
-                                    // leader and leaderEpoch in currentLeaderAndIsr.
-                                    currentLeaderAndIsr.leader(),
-                                    currentLeaderAndIsr.leaderEpoch(),
-                                    // TODO: reject the request if there is a replica in ISR is not
-                                    // online,
-                                    //  see KIP-841.
-                                    tryAdjustLeaderAndIsr.isr(),
-                                    tryAdjustLeaderAndIsr.standbyReplicas(),
-                                    coordinatorContext.getCoordinatorEpoch(),
-                                    currentLeaderAndIsr.bucketEpoch() + 1)
-                            .withZkVersion(currentLeaderAndIsr.zkVersion());
-            proposedChanges.put(tableBucket, newLeaderAndIsr);
         }
 
         Map<TableBucket, LeaderAndIsr> committedChanges;
@@ -2407,17 +2377,14 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                         notifyOnlineReplicas(bucket);
                                     }
                                 });
-            }
-            for (TableBucket bucket : proposedChanges.keySet()) {
-                LeaderAndIsr committed = committedChanges.get(bucket);
-                result.add(
-                        committed == null
-                                ? new AdjustIsrResultForBucket(
-                                        bucket,
-                                        new ApiError(
-                                                Errors.NETWORK_EXCEPTION,
-                                                "Could not confirm the ISR update for " + bucket))
-                                : new AdjustIsrResultForBucket(bucket, committed));
+                for (TableBucket bucket : conflicts) {
+                    result.add(
+                            new AdjustIsrResultForBucket(
+                                    bucket,
+                                    new ApiError(
+                                            Errors.NETWORK_EXCEPTION,
+                                            "Could not confirm the ISR update for " + bucket)));
+                }
             }
         } catch (InvalidCoordinatorException e) {
             ApiError error = ApiError.fromThrowable(e);
@@ -2438,7 +2405,6 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                                     newLeaderAndIsr,
                                     coordinatorContext.getCoordinatorZkVersion());
                     committedChanges.put(tableBucket, committed);
-                    result.add(new AdjustIsrResultForBucket(tableBucket, committed));
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
                     result.add(
@@ -2448,7 +2414,11 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
         }
 
         // update coordinator leader and isr cache.
-        committedChanges.forEach(coordinatorContext::putBucketLeaderAndIsr);
+        committedChanges.forEach(
+                (bucket, committed) -> {
+                    coordinatorContext.putBucketLeaderAndIsr(bucket, committed);
+                    result.add(new AdjustIsrResultForBucket(bucket, committed));
+                });
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
         committedChanges.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
@@ -2459,12 +2429,12 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
     }
 
     /**
-     * Validate the new leader and isr.
+     * Validates an ISR change and derives the update from the current persisted role.
      *
      * @param tableBucket table bucket
      * @param newLeaderAndIsr new leader and isr
      */
-    private void validateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) {
+    private LeaderAndIsr prepareIsrUpdate(TableBucket tableBucket, LeaderAndIsr newLeaderAndIsr) {
         if (coordinatorContext.getTablePathById(tableBucket.getTableId()) == null) {
             throw new UnknownTableOrBucketException("Unknown table id " + tableBucket.getTableId());
         }
@@ -2537,6 +2507,10 @@ public class CoordinatorEventProcessor implements EventProcessor, RebalanceExecu
                 throw new FencedLeaderEpochException(
                         "The request isr in adjust isr request is not in assignment.");
             }
+            return currentLeaderAndIsr.withUpdatedIsr(
+                    isr,
+                    newLeaderAndIsr.standbyReplicas(),
+                    coordinatorContext.getCoordinatorEpoch());
         }
     }
 
