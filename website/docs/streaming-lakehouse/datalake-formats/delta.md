@@ -64,7 +64,7 @@ Fluss strips the `datalake.delta.` prefix and uses the remaining options as foll
 | Option | Default | Description |
 |--------|---------|-------------|
 | `warehouse` | (none) | Required. The root path of the Delta tables. The table `db.tbl` is stored at `<warehouse>/db/tbl`. |
-| `write.batch-size` | `100000` | The number of rows a tiering writer buffers before it writes them out as Parquet files. A larger value gives fewer and bigger files at the cost of memory. A table can override it with the table property `write.batch-size`. |
+| `write.batch-size` | `100000` | The number of rows a tiering writer buffers before it writes them out as Parquet files. A larger value gives fewer and bigger files at the cost of memory. Only the tiering service reads it, so pass it as `--datalake.delta.write.batch-size` when you [start the tiering service](#start-tiering-service-to-delta-lake). A table can override it with the table property `write.batch-size`. |
 
 All options, the two above included, are also set on the Hadoop `Configuration` that Delta Kernel uses for file system access.
 Set file system options such as credentials here, for example `datalake.delta.fs.s3a.access.key` for an `s3a://` warehouse.
@@ -202,7 +202,7 @@ CREATE TABLE access_logs (
 );
 ```
 
-Creating a primary key table with Delta Lake as the datalake format fails, since primary key tables aren't supported yet.
+Creating a primary key table with `'table.datalake.enabled' = 'true'`, or enabling datalake on an existing primary key table, fails, since primary key tables aren't supported yet.
 
 ### Partitioned Tables
 
@@ -242,7 +242,7 @@ CREATE TABLE access_logs_with_retention (
 ```
 
 All other Fluss table properties are written to the Delta table with the `fluss.` prefix, for example `fluss.table.datalake.freshness`. They show how the table is configured in Fluss, and Fluss never reads them back.
-`ALTER TABLE ... SET` and `RESET` of these properties update the `fluss.*` properties of the Delta table.
+When `ALTER TABLE ... SET` or `RESET` changes one of these properties, Fluss sets or removes the matching `fluss.*` property of the Delta table.
 
 Fluss rejects:
 
@@ -343,7 +343,7 @@ delta-rs (as of 1.6.6) can read Delta tiered tables but can't write them: append
 
 A Delta tiered table is a standard Delta table, so other engines can write to it. Fluss can only keep the table in line with the Fluss log if they follow these rules:
 
-- **Allowed**: `OPTIMIZE` and `ZORDER`, `VACUUM`, checkpoints and log cleanup, and changes of other table properties outside `fluss.*`.
+- **Allowed**: `OPTIMIZE` and `ZORDER`, `VACUUM`, checkpoints and log cleanup, and changes of other table properties outside `fluss.*`, except the ones listed under **Not allowed**.
 - **Not allowed**: data changes (`INSERT`, `DELETE`, `UPDATE`, `MERGE`, overwrite), schema or partition changes, changes to the `fluss.tiering` domain metadata, CHECK constraints (`delta.constraints.*`), and column mapping (`delta.columnMapping.mode`). Delta Kernel can't write to a table with CHECK constraints or column mapping, so tiering the table fails.
 
 Before each commit, the tiering service checks that the schema and partition columns of the Delta table still match the Fluss table, and fails the commit with a message naming the difference.
@@ -369,7 +369,7 @@ Domain metadata survives checkpoints and log cleanup. When Fluss recovers a lake
 ## Current Limitations
 
 - Only log tables can be tiered to Delta Lake. Primary key tables aren't supported yet.
-- Schema changes such as `ALTER TABLE ... ADD COLUMN` and bucket count changes aren't supported for Delta tiered tables yet.
+- Schema changes such as `ALTER TABLE ... ADD COLUMN` aren't supported for Delta tiered tables yet. Bucket count changes are rejected for tables with bucket keys.
 - Column-mapped Delta tables aren't supported.
 - The Fluss catalog `$lake` suffix doesn't expose Delta tables yet. Use a Delta Lake reader to read Delta-only data.
 - Union read doesn't push filters or limits down to Delta Lake yet.
