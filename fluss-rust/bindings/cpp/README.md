@@ -230,6 +230,56 @@ with a non-positive timeout. The reader remains valid after timeout if a caller 
 resume policy, but unconditional retry is not the intended usage. `NextBatch()` remains the
 per-poll API for engines that need to check cancellation between batches.
 
+### Bounded and streaming UnionRead
+
+Configure CMake with `-DFLUSS_ENABLE_UNION_READ=ON` (Rust 1.95+). This enables the
+Rust UnionRead reader and its Paimon backend; the default C++ build is unchanged.
+On Linux, install the OpenSSL development package (e.g. `libssl-dev`).
+To override lake catalog properties on a worker, pass `UnionReadOptions` when
+opening the reader. The optional PK memory budget applies during bootstrap.
+
+Capture the boundary once and persist the returned bytes. They contain the same
+`PbUnionReadContext` as the Java and Rust SDKs. Open the reader on the same table.
+For a bounded read use `CreateBoundedUnionReader`: successive `Next` calls
+return Arrow snapshot batches followed by `Finished`. For a continuous import:
+
+```cpp
+std::vector<uint8_t> context;
+Check(table.CaptureUnionReadContext(context));
+auto scan = table.NewScan();
+scan.ProjectByName({"price"}).Filter(fluss::Col("price").GreaterThan(100));
+fluss::UnionReadReader reader;
+Check(scan.CreateStreamingUnionReader(context, reader));
+fluss::UnionReadEvent event;
+for (;;) {
+    Check(reader.Next(1000, event));
+    switch (event.kind) {
+        case fluss::UnionReadKind::Snapshot: Stage(event.snapshot); break;
+        case fluss::UnionReadKind::SnapshotFinished:
+            CommitBootstrap(context, event.next_offsets); break;
+        case fluss::UnionReadKind::Changes:
+            ApplyAndCheckpoint(event.changes, event.next_offsets); break;
+        case fluss::UnionReadKind::TimedOut: continue;
+        case fluss::UnionReadKind::Finished: return;
+    }
+}
+```
+
+Here the capitalized helpers are application code. Commit output and next unread
+offsets together. At the marker the offsets cover **every** captured bucket;
+afterwards merge each poll's advances into that checkpoint, including buckets
+with no visible rows. Resume with `scan.ResumeStreamingUnionReader(context,
+checkpoint, reader)` using the same filter and projection. If bootstrap was
+not committed, discard staged rows and start again from the saved boundary.
+
+The stream appends missing PK columns to the projection. With a non-key filter
+on a WAL table, apply `UpdateAfter` as an upsert and `Delete` by key, even if the
+key is already absent. FULL mode preserves matching change images, including
+retractions. A `TimedOut` event indicates no event was ready before the deadline;
+keep the same reader. Call `Next` from one thread at a time and destroy the reader
+after the call returns. Returned Arrow batches and copied scan records remain
+valid independently of the reader.
+
 ## TODO
 
 - [ ] How to introduce fluss-cpp in your own project, https://github.com/apache/opendal/blob/main/bindings/cpp/README.md is a good reference

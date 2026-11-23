@@ -1480,6 +1480,48 @@ Result TableScan::CreateRecordBatchLogScanner(LogScanner& out) {
     return DoCreateScanner(out, true);
 }
 
+struct TableScan::EncodedPredicate {
+    rust::Vec<ffi::FfiPredicateNode> nodes;
+};
+
+TableScan::EncodedPredicate TableScan::EncodePredicate() const {
+    EncodedPredicate encoded;
+    if (predicate_.has_value()) {
+        std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
+        append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
+            ffi::FfiPredicateNode ffi_node;
+            ffi_node.node_type = node->node_type;
+            ffi_node.leaf_function = node->leaf_function;
+            ffi_node.compound_function = node->compound_function;
+            ffi_node.field = rust::String(node->field);
+            ffi_node.child_count = static_cast<uint32_t>(node->children.size());
+
+            for (const auto& literal : node->literals) {
+                ffi::FfiPredicateLiteral ffi_literal;
+                ffi_literal.literal_type = literal.literal_type_;
+                ffi_literal.boolean_value = literal.boolean_value_;
+                ffi_literal.integer_value = literal.integer_value_;
+                ffi_literal.floating_value = literal.floating_value_;
+                ffi_literal.string_value = rust::String(literal.string_value_);
+                for (uint8_t value : literal.bytes_value_) {
+                    ffi_literal.bytes_value.push_back(value);
+                }
+                ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
+                ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
+                ffi_node.literals.push_back(std::move(ffi_literal));
+            }
+
+            encoded.nodes.push_back(std::move(ffi_node));
+            for (const auto& child : node->children) {
+                append_node(child);
+            }
+        };
+        append_node(predicate_->root_);
+    }
+
+    return encoded;
+}
+
 Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
     if (table_ == nullptr) {
         return utils::make_client_error("Table not available");
@@ -1496,41 +1538,7 @@ Result TableScan::DoCreateScanner(LogScanner& out, bool is_record_batch) {
             rust_indices.push_back(idx);
         }
 
-        rust::Vec<ffi::FfiPredicateNode> rust_predicate;
-        if (predicate_.has_value()) {
-            std::function<void(const std::shared_ptr<const Predicate::Node>&)> append_node;
-            append_node = [&](const std::shared_ptr<const Predicate::Node>& node) {
-                ffi::FfiPredicateNode ffi_node;
-                ffi_node.node_type = node->node_type;
-                ffi_node.leaf_function = node->leaf_function;
-                ffi_node.compound_function = node->compound_function;
-                ffi_node.field = rust::String(node->field);
-                ffi_node.child_count = static_cast<uint32_t>(node->children.size());
-
-                for (const auto& literal : node->literals) {
-                    ffi::FfiPredicateLiteral ffi_literal;
-                    ffi_literal.literal_type = literal.literal_type_;
-                    ffi_literal.boolean_value = literal.boolean_value_;
-                    ffi_literal.integer_value = literal.integer_value_;
-                    ffi_literal.floating_value = literal.floating_value_;
-                    ffi_literal.string_value = rust::String(literal.string_value_);
-                    for (uint8_t value : literal.bytes_value_) {
-                        ffi_literal.bytes_value.push_back(value);
-                    }
-                    ffi_literal.timestamp_millis = literal.timestamp_value_.epoch_millis;
-                    ffi_literal.timestamp_nanos = literal.timestamp_value_.nano_of_millisecond;
-                    ffi_node.literals.push_back(std::move(ffi_literal));
-                }
-
-                rust_predicate.push_back(std::move(ffi_node));
-                for (const auto& child : node->children) {
-                    append_node(child);
-                }
-            };
-            append_node(predicate_->root_);
-        }
-
-        auto ffi_result = table_->create_scanner(std::move(rust_indices), std::move(rust_predicate),
+        auto ffi_result = table_->create_scanner(std::move(rust_indices), EncodePredicate().nodes,
                                                  is_record_batch);
         auto result = utils::from_ffi_result(ffi_result.result);
         if (result.Ok()) {
@@ -2393,6 +2401,19 @@ Result LogScanner::UnsubscribePartition(int64_t partition_id, int32_t bucket_id)
     return utils::from_ffi_result(ffi_result);
 }
 
+static std::shared_ptr<const detail::ScanData> TakeScanData(
+    rust::Box<ffi::ScanResultInner> records) {
+    auto data = std::make_shared<detail::ScanData>(nullptr, detail::ColumnMap{});
+    data->raw = records.into_raw();
+    auto col_count = data->raw->sv_column_count();
+    for (size_t i = 0; i < col_count; ++i) {
+        auto name = data->raw->sv_column_name(i);
+        data->columns[std::string(name.data(), name.size())] = {
+            i, static_cast<TypeId>(data->raw->sv_column_type(i))};
+    }
+    return data;
+}
+
 Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
     if (!Available()) {
         return utils::make_client_error("LogScanner not available");
@@ -2404,18 +2425,111 @@ Result LogScanner::Poll(int64_t timeout_ms, ScanRecords& out) {
                                  std::string(result_box->sv_error_message()));
     }
 
-    // Wrap raw pointer in ScanData immediately so it's never leaked on exception.
-    auto data = std::make_shared<detail::ScanData>(result_box.into_raw(), detail::ColumnMap{});
-    // Build column map eagerly — shared by all RowViews/BucketRecords.
-    auto col_count = data->raw->sv_column_count();
-    for (size_t i = 0; i < col_count; ++i) {
-        auto name = data->raw->sv_column_name(i);
-        data->columns[std::string(name.data(), name.size())] = {
-            i, static_cast<TypeId>(data->raw->sv_column_type(i))};
-    }
-    out.data_ = std::move(data);
+    out.data_ = TakeScanData(std::move(result_box));
     return utils::make_ok();
 }
+
+#ifdef FLUSS_ENABLE_UNION_READ
+Result Table::CaptureUnionReadContext(std::vector<uint8_t>& out) const {
+    if (!table_) return utils::make_client_error("Table not available");
+    rust::Vec<uint8_t> bytes;
+    auto status = utils::from_ffi_result(table_->capture_union_context(bytes));
+    if (status.Ok()) out.assign(bytes.begin(), bytes.end());
+    return status;
+}
+
+Result TableScan::CreateBoundedUnionReader(const std::vector<uint8_t>& ctx, UnionReadReader& out,
+                                           const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, false, nullptr, out, options);
+}
+
+Result TableScan::CreateStreamingUnionReader(const std::vector<uint8_t>& ctx, UnionReadReader& out,
+                                             const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, true, nullptr, out, options);
+}
+
+Result TableScan::ResumeStreamingUnionReader(const std::vector<uint8_t>& ctx,
+                                             const std::vector<ReaderStopOffset>& offsets,
+                                             UnionReadReader& out,
+                                             const UnionReadOptions& options) const {
+    return OpenUnionReader(ctx, true, &offsets, out, options);
+}
+
+Result TableScan::OpenUnionReader(const std::vector<uint8_t>& ctx, bool streaming,
+                                  const std::vector<ReaderStopOffset>* offsets,
+                                  UnionReadReader& out, const UnionReadOptions& options) const {
+    if (!table_) return utils::make_client_error("Table not available");
+    if (limit_) return utils::make_client_error("UnionRead does not support Limit");
+    ffi::FfiUnionOptions opts{};
+    opts.mode = offsets     ? ffi::FfiUnionMode::Resume
+                : streaming ? ffi::FfiUnionMode::Streaming
+                            : ffi::FfiUnionMode::Bounded;
+    opts.predicate = EncodePredicate().nodes;
+    for (auto index : projection_) opts.projection.push_back(index);
+    for (const auto& name : name_projection_) opts.names.push_back(rust::String(name));
+    for (const auto& [k, v] : options.catalog_properties)
+        opts.properties.push_back({rust::String(k), rust::String(v)});
+    opts.has_budget = options.pk_memory_budget_bytes.has_value();
+    opts.budget = options.pk_memory_budget_bytes.value_or(0);
+    if (offsets) {
+        for (const auto& o : *offsets) {
+            opts.offsets.push_back({o.bucket.table_id, o.bucket.partition_id.has_value(),
+                                    o.bucket.partition_id.value_or(0), o.bucket.bucket_id,
+                                    o.offset});
+        }
+    }
+    auto opened = table_->open_union({ctx.data(), ctx.size()}, std::move(opts));
+    auto result = utils::from_ffi_result(opened.result);
+    if (result.Ok()) out.reader_.reset(utils::ptr_from_ffi<ffi::UnionReader>(opened));
+    return result;
+}
+
+void UnionReadReader::Deleter::operator()(ffi::UnionReader* ptr) const noexcept {
+    ffi::delete_union_reader(ptr);
+}
+
+Result UnionReadReader::Next(int64_t timeout_ms, UnionReadEvent& out) {
+    if (!reader_) return utils::make_client_error("UnionRead reader not available");
+    if (timeout_ms < 0) return utils::make_client_error("Negative UnionRead timeout");
+    ArrowArray array{};
+    ArrowSchema schema{};
+    auto event = reader_->union_next(timeout_ms, reinterpret_cast<size_t>(&array),
+                                     reinterpret_cast<size_t>(&schema));
+    auto result = utils::from_ffi_result(event.result);
+    if (!result.Ok()) return result;
+    UnionReadEvent next;
+    switch (event.kind) {
+        case ffi::FfiUnionKind::Snapshot: {
+            auto imported = arrow::ImportRecordBatch(&array, &schema);
+            if (!imported.ok()) return utils::make_client_error(imported.status().ToString());
+            next.snapshot = std::move(imported).ValueOrDie();
+            next.kind = UnionReadKind::Snapshot;
+            break;
+        }
+        case ffi::FfiUnionKind::SnapshotFinished:
+            next.kind = UnionReadKind::SnapshotFinished;
+            break;
+        case ffi::FfiUnionKind::Changes:
+            next.kind = UnionReadKind::Changes;
+            next.changes.data_ = TakeScanData(std::move(event.records));
+            break;
+        case ffi::FfiUnionKind::TimedOut:
+            next.kind = UnionReadKind::TimedOut;
+            break;
+        case ffi::FfiUnionKind::Finished:
+            next.kind = UnionReadKind::Finished;
+            break;
+    }
+    for (const auto& o : event.offsets) {
+        next.next_offsets.push_back(
+            {{o.table_id, o.bucket_id,
+              o.has_partition_id ? std::optional<int64_t>(o.partition_id) : std::nullopt},
+             o.offset});
+    }
+    out = std::move(next);
+    return utils::make_ok();
+}
+#endif
 
 ArrowRecordBatch::ArrowRecordBatch(std::shared_ptr<arrow::RecordBatch> batch, int64_t table_id,
                                    int64_t partition_id, int32_t bucket_id,

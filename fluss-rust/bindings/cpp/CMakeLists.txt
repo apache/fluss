@@ -52,6 +52,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(FLUSS_ENABLE_ADDRESS_SANITIZER "Enable address sanitizer" OFF)
 option(FLUSS_ENABLE_TESTING "Enable building test binary for fluss" OFF)
+option(FLUSS_ENABLE_UNION_READ "Build bounded and streaming UnionRead with Paimon (Rust 1.95+)" OFF)
 option(FLUSS_DEV "Enable dev mode" OFF)
 
 if (FLUSS_DEV)
@@ -146,6 +147,12 @@ endif()
 get_filename_component(CARGO_WORKSPACE_DIR "${CARGO_MANIFEST_PATH}" DIRECTORY)
 set(CARGO_TARGET_DIR "${CARGO_WORKSPACE_DIR}/target")
 
+if (FLUSS_ENABLE_UNION_READ)
+    # cxx generates different headers for this feature. Isolate them from plain Cargo builds.
+    set(CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/cargo-union-read")
+    list(APPEND CARGO_BUILD_FLAGS --target-dir "${CARGO_TARGET_DIR}")
+endif()
+
 set(CARGO_MANIFEST ${PROJECT_SOURCE_DIR}/Cargo.toml)
 set(RUST_SOURCE_FILE ${PROJECT_SOURCE_DIR}/src/lib.rs)
 set(RUST_BRIDGE_CPP ${CARGO_TARGET_DIR}/cxxbridge/fluss-cpp/src/lib.rs.cc)
@@ -169,6 +176,10 @@ if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND CARGO_BUILD_FLAGS "--release")
 endif()
 
+if (FLUSS_ENABLE_UNION_READ)
+    list(APPEND CARGO_BUILD_FLAGS --features union_read)
+endif()
+
 add_custom_target(cargo_build
     COMMAND ${FLUSS_CARGO_EXECUTABLE} build --manifest-path ${CARGO_MANIFEST} ${CARGO_BUILD_FLAGS}
     BYPRODUCTS ${RUST_BRIDGE_CPP} ${RUST_LIB} ${RUST_HEADER_FILE}
@@ -178,13 +189,22 @@ add_custom_target(cargo_build
 )
 
 add_library(fluss_cpp STATIC ${CPP_SOURCE_FILE} ${RUST_BRIDGE_CPP})
+target_link_libraries(fluss_cpp PUBLIC ${RUST_LIB})
+if (FLUSS_ENABLE_UNION_READ)
+    target_compile_definitions(fluss_cpp PUBLIC FLUSS_ENABLE_UNION_READ)
+    if (APPLE)
+        target_link_libraries(fluss_cpp PUBLIC "-framework SystemConfiguration")
+    elseif (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(OpenSSL REQUIRED)
+        target_link_libraries(fluss_cpp PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+endif()
 target_sources(fluss_cpp PUBLIC ${CPP_HEADER_FILE})
 target_sources(fluss_cpp PRIVATE ${RUST_HEADER_FILE})
 target_include_directories(fluss_cpp PUBLIC ${CPP_INCLUDE_DIR})
 if (FLUSS_CPP_ARROW_EXTRA_INCLUDE_DIRS)
     target_include_directories(fluss_cpp PUBLIC ${FLUSS_CPP_ARROW_EXTRA_INCLUDE_DIRS})
 endif()
-target_link_libraries(fluss_cpp PUBLIC ${RUST_LIB})
 target_link_libraries(fluss_cpp PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
 target_link_libraries(fluss_cpp PUBLIC Arrow::arrow_shared)
 target_compile_definitions(fluss_cpp PRIVATE ARROW_FOUND)

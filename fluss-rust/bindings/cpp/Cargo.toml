@@ -26,7 +26,13 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+union_read = ["dep:fluss-lake", "dep:futures", "dep:prost"]
+
 [dependencies]
+fluss-lake = { path = "../../crates/fluss-lake", features = ["paimon"], optional = true }
+futures = { version = "0.3", optional = true }
+prost = { version = "0.14", optional = true }
 anyhow = "1.0"
 arrow = { workspace = true, features = ["ffi"] }
 bigdecimal = { workspace = true }

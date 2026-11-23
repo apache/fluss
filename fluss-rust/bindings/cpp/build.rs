@@ -16,7 +16,11 @@
 // under the License.
 
 fn main() {
-    cxx_build::bridge("src/lib.rs")
+    let mut bridge = cxx_build::bridge("src/lib.rs");
+    if cfg!(feature = "union_read") {
+        bridge.define("FLUSS_ENABLE_UNION_READ", None);
+    }
+    bridge
         .include("include")
         .include("src")
         .std("c++17")

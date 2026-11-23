@@ -17,6 +17,10 @@
 
 mod lookup;
 mod types;
+#[cfg(feature = "union_read")]
+mod union_read;
+#[cfg(feature = "union_read")]
+use union_read::UnionReader;
 mod write_callback;
 use lookup::{
     LookupCompletion, PendingLookup, PendingPrefixLookup, PrefixLookupCompletion,
@@ -276,6 +280,42 @@ mod ffi {
         arrow_batches: FfiArrowRecordBatches,
     }
 
+    #[cfg(feature = "union_read")]
+    enum FfiUnionMode {
+        Bounded,
+        Streaming,
+        Resume,
+    }
+
+    #[cfg(feature = "union_read")]
+    enum FfiUnionKind {
+        Snapshot,
+        SnapshotFinished,
+        Changes,
+        TimedOut,
+        Finished,
+    }
+
+    #[cfg(feature = "union_read")]
+    struct FfiUnionOptions {
+        mode: FfiUnionMode,
+        projection: Vec<usize>,
+        names: Vec<String>,
+        predicate: Vec<FfiPredicateNode>,
+        offsets: Vec<FfiReaderStopOffset>,
+        properties: Vec<HashMapValue>,
+        budget: usize,
+        has_budget: bool,
+    }
+
+    #[cfg(feature = "union_read")]
+    struct FfiUnionEvent {
+        result: FfiResult,
+        kind: FfiUnionKind,
+        offsets: Vec<FfiReaderStopOffset>,
+        records: Box<ScanResultInner>,
+    }
+
     struct FfiBoundedReadResult {
         result: FfiResult,
         arrow_batches: FfiArrowRecordBatches,
@@ -430,6 +470,21 @@ mod ffi {
         type Connection;
         type Admin;
         type Table;
+        #[cfg(feature = "union_read")]
+        type UnionReader;
+        #[cfg(feature = "union_read")]
+        unsafe fn delete_union_reader(reader: *mut UnionReader);
+        #[cfg(feature = "union_read")]
+        fn capture_union_context(self: &Table, bytes: &mut Vec<u8>) -> FfiResult;
+        #[cfg(feature = "union_read")]
+        fn open_union(self: &Table, context: &[u8], options: FfiUnionOptions) -> FfiPtrResult;
+        #[cfg(feature = "union_read")]
+        fn union_next(
+            self: &mut UnionReader,
+            timeout_ms: u64,
+            array: usize,
+            schema: usize,
+        ) -> FfiUnionEvent;
         type AppendWriter;
         type WriteResult;
         type LogScanner;
@@ -2581,31 +2636,10 @@ impl LogScanner {
         let result = RUNTIME.block_on(async { inner.poll(timeout).await });
 
         match result {
-            Ok(records) => {
-                let columns = self.projected_columns.clone();
-                let mut total_count = 0usize;
-                let mut buckets = Vec::new();
-                let mut bucket_infos = Vec::new();
-                for (table_bucket, bucket_records) in records.into_records_by_buckets() {
-                    let count = bucket_records.len();
-                    total_count += count;
-                    bucket_infos.push(ffi::FfiBucketInfo {
-                        table_id: table_bucket.table_id(),
-                        bucket_id: table_bucket.bucket_id(),
-                        has_partition_id: table_bucket.partition_id().is_some(),
-                        partition_id: table_bucket.partition_id().unwrap_or(0),
-                        record_count: count,
-                    });
-                    buckets.push((table_bucket, bucket_records));
-                }
-                Box::new(ScanResultInner {
-                    error: None,
-                    buckets,
-                    columns,
-                    bucket_infos,
-                    total_count,
-                })
-            }
+            Ok(records) => Box::new(ScanResultInner::from_records(
+                records,
+                self.projected_columns.clone(),
+            )),
             Err(e) => {
                 let ffi_err = err_from_core_error(&e);
                 Box::new(ScanResultInner::from_error(
@@ -2795,6 +2829,11 @@ fn reader_bucket_to_core(
 const BATCH_AVAILABLE: i32 = 0;
 const TIMED_OUT: i32 = 1;
 const FINISHED: i32 = 2;
+
+#[cfg(feature = "union_read")]
+unsafe fn delete_union_reader(reader: *mut UnionReader) {
+    unsafe { drop(Box::from_raw(reader)) };
+}
 
 unsafe fn delete_record_batch_log_reader(reader: *mut RecordBatchLogReader) {
     if !reader.is_null() {
@@ -3398,6 +3437,31 @@ pub struct ScanResultInner {
 }
 
 impl ScanResultInner {
+    fn from_records(records: fcore::record::ScanRecords, columns: Vec<Column>) -> Self {
+        let mut total_count = 0usize;
+        let mut buckets = Vec::new();
+        let mut bucket_infos = Vec::new();
+        for (table_bucket, bucket_records) in records.into_records_by_buckets() {
+            let count = bucket_records.len();
+            total_count += count;
+            bucket_infos.push(ffi::FfiBucketInfo {
+                table_id: table_bucket.table_id(),
+                bucket_id: table_bucket.bucket_id(),
+                has_partition_id: table_bucket.partition_id().is_some(),
+                partition_id: table_bucket.partition_id().unwrap_or(0),
+                record_count: count,
+            });
+            buckets.push((table_bucket, bucket_records));
+        }
+        Self {
+            error: None,
+            buckets,
+            columns,
+            bucket_infos,
+            total_count,
+        }
+    }
+
     fn from_error(code: i32, msg: String) -> Self {
         Self {
             error: Some((code, msg)),
