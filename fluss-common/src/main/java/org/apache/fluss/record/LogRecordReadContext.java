@@ -38,6 +38,7 @@ import org.apache.fluss.utils.UnshadedArrowReadUtils;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
@@ -143,7 +144,13 @@ public class LogRecordReadContext
                 dataRowType = rowType;
                 selectedFields = projection.getProjection();
             }
-            target = new ReadTarget(schemaId, dataRowType, selectedFields, logFormat);
+            target =
+                    new ReadTarget(
+                            schemaId,
+                            dataRowType,
+                            selectedFields,
+                            logFormat,
+                            projectionPushDowned ? projection.getProjectionInOrder() : null);
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -221,7 +228,16 @@ public class LogRecordReadContext
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW);
+        int[] sourceFields =
+                projectionPushDowned
+                        ? rowType.getFieldNames().stream()
+                                .mapToInt(
+                                        schemaGetter.getSchema(schemaId).getRowType()
+                                                ::getFieldIndex)
+                                .toArray()
+                        : null;
+        ReadTarget target =
+                new ReadTarget(schemaId, rowType, selectedFields, LogFormat.ARROW, sourceFields);
         return createArrowReadContext(-1L, target, projectionPushDowned, schemaGetter, null);
     }
 
@@ -278,11 +294,18 @@ public class LogRecordReadContext
 
     @Override
     public RowType getRowType(int schemaId) {
-        if (isProjectionPushDowned() || (target != null && target.schemaId == schemaId)) {
-            assert target != null;
+        if (target != null && target.schemaId == schemaId) {
             return target.dataRowType;
         }
-        return schemaGetter.getSchema(schemaId).getRowType();
+        RowType historicalType = schemaGetter.getSchema(schemaId).getRowType();
+        if (isProjectionPushDowned()) {
+            int[] existingFields =
+                    Arrays.stream(target.sourceFields)
+                            .filter(p -> p < historicalType.getFieldCount())
+                            .toArray();
+            return historicalType.project(existingFields);
+        }
+        return historicalType;
     }
 
     /**
@@ -323,8 +346,17 @@ public class LogRecordReadContext
      */
     @Nullable
     private int[] getSchemaEvolutionMapping(int schemaId) {
-        if (target == null || isProjectionPushDowned() || schemaId == target.schemaId) {
+        if (target == null || schemaId == target.schemaId) {
             return null;
+        }
+        if (isProjectionPushDowned()) {
+            int fieldCount = schemaGetter.getSchema(schemaId).getRowType().getFieldCount();
+            int[] mapping = new int[target.sourceFields.length];
+            int inputIndex = 0;
+            for (int i = 0; i < mapping.length; i++) {
+                mapping[i] = target.sourceFields[i] < fieldCount ? inputIndex++ : -1;
+            }
+            return mapping;
         }
         return SchemaUtil.getIndexMapping(
                 schemaGetter.getSchema(schemaId), schemaGetter.getSchema(target.schemaId));
@@ -438,13 +470,26 @@ public class LogRecordReadContext
         @Override
         public ArrowBatchData createArrowBatchData(
                 long baseLogOffset, long timestamp, int schemaId) {
-            int[] schemaMapping = getSchemaEvolutionMapping(schemaId);
-            if (schemaMapping != null) {
-                outputRoot =
-                        UnshadedArrowReadUtils.projectVectorSchemaRoot(
-                                readRoot, target.dataRowType, schemaMapping, allocator);
-                readRoot.close();
-                readRoot = null;
+            if (target != null) {
+                int[] schemaMapping = getSchemaEvolutionMapping(schemaId);
+                int[] outputMapping =
+                        Arrays.stream(target.selectedFields)
+                                .map(i -> schemaMapping == null ? i : schemaMapping[i])
+                                .toArray();
+                boolean identity = outputMapping.length == readRoot.getFieldVectors().size();
+                for (int i = 0; identity && i < outputMapping.length; i++) {
+                    identity = outputMapping[i] == i;
+                }
+                if (!identity) {
+                    outputRoot =
+                            UnshadedArrowReadUtils.projectVectorSchemaRoot(
+                                    readRoot,
+                                    target.dataRowType.project(target.selectedFields),
+                                    outputMapping,
+                                    allocator);
+                    readRoot.close();
+                    readRoot = null;
+                }
             }
             ArrowBatchData arrowBatchData =
                     new ArrowBatchData(outputRoot, baseLogOffset, timestamp, schemaId);
@@ -502,10 +547,23 @@ public class LogRecordReadContext
         /** The field indices to select from the data row type. */
         final int[] selectedFields;
 
+        /** Sorted positions in the full target schema for server-side projection, or null. */
+        @Nullable final int[] sourceFields;
+
         /** Pre-built field getters corresponding to {@link #selectedFields}. */
         final FieldGetter[] fieldGetters;
 
         ReadTarget(int schemaId, RowType dataRowType, int[] selectedFields, LogFormat logFormat) {
+            this(schemaId, dataRowType, selectedFields, logFormat, null);
+        }
+
+        ReadTarget(
+                int schemaId,
+                RowType dataRowType,
+                int[] selectedFields,
+                LogFormat logFormat,
+                @Nullable int[] sourceFields) {
+            this.sourceFields = sourceFields;
             this.schemaId = schemaId;
             this.dataRowType = dataRowType;
             this.selectedFields = selectedFields;
