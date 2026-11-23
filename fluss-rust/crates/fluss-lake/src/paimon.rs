@@ -674,7 +674,7 @@ async fn plan_snapshot_splits(
                 total.checked_add(usize::try_from(file.file_size).ok()?)
             }),
             payload_version: PAIMON_PAYLOAD_VERSION,
-            payload: serde_json::to_vec(split).map_err(|error| {
+            payload: split.serialize_split_v1().map_err(|error| {
                 FlussLakeError::PlanningFailed(format!("failed to encode Paimon split: {error}"))
             })?,
         });
@@ -923,10 +923,34 @@ fn to_paimon_scalar(datum: &Datum<'_>) -> Option<PaimonDatum> {
     })
 }
 
-/// The authorization marker of a serialized split, which `DataSplit` keeps private.
-#[derive(serde::Deserialize)]
-struct SplitAuthorization {
-    query_auth_required: bool,
+fn decode_paimon_split(payload: &[u8]) -> Result<DataSplit> {
+    // SplitSerializer magic followed by the big-endian format version.
+    const V1_HEADER: &[u8] = b"SPLIT_V1\0\0\0\x01";
+    const DATA_SPLIT: i32 = 1;
+    const INDEXED_SPLIT: i32 = 3;
+    const QUERY_AUTH_SPLIT: i32 = 5;
+
+    let frame = payload.strip_prefix(V1_HEADER).ok_or_else(|| {
+        FlussLakeError::IncompatibleSplitVersion(
+            "expected a Paimon SplitSerializer V1 frame".into(),
+        )
+    })?;
+    let type_bytes = frame
+        .first_chunk::<4>()
+        .ok_or_else(|| FlussLakeError::PlanningFailed("missing Paimon split type ID".into()))?;
+
+    match i32::from_be_bytes(*type_bytes) {
+        DATA_SPLIT | INDEXED_SPLIT => DataSplit::deserialize_split_v1(payload).map_err(|error| {
+            FlussLakeError::PlanningFailed(format!("failed to decode Paimon split: {error}"))
+        }),
+        // A replacement reader bypasses TableRead, even when the policy has no rules.
+        QUERY_AUTH_SPLIT => Err(FlussLakeError::NotLakeReadable(
+            "UnionRead does not support Paimon splits requiring query authorization".into(),
+        )),
+        other => Err(FlussLakeError::NotLakeReadable(format!(
+            "unsupported Paimon split type ID: {other}"
+        ))),
+    }
 }
 
 /// Reads several frozen Paimon splits as one finite Arrow batch stream.
@@ -971,26 +995,7 @@ async fn read_snapshot_splits(
                     "Paimon read tasks must belong to one partition/bucket".to_string(),
                 ));
             }
-            if source.baseline_reader.is_some() {
-                // TableRead checks this transported marker itself. A replacement
-                // reader does not pass through TableRead, and rules can be empty
-                // even when a grant is required.
-                let auth: SplitAuthorization =
-                    serde_json::from_slice(&task.payload).map_err(|error| {
-                        FlussLakeError::PlanningFailed(format!(
-                            "invalid Paimon split authorization marker: {error}"
-                        ))
-                    })?;
-                if auth.query_auth_required {
-                    return Err(FlussLakeError::NotLakeReadable(
-                        "UnionRead does not support Paimon splits requiring query authorization"
-                            .into(),
-                    ));
-                }
-            }
-            let split: DataSplit = serde_json::from_slice(&task.payload).map_err(|error| {
-                FlussLakeError::PlanningFailed(format!("failed to decode Paimon split: {error}"))
-            })?;
+            let split = decode_paimon_split(&task.payload)?;
             validate_split_bucket_count(&split, task.bucket_count)?;
             if split_partition_identity(
                 &split,

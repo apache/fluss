@@ -925,10 +925,15 @@ async fn query_authorization_is_rejected_at_planning_and_by_both_readers() {
             polling_failure: false,
         }));
     let mut splits = native.plan(planner(&info, snapshot)).await.unwrap();
-    // The transport retains this marker but never carries a live grant.
-    let mut payload: serde_json::Value = serde_json::from_slice(&splits[0].payload).unwrap();
-    payload["query_auth_required"] = true.into();
-    splits[0].payload = serde_json::to_vec(&payload).unwrap();
+    // Wrap the planned split in a QueryAuthSplit with no filters or masks.
+    splits[0].payload = [
+        b"SPLIT_V1".as_slice(),
+        &1_i32.to_be_bytes(),
+        &5_i32.to_be_bytes(),
+        &splits[0].payload,
+        &[1, 0, 0], // policy present; both rule lists absent
+    ]
+    .concat();
     for source in [&native, &replaced] {
         assert!(matches!(
             read_append_splits(source, &info, snapshot, &splits).await,
@@ -963,7 +968,7 @@ async fn deleted_data_files_are_reported_unavailable() {
     let splits = source.plan(planner(&info, snapshot)).await.unwrap();
     let table = catalog.get_table(&identifier).await.unwrap();
     for task in &splits {
-        let split: DataSplit = serde_json::from_slice(&task.payload).unwrap();
+        let split = DataSplit::deserialize_split_v1(&task.payload).unwrap();
         for file in split.data_files() {
             table
                 .file_io()
