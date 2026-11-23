@@ -58,7 +58,7 @@ mod reader_tests;
 /// Pinned snapshots a shared source keeps open; older ones are reopened on demand.
 const MAX_PINNED_TABLES: usize = 4;
 
-const PAIMON_PAYLOAD_VERSION: u32 = 2;
+const PAIMON_PAYLOAD_VERSION: u32 = 1;
 
 /// Default Paimon LakeSource. Planning and reading share the same catalog mapping.
 /// Credentials stay in this runtime object, never in the split payload.
