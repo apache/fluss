@@ -43,6 +43,8 @@ defmodule Fluss.SchemaTest do
       for {name, opts, message} <- [
             {:id, [], "expected the column name to be a string"},
             {"id", [comment: 1], "expected the column comment to be a string"},
+            {<<0xFF>>, [], "expected the column name to be valid UTF-8"},
+            {"id", [comment: <<0xFF>>], "expected the column comment to be valid UTF-8"},
             {"id", [unknown: "x"], "unknown keys [:unknown]"},
             {"id", "not opts", "expected options to be a keyword list"}
           ] do
@@ -65,8 +67,8 @@ defmodule Fluss.SchemaTest do
             {:decimal, 1, 0},
             {:decimal, 38, 38},
             {:char, 1},
-            {:char, 0xFFFFFFFF},
-            {:binary, 0xFFFFFFFFFFFFFFFF},
+            {:char, 0x7FFFFFFF},
+            {:binary, 0x7FFFFFFF},
             {:row, []},
             {:not_null, {:not_null, :int}},
             {:row, [{"a", {:array, {:map, {:char, 1}, {:binary, 16}}}}]}
@@ -94,9 +96,9 @@ defmodule Fluss.SchemaTest do
             {:decimal, 10, 11},
             {:decimal, 10.0, 2},
             {:char, 0},
-            {:char, 0x100000000},
+            {:char, 0x80000000},
             {:binary, -1},
-            {:binary, 0x10000000000000000}
+            {:binary, 0x80000000}
           ] do
         message = ~r/invalid data type for column `c`.*#{Regex.escape(inspect(type))}/
 
